@@ -795,7 +795,7 @@ static void test_config(const char *dir)
   CHECK(xh_config_args(&c, 13, argv) == 0 && xh_config_finish(&c) == 0);
   CHECK(strstr(c.kernel, "/image/kernel.kc") && c.ndisk == 4 && strstr(c.disk[3].path, "data.seed") && !c.disk[3].writable && !c.disk[0].writable && strstr(c.disk[1].path, "systemos.img"));
   CHECK(c.disk[2].data_store && c.disk[2].writable && strstr(c.disk[2].path, "/data.img") && strstr(c.disk[2].seed, "data.seed"));
-  CHECK(c.ncpu == 4 && !strcmp(c.display, "shm") && c.input && c.tasks);
+  CHECK(c.ncpu >= 1 && c.ncpu <= XH_MAX_CPUS && !strcmp(c.display, "shm") && c.input && c.tasks);
   CHECK(c.bridges == 1 && !strcmp(c.bluetooth, "virtual"));                    // on in a session
   // the image set's own settings, and what the command line overrides
   snprintf(path, sizeof path, "%s/xnuhost.conf", image);

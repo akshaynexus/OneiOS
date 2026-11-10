@@ -791,3 +791,14 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   1.6 MB again (`0x188000`; was 10.4 MB), checked on a full `HOSTED_OUT=gpu` build with the series as of today
   (`0001 0003 0002 0005 0006 0004 0007`). Delivery stays (a): in the hosted kernel, nothing for the fileset. The
   accelerator binds to IOGPUFamily's `IOAcceleratorES`, so AGXG18P stays out; the iPhone18,2 plan for it is not written.
+- 2026-11-10, lead -> all: **the session's own command line now boots as far as the bench runs.** Run as the fork
+  runs it (`bwrap --bind STAGE /data`, then `/data/runtime/bin/xnuhost --session-abi 1 --mode takeover --runtime
+  /data/runtime --image /data/image --data /data/data --session /data/session` under qemu-aarch64), with
+  `kernel.kc` in the image folder: with no boot arguments it panicked at `arm_vm_init.c:1107` (the contiguous hint)
+  and started 4 vCPUs with no SMP. xnuhost now has **default boot arguments** when neither the command line nor
+  `image/xnuhost.conf` gives any (Droid-VM's machine set: `sheng-smp=1`, the ArmCpu IPIs, `use_contiguous_hint=0`,
+  watchdogs off, `native-source-storage=1`, `vgpu-3d=1 droidvm-gpu-metal=1`, console in the log) and **one vCPU per
+  host core, up to 8**. Owners of drivers that need more arguments (display, HID, key store): add them to that
+  string in `runtime/xnuhost/src/config.c` when your driver lands. Now at: `apfs_module_start ... load:
+  com.apple.filesystems.apfs`, then the unmapped kernel function called from `0x200397eea4` (apfs; original
+  `0xfffffe000ad58f08`, 16 bytes, returns a 32-bit global, between `ml_readprop` and `hw_spin_always_return`).

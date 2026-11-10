@@ -14,7 +14,9 @@ void xh_config_defaults(xh_config *c)
   memset(c, 0, sizeof *c);
   c->session_abi = 1;
   strcpy(c->mode, "takeover");
-  c->ncpu = 4;
+  // One vCPU per core of the host, up to the 8 the phone has (the bridges give them its cluster types).
+  long cores = sysconf(_SC_NPROCESSORS_ONLN);
+  c->ncpu = cores < 1 ? 1 : cores > XH_MAX_CPUS ? XH_MAX_CPUS : (unsigned)cores;
   c->ram_bytes = 4ull << 30;
   strcpy(c->display, "shm");
   strcpy(c->gpu, "auto");
@@ -190,6 +192,15 @@ int xh_config_finish(xh_config *c)
   xh_config_defaults(&from_image);
   if (snprintf(path, sizeof path, "%s/xnuhost.conf", c->image) < (int)sizeof path && xh_config_file(&from_image, path)) return -1;
   if (!*c->boot_args) strcpy(c->boot_args, from_image.boot_args);
+  // Neither the command line nor the image set gave any: what the hosted kernel needs to start on this
+  // machine (the session's command line has no boot arguments). From Droid-VM's ipados27/board.toml
+  // kernel_args, the ones about the machine: SMP and ArmCpu's IPIs, no contiguous-hint mappings (the
+  // collection's layout: arm_vm_init.c:1107 asserts without it), no interrupt-masked or preemption watchdogs
+  // (a vCPU is a host thread), the source storage, the GPU's 3D context, the console in the log.
+  if (!*c->boot_args)
+    strcpy(c->boot_args, "debug=0x14e serial=3 -v kt_fixed_zones=120 -no_slto_panic ml-timeout-lock-panic-scale=40 tlto_us=0 "
+           "sheng-smp=1 armcpu-self-ipi=1 armcpu-spi-ipi=1 use_contiguous_hint=0 interrupt-masked-debug-mode=0 "
+           "sched_preemption_disable_debug_mode=0 wdt=-1 native-source-storage=1 vgpu-3d=1 droidvm-gpu-metal=1");
   if (c->ndisk == 0) { memcpy(c->disk, from_image.disk, sizeof c->disk); c->ndisk = from_image.ndisk; }
   if (!*c->kernel && !exists(c->image, "kernel.kc", c->kernel, sizeof c->kernel) &&
       !exists(c->image, "kernel.macho", c->kernel, sizeof c->kernel)) {
