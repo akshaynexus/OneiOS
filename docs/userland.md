@@ -5,8 +5,9 @@ Owner: userland. Code: `userland/`. Date: 2026-11-11.
 **State: run on the real root and booted on the PC; nothing has run on the phone.** `scripts/image/build.sh` with
 the hook builds the image set of 24A446 from the real images, and the hosted kernel boots that set under
 qemu-aarch64 to launchd and about 120 processes. In that boot launchd applies the daemon policy (section 10 has
-the numbers and how to check a run). The guest helpers are not built (no iOS SDK here), so nothing of
-`/private/var/oneios/bin` runs. The tests use a generated fake root. Marks:
+the numbers and how to check a run). The guest helpers are not built (the iOS toolchain of
+`docs/building.md` section 9 exists since 2026-11-11; `helpers/build.sh` does not use it yet), so nothing of
+`/private/var/oneios/bin` runs. The Metal plug-in is built with that toolchain and placed (section 7.1); not run. The tests use a generated fake root. Marks:
 [F] taken from a source that is named, [I] inferred, [U] unknown until a boot.
 
 What this part does: it takes Apple's iOS 27.0.1 system for iPhone18,2 (24A446) as it is and prepares
@@ -188,28 +189,32 @@ owner's IPSW (`out/kernel-inputs/24A446/devicetree.bin`, read locally, never com
 
 Built by `helpers/build.sh` for `arm64e-apple-ios27.0`, signed ad hoc with 4 KiB signature pages: Xcode on
 macOS, or stock clang with theos' ld64, ldid and an iPhoneOS SDK on Linux (iOSPlus10's
-`userland/ssh/build.sh` toolchain). **Not built for iOS yet**: no SDK on this machine. arm64e because iOS 27
+`userland/ssh/build.sh` toolchain). **Not built for iOS yet.** The project's own Linux toolchain now exists
+(`scripts/ios/ios-clang`, `ios-sign.py`, `macho-check.py`; `docs/building.md` section 9) and builds arm64e with
+4 KiB signature pages and DER entitlements; `helpers/build.sh`'s Linux branch still asks for theos and ldid and
+should be moved to it. arm64e because iOS 27
 kills arm64 platform binaries at exec (ownervisor `build.py`). A debug shell (dropbear) is not built here;
 `helpers/README.md` says where to take one (`external/ownervisor`, `external/applebox`, droidvm
 `ipados27/scripts/add-ownervisor-data.py`).
 
 ### 7.1 The Metal plug-in
 
-Placed by this part, not built by it. What to build (references agent, `docs/references.md`; fetch with
-`scripts/setup/get-references.sh`): `external/NativeMetal` at b0d6a07, metal2vulkan 624bab3 with
-`external/Droid-VM-UniXNU/patches/metal2vulkan/0001..0038`, Mesa c823a83e with `patches/mesa/*` (Turnip's
-darwin backend), by the kernel base's `scripts/build-turnip-darwin.py`, `build-adreno-metal-bridge.py` and
-`build-adreno-metal-plugin.py`; pins in `scripts/data/gpu-metal-vulkan-inputs.json`. It needs a Mac with
-Xcode 27.1. That stack passes MetalCheck 41/41 on an SM8650 / Adreno 750 phone under iPadOS 27.0.1 [F, references].
-Stage the result as `out/userland/NativeAdrenoMetal.bundle`; the hook picks it up, and the plug-in and Turnip
-CDHashes go to `owner-trust.json`.
+Built by `userland/metal/build.sh` on the Linux PC (`docs/gpu.md` section 7 has the pieces, the pins and what
+differs from upstream), placed by this part. The build leaves `out/userland/NativeAdrenoMetal.bundle` (`Info.plist`,
+`NativeAdrenoMetal`, `libvulkan_freedreno.dylib`, `oneios-target`) and beside it `NativeAdrenoMetal.build.json`:
+the SDK used, the source pins, each binary's size and the CDHash the build signed it with. The hook picks the
+bundle up, reads each Mach-O's CDHash from its signature into `owner-trust.json`, and compares them with the build
+record: a bundle changed after its build stops the image build. The manifest's `tweaks.info` gets `metal_plugin` (placed,
+target, CDHashes, SDK). The same stack passes MetalCheck 41/41 on an SM8650 / Adreno 750 phone under iPadOS 27.0.1
+[F, references]; here nothing has loaded it.
 
 **It must not be staged as upstream builds it.** Read in `external/NativeMetal/NativeAdrenoMetalPlugin.mm`:
 the plug-in writes QuartzCore's options at fixed addresses of the iPad17,3 24A446 shared cache, taken
 relative to `CARenderServerStart` (0x1846dce88), with no check of which cache is loaded. In the iPhone's
 cache the same writes land on other memory of backboardd. So `roottweak` places a bundle only if it holds a
 file `oneios-target` with `iPhone18,2 24A446`, which whoever re-finds the addresses for the iPhone cache adds
-before signing; otherwise the line is `off` and the guest renders on the CPU (`--metal-plugin-unchecked`
+(`userland/metal/build.sh` does, after rewriting the addresses from `userland/metal/hooks/iPhone18,2-24A446.json`;
+`docs/gpu.md` section 7 has the table and how each was found); otherwise the line is `off` and the guest renders on the CPU (`--metal-plugin-unchecked`
 overrides). Also read there: `<Name>.publish` and `<Name>.primelist` are looked up beside the bundle, which
 is where they are placed; `<Name>.clients` is read by the kernel's GPU driver, not the plug-in; and the
 plug-in's debug switches are fixed paths under `/private/var/ngpu/debug`, not under `/private/var/oneios`.
@@ -225,17 +230,17 @@ GPU tests once it runs: droidvm `package/metalcheck`, `gfxprobe`, `gfxbench`.
 | keybagd, securityd | Key-store stand-in: no passcode, wrap/unwrap for the keychain; empty `keybags/`. In the hosted kernel since `0022-keystore.patch` (`kernel/patches/oneios-hosted/keystore/README.md`: class keys from a constant, AES key wrap in software, the protection class of a Data file in an extended attribute; **not a security boundary**) | kernel; `data-layout` |
 | backboardd | The original IOMobileFramebuffer with a host display behind it; a Digitizer/Touch Screen HID service; the CA preferences of 3.1; backlight properties (iOS 26.5's CoreBrightness crashed on missing `backlight-calibration-parameters`; [U] on 27) | kernel, booter; `preferences` |
 | SpringBoard | Identity = iPhone (`oneios-mg` checks it); Setup skipped; migration recorded; watchdogs relaxed; CommCenter and sleepd answering; PosterBoard's store (data-protection class); staged apps and a fresh LaunchServices database; @3x | all; `preferences`, `launchd-jobs` |
-| Home screen with GPU | Metal plugin placed and trusted; clients list; kernel accelerator publishing `MetalPluginName` | plugin build (not started), kernel |
+| Home screen with GPU | Metal plugin placed and trusted; clients list; kernel accelerator publishing `MetalPluginName` | plugin built and placed (`userland/metal`), not run; kernel |
 
 ## 9. What is still missing for SpringBoard
 
 1. Done: the run on the real root (all 142 labels of the default policy are in the iPhone's cache) and a PC boot with it (section 10).
-2. iOS builds of the helpers (an SDK on the build machine), and their CDHashes in the kernel's owner trust module. Until then the kernel's line `no /private/var/oneios/bin/oneios-init in this seed: no service manager` stays. It is about our own helpers (boot stages on the console, the MobileGestalt check, a debug shell), not about the daemon policy.
+2. iOS builds of the helpers (`helpers/build.sh` moved to the toolchain of `docs/building.md` section 9), and their CDHashes in the kernel's owner trust module. Until then the kernel's line `no /private/var/oneios/bin/oneios-init in this seed: no service manager` stays. It is about our own helpers (boot stages on the console, the MobileGestalt check, a debug shell), not about the daemon policy.
 3. Done by the kernel: the first-start Data path (`0004`), with the seed unpacked in the kernel.
 4. The @3x scale: no fixup for the iPhone's QuartzCore yet, and the phone path of `-[CADisplayMode preferredScale]` has not been read (it needs `systemos.img`, not fetched here). Without it the guest may come up @2x (660x1434 points) and lay out wrongly.
 5. Kernel features of section 6 for this profile (release-kernel, booter).
 6. CommCenter without a baseband: in the PC boot launchd refused `com.apple.CommCenter.plist` (`_LimitLoadToDeviceTree baseband`: "cannot be loaded on this hardware"), loaded `com.apple.CommCenter-noncellular.plist` under the same label and CommCenter ran with no exit in the 5 minutes the log covers. Longer runs and SpringBoard's use of it: [U].
-7. The Metal plug-in: nothing built (needs a Mac with Xcode 27.1), and upstream's holds the iPad cache's QuartzCore addresses, which must be re-found in the iPhone's cache first (section 7.1). Until then CPU rendering.
+7. The Metal plug-in is built for the iPhone's cache and placed (section 7.1), but no boot has loaded it (`docs/gpu.md` sections 5.1 and 7: the kernel side is linked; a boot needs an image set with the bundle and a kernel that trusts its two CDHashes). Until then CPU rendering.
 8. Camera, cellular, Face ID, NFC, haptics: idled or disabled, not provided.
 
 

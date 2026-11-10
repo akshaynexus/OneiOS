@@ -459,6 +459,47 @@ class Hook(Case):
         env['ONEIOS_HOOK_API'] = '2'
         self.assertNotEqual(subprocess.run([sys.executable, '-I', hook], env=env, capture_output=True).returncode, 0)
 
+    def test_the_hook_checks_the_plug_ins_build_record(self):
+        import subprocess
+        overlay, info = os.path.join(self.top, 'overlay'), os.path.join(self.top, 'info.json')
+        os.mkdir(overlay)
+        bundle = os.path.join(self.top, 'out/NativeAdrenoMetal.bundle')
+        os.makedirs(bundle)
+        with open(os.path.join(bundle, 'Info.plist'), 'wb') as f:
+            plistlib.dump({'CFBundleExecutable': 'NativeAdrenoMetal', 'NSPrincipalClass': 'NativeAdrenoMetalDevice'}, f)
+        hashes = []
+        for name in ('NativeAdrenoMetal', 'libvulkan_freedreno.dylib'):
+            data, cdhash = fakeroot.signed_macho('org.example.' + name)
+            hashes.append(cdhash)
+            with open(os.path.join(bundle, name), 'wb') as f:
+                f.write(data)
+        with open(os.path.join(bundle, 'oneios-target'), 'w') as f:
+            f.write(f'iPhone18,2 {fakeroot.BUILD}\n')
+        record = os.path.join(self.top, 'out/NativeAdrenoMetal.build.json')
+
+        def write(cdhashes):
+            with open(record, 'w') as f:
+                json.dump({'target': f'iPhone18,2 {fakeroot.BUILD}', 'cdhashes': cdhashes, 'sdk': {'version': '26.5'}}, f)
+
+        env = {'PATH': os.environ['PATH'], 'ONEIOS_HOOK_API': '1', 'ONEIOS_OS_ROOT': self.root, 'ONEIOS_DATA': self.data,
+               'ONEIOS_OVERLAY': overlay, 'ONEIOS_INFO': info, 'ONEIOS_BUILD': fakeroot.BUILD,
+               'ONEIOS_HELPERS': os.path.join(self.top, 'none'), 'ONEIOS_METAL_PLUGIN': bundle}
+        hook = os.path.join(os.path.dirname(HERE), 'image-hook')
+        write(sorted(hashes))
+        done = subprocess.run([sys.executable, '-I', hook], env=env, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        with open(os.path.join(overlay, 'userland/owner-trust.json')) as f:
+            self.assertEqual(json.load(f)['cdhashes'], sorted(hashes))
+        with open(info) as f:
+            self.assertEqual(json.load(f)['metal_plugin'], {'placed': True, 'target': f'iPhone18,2 {fakeroot.BUILD}',
+                                                            'cdhashes': sorted(hashes), 'sdk': '26.5',
+                                                            'record': 'NativeAdrenoMetal.build.json'})
+        # a bundle that is not the one its record describes stops the build
+        write(sorted(hashes[:1] + ['00' * 20]))
+        done = subprocess.run([sys.executable, '-I', hook], env=env, capture_output=True, text=True)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn('changed after it was built', done.stderr)
+
 
 class ReadWrite(Case):
     def cache(self):

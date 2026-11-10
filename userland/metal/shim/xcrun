@@ -1,0 +1,25 @@
+#!/bin/sh
+# xcrun for the kernel base's build scripts on Linux: the SDK and tools of scripts/ios/env.sh.
+#   xcrun [--sdk iphoneos] --show-sdk-path | --find TOOL | TOOL ARGS...
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sdk) shift 2 ;;
+    --show-sdk-path) echo "$IOS_SDK"; exit 0 ;;
+    --find)
+      case "$2" in
+        clang) echo "$IOS_DIR/ios-clang" ;;
+        clang++) echo "$IOS_DIR/ios-clang++" ;;
+        ar) command -v llvm-ar ;;
+        strip) echo "$IOS_CCTOOLS/strip" ;;
+        *) echo "xcrun shim: no tool $2" >&2; exit 1 ;;
+      esac
+      exit 0 ;;
+    *) break ;;
+  esac
+done
+tool=$1; shift
+case "$tool" in
+  clang) exec "$IOS_DIR/ios-clang" "$@" ;;
+  clang++) exec "$IOS_DIR/ios-clang++" "$@" ;;
+  *) echo "xcrun shim: no tool $tool" >&2; exit 1 ;;
+esac

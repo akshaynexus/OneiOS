@@ -39,8 +39,9 @@ and the board, [docs/agents.md](docs/agents.md).
 Built and tested on the PC, not yet on the phone: xnuhost and its loader, the GPU path (drm2kgsl on KGSL), the
 display helper, the hardware bridges (CPU, network, Bluetooth, haptics, audio, brightness and the light sensor,
 camera), the image pipeline, the runtime package and releases, and the OneOS fork's iOS 27 card, session scripts and
-Hardware checks. Not done: the camera's iOS-side capture device, auto-brightness's last link into CoreBrightness,
-the Metal plug-in build for the iPhone cache. Never: passcode, Face ID, Wallet, calls, SMS.
+Hardware checks, and the iOS user-space cross toolchain with the Metal plug-in built for the iPhone's shared cache
+(not loaded by any boot yet). Not done: the camera's iOS-side capture device, auto-brightness's last link into
+CoreBrightness. Never: passcode, Face ID, Wallet, calls, SMS.
 
 ## Layout
 

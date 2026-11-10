@@ -1,0 +1,15 @@
+#!/bin/sh
+# clang for iOS user space on Linux: the target (arm64e-apple-ios27.0), the iPhoneOS SDK's headers, Apple's ld64
+# through ios-ld (which puts the iOS 27 stubs of out/ios27-tbd before the SDK's). Arguments as for clang:
+#
+#   scripts/ios/ios-clang   -O2 hello.c -o hello                          an executable
+#   scripts/ios/ios-clang   -dynamiclib -install_name /usr/lib/x.dylib x.c -o x.dylib
+#   scripts/ios/ios-clang++ -bundle -fobjc-arc x.mm -framework Metal -o X
+#
+# ios-clang++ is a link to this file. Settings: scripts/ios/env.sh (IOS_SDK, IOS_MIN, IOS_TARGET, IOS_TBD, IOS_LD).
+# The output is not signed: scripts/ios/ios-sign.py signs it and prints its CDHash.
+IOS_DIR=$(dirname "$(readlink -f "$0")")
+. "$IOS_DIR/env.sh" || exit 1
+case "$(basename "$0")" in *++) cc=$IOS_CLANG++ ;; *) cc=$IOS_CLANG ;; esac
+exec "$cc" -target "$IOS_TARGET" -isysroot "$IOS_SDK" --ld-path="$IOS_DIR/ios-ld" -mlinker-version="$IOS_LD_VERSION" \
+  -Qunused-arguments "$@"

@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "$IOS_CCTOOLS/strip" "$@"

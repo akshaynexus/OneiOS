@@ -9,13 +9,13 @@ run on the phone: no phone was on adb. `gpuctl` (section 4) is the first thing t
 driver builds into the hosted kernel. Metal's kernel side is linked (2026-11-11, native-adreno; section 5):
 NativeAdreno's `AGXAccelerator` under the collection's `IOAcceleratorES` and its `AGXDeviceUserClient` over
 `droidvm_virtgpu_call`. On the PC it registers, IOKit matches it and the Metal plug-in's connection opens from
-inside the kernel; qemu has no KGSL, so no 3D context, blob or submit has run anywhere. The Metal plug-in is not
-built (section 6).
+inside the kernel; qemu has no KGSL, so no 3D context, blob or submit has run anywhere. The Metal plug-in is built on
+the PC for the iPhone18,2 24A446 shared cache and placed by the image hook (section 7); no boot has loaded it.
 
 ## 1. The path
 
 ```
-iOS process: Metal -> NativeAdrenoMetal.bundle (NativeMetal, metal2vulkan, Turnip)          userland/, not built
+iOS process: Metal -> NativeAdrenoMetal.bundle (NativeMetal, metal2vulkan, Turnip)          userland/metal, built, not run
    | IOKit: AGXAccelerator -> AGXDeviceUserClient, open type 0x4149, DROIDVM_VIRTGPU_*       gpu/ archive, opens on the PC
 hosted XNU: DroidVMVirtioGpu3D.cpp (droidvm_virtgpu_call) -> DroidVMVirtioGpu.cpp            0005, builds
    | virtio-mmio: /arm-io/virtio-gpu, control queue
@@ -248,10 +248,7 @@ member `AGXAccelerator::superClass` keeps the parent's unslid link address (noth
    IOFilterInterruptEventSource and IOTimerEventSource), `0xfffffe000b3597a8` (a platform-expert call before
    `PEHaltRestartInternal`). NativeAdreno itself calls kext code only through the two bound stubs; the plug-in's
    IOSurface use and IOGPUFamily's own user clients can reach the others.
-3. **The Metal plug-in.** `userland/roottweak` already places `out/userland/NativeAdrenoMetal.bundle` at
-   `/System/Library/Extensions/` and records it in the contract (`metal`); the bundle itself (NativeMetal b0d6a07,
-   metal2vulkan + patches, Turnip's darwin backend) needs a Mac to build and its QuartzCore hooks redone for the
-   iPhone18,2 shared cache (`docs/agents.md`, references -> userland). The kernel side publishes
+3. **The Metal plug-in running.** It is built and placed (section 7); nothing has loaded it. The kernel side publishes
    `MetalPluginName = NativeAdrenoMetal`, `MetalPluginClassName = NativeAdrenoMetalDevice`; the interface and the
    boot arguments are in section 5.1.
 4. **Hosted mappings of the pool and of guest blobs.** The driver maps the pool with
@@ -259,3 +256,85 @@ member `AGXAccelerator::superClass` keeps the parent's unslid link address (noth
    memfd outside the kernel's window (the pool: allowed by `0024-gpu-pool.patch`) and ordinary pages (blobs). Not run.
 5. **Zero-copy scanout**, EDID (refresh rate), cursor: not done; the display is a row copy per flush.
 6. **Blobs larger than udmabuf's limits** (section 4) are refused by the kernel; there is no fallback by address.
+
+## 7. The Metal plug-in (`userland/metal`)
+
+Built on the Linux PC with the iOS cross toolchain ([building.md](building.md) section 9); no Mac.
+
+```sh
+scripts/bg.sh metal userland/metal/build.sh      # stage, turnip, plugin, finish (each also runs alone)
+```
+
+**What it builds**, all for `arm64e-apple-ios27.0`:
+
+| Piece | Source | Notes |
+|---|---|---|
+| `libvulkan_freedreno.dylib` | `external/mesa-droidvm` cecc0e9 (Droid-VM/mesa, `droidvm`) + the 30 patches listed in Droid-VM-UniXNU `scripts/data/adreno-compiler-inputs.json` (`patches/mesa/`: `turnip-darwin-kmd`, `turnip-darwin-virtgpu`, ...) | meson cross build, `-Dvulkan-drivers=freedreno -Dfreedreno-kmds=darwin`, release. Its 5633 weak flat-namespace imports are bound to the image itself (`macho-weak-self-binds.py`) |
+| `libadreno_metal_bridge.a` | `external/metal2vulkan` 624bab3 + NativeMetal `bridge/patches` 0001-0024 (without 0020) + Droid-VM-UniXNU `patches/metal2vulkan` 0011-0038, behind `bridge/NativeMetalBridge.rs` | Rust 1.98.0, target `arm64e-apple-ios`, std built from `rust-src`, fat LTO. No `Cargo.lock` is pinned upstream: the crates are the newest that fit at build time |
+| `NativeAdrenoMetal` | `external/NativeMetal` b0d6a07 (`NativeAdrenoMetalPlugin.mm`, `NativeBridgeMetalFrontend.mm`), `external/AdrenoPM4`, the bridge | The Rust objects' callback imports go through `RustPacBoundary.c`; their indirect branches through its trampolines (`rust-pac-rewrite.py`) |
+
+The steps are the kernel base's own scripts (`build-turnip-darwin.py`, `build-adreno-metal-bridge.py`,
+`build-adreno-metal-plugin.py`, `--target ios27`), run from a staged copy of its tree in `out/metal/root` with
+`userland/metal/shim/` first in `PATH`: `xcrun`, `codesign`, `strip` and `nm` are answered by `scripts/ios` and
+cctools. The staged copies differ from upstream in four lines, which `stage` prints: meson's build-machine compiler,
+ninja's job count, a longer limit for the Rust build, and no `TurnipReplay.h` (it is recorded by a Mac-only host
+simulation; the plug-in includes it only when it exists, so the prefix-replay diagnostic is absent). Also not made:
+`build/prime-list.txt` (the image's `.metallib` paths for shader priming; the plug-in primes nothing without it).
+The script's probe daemon `adrenoprobed` is built beside the bundle (`out/metal/root/build/adreno-metal-plugin27/`)
+and not placed.
+
+**The bundle** (`out/userland/NativeAdrenoMetal.bundle`): `Info.plist` (`org.blu-sharky.NativeAdrenoMetal`, principal
+class `NativeAdrenoMetalDevice`, MinimumOSVersion 27.0), `NativeAdrenoMetal`, `libvulkan_freedreno.dylib` (opened by
+path by the plug-in), `oneios-target`. Both binaries are signed by `scripts/ios/ios-sign.py`;
+`NativeAdrenoMetal.build.json` beside the bundle records the SDK, the stubs' cache, the source pins, sizes and CDHashes.
+
+**The shared cache addresses.** Upstream's plug-in writes QuartzCore's options at fixed addresses of the iPad17,3
+24A446 cache, relative to `CARenderServerStart`. They were re-found in this guest's cache
+(`out/image/24A446/systemos.img`, cache UUID `77BC8C63-93DA-3E9B-BB9C-0BE2AF0C0E17`) and are recorded in
+`userland/metal/hooks/iPhone18,2-24A446.json`; `stage` rewrites the staged `NativeAdrenoMetalPlugin.mm` from that file
+and refuses to go on if the arm64e code holds an address the file does not name.
+
+| What | iPad17,3 (upstream) | iPhone18,2 |
+|---|---|---|
+| `_CARenderServerStart` (the anchor) | `0x1846dce88` | `0x1846dce88` |
+| `CA::WindowServer::IOMFBDisplay::framebuffer_pixel_format`; its `tbnz w8, #0` (word `0x37000608`) | `0x184461838`; `0x184461928` | the same |
+| `debug_values[21]` (`CA_DISPLAY_EDR_HEADROOM`) | `0x1e7021014` | `0x1e7025014` |
+| `debug_values[81]` (`CA_FP16_MIN_HEADROOM`) | `0x1e7021104` | `0x1e7025104` |
+| `_ca_debug_options` (+128 force FP16, +156 EDR mirroring) | `0x1e702116c` | `0x1e702516c` |
+| `CADeviceIsVirtualized::is_virtualized` | `0x1e701bdd9` | `0x1e701fdd9` |
+| `CADeviceIsVirtualized::once` | `0x1e7020780` | `0x1e7024780` |
+| the constant CFString of that query (a diagnostic note) | `0x1e9021680` | `0x1e9025680` |
+
+QuartzCore's code is at the same addresses in both caches; its `__DATA_DIRTY` and the CFString are 0x4000 higher in
+the iPhone's. Placed as upstream builds it, the plug-in would have written the headroom, the threshold, the option
+byte and the once token 16 KiB below their places in backboardd. How they were found:
+
+```sh
+apfs-fuse -o ro out/image/24A446/systemos.img MNT       # the cache: MNT/root/System/Library/Caches/com.apple.dyld/
+C=out/ios27-cache/dyld_shared_cache_arm64e              # (a copy of that folder; ipsw reads it much faster)
+out/bin/ipsw dyld symaddr $C -i QuartzCore              # the cache has QuartzCore's local symbols:
+#   0x1846dce88 _CARenderServerStart                     0x184461838 __ZN2CA12WindowServer12IOMFBDisplay24framebuffer_pixel_formatEv
+#   0x184541f10 ___CADeviceIsVirtualized_block_invoke    0x1844eef00 __ZL10init_debugPv
+#   0x1e7024fc0 __ZL12debug_values    0x1e702516c _ca_debug_options
+#   0x1e701fdd9 __ZZ21CADeviceIsVirtualizedE14is_virtualized    0x1e7024780 __ZZ21CADeviceIsVirtualizedE4once
+out/bin/ipsw dyld disass $C --vaddr 0x184461838          # framebuffer_pixel_format reads exactly these:
+#   0x184461888 ldr s8, [0x1e7025000 + 0x104]     0x1844618c4 ldrb [.. + 0x1ec]    0x1844618d0 ldrb [.. + 0x208]
+#   0x184461914 ldr x8, [0x1e7024000 + 0x780]     0x184461924 ldrb [0x1e701f000 + 0xdd9]
+#   0x184461928 08 06 00 37  tbnz w8, #0, 0x1844619e8
+out/bin/ipsw dyld disass $C --vaddr 0x184541f10          # adrp/add x0 = 0x1e9025680; strb w0, [0x1e701fdd9]
+```
+
+`debug_values[21]` is read by `CA::WindowServer::Display::edr_headroom` (0x18441f638, which that function calls):
+`0x18441f660 ldr s0, [0x1e7025000 + 0x14]`. **RenderBox, WebGPU, ANGLE:** the frontend tells each a GPU
+family by the caller's image path (`dladdr`), no address: all three images are in this cache under the paths the
+code tests. The frontend's `quartzCoreCallers` diagnostic still holds offsets of the iOS 17 QuartzCore, as upstream
+has it on the iPad; it only reads inside QuartzCore's image.
+
+**Verified** (2026-11-11, SDK 26.5 headers, iOS 27 stubs): the bundle builds; `scripts/ios/macho-check.py` passes for
+both binaries (every library has a stub of 24A446 and every bound import is exported by it; Turnip's 5633 weak
+entrypoints are bound to itself); the image hook places the bundle and `owner-trust.json` lists both CDHashes
+(sizes and hashes: `out/userland/NativeAdrenoMetal.build.json`).
+**Not verified:** anything at run time. No guest has loaded the bundle: no boot has been made from an image set
+that carries it with a kernel that trusts its CDHashes, and SpringBoard is not up. Whether dyld and AMFI of this guest accept the binaries, whether the
+writes above have the effect they have on the iPad, and whether MetalCheck passes are all open.
+

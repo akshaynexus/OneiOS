@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""codesign for the kernel base's build scripts on Linux, over scripts/ios/ios-sign.py. The forms they use:
+  codesign --force --sign - --pagesize 4096 --identifier ID [--entitlements PLIST] FILE|BUNDLE
+  codesign --verify --strict FILE|BUNDLE
+  codesign --display --verbose=4 FILE|BUNDLE          (stderr: CDHash=..., Page size=...)
+  codesign -d --entitlements :- FILE                  (stdout: the signed entitlements)
+A bundle means its CFBundleExecutable; no bundle seal is made (ios-sign.py says why)."""
+import os
+import plistlib
+import struct
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.join(os.environ['IOS_REPO'], 'userland'))
+from roottweak import macho  # noqa: E402
+
+args = sys.argv[1:]
+target = args[-1]
+if os.path.isdir(target):
+    with open(os.path.join(target, 'Info.plist'), 'rb') as f:
+        target = os.path.join(target, plistlib.load(f)['CFBundleExecutable'])
+
+
+def option(name):
+    return args[args.index(name) + 1] if name in args else None
+
+
+def described():
+    with open(target, 'rb') as f:
+        return f.read(), macho.describe(open(target, 'rb').read())[0]
+
+
+if '--sign' in args:
+    if option('--pagesize') != '4096':
+        sys.exit('codesign shim: only --pagesize 4096')
+    command = [os.path.join(os.environ['IOS_DIR'], 'ios-sign.py'), '--identifier', option('--identifier') or os.path.basename(target)]
+    if option('--entitlements'):
+        command += ['--entitlements', option('--entitlements')]
+    sys.exit(subprocess.run(command + [target], stdout=subprocess.DEVNULL).returncode)
+if '--verify' in args:
+    described()
+    sys.exit(0)
+if '--entitlements' in args:      # -d --entitlements :-
+    data, _ = described()
+    at = data.find(struct.pack('>I', 0xFADE7171))
+    if at < 0:
+        sys.exit('codesign shim: no entitlements in the signature')
+    sys.stdout.buffer.write(data[at + 8:at + struct.unpack_from('>I', data, at + 4)[0]])
+    sys.exit(0)
+if '--display' in args or '-d' in args:
+    _, info = described()
+    sys.stderr.write(f'Identifier={info["identifier"]}\nCDHash={info["cdhash"]}\nPage size={info["page_size"]}\n')
+    sys.exit(0)
+sys.exit('codesign shim: form not handled: ' + ' '.join(args))

@@ -1,0 +1,23 @@
+{
+  "target": "iPhone18,2 24A446",
+  "cache_uuid": "77BC8C63-93DA-3E9B-BB9C-0BE2AF0C0E17",
+  "source": "external/NativeMetal b0d6a07 NativeAdrenoMetalPlugin.mm, whose constants are the iPad17,3 24A446 cache's",
+  "how": "ipsw dyld symaddr CACHE -i QuartzCore (the cache carries QuartzCore's local symbols), then ipsw dyld disass --vaddr of the three functions; docs/gpu.md section 7 has the commands and what each showed",
+  "anchor": {"symbol": "_CARenderServerStart", "upstream": "0x1846dce88", "value": "0x1846dce88"},
+  "branch": {"address": "0x184461928", "word": "0x37000608", "what": "tbnz w8, #0 in CA::WindowServer::IOMFBDisplay::framebuffer_pixel_format (0x184461838), after ldrb of is_virtualized"},
+  "replace": [
+    {"upstream": "0x1e7021014", "value": "0x1e7025014", "what": "debug_values[21], CA_DISPLAY_EDR_HEADROOM (float); debug_values is 0x1e7024fc0; read by Display::edr_headroom at 0x18441f660"},
+    {"upstream": "0x1e7021104", "value": "0x1e7025104", "what": "debug_values[81], CA_FP16_MIN_HEADROOM (float); read by framebuffer_pixel_format at 0x184461888"},
+    {"upstream": "0x1e702116c", "value": "0x1e702516c", "what": "_ca_debug_options; +128 CA_FORCE_FP16_FRAMEBUFFER (read at 0x1844618c4), +156 CA_ALLOW_EDR_MIRRORING (read at 0x1844618d0)"},
+    {"upstream": "0x1e701bdd9", "value": "0x1e701fdd9", "what": "CADeviceIsVirtualized::is_virtualized (byte); stored by the block at 0x184541f10, read at 0x184461924"},
+    {"upstream": "0x1e7020780", "value": "0x1e7024780", "what": "CADeviceIsVirtualized::once (dispatch_once token); read at 0x184461914"},
+    {"upstream": "0x1e9021680", "value": "0x1e9025680", "what": "the constant CFString the block at 0x184541f10 passes to MobileGestalt (a diagnostic note reads its text)"}
+  ],
+  "same": [
+    {"value": "0x1846dce88", "what": "CARenderServerStart, the anchor the slide is taken from"},
+    {"value": "0x184461838", "what": "framebuffer_pixel_format"},
+    {"value": "0x184461928", "what": "its branch (only patched with the boot argument sheng-fb-bgra=1)"},
+    {"value": "0x184541f10", "what": "the CADeviceIsVirtualized block (named in comments only)"}
+  ],
+  "no_address": "RenderBox, WebGPU and ANGLE are told a GPU family by the caller's image path (dladdr): /System/Library/PrivateFrameworks/RenderBox.framework/RenderBox, .../WebGPU.framework/WebGPU and .../WebCore.framework/Frameworks/libANGLE-shared.dylib are all in this cache under those paths. The frontend's quartzCoreCallers diagnostic holds offsets of the iOS 17 (21H461) QuartzCore; it only reads, inside QuartzCore's image, and is left as upstream has it."
+}

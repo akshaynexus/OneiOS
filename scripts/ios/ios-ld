@@ -1,0 +1,18 @@
+#!/bin/sh
+# Apple's ld64 for an iOS link. clang (ios-clang) runs this as its linker; by hand it takes ld64's own arguments:
+#
+#   scripts/ios/ios-ld -arch arm64e -platform_version ios 27.0 26.5 -syslibroot "$IOS_SDK" -o x x.o -lSystem
+#
+# When out/ios27-tbd exists (scripts/ios/make-tbds.py: stubs made from the guest's iOS 27 shared cache), it is
+# given as the first -syslibroot, so every library and framework resolves against what iOS 27.0.1 really exports
+# and only a library the stubs lack falls back to the SDK's stub. IOS_TBD=/nonexistent links against the SDK alone.
+IOS_DIR=$(dirname "$(readlink -f "$0")")
+. "$IOS_DIR/env.sh" || exit 1
+# Chained fixups (LC_DYLD_CHAINED_FIXUPS), as Xcode's linker writes for iOS 14 and later: this ld64 writes the older
+# LC_DYLD_INFO opcodes unless told. Not for a relocatable link (-r).
+for a in "$@"; do [ "$a" = -r ] && chains=no; done
+[ "${chains:-}" = no ] || set -- -fixup_chains "$@"
+if [ -f "$IOS_TBD/usr/lib/libSystem.B.tbd" ]; then
+  exec "$IOS_LD" -syslibroot "$IOS_TBD" "$@"
+fi
+exec "$IOS_LD" "$@"

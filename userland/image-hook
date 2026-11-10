@@ -11,7 +11,8 @@ trust cache), tweaks.manifest.json, report.txt, report.json. Owners go to ONEIOS
 
 Optional inputs, each used when it is there:
   ONEIOS_HELPERS        signed guest helpers (default out/userland/helpers, from userland/helpers/build.sh)
-  ONEIOS_METAL_PLUGIN   a built Metal plugin bundle (default out/userland/NativeAdrenoMetal.bundle)
+  ONEIOS_METAL_PLUGIN   a built Metal plugin bundle (default out/userland/NativeAdrenoMetal.bundle, from
+                        userland/metal/build.sh); its build record NativeAdrenoMetal.build.json beside it is checked
   ONEIOS_ROOTTWEAK_ARGS more `roottweak apply` arguments, split like a shell line (--group fewest, --disable LABEL)
 """
 import json
@@ -75,6 +76,26 @@ def main():
             f.write('\n')
         first_start = 'overlay/userland/bin/oneios-seed'
 
+    # The plug-in's build record (userland/metal/build.sh writes NativeAdrenoMetal.build.json beside the bundle, with the
+    # CDHash of each binary as the build signed it): when the bundle was placed, the trust list must hold exactly those.
+    # A bundle changed after its build (re-signed, a file swapped) stops the image build here, not at the guest's AMFI.
+    metal = None
+    record = plugin.rstrip('/')[:-len('.bundle')] + '.build.json' if plugin.rstrip('/').endswith('.bundle') else None
+    if record and os.path.isfile(record):
+        with open(record) as f:
+            built = json.load(f)
+        with open(os.path.join(out, 'owner-trust.json')) as f:
+            trust = json.load(f)
+        with open(os.path.join(out, 'boot-contract.json')) as f:
+            placed = 'metal' in json.load(f)
+        if placed:
+            missing = sorted(set(built['cdhashes']) - set(trust['cdhashes']))
+            if missing:
+                sys.exit(f'image-hook: {record} lists CDHashes the placed bundle does not have ({", ".join(missing)}): '
+                         'the bundle changed after it was built; run userland/metal/build.sh again')
+        metal = {'placed': placed, 'target': built.get('target'), 'cdhashes': built['cdhashes'],
+                 'sdk': (built.get('sdk') or {}).get('version'), 'record': os.path.basename(record)}
+
     with open(os.path.join(out, 'tweaks.manifest.json')) as f:
         manifest = json.load(f)
     owners = env.get('ONEIOS_OWNERS')
@@ -98,6 +119,7 @@ def main():
                 'first_start_unpacker': first_start,
                 'disabled_jobs': len(contract['launch_policy']['disable_jobs']),
                 'owner_cdhashes': len(trust['cdhashes']),
+                'metal_plugin': metal,
                 'off': [f'{r["item"]}: {r["note"]}' for r in report['results'] if r['state'] == 'off'],
                 'not_found': [r['item'] for r in report['results'] if r['state'] == 'not-found'],
             }, f, indent=2)

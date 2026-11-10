@@ -21,6 +21,9 @@ DEST=${REF_DIR:-$REPO/external}
 # AdrenoPM4, ArmSmmu4K  the two kits NativeAdreno's sources include (PM4 encoder, SMMU page-table types), at the kernel
 #                   base's kits/ submodule commits: for the compile check of kernel/patches/oneios-hosted/gpu.
 # NativeMetal       the Metal plug-in (frontend, metal2vulkan bridge, Turnip glue), at the kernel base's drivers/AdrenoMetal.
+# metal2vulkan, mesa-droidvm  the Metal plug-in's translator and Turnip's source, at the pins of the kernel base's
+#                   scripts/data/gpu-metal-vulkan-inputs.json and adreno-compiler-inputs.json. userland/metal/build.sh
+#                   patches copies of them (patches/metal2vulkan, patches/mesa of Droid-VM-UniXNU); these stay as fetched.
 # NativeMobileDisplay  the IOMobileFramebuffer backend (GopFramebuffer fork), at the kernel base's drivers/GopFramebuffer.
 # NativeHidInput    UniXNU/ShengHidInput at the commit UniXNU-droidvm's feeds.toml pins: touch, buttons, keyboard HID.
 # ownervisor, applebox  the owner debug shell and tools of the guest (UniXNU-droidvm's feeds.toml pin; applebox head).
@@ -35,6 +38,8 @@ NativeAdreno         https://github.com/Droid-VM/NativeAdreno.git         627836
 AdrenoPM4            https://github.com/UniXNU/AdrenoPM4.git              282606b528b2595bc4274ea7490b62b323f35a5f main
 ArmSmmu4K            https://github.com/UniXNU/ArmSmmu4K.git              83969cd874503e65997ff7639f7dcf3d0a92cd17 main
 NativeMetal          https://github.com/Droid-VM/NativeMetal.git          b0d6a07a3da3e23486593aff235904177e94a3ff wip/hackintosh
+metal2vulkan         https://github.com/steelbrain/metal2vulkan.git       624bab3918de5b978e1101517abca2b4fa426565 development
+mesa-droidvm         https://github.com/Droid-VM/mesa.git                 cecc0e96d7193c72356a31abb0cc589e4fc0415e droidvm
 NativeMobileDisplay  https://github.com/Droid-VM/NativeMobileDisplay.git  ed08bd437b93772d4c41d74633af12446918f18a wip/hackintosh
 NativeHidInput       https://github.com/UniXNU/ShengHidInput.git          5f3a37cec0c3fc4234b10726b25489a55f0d77ef main
 ownervisor           https://github.com/Droid-VM/ownervisor.git           65fc2c7037f494a238f4263f528a68ff21e87406 main

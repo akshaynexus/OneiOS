@@ -1,7 +1,6 @@
 # Building and testing OneiOS
 
-Everything builds on a Linux x86_64 PC. No Mac is needed for the boot path; a Mac (Xcode 27.1) is only needed for
-optional pieces named below. Long steps run in tmux with `scripts/bg.sh NAME CMD...` (log in `logs/NAME.log`, exit
+Everything builds on a Linux x86_64 PC, iOS user-space code included (section 9); no Mac is needed. Long steps run in tmux with `scripts/bg.sh NAME CMD...` (log in `logs/NAME.log`, exit
 code in `logs/NAME.exit`, state with `scripts/bg.sh -s NAME`). tmux does not pass environment variables: put them
 inside the command (`scripts/bg.sh x env VAR=1 cmd`).
 
@@ -21,6 +20,7 @@ and `out/`.
 | `ipsw` CLI | AEA decryption | `scripts/fetch/get-ipsw-cli.sh` installs the pinned version to `out/bin/ipsw` |
 | mksh, dash (optional) | testing the phone scripts the way Android runs them | |
 | gh | releases | |
+| xtool, an Xcode `.xip`, rustup 1.98.0 with `rust-src`, meson, ninja, glslang, glslc, spirv-val, bison, flex, PyYAML | iOS user-space code: the cross toolchain and the Metal plug-in | section 9; `scripts/setup/ios-toolchain.sh` says what is missing |
 
 Source references (shallow clones into `external/`, git-ignored):
 
@@ -185,3 +185,84 @@ the prerelease `oneios-<version>` (0.4.75 is the first with the Hardware checks 
 A tag `vN.N.N` on `main` runs `.github/workflows/release.yml`, which builds the runtime package with the pinned NDK
 and attaches it and its `.sha256` to the release. No kernel, no image. See [releases.md](releases.md).
 The first release is [`v0.1.0`](https://github.com/akshaynexus/OneiOS/releases/tag/v0.1.0) (2026-11-10).
+
+## 9. iOS user-space code (executables, dylibs, bundles) on Linux
+
+The method of `macos_helios300` (its `CROSS-BUILD.md`): the host's clang against the SDK that xtool extracts from
+Xcode, linked by Apple's ld64, signed ad hoc here. Nothing of it needs a Mac.
+
+```sh
+scripts/setup/ios-toolchain.sh          # one line: "ios toolchain: ok: SDK ..., ld64-956.6, clang ..., iOS 27 stubs N"
+                                        #        or "ios toolchain: missing: A; B" (each with the command that makes it)
+scripts/bg.sh ios-ld scripts/setup/ios-toolchain.sh --ld      # once: ld64 with .tbd support -> out/ios-toolchain (about 6 min)
+scripts/bg.sh ios-tbds scripts/setup/ios-toolchain.sh --tbd   # once per image set: the iOS 27 stubs -> out/ios27-tbd (about 6 min)
+scripts/setup/ios-toolchain.sh --test   # builds, signs and checks out/ios-test/hello
+```
+
+| Part | What | Where it comes from |
+|---|---|---|
+| SDK | headers (and stubs, as a fallback) | `xtool sdk install <Xcode.xip>` puts it under `~/.config/swiftpm/swift-sdks/darwin.artifactbundle/.../SDKs/`. The newest `iPhoneOS*.sdk` there is used; `IOS_SDK=DIR` names another. Every build prints the SDK it used and writes it into its build record |
+| ld64 | Apple's ld64-956.6 with libtapi | `--ld` builds cctools-port at the kernel's pin (`kernel/pins.sh`) with tpoechtrager/apple-libtapi `2a57054` into `out/ios-toolchain`. The kernel's ld64 (`out/toolchain`) is built without libtapi and cannot read a `.tbd` |
+| iOS 27 stubs | what 24A446 really exports | `--tbd` runs `scripts/ios/make-tbds.py`: one `.tbd` per image of the guest's own shared cache (4696; read from `out/ios27-cache/` when that copy exists, otherwise from `out/image/24A446/systemos.img` mounted with apfs-fuse), written by `ipsw dyld tbd`, laid out like an SDK in `out/ios27-tbd/` (1.5 GB). Derived from Apple's binaries: never committed |
+| clang | the host's, LLVM 19 or newer (arm64e) | |
+
+**The SDK today is iOS 26.5; the target is iOS 27.** xtool has only `iPhoneOS26.5.sdk` until the owner downloads
+Xcode 27.1 from Apple (it needs their Apple ID) and runs:
+
+```sh
+xtool sdk install ~/Downloads/Xcode_27.1.xip
+```
+
+Until then code compiles against the 26.5 **headers** and links against the **iOS 27 stubs**: `ios-ld` gives
+`out/ios27-tbd` to ld64 as the first `-syslibroot`, so a symbol iOS 27.0.1 does not export fails the link, and
+`macho-check.py` checks the result against the same stubs. The deployment target is 27.0 either way
+(`LC_BUILD_VERSION`: minos 27.0, sdk 26.5). What changes once the iOS 27 SDK is installed: it is picked up with no
+edit (the newest `iPhoneOS*.sdk`), the printed SDK line and the build records say 27.x, iOS 27's own headers
+(new API declarations, availability) are used, and the binaries' `sdk` field becomes 27.x. The stubs stay first:
+they are this guest's build, the SDK's are the SDK's. Rebuild what was built (`userland/metal/build.sh`).
+
+The helpers in `scripts/ios/` (settings and their overrides are in `env.sh`):
+
+```sh
+scripts/ios/ios-clang -O2 x.c -framework CoreFoundation -o x                    # executable (ios-clang++ for C++/ObjC++)
+scripts/ios/ios-clang -dynamiclib -install_name /usr/lib/libx.dylib x.c -o libx.dylib
+scripts/ios/ios-clang++ -bundle -fobjc-arc x.mm -framework Metal -o X           # a bundle's executable
+scripts/ios/ios-sign.py --identifier com.oneios.x [--entitlements e.plist] x    # ad-hoc signature; prints the CDHash
+scripts/ios/macho-check.py x                                                    # every import against the iOS 27 stubs
+```
+
+- `ios-clang`: `clang -target arm64e-apple-ios27.0 -isysroot $IOS_SDK`, with `ios-ld` as the linker.
+- `ios-ld`: ld64 with the iOS 27 stubs before the SDK and `-fixup_chains` (this ld64 writes the old `LC_DYLD_INFO`
+  opcodes unless told; Xcode's linker writes chained fixups for iOS).
+- `ios-sign.py`: what `codesign --force --sign - --pagesize 4096` makes: one SHA-256 code directory with 4 KiB pages
+  (this guest's kernel runs 4 KiB pages), the entitlements as XML and DER when given. It prints
+  `<cdhash> <arch> pages=4096 <identifier> <file>`. No bundle seal (`_CodeSignature/CodeResources`): the kernel
+  checks a mapped library by its CDHash alone.
+- `macho-check.py`: arm64e, platform iOS, signed with 4 KiB pages, every library has a stub, every undefined symbol
+  is exported by the library it is bound to (re-exports followed). `--local FILE` names a dylib that travels with
+  the file; `--sdk` checks against the SDK's stubs instead.
+
+**Trust.** The guest runs a binary whose CDHash is in a trust cache. Ours get there through the image hook: it reads
+the CDHash from each signed Mach-O it places and writes `overlay/userland/owner-trust.json` ([userland.md](userland.md)).
+The Metal plug-in's build also writes its CDHashes into `out/userland/NativeAdrenoMetal.build.json`, and the hook
+stops the image build when the placed bundle no longer matches that record.
+
+Checked on 2026-11-11 (SDK 26.5, stubs of 24A446): `--test` builds `out/ios-test/hello` (arm64e, minos 27.0,
+chained fixups, 50432 bytes), `userland/tweak cdhash` reads back the CDHash `ios-sign.py` printed, `rcodesign
+print-signature-info` parses the signature (ad hoc, SHA-256, `MAIN_BINARY`), and `macho-check.py` passes: its
+libraries and 3 imports resolve in the iOS 27 stubs. **Not checked: that the guest runs it.** No boot has exec'ed a
+binary built here. The DER entitlements are byte-identical to `rcodesign`'s for the same plist (booleans, strings, an
+array, an integer); neither was compared with Apple's codesign.
+
+### The Metal plug-in
+
+```sh
+scripts/setup/get-references.sh         # NativeMetal, NativeAdreno, AdrenoPM4, metal2vulkan, mesa-droidvm, Droid-VM-UniXNU
+rustup toolchain install 1.98.0 && rustup +1.98.0 component add rust-src
+scripts/bg.sh metal userland/metal/build.sh
+# -> out/userland/NativeAdrenoMetal.bundle, NativeAdrenoMetal.build.json, NativeAdrenoMetal.check.txt
+```
+
+Then rebuild the image set (section 1): the hook places the bundle and lists its two CDHashes. What the build does,
+what was changed for the iPhone's shared cache and what is verified: [gpu.md](gpu.md) section 7.
+

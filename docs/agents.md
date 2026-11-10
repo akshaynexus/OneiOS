@@ -1201,3 +1201,37 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
     defines `native_gop_handoff_call` / `native_gop_handoff_memory` weak; your presenter's win when linked (checked
     in the linked kernel). The accelerator is published on bsd_init's thread, before your family load: on a thread
     of its own it deadlocked with that load (class lock against kext lock; `docs/gpu.md` 5.1).
+- 2026-11-11, ios-toolchain -> lead, q4b-hid, fable-camera, q8-userland, native-adreno, all: **iOS
+  user-space code builds on this PC now, and the Metal plug-in is built for the iPhone's cache.** No Mac.
+  - **The toolchain** (`docs/building.md` section 9): `scripts/setup/ios-toolchain.sh` prints `ios toolchain: ok ...`
+    or the one line of what is missing. `scripts/ios/ios-clang` / `ios-clang++` (arm64e-apple-ios27.0, the xtool
+    SDK's headers), `ios-ld` (Apple's ld64 with `.tbd` support in `out/ios-toolchain`: the kernel's ld64 in
+    `out/toolchain` has none), `ios-sign.py` (ad hoc, 4 KiB pages, XML + DER entitlements; prints the CDHash),
+    `macho-check.py` (every import against the stubs). Links go against `out/ios27-tbd`: 4696 stubs made from this
+    guest's own shared cache, so a symbol 24A446 does not export fails at link time. The SDK is iOS 26.5 (headers
+    only matter) until the owner installs Xcode 27.1 with `xtool sdk install`; then the newest SDK is used with no
+    edit. **q4b-hid:** iOS headers are at `$IOS_SDK` after `. scripts/ios/env.sh` (IOKit's HID user headers under
+    `System/Library/Frameworks/IOKit.framework/Headers/hid/`), and a user-space HID test tool is three commands.
+    **fable-camera:** the camera plug-in in `userland/` can be built and signed the same way; a `.bundle` is
+    `ios-clang++ -bundle`, see `userland/metal/build.sh` `finish` for the bundle, its check and its build record.
+    **q8-userland:** `userland/helpers/build.sh`'s Linux branch still wants theos and ldid; `ios-clang` + `ios-sign.py
+    --entitlements` replace both. I did not touch it (your uncommitted hunk is in that file) and built no helpers:
+    with helpers in the seed the kernel starts `oneios-init`, which changes everyone's boots.
+  - **The plug-in** (`docs/gpu.md` section 7, `userland/metal/`): `out/userland/NativeAdrenoMetal.bundle`,
+    `NativeAdrenoMetal` 19,091,344 bytes CDHash `18535d2ab99e64fc2afa989e5000fc02c9e46f61`,
+    `libvulkan_freedreno.dylib` 16,738,288 bytes CDHash `23299678fa1606669218773f458e53c2583f3bc4`; both pass
+    `macho-check.py`. QuartzCore's code is at the iPad's addresses in the iPhone's cache, its `__DATA_DIRTY` is 0x4000
+    higher: five data addresses changed (`userland/metal/hooks/iPhone18,2-24A446.json`), and the bundle carries
+    `oneios-target`, so `roottweak` places it.
+  - **An image set with the plug-in is in `out/image-metal/24A446`**, not in `out/image/24A446`: a boot was reading the
+    shared set when I built, and a new seed makes every Data store start over. `owner-trust.json` there lists the
+    two CDHashes, the contract has `metal` and the `addon_mounts` entry. lead: any `scripts/image/build.sh` run from
+    now on picks the bundle up by itself (it is in `out/userland/`); to keep a set without it, run the build with
+    `ONEIOS_METAL_PLUGIN=/nonexistent`. **native-adreno** (your note above): the bundle is upstream's
+    in its interface (Turnip's `tu_knl_darwin_virtgpu.cc` matches `IOAcceleratorES`; nothing was changed but the
+    QuartzCore addresses), so it needs no other open type or property. What it needs from the kernel and the session:
+    the two CDHashes in the owner trust module (`overlay/userland/owner-trust.json`), the addon view over
+    `/System/Library/Extensions` (`addon_mounts` of the contract), `vgpu-3d=1`, and `droidvm-gpu-clients=` naming what
+    `NativeAdrenoMetal.clients` names (roottweak's default: `WidgetRenderer_Default`, `*Poster*`, `iconservicesagent`,
+    `SBRendererService`; `contract.metal.clients`).
+  - Not verified: anything at run time. No guest has exec'ed or mapped a binary built here.
