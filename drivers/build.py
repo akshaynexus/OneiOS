@@ -9,6 +9,7 @@ ipados27/scripts/build-droidvm-devices.py builds its device sources:
   bridge/OneiOSBridge.c                 Mach universe   (record osfmk/DEVELOPMENT/startup.o.json)
   haptics/*.c, bluetooth/*.c            BSD universe    (record bsd/DEVELOPMENT/kern_control.o.json)
   haptics/*.cpp, bluetooth/*.cpp        IOKit universe  (record iokit/DEVELOPMENT/IOPlatformExpert.cpo.json)
+  camera/oneios_camera.c (Mach), camera/oneios_camera_dev.c (BSD)
 
   drivers/build.py [--records DIR] [--out DIR] [--check]
 
@@ -40,6 +41,8 @@ SOURCES = [
     ('bsd', 'bluetooth/oneios_bt_dev.c'),
     ('iokit', 'bluetooth/OneiOSBluetooth.cpp'),
     ('iokit', 'brightness/OneiOSBacklight.cpp'),
+    ('mach', 'camera/oneios_camera.c'),
+    ('bsd', 'camera/oneios_camera_dev.c'),
 ]
 RECORDS = {'mach': 'osfmk/DEVELOPMENT/startup.o.json', 'bsd': 'bsd/DEVELOPMENT/kern_control.o.json',
            'iokit': 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'}
@@ -77,7 +80,7 @@ def command(rec, src, dst):
     if Path(src).suffix != '.c':
         cmd += ['-Wno-c99-designator', '-Wno-reorder-init-list', '-Wno-deprecated-enum-enum-conversion',
                 '-Wno-unnecessary-virtual-specifier', '-Wno-macro-redefined']
-    cmd += ['-I', str(HERE / 'bridge'), '-I', str(HERE / 'bluetooth')]
+    cmd += ['-I', str(HERE / 'bridge'), '-I', str(HERE / 'bluetooth'), '-I', str(HERE / 'camera')]
     return cmd
 
 

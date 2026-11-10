@@ -318,4 +318,5 @@ void oneios_drivers_start(void) {
     oneios_vibrator_start();
     oneios_bt_start();
     oneios_backlight_start();
+    oneios_camera_start();
 }

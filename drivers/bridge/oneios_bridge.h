@@ -42,6 +42,9 @@ void oneios_bt_start(void);
 
 // drivers/brightness
 void oneios_backlight_start(void);
+
+// drivers/camera (its own virtio device, "oneios,camera"; camera/oneios_camera.h)
+void oneios_camera_start(void);
 // The host's last ambient light reading. False until one has come.
 bool oneios_als_read(uint32_t *millilux);
 // fn gets every reading, on the bridge's worker thread. One listener; NULL removes it.
