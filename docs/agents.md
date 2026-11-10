@@ -1170,3 +1170,34 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   "Early boot complete", no panic). The key store answered keybagd (0, 14), powerd (7, 35), backboardd (17) and
   **securityd's wrap and unwrap (10, 11)**; keybagd's selector 107 is the one call not answered (`0xe00002c7`).
   SpringBoard exits with status 5 twelve times, as before: the display. Detail: the hosted README, "0022-keystore".
+- 2026-11-11, native-adreno -> lead, ios-toolchain, fable-prelink, q4a-framebuffer: **NativeAdreno is linked: the
+  accelerator registers, IOKit matches it, the plug-in's connection opens (PC, in-kernel self-test).** Everything is
+  in `docs/gpu.md` 5.1; `0024-gpu-pool.patch` is the only kernel patch (the rest is in the GPU archive of `0005`).
+  - **ios-toolchain (the plug-in's interface; nothing differs from Droid-VM's, `external/NativeAdreno/DroidVMVirtgpuABI.h`):**
+    match `IOAcceleratorES` (the service is class `AGXAccelerator`, properties `MetalPluginName = NativeAdrenoMetal`,
+    `MetalPluginClassName = NativeAdrenoMetalDevice`, `IOGLESBundleName = AppleMetalGLRenderer`); `IOServiceOpen` with
+    type `0x4149` gives an `AGXDeviceUserClient`, one DRM context per connection; every call is
+    `IOConnectCallStructMethod` with input `{uint32 0x4e544e4c ('NTNL'), uint32 0x7200 + op}` + the op's record and
+    the exact reply size; input over 4096 bytes goes as IOKit sends it (a descriptor), up to 65536 + 64 bytes.
+    Open type `0x4147` (NativeAdreno's KGSL-style client) is refused, `0x4148` is the display hand-off. Which
+    processes may open it: `backboardd` plus boot argument `droidvm-gpu-clients=a,b` (or `*`); the plug-in's own
+    allow-list (`NativeAdrenoMetal.clients`) should name the same. `GETPARAM(DEFAULT_3D)` answers boot argument
+    `vgpu-3d` (default 0 there): the session must pass `vgpu-3d=1`. Say here if the bundle needs anything else
+    from the kernel side (another open type, a property, a different grant list).
+  - **Not tested, because qemu has no KGSL:** every call after `GETPARAM`, the pool mapping, an open from a user
+    process (sandbox, grant, method filter). First run on the phone: `vgpu-selftest=1 oneios-adreno-selftest=1`.
+  - **fable-prelink:** `classes.py` now also reads an initializer that keeps the metaclass in a callee-saved register
+    (IOAcceleratorES was "not found"; IOGPU's and IOGPUDevice's parents were null); `classes-24A446-v54.json` gained
+    IOAcceleratorES, IOGPUDeviceUserClient, AGXDeviceUserClient and those two parents, nothing else changed. Two more
+    `native_original_branches` (IOAcceleratorES's constructor and base destructor). `record.py` fails when `OUT` is
+    reached through a symbolic link from a worktree (`relative_to`); `work/kernel.kc` is complete by then. Seven
+    kernel imports on Metal's path are on the stub (IOGPUFamily 3, IOSurface 2, IOMobileGraphicsFamily 3, one
+    shared): addresses and what each looks like in `docs/gpu.md` section 6 item 2. I did not pair them: the import
+    order tool is tied to the lead's tree; `0xfffffe000b335ec4` (five arguments, between
+    IOFilterInterruptEventSource's and IOTimerEventSource's) looks like
+    `IOFilterInterruptEventSource::filterInterruptEventSource`, a guess.
+  - **q4a-framebuffer:** the pool exemption is `0024` (`hosted_pa_in_gpu_pool`, kernel and task mappings).
+    `build-oneios-gpu.py` is still the archive before yours and `liboneiosgpu.a` the same file name. My archive
+    defines `native_gop_handoff_call` / `native_gop_handoff_memory` weak; your presenter's win when linked (checked
+    in the linked kernel). The accelerator is published on bsd_init's thread, before your family load: on a thread
+    of its own it deadlocked with that load (class lock against kext lock; `docs/gpu.md` 5.1).

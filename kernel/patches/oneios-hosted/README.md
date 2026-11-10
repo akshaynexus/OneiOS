@@ -235,3 +235,14 @@ kernel with the committed prelink records of `a6c13fe` for boots 1 to 4, of the 
   and ran 7 minutes without a panic; boot 5, with the key store on, ran 8. Whether a working keybag task makes
   those stops likelier (more daemons get further at once) is not known: one boot each way.
 
+## 0024-gpu-pool.patch and Metal's kernel side in gpu/ (native-adreno, 2026-11-11)
+
+`0024` (`hosted_pmap.h`, `hosted_pa_in_gpu_pool`): the host RAM object's pages between the kernel's window and the
+boot framebuffer (xnuhost's GPU pool, `/arm-io/virtio-gpu` `drm-host-pool`; at most 64 MiB) may be handed to the
+host's `kernel_map` and `task_map`, as `0020` allows the boot framebuffer for kernel mappings. The virtio-gpu 3D
+driver maps each context's response buffer from the pool into the client's task. Not run: xnuhost names a pool only
+with a renderer, and the PC has none.
+
+NativeAdreno (the `AGXAccelerator` under the collection's `IOAcceleratorES`, `AGXDeviceUserClient`) needs no patch:
+it is in the GPU archive of `0005` and starts from `oneios_gpu3d_start` (`docs/gpu.md` 5.1, with the PC boot's
+lines and what is not tested).

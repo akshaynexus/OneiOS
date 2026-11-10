@@ -84,10 +84,28 @@ def main():
                     if back in by_site and word(back) & 31 == 0 and by_site[back][1] == 'add':
                         meta = by_site[back][0]
                         break
+                def held(register, before, reach):
+                    # the address a register was given (adrp/add) at most `reach` bytes before
+                    for back in range(before, before - reach, -4):
+                        if back in by_site and word(back) & 31 == register and by_site[back][1] == 'add':
+                            return by_site[back][0]
+                    return None
+
+                if meta is None:
+                    # the metaclass kept in a callee-saved register and moved to x0 after the name (an initializer
+                    # that goes on to use it as the next class's parent: IOAcceleratorES before IOGPU)
+                    for forward in range(here + 4, here + 32, 4):
+                        instruction = word(forward)
+                        if instruction & 0xffe0ffff == 0xaa0003e0:      # mov x0, xN
+                            meta = held(instruction >> 16 & 31, here - 8, 20)
+                        if instruction >> 26 == 0x25:
+                            break
                 if meta is None:
                     continue
                 for forward in range(here + 4, here + 32, 4):
                     instruction = word(forward)
+                    if instruction & 0xffe0ffff == 0xaa0003e2:      # mov x2, xN: the parent's metaclass made earlier in this function
+                        parent = held(instruction >> 16 & 31, forward - 4, 256)
                     if forward in by_site and instruction & 31 == 2:
                         parent, how = by_site[forward]
                         if how == 'ldst':                       # through the kext's GOT

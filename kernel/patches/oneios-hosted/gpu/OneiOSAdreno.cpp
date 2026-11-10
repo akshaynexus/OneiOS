@@ -1,0 +1,181 @@
+// SPDX-License-Identifier: MIT
+// OneiOS, hosted kernel: NativeAdreno's Metal face on the virtio GPU, bound to the iPhone18,2 kernel collection.
+//
+// What is linked (build-oneios-gpu.py): NativeAdreno's user client, IOKit surface, execbuf, memory and PM4 encoder
+// with Droid-VM's edits, Droid-VM's package/DroidVMGpu.cpp (the hardware classes never attached, the publish, the
+// accelerator's registration) and the staged AGXAccelerator (NativeAdrenoAccelerator.cpp), a subclass of the
+// collection's IOAcceleratorES (com.apple.iokit.IOGPUFamily). Apple's AGXG18P is not in the collection, so the
+// class name AGXAccelerator and the user client's name AGXDeviceUserClient are free.
+//
+// The parent is reached as the software AES reaches IOAESAccelerator (../aes/OneiOSSoftwareAES.cpp): its
+// constructor and destructor through generated stubs `bti c; b <name>.original`, which XnuPrelink retargets, and
+// its metaclass as an absolute symbol whose value is the link address. Under xnuhost the collection runs slid, so
+//   - oneios_adreno_parent_bound: the live IOAcceleratorES must be the bound one (link address + slide, 136 bytes);
+//   - oneios_adreno_parent_slide: AGXAccelerator's metaclass, constructed with the link address as its superclass,
+//     gets the live one before OSMetaClass::postModLoad reads it.
+// DroidVMGpu.cpp calls both from its publishMetal (the build stages those two lines and the start condition).
+//
+// The start: oneios_adreno_start, from oneios_gpu3d_start (OneiOSGpu.cpp), which the board's late start calls in
+// bsd_init. Boot arguments:
+//   oneios-gpu-metal=0|1     0: nothing is published. 1: published whatever the host offers. Not given: published
+//                            when the host's virtio GPU offers 3D (oneios_gpu3d_state 3). Droid-VM's
+//                            droidvm-gpu-metal is read the same way when oneios-gpu-metal is absent.
+//   droidvm-gpu-clients=...  the processes besides backboardd granted the user client (DroidVMGpu.cpp)
+//   oneios-adreno-selftest=1 after the publish: IOKit's match of IOAcceleratorES, an in-kernel open of the Metal
+//                            plug-in's connection (type 0x4149) and one GETPARAM through its tunnel; one log line
+//                            with each result.
+#include <IOKit/IOLib.h>
+#include <IOKit/IOService.h>
+#include <IOKit/IOUserClient.h>
+#include <IOKit/IOMemoryDescriptor.h>
+#include <libkern/c++/OSMetaClass.h>
+#include <kern/thread.h>
+#include <kern/task.h>
+#include <pexpert/pexpert.h>
+#include "DroidVMVirtgpuABI.h"
+
+extern vm_offset_t vm_kernel_slide;
+extern "C" {
+// The generated bindings (build-oneios-gpu.py): the parent metaclass's link address and instance size as numbers.
+extern const uint64_t oneios_adreno_parent_meta_link;
+extern const uint32_t oneios_adreno_parent_size;
+extern char oneios_adreno_accelerator_meta[] __asm__("__ZN14AGXAccelerator10gMetaClassE");
+extern volatile uint32_t oneios_gpu3d_state;                   // OneiOSGpu.cpp
+extern volatile uint64_t droidvm_metal_publish[3];             // DroidVMGpu.cpp: publish status, accelerator stage, status
+extern volatile uint32_t droidvm_gpu_chain;                    // DroidVMGpu.cpp: which class chains were adopted
+void sheng_gpu_power_probe(void);                              // DroidVMGpu.cpp: the publish, on the caller's thread (staged)
+
+// 0 not started; 1 not wanted; 2 the publish was started; 0x81 the live IOAcceleratorES is not the bound one.
+volatile uint32_t oneios_adreno_stage;
+// The self-test: [0] stage (1 waiting, 2 matched, 3 opened, 4 called, 5 closed; 0x80 | n failed at n), [1] the
+// open's status, [2] the call's status, [3] its answer (the virtgpu ABI version).
+volatile uint64_t oneios_adreno_selftest[4];
+bool oneios_adreno_wanted(void);
+bool oneios_adreno_parent_bound(void);
+void oneios_adreno_parent_slide(void);
+void oneios_adreno_start(void);
+}
+
+// What NativeAdrenoPublish.cpp calls on sheng and on a DroidVM board, and what stands behind it there: the
+// display hand-off (NativeMobileDisplay's presenter: the display archive defines these two when it is linked, and
+// its definitions win over these weak ones) and the board's log export. Neither exists here.
+extern "C" __attribute__((weak)) IOReturn native_gop_handoff_call(uint32_t, task_t, const void *, size_t, void *, size_t)
+{
+    return kIOReturnUnsupported;
+}
+extern "C" __attribute__((weak)) IOMemoryDescriptor *native_gop_handoff_memory(void) {return nullptr;}
+extern "C" __attribute__((weak)) int boot_log_export_put(uint32_t, uint32_t, uint32_t, const void *, uint32_t) {return -1;}
+
+// OSMetaClass as laid out in libkern/c++/OSMetaClass.h: the vtable pointer, reserved, superClassLink.
+struct MetaClassHead { void *vtable; void *reserved; const OSMetaClass *superClassLink; };
+
+static const OSMetaClass *boundParent()
+{
+    return reinterpret_cast<const OSMetaClass *>(oneios_adreno_parent_meta_link + vm_kernel_slide);
+}
+
+bool oneios_adreno_wanted(void)
+{
+    uint32_t wanted = oneios_gpu3d_state == 3;
+    if (!PE_parse_boot_argn("oneios-gpu-metal", &wanted, sizeof wanted)) PE_parse_boot_argn("droidvm-gpu-metal", &wanted, sizeof wanted);
+    return wanted != 0;
+}
+
+bool oneios_adreno_parent_bound(void)
+{
+    const OSSymbol *name = OSSymbol::withCString("IOAcceleratorES");
+    const OSMetaClass *live = name ? OSMetaClass::getMetaClassWithName(name) : nullptr;
+    OSSafeReleaseNULL(name);
+    if (live && live == boundParent() && live->getClassSize() == oneios_adreno_parent_size) return true;
+    oneios_adreno_stage = 0x81;
+    IOLog("oneios-adreno: the live IOAcceleratorES (%p, %u bytes) is not the bound one (%p, %u bytes): the bindings are for "
+          "another kernel collection; no accelerator\n", live, live ? live->getClassSize() : 0, boundParent(), oneios_adreno_parent_size);
+    return false;
+}
+
+void oneios_adreno_parent_slide(void)
+{
+    MetaClassHead *meta = reinterpret_cast<MetaClassHead *>(oneios_adreno_accelerator_meta);
+    if (reinterpret_cast<uint64_t>(meta->superClassLink) == oneios_adreno_parent_meta_link) meta->superClassLink = boundParent();
+    if (meta->superClassLink != boundParent())
+        IOLog("oneios-adreno: AGXAccelerator's superclass is %p, expected %p\n", meta->superClassLink, boundParent());
+}
+
+namespace {
+void selftest(void *, wait_result_t)
+{
+    volatile uint64_t *st = oneios_adreno_selftest;
+    st[0] = 1;
+    // The publish has run by now (oneios_adreno_start): stage 5 is "registered", a status is a refusal.
+    if (droidvm_metal_publish[1] != 5) {
+        st[0] = 0x81;
+        IOLog("oneios-adreno: selftest: not published (publish %#llx, accelerator stage %llu status %#llx)\n", droidvm_metal_publish[0],
+              droidvm_metal_publish[1], droidvm_metal_publish[2]);
+        return;
+    }
+    // What Metal does first: IOServiceMatching("IOAcceleratorES").
+    OSDictionary *matching = IOService::serviceMatching("IOAcceleratorES");
+    IOService *service = matching ? IOService::waitForMatchingService(matching, 10ull * NSEC_PER_SEC) : nullptr;
+    OSSafeReleaseNULL(matching);
+    if (!service) {
+        st[0] = 0x82;
+        IOLog("oneios-adreno: selftest: IOKit matched no IOAcceleratorES\n");
+        return;
+    }
+    st[0] = 2;
+    OSObject *plugin = service->copyProperty("MetalPluginName");
+    OSString *pluginName = OSDynamicCast(OSString, plugin);
+    IOLog("oneios-adreno: selftest: IOKit matched IOAcceleratorES: class %s (parent %s), %u bytes, MetalPluginName %s, registered %d, "
+          "chains %u\n", service->getMetaClass()->getClassName(), service->getMetaClass()->getSuperClass()->getClassName(),
+          service->getMetaClass()->getClassSize(), pluginName ? pluginName->getCStringNoCopy() : "(none)",
+          (service->getState() & kIOServiceRegisteredState) != 0, droidvm_gpu_chain);
+    OSSafeReleaseNULL(plugin);
+    // The Metal plug-in's connection: open type 0x4149, then {'NTNL', 0x7200 + op} and the op's record.
+    IOUserClient *client = nullptr;
+    const IOReturn opened = service->newUserClient(kernel_task, nullptr, DROIDVM_VIRTGPU_OPEN_TYPE, nullptr, &client);
+    st[1] = uint32_t(opened);
+    if (opened || !client) {
+        st[0] = 0x83;
+        IOLog("oneios-adreno: selftest: the open with type %#x failed (%#x)\n", DROIDVM_VIRTGPU_OPEN_TYPE, opened);
+        service->release();
+        return;
+    }
+    st[0] = 3;
+    struct {uint32_t magic, method; droidvm_virtgpu_getparam record;} request = {0x4e544e4c, DROIDVM_VIRTGPU_METHOD + DROIDVM_VIRTGPU_GETPARAM,
+                                                                                {DROIDVM_VIRTGPU_PARAM_ABI_VERSION}};
+    droidvm_virtgpu_getparam_reply reply = {};
+    IOExternalMethodArguments arguments = {};
+    arguments.version = kIOExternalMethodArgumentsCurrentVersion;
+    arguments.structureInput = &request;
+    arguments.structureInputSize = sizeof request;
+    arguments.structureOutput = &reply;
+    arguments.structureOutputSize = sizeof reply;
+    const IOReturn called = client->externalMethod(0, &arguments, nullptr, nullptr, nullptr);
+    st[2] = uint32_t(called);
+    st[3] = reply.value;
+    st[0] = 4;
+    IOLog("oneios-adreno: selftest: user client %s opened with type %#x; GETPARAM(ABI_VERSION) through the tunnel: status %#x, value %llu "
+          "(the 3D device is %s: gpu state %u)\n", client->getMetaClass()->getClassName(), DROIDVM_VIRTGPU_OPEN_TYPE, called, reply.value,
+          oneios_gpu3d_state == 3 ? "there" : "not there", oneios_gpu3d_state);
+    client->clientClose();
+    client->release();
+    service->release();
+    st[0] = called ? 0x84 : 5;
+}
+}  // namespace
+
+void oneios_adreno_start(void)
+{
+    if (oneios_adreno_stage) return;
+    if (!oneios_adreno_wanted()) {
+        oneios_adreno_stage = 1;
+        IOLog("oneios-adreno: no Metal accelerator (gpu state %u; oneios-gpu-metal=1 publishes it anyway)\n", oneios_gpu3d_state);
+        return;
+    }
+    oneios_adreno_stage = 2;
+    sheng_gpu_power_probe();
+    uint32_t test = 0;
+    PE_parse_boot_argn("oneios-adreno-selftest", &test, sizeof test);
+    thread_t thread = nullptr;
+    if (test && kernel_thread_start(selftest, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+}

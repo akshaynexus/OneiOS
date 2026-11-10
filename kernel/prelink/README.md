@@ -63,8 +63,9 @@ clients, the ANE HAL, FairPlayIOKit, and IOAudioCodecs, whose start waits for Fa
 links against returns for its code only, without personalities. FairPlayIOKit is out although it is not hardware
 (obfuscated calls through computed tables; reason in `roots.py`). Today: 319 in the kernelcache, 133 roots, 154 in
 the closure (21 returned dependencies), 165 absent, 139 fileset entries (15 of the closure are codeless KPIs).
-IOGPUFamily and what it links are roots; AGXG18P (the GPU's own driver) is left out, so NativeAdreno's
-`AGXAccelerator` binding for this kernelcache is not staged yet (`docs/gpu.md`).
+IOGPUFamily and what it links are roots; AGXG18P (the GPU's own driver) is left out. NativeAdreno's `AGXAccelerator`
+is linked into the kernel under IOGPUFamily's `IOAcceleratorES` (`kernel/patches/oneios-hosted/gpu`, `docs/gpu.md`
+5.1): two more `native_original_branches`, the class's constructor and base destructor.
 
 ## The board's drivers
 
@@ -78,7 +79,10 @@ IOSurface (`native_original_branches`); both kexts are roots and keep their pers
 A driver that subclasses an original class needs that class's addresses in this kernelcache: `classes.py` reads
 them from the kexts' code (metaclass, size, parent, vtable and slots, constructors, destructors), and
 `classes-24A446-v54.json` has them for IOAESAccelerator, IOCryptoAccelerator, IOMobileFramebufferLegacy,
-IOHIDDevice, IOSurface, IOGPUDevice, IOGPU and AGXAccelerator (AGXG18P itself is left out of the collection).
+IOHIDDevice, IOSurface, IOGPUDevice, IOGPU, IOAcceleratorES, IOGPUDeviceUserClient, and AGXG18P's AGXAccelerator
+and AGXDeviceUserClient (for reference: AGXG18P itself is left out of the collection). `classes.py` also reads an
+initializer that keeps the metaclass in a callee-saved register and passes it on as the next class's parent
+(IOAcceleratorES, then IOGPU; the parent of IOGPUDevice found this way is 256 bytes back at most and not checked).
 The lead's hosted AES archive (`kernel/patches/oneios-hosted/aes`, `0008-software-aes.patch`) is the worked
 example: stubs `bti c; b` with an N_ABS `<stub>.original` at the linked address, which XnuPrelink's emitter
 retargets when it places the kernel; an absolute address in a literal is wrong under xnuhost's slide.
@@ -178,6 +182,8 @@ and 18 data targets are unpaired; `kernel.kc.build.json` lists them per kext.
 - **Inferred pairs can be wrong** (2 % of the order pairs on known functions; three seen in the boot so far, each
   now a reviewed record). XnuPrelink's own order rule also made one (`lck_mtx_gate_close`). A strange fault in a
   kernel function reached from a kext is worth one `unmapped.py --target` look at the caller's pair.
-- The class list (`abi/original-classes.json` of the iPad profile) and the `AGXAccelerator` binding for this
-  kernelcache; `x18` use in kexts is not checked by default (`X18=1 build.sh`, slow).
+- The class list (`abi/original-classes.json` of the iPad profile); `x18` use in kexts is not checked by default
+  (`X18=1 build.sh`, slow).
+- `record.py` fails when `OUT` resolves outside the repository it runs from (a worktree with `out` as a symbolic
+  link): `work/kernel.kc` is complete by then.
 - No run on the phone.

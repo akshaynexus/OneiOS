@@ -45,3 +45,9 @@
 # lead: the three messages of the return-to-user path (task process gone, twin not made, thread_run refused) are
 # printed with interrupts on: the serial console panicked on them ("Console I/O from interrupt-disabled context").
 0023-user-return-console.patch
+# native-adreno: the GPU's pool (the host RAM object's pages between the kernel's window and the boot framebuffer,
+# /arm-io/virtio-gpu drm-host-pool) may be mapped into a task and at a kernel address, as 0020 allows the boot
+# framebuffer: the virtio-gpu 3D driver maps each context's response buffer from it. No patch links NativeAdreno:
+# Metal's kernel side (the AGXAccelerator under the collection's IOAcceleratorES, AGXDeviceUserClient) is in the GPU
+# archive of 0005 (gpu/build-oneios-gpu.py, gpu/OneiOSAdreno.cpp) and starts from oneios_gpu3d_start.
+0024-gpu-pool.patch

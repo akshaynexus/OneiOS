@@ -13,6 +13,9 @@
 // Boot arguments: vgpu-3d=0 leaves the 3D half alone (the display driver may still start the transport);
 // vgpu-selftest=1 runs one context through the host at boot (capset, context, its response buffer from the pool,
 // GET_PARAM answered there) and logs each stage.
+//
+// Then Metal's kernel side: oneios_adreno_start (OneiOSAdreno.cpp), NativeAdreno's accelerator and user client over
+// droidvm_virtgpu_call. Compiled out with ONEIOS_GPU_ADRENO=0 (build-oneios-gpu.py, when its objects are not linked).
 #include "DroidVMVirtioGpu.h"
 #include <pexpert/pexpert.h>
 
@@ -22,6 +25,17 @@ extern "C" {
 volatile uint32_t oneios_gpu3d_state;
 extern volatile uint64_t droidvm_virtgpu_selftest[14];
 void oneios_gpu3d_start(void);
+void oneios_adreno_start(void);
+}
+
+#ifndef ONEIOS_GPU_ADRENO
+#define ONEIOS_GPU_ADRENO 1
+#endif
+static void adreno_start(void)
+{
+#if ONEIOS_GPU_ADRENO
+    oneios_adreno_start();
+#endif
 }
 
 void oneios_gpu3d_start(void)
@@ -32,6 +46,7 @@ void oneios_gpu3d_start(void)
     if (!DroidVMVirtioGpu::start()) {
         oneios_gpu3d_state = 1;
         IOLog("oneios-gpu: no virtio GPU (no /arm-io/virtio-gpu, or the device did not start)\n");
+        adreno_start();
         return;
     }
     // VIRGL, RESOURCE_BLOB, CONTEXT_INIT and CREATE_GUEST_HANDLE: what xnuhost offers only with its renderer open.
@@ -39,6 +54,7 @@ void oneios_gpu3d_start(void)
     if ((have & need) != need) {
         oneios_gpu3d_state = 2;
         IOLog("oneios-gpu: the host offers no 3D (features %#llx): display only\n", have);
+        adreno_start();
         return;
     }
     oneios_gpu3d_state = 3;
@@ -47,4 +63,5 @@ void oneios_gpu3d_start(void)
     if (droidvm_virtgpu_selftest[0])
         IOLog("oneios-gpu: selftest stage %llu status %#llx, gpu id %llu, context type %llu, pool offset %#llx\n", droidvm_virtgpu_selftest[0],
               droidvm_virtgpu_selftest[1], droidvm_virtgpu_selftest[2], droidvm_virtgpu_selftest[3], droidvm_virtgpu_selftest[4]);
+    adreno_start();
 }

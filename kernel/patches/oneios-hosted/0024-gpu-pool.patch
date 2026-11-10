@@ -1,0 +1,49 @@
+diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
+index da87405..d38e080 100644
+--- a/osfmk/arm64/hosted/hosted_pmap.h
++++ b/osfmk/arm64/hosted/hosted_pmap.h
+@@ -135,6 +135,25 @@ hosted_pa_in_boot_video(pmap_paddr_t pa)
+ 	return hosted_info.video[0] != 0 && pa >= base && pa < end;
+ }
+ 
++/*
++ * The GPU's pool: memory of the host's RAM object between the kernel's window and the boot framebuffer, which
++ * xnuhost leaves there unless it runs with --gpu 2d and names to the guest as /arm-io/virtio-gpu drm-host-pool. The
++ * host's renderer (drm2kgsl) puts each 3D context's response buffer in it; the guest's virtio-gpu driver maps that
++ * buffer as device memory (IOMemoryDescriptor::withPhysicalAddress): into the task that owns the context (the Metal
++ * plug-in's vdrm reads its answers there) and, for the driver's self-test, at a kernel address. The host's
++ * kernel_map and task_map take any page of the RAM object, so such a page is mapped like a page of the window.
++ * It is not behind phystokv: copyin and copyout on a pool page fail (hosted_user_window_locked), as on any device
++ * page. The range is bounded: more than 64 MiB between the window and the framebuffer is not a pool.
++ */
++static inline bool
++hosted_pa_in_gpu_pool(pmap_paddr_t pa)
++{
++	uint64_t base = hosted_info.ram_phys + hosted_info.ram_size;
++	uint64_t end = hosted_info.video[0] & ~(uint64_t)ARM_PGMASK;
++
++	return hosted_info.video[0] != 0 && end > base && end - base <= (64ull << 20) && pa >= base && pa < end;
++}
++
+ /* mmu_kvtop: what the address translation instruction would say, for the part that needs no page table. */
+ uint64_t hosted_mmu_kvtop(uint64_t va);
+ uint64_t
+@@ -165,7 +184,7 @@ hosted_kernel_map_locked(uint64_t va, uint64_t size, uint32_t need)
+ 		uint32_t prot = hosted_pte_prot(pte, false);
+ 		pmap_paddr_t pa = pte_to_pa(pte);
+ 
+-		if (prot == 0 || (need & ~prot) || !(hosted_pa_in_window(pa) || hosted_pa_in_boot_video(pa))) {
++		if (prot == 0 || (need & ~prot) || !(hosted_pa_in_window(pa) || hosted_pa_in_boot_video(pa) || hosted_pa_in_gpu_pool(pa))) {
+ 			prot = 0;
+ 		}
+ 		if (prot != 0 && run_size != 0 && prot == run_prot && pa == run_pa + run_size) {
+@@ -319,7 +338,8 @@ hosted_user_fill(pmap_t pmap, uint64_t va, uint32_t access)
+ 	uint32_t old = hosted_tlb_lock();
+ 	pt_entry_t pte = hosted_walk(pmap, va);
+ 	uint32_t prot = hosted_pte_prot(pte, true);
+-	if (prot != 0 && !(access & ~prot) && hosted_pa_in_window(pte_to_pa(pte)) && pmap->hosted_task != 0) {
++	if (prot != 0 && !(access & ~prot) && (hosted_pa_in_window(pte_to_pa(pte)) || hosted_pa_in_gpu_pool(pte_to_pa(pte))) &&
++	    pmap->hosted_task != 0) {
+ 		filled = HPC(task_map, pmap->hosted_task, va, ARM_PGBYTES, prot, pte_to_pa(pte)) == 0;
+ 		hosted_pmap_stats.user_maps += filled;
+ 	}

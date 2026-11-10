@@ -129,6 +129,10 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   `kernel/patches/oneios-hosted/display/display-capture.py --session out/run/session --out out/run/frame`: it prints a
   line when the picture changed and writes `out/run/frame-NNN.png`. `out/run/session/ready` appears at the first
   frame that is not the boot console's. Boot argument `oneios-display=0` leaves the display out.
+- Metal's kernel side: add `oneios-gpu-metal=1 oneios-adreno-selftest=1` to the boot arguments (the accelerator is
+  not published on a host without 3D unless asked). About ten seconds in: `droidvm-gpu: Metal accelerator stage 5
+  status 0` and two `oneios-adreno: selftest:` lines (IOKit's match, the plug-in's open and one call;
+  [gpu.md](gpu.md) 5.1). No 3D call can run here: qemu has no KGSL.
 - What the PC cannot show: seccomp (qemu-user has none; a marked trap instruction stands in), real timing, the
   phone's GPU, panel, HALs, SELinux and KernelSU.
 
