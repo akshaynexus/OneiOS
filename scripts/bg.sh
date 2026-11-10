@@ -12,6 +12,11 @@ if [ "${1:-}" = -s ]; then
 fi
 n=$1; shift
 rm -f "$ROOT/logs/$n.exit"
+# tmux starts the job from its server's environment, not from this shell's: HOSTED_OUT, HOSTED_PATCH and
+# HOSTED_SERIES (which work tree kernel/build-hosted.sh builds) are passed on explicitly.
+vars=()
+for v in HOSTED_OUT HOSTED_PATCH HOSTED_SERIES; do [ -z "${!v+x}" ] || vars+=("$v=${!v}"); done
+[ ${#vars[@]} -eq 0 ] || set -- env "${vars[@]}" "$@"
 cmd=$(printf '%q ' "$@")
 tmux new-session -d -s "oneios-$n" -c "$ROOT" "bash -c '$cmd > logs/$n.log 2>&1; echo \$? > logs/$n.exit'"
 echo "started $n: logs/$n.log"

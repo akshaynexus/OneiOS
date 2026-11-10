@@ -11,6 +11,10 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 [ "$(uname -s)" = Linux ] || { echo "build-hosted: Linux only" >&2; exit 1; }
 # HOSTED_OUT=NAME: a second, independent work tree and output (out/kernel-hosted-NAME, out/hosted-device-NAME,
 # out/kernel/current-hosted-NAME), so that several people can build and edit at once. The default tree is the lead's.
+# It must be named: HOSTED_OUT=lead is the default tree (out/kernel-hosted, out/kernel/current-hosted), which is the
+# lead's; a build with no name once rebuilt that tree under its owner.
+[ -n "${HOSTED_OUT:-}" ] || { echo "build-hosted: set HOSTED_OUT=<your name> (your own work tree; 'lead' is the lead's)" >&2; exit 2; }
+[ "$HOSTED_OUT" != lead ] || HOSTED_OUT=
 SUFFIX=${HOSTED_OUT:+-$HOSTED_OUT}
 export KERNEL_OUT=$ROOT/out/kernel-hosted$SUFFIX KERNEL_DEFCONFIG=oneios_hosted_defconfig
 . "$ROOT/kernel/lib/stage.sh"
@@ -27,7 +31,7 @@ rm -rf "$DEVICE"; mkdir -p "$DEVICE"
 git -C "$ROOT" archive HEAD kernel/device | tar -x -C "$DEVICE" --strip-components=2
 cp "$ROOT/kernel/device/configs/oneios_hosted_defconfig" "$DEVICE/configs/"
 sed -i "s#^\.\./\.\./\.\./\.\./external/#$ROOT/external/#" "$DEVICE/patches/xnu-12377/series"
-python3 -I - "$DEVICE/board.toml" "$ROOT/kernel/patches/oneios-hosted/series" <<'PY'
+python3 -I - "$DEVICE/board.toml" "${HOSTED_SERIES:-$ROOT/kernel/patches/oneios-hosted/series}" <<'PY'
 import re, sys
 path, series = sys.argv[1:]
 text = open(path).read()

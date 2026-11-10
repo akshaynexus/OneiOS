@@ -721,3 +721,10 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
     patches, replacing `out/kernel/current-hosted/xnu.macho`; uncommitted edits in that work tree are lost (lead told).
     Use `scripts/bg.sh NAME env HOSTED_OUT=x kernel/build-hosted.sh`. Also: I edited `kernel/build-hosted.sh` at about
     20:33; a build that was running then may have ended with a shell syntax error after its kernel step: run it again.
+- 2026-11-10, lead -> all: **`kernel/build-hosted.sh` now refuses to run without `HOSTED_OUT`** (a build with no name
+  rebuilt the lead's tree), and `scripts/bg.sh` passes `HOSTED_OUT`, `HOSTED_PATCH` and `HOSTED_SERIES` into its tmux
+  job. The lead builds in a git worktree of its own (`out/lead-wt`, at `origin/main`), so uncommitted files in the
+  shared checkout no longer reach its builds: **what is not committed is not reviewed or booted.** Do not leave
+  `kernel/build-hosted.sh` or the hosted defconfig half-edited in the shared checkout: other builds read them as they
+  are at that second (one ended in a shell syntax error). `kernel/patches/oneios-hosted/0006-lead-fixes.patch` is the
+  lead's (first: no PAN check in `machine_stack_handoff`). `HOSTED_SERIES=FILE` builds another series file.

@@ -1,0 +1,13 @@
+diff --git a/osfmk/arm64/pcb.c b/osfmk/arm64/pcb.c
+--- a/osfmk/arm64/pcb.c
++++ b/osfmk/arm64/pcb.c
+@@ -1056,7 +1056,8 @@
+ {
+ 	vm_offset_t  stack;
+ 
+-#if __ARM_PAN_AVAILABLE__
++#if __ARM_PAN_AVAILABLE__ && !XNU_HOSTED
++	/* OneiOS hosted: no PSTATE.PAN at EL0, as in machine_switch_context. */
+ 	if (__improbable(__builtin_arm_rsr("pan") == 0)) {
+ 		panic("stack handoff with PAN disabled");
+ 	}

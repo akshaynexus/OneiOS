@@ -11,6 +11,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # HOSTED_OUT=NAME selects the work tree of `HOSTED_OUT=NAME kernel/build-hosted.sh`; HOSTED_PATCH=FILE (a name in
 # kernel/patches/oneios-hosted, default 0001-hosted-machine-layer.patch) is the patch that `base` leaves out and
 # `patch` writes. A new patch: build with it absent, `base`, edit, `patch`, add its name to `series`.
+[ "${HOSTED_OUT:-}" != lead ] || HOSTED_OUT=
 WORK=$ROOT/out/kernel-hosted${HOSTED_OUT:+-$HOSTED_OUT}/unixnu/oneios/ios-27.0.1-24A446/oneios_hosted
 TREE=$WORK/tree/.cache/xnu-work
 PATCH=$ROOT/kernel/patches/oneios-hosted/${HOSTED_PATCH:-0001-hosted-machine-layer.patch}
@@ -39,6 +40,6 @@ open(stamp, 'w').write(json.dumps(record, indent=2) + '\n')
 PY
   echo "hosted-dev: $PATCH ($(grep -c '^diff --git' "$PATCH") files, $(wc -l < "$PATCH") lines)" ;;
 build)
-  exec "$ROOT/kernel/build-hosted.sh" ;;
+  HOSTED_OUT=${HOSTED_OUT:-lead} exec "$ROOT/kernel/build-hosted.sh" ;;
 *) sed -n 2,8p "$0"; exit 2 ;;
 esac
