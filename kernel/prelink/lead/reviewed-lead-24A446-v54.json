@@ -2859,6 +2859,36 @@
     "sha256": "83ff692b2e36b96398de84a3456dba034c8c63b76b5b55b32b58a620922e2b15"
    },
    "evidence": "The four trust cache queries of bsd/kern/kern_trustcache.c after load_legacy_trust_cache, told apart by their arguments (the original's order differs from the public source's): 0xfffffe000b130ca4 takes a query type (checked <= 3), a cdhash, a length and the token in x3: query_trust_cache_with_length; 0xfffffe000b130d5c the same without the length (token in x2): query_trust_cache; 0xfffffe000b130e18 a cdhash, a length and the permissions pointer in x2: query_trust_cache_for_rem_with_length; 0xfffffe000b130e98 a cdhash and the pointer in x1, with the length 20 filled in: query_trust_cache_for_rem. AMFI's alphabetical import table has 0xfffffe000b130e18 directly before 0xfffffe000b130ca4 (for_rem_with_length, with_length), between ptrauth_utils_sign_blob_generic and restricted_execution_mode_enable."
+  },
+  {
+   "original": "0xfffffe000b0f27e8",
+   "native_symbol": "_proc_find_ident_validated",
+   "check": {
+    "address": "0xfffffe000b0f27e8",
+    "size": 412,
+    "sha256": "7609da2a80269bf185a1a432e0c37f32c320fb56fb84939625e7e63f1b8081e3"
+   },
+   "evidence": "Returns 22 (EINVAL) when x0 or x1 is NULL, then finds the process of the identifier's pid (the field at +8 shifted) and checks its unique id and pid version against the identifier before storing it through x1: proc_find_ident_validated(ident, out) of bsd/kern/kern_proc.c. After proc_pidversion and before pzfind_unique, where our kernel has proc_find_audit_token, proc_find_ident_validated, proc_ident_has_policy; its import slot lies between proc_find and proc_get_syscall_filter_mask. The sandbox calls it from mac_task_check_get_task_special_port (0xfffffe000a8e6434)."
+  },
+  {
+   "original": "0xfffffe000ade6a14",
+   "native_symbol": "_vfs_vnodecovered_noblock",
+   "check": {
+    "address": "0xfffffe000ade6a14",
+    "size": 88,
+    "sha256": "20f1decdc584e0597153bce22c8f428f6b74ac6aa99d84e20828dd6f9cef9877"
+   },
+   "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported symbols): in the 1 kext(s) that import this function (sandbox) its slot lies between the slots of _vfs_statfs and _vm_deallocate, and _vfs_vnodecovered_noblock is the only exported kernel function between those names that no other original function is paired with. It is also the only one of them that our kernel places between _vfs_vnodecovered and _vfs_setdevvp, the paired functions on either side of this one in the original."
+  },
+  {
+   "original": "0xfffffe000b0f2b64",
+   "native_symbol": "_proc_find_ident",
+   "check": {
+    "address": "0xfffffe000b0f2b64",
+    "size": 52,
+    "sha256": "2a1f2a2bb6f749ce175c3c3b7c67736716eb451bd5133015c20bfac1bdf7ca62"
+   },
+   "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported symbols): in the 1 kext(s) that import this function (AppleMobileFileIntegrity) its slot lies between the slots of _proc_find and _proc_getexecutablevnode, and _proc_find_ident is the only exported kernel function between those names that no other original function is paired with. It is also the only one of them that our kernel places between _pzfind_unique and _proc_self, the paired functions on either side of this one in the original."
   }
  ]
 }

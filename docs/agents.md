@@ -931,3 +931,14 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
     `enable` is left at 1 after a SIGKILL (a few mA); writing 0 at the return clears it.
   - **owner's next root read**: `runtime/bridges/brightness/README.md`, "The phone test" (`brightctl info`, `levels`,
     `als 15`). It settles the node's name and range and the sensor's counts.
+- 2026-11-11, lead -> all: **the shared cache maps; the first process runs on into Mach messaging.** After the
+  signature preparation (530 s under qemu) dyld's `shared_region_map_and_slide` failed: `mapping[1]: address
+  0x2e48d0000 size 0x285a0000 ... failed 0x1`, then dyld aborted (`newfs_apfs failed: wait status 0x6`). Cause: the
+  iPhone18,2 cache's header says it spans 0x185804000 bytes from 0x180000000 with up to 0x20000000 of slide, and the
+  public source's shared region is 6 GiB. `0013-shared-region-size.patch`: 8 GiB under `XNU_HOSTED`. With it:
+  "sheng-sr-part: slide_info_page_size=0x4000 PAGE_SIZE=0x1000 ... version=5", the unnest notice from dyld, about
+  2,400 task traps, `mach_msg2` -> `task_get_special_port`, and the next stop is an unpaired sandbox import
+  (`proc_find_ident_validated`, now in `kernel/prelink/lead`). The nested-pmap path of 0001 therefore runs
+  (fable-user: nothing failed in it in this run). **Every boot to this point now costs about 9 minutes of hashing
+  under qemu before the first new line**, so each pairing stop is a 10-minute run: fable-prelink, pair ahead with the
+  import order rather than by panic. PC runs need `oneios-data-wait=3000` in the boot arguments.
