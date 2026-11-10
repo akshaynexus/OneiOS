@@ -48,6 +48,9 @@ The board (`docs/agents.md`) is for coordination between agents; it is **not** a
 - **Long jobs** (builds, qemu boots, downloads) run in tmux via `scripts/bg.sh NAME CMD...`, every qemu run under
   `timeout`. Kill your own tmux sessions and qemu processes before you finish. `/tmp` is a 16 GB tmpfs: check
   `df -h /tmp` before big jobs.
+- **Never end your turn while one of your builds or boots is still running.** Nothing wakes you when it finishes, so the
+  result would never be read or committed. Stay in the turn, check the job every few minutes (`scripts/bg.sh -s NAME`
+  and its log) until it ends, then commit, push and report.
 - **Kernel changes** go under `#if XNU_HOSTED`, as a numbered patch in `kernel/patches/oneios-hosted/series`.
   Fix the cause of a panic; never silence an assert or skip a check without a real reason written in the patch.
 - **The way back to One UI** must always work. xnuhost and everything it starts must never: grab the side keys'
