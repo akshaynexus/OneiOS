@@ -1,0 +1,38 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 261ffbf..6693292 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8145,6 +8145,13 @@ done:
+ 	if (!error && cache_authorized && root_recheck &&
+ 	    !native_owner_publish_boot_manifest(root_device, XNU_OWNER_ROOT_VOLUME_UUID,
+ 	        selected, volume)) error = EAUTH;
++#if XNU_HOSTED
++	/* OneiOS hosted: the IOAESAccelerator AppleImage4 waits for, now that /chosen has the boot manifest hash. */
++	if (!error) {
++		extern void oneios_software_aes_start(void);
++		oneios_software_aes_start();
++	}
++#endif /* XNU_HOSTED */
+ #endif
+ #if defined(XNU_OWNER_CACHE_STARTUP) && XNU_OWNER_CACHE_STARTUP
+ 	if (!error && cache_authorized && root_recheck) {
+diff --git a/osfmk/arm64/oneios_host.c b/osfmk/arm64/oneios_host.c
+index 2611165..c0eabd8 100644
+--- a/osfmk/arm64/oneios_host.c
++++ b/osfmk/arm64/oneios_host.c
+@@ -65,8 +65,13 @@ oneios_board_late_start(void)
+ 	droidvm_cpufreq_attach();
+ 	oneios_drivers_start();
+ #if XNU_HOSTED
+-	/* first: AppleImage4 is already waiting for it, and with it IOResources' matching */
+-	oneios_software_aes_start();
++	/*
++	 * Not here (0010-aes-after-boot-manifest.patch): AppleImage4 comes up as soon as it has its IOAESAccelerator,
++	 * and the collection's Image4 starts with it and panics when /chosen has no boot-manifest-hash yet
++	 * ("Image4: unable to initialize magazine: 7"). The owner cache path of kern_exec.c publishes that hash after
++	 * the root mount and starts the accelerator then. Nothing before that needs AppleImage4: the disks' BSD
++	 * clients and the root mount do not wait for it.
++	 */
+ 	oneios_gpu3d_start();
+ #endif /* XNU_HOSTED */
+ }

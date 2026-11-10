@@ -17,3 +17,6 @@
 0008-software-aes.patch
 # fable-prelink: boot argument hosted_dump_threads=1: the kernel stack of every blocked thread at each root-device wait.
 0009-debug-blocked-threads.patch
+# fable-prelink: the accelerator of 0008 is started when /chosen has the boot manifest hash (the owner cache path of
+# kern_exec.c), not at the board start: the collection's Image4 starts with AppleImage4 and panics without that hash.
+0010-aes-after-boot-manifest.patch

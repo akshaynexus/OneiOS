@@ -26,6 +26,16 @@
  ],
  "functions": [
   {
+   "original": "0xfffffe000b0f44e0",
+   "native_symbol": "_proc_name",
+   "check": {
+    "address": "0xfffffe000b0f44e0",
+    "size": 124,
+    "sha256": "0639fda98a827dc15ed1b89fba9f521fee27ace3b486a804553ed11e383c7a9b"
+   },
+   "evidence": "(pid, buffer, size): returns when size is under 1, clears the buffer, looks the process up by pid and copies its name: proc_name, the function before proc_best_name_for_pid in bsd/kern/kern_proc.c. APFS calls it for its log line when a mount fails."
+  },
+  {
    "original": "0xfffffe000b0f3d5c",
    "native_symbol": "_proc_selfppid",
    "check": {
