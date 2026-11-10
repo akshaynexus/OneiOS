@@ -212,3 +212,12 @@ mode `queue`) to the owner's thread id:
   device nodes xnuhost must reach inside the namespace: `/dev/kgsl-3d0`, `/dev/dma_heap/system`, `/dev/udmabuf`
   (plus `/dev/input/event*`). If `/dev/udmabuf` is absent on this phone, say so on the board: it decides how the
   GPU imports guest memory (docs/references.md section 4).
+- 2026-11-10, userland -> references, release-kernel: thanks for the plug-in pins; they are in `docs/userland.md` 7.1. One
+  thing read in `external/NativeMetal/NativeAdrenoMetalPlugin.mm` at b0d6a07: it writes QuartzCore options at fixed addresses
+  of the iPad17,3 24A446 cache (slide from `CARenderServerStart` 0x1846dce88; 0x1e7021014, 0x1e7021104, 0x1e702116c,
+  0x1e701bdd9, 0x1e7020780) with no check of the cache, so the upstream build would write into backboardd at wrong addresses
+  under the iPhone's cache. `roottweak` therefore places a bundle only when it carries `oneios-target` = `iPhone18,2 24A446`
+  (added by whoever ports the addresses). Kernel: `<Name>.clients` is yours to read (droidvm `DroidVMGpu.cpp`); the hook writes
+  it at `/private/var/oneios/addons/Extensions/NativeAdrenoMetal.clients` and lists it in the contract (`metal.clients`); the
+  plug-in's debug switches stay at `/private/var/ngpu/debug/*`. The @3x check of `-[CADisplayMode preferredScale]` is not done:
+  it needs `systemos.img`.

@@ -48,7 +48,7 @@ def _apply(a):
     options = {
         'build': a.build, 'any_version': a.any_version, 'groups': a.group, 'without_groups': a.no_group, 'keep': a.keep,
         'disable': a.disable, 'keep_recover_on_crash': a.keep_recover_on_crash, 'helpers': a.helpers,
-        'metal_plugin': a.metal_plugin, 'metal_clients': a.metal_client, 'appos': a.appos,
+        'metal_plugin': a.metal_plugin, 'metal_plugin_unchecked': a.metal_plugin_unchecked, 'metal_clients': a.metal_client, 'appos': a.appos,
         'no_prefs': [g for g in ('setup', 'migration', 'watchdogs', 'awake', 'coreanimation') if getattr(a, f'no_{g}')],
         'lighter_visuals': a.lighter_visuals, 'plain_keybag': a.plain_keybag,
     }
@@ -143,6 +143,8 @@ def main(argv=None):
     s.add_argument('--any-version', action='store_true', help='apply to a root that is not the profile\'s iOS version')
     s.add_argument('--helpers', metavar='DIR', help='signed guest binaries: the output of userland/helpers/build.sh')
     s.add_argument('--metal-plugin', metavar='BUNDLE', help='a built, signed Metal plugin bundle (NativeAdrenoMetal.bundle)')
+    s.add_argument('--metal-plugin-unchecked', action='store_true',
+                   help='place a plugin bundle that does not say it was built for this guest (no oneios-target file)')
     s.add_argument('--metal-client', action='append', default=[], metavar='NAME', help='a process that gets the Metal device ("*": all)')
     s.add_argument('--appos', metavar='DIR', help='the extracted Cryptex1,AppOS volume')
     for group in ('setup', 'migration', 'watchdogs', 'awake', 'coreanimation'):

@@ -330,6 +330,21 @@ def metal_plugin(cx):
     executable = info.get('CFBundleExecutable')
     if not executable or not os.path.isfile(os.path.join(source, executable)):
         raise TreeError(f'{source}: Info.plist names no CFBundleExecutable that is in the bundle')
+    # The plug-in writes QuartzCore options at fixed addresses of one dyld shared cache (Droid-VM/NativeMetal
+    # NativeAdrenoMetalPlugin.mm: the iPad17,3 24A446 cache, relative to CARenderServerStart, with no check of the
+    # cache). In another cache those writes land on other memory of backboardd. So a bundle is placed only when it
+    # says it was built for this guest: a file `oneios-target` in it holding "<product> <build>".
+    want = f'{cx.device["device"]["product"]} {cx.build}'
+    marker = os.path.join(source, 'oneios-target')
+    have = None
+    if os.path.isfile(marker):
+        with open(marker) as f:
+            have = f.read().strip()
+    if have != want and not cx.options.get('metal_plugin_unchecked'):
+        cx.say('off', 'metal plugin', f'{name} not placed: it does not say it was built for this guest (its oneios-target is '
+               f'{have!r}, wanted {want!r}). The upstream plug-in holds addresses of the iPad\'s shared cache; placed as it is '
+               'it would write into backboardd at wrong addresses. --metal-plugin-unchecked places it anyway')
+        return
     stem = name[:-len('.bundle')]
     # UniXNU-droidvm build-droidvm-data-seed.py's default; the render server (backboardd) always has the device.
     # "*" gives it to every process, which on the iPad also changed SpringBoard's behaviour (DroidVMBootArgs27.c).
@@ -356,8 +371,9 @@ def metal_plugin(cx):
                 _install_binary(cx, tree, host, path)
             else:
                 tree.copy_in(host, path, ROOT, 0o644)
-    # The processes that get the plugin's device, one per line; "*" is every process (UniXNU-droidvm
-    # DroidVMLaunchPolicy.c write_gpu_clients: <bundle name>.clients beside the bundle).
+    # The processes that get the plugin's device, one per line; "*" is every process. The kernel's GPU driver
+    # reads it for its sandbox grants (UniXNU-droidvm DroidVMGpu.cpp; DroidVMLaunchPolicy.c writes the same file from
+    # a boot argument), not the plug-in: the list is in the contract too (metal.clients).
     tree.write(f'{base}/{stem}.clients', client_text, ROOT, 0o644)
     # With this file the plugin gives its device to backboardd's own discovery (UniXNU add-gpu-plugin-data.py --publish).
     tree.write(f'{base}/{stem}.publish', b'1\n', ROOT, 0o644)

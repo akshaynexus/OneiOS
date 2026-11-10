@@ -333,9 +333,22 @@ class Sealed(Case):
                 f.write(data)
         with open(os.path.join(bundle, '_CodeSignature/CodeResources'), 'w') as f:
             f.write('resources')
+        # a bundle that does not say it was built for this guest's shared cache is not placed: upstream's holds
+        # addresses of the iPad's cache
+        for target in (None, 'iPad17,3 24A446'):
+            if target:
+                with open(os.path.join(bundle, 'oneios-target'), 'w') as f:
+                    f.write(target + '\n')
+            self.apply('--metal-plugin', bundle)
+            self.assertEqual(self.states()['metal plugin'], 'off')
+            self.assertFalse(os.path.exists(os.path.join(self.data, 'oneios/addons')))
+            self.assertEqual(self.read('owner-trust.json')['cdhashes'], [])
+        with open(os.path.join(bundle, 'oneios-target'), 'w') as f:
+            f.write(f'iPhone18,2 {fakeroot.BUILD}\n')
         self.apply('--metal-plugin', bundle)
         base = os.path.join(self.data, 'oneios/addons/Extensions')
         self.assertEqual(sorted(os.listdir(base)), ['NativeAdrenoMetal.bundle', 'NativeAdrenoMetal.clients', 'NativeAdrenoMetal.publish'])
+        self.assertEqual(self.entry('data', 'oneios/addons/Extensions/NativeAdrenoMetal.bundle/oneios-target')['mode'], '0644')
         with open(os.path.join(base, 'NativeAdrenoMetal.clients')) as f:
             self.assertEqual(f.read(), 'WidgetRenderer_Default\n*Poster*\niconservicesagent\nSBRendererService\n')
         self.assertEqual(self.entry('data', 'oneios/addons/Extensions/NativeAdrenoMetal.bundle/NativeAdrenoMetal')['mode'], '0755')
@@ -503,7 +516,7 @@ class ReadWrite(Case):
             plistlib.dump({'CFBundleExecutable': 'NativeAdrenoMetal'}, f)
         with open(os.path.join(bundle, 'NativeAdrenoMetal'), 'wb') as f:
             f.write(fakeroot.signed_macho()[0])
-        self.apply('--metal-plugin', bundle, layout='rw')
+        self.apply('--metal-plugin', bundle, '--metal-plugin-unchecked', layout='rw')
         self.assertTrue(os.path.isfile(os.path.join(self.root, 'Applications/Example.app/Info.plist')))
         self.assertTrue(os.path.isfile(os.path.join(self.root, 'System/Library/Extensions/NativeAdrenoMetal.bundle/NativeAdrenoMetal')))
         self.assertEqual(self.read('boot-contract.json')['addon_mounts'], [])

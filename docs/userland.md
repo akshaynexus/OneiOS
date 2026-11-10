@@ -175,8 +175,30 @@ Built by `helpers/build.sh` for `arm64e-apple-ios27.0`, signed ad hoc with 4 KiB
 macOS, or stock clang with theos' ld64, ldid and an iPhoneOS SDK on Linux (iOSPlus10's
 `userland/ssh/build.sh` toolchain). **Not built for iOS yet**: no SDK on this machine. arm64e because iOS 27
 kills arm64 platform binaries at exec (ownervisor `build.py`). A debug shell (dropbear) is not built here;
-`helpers/README.md` says where to take one. The Metal plugin (Droid-VM/NativeMetal + metal2vulkan + Turnip)
-is placed, not built, by this part: its build needs a Mac (UniXNU `scripts/build-adreno-metal-plugin.py`).
+`helpers/README.md` says where to take one (`external/ownervisor`, `external/applebox`, droidvm
+`ipados27/scripts/add-ownervisor-data.py`).
+
+### 7.1 The Metal plug-in
+
+Placed by this part, not built by it. What to build (references agent, `docs/references.md`; fetch with
+`scripts/setup/get-references.sh`): `external/NativeMetal` at b0d6a07, metal2vulkan 624bab3 with
+`external/Droid-VM-UniXNU/patches/metal2vulkan/0001..0038`, Mesa c823a83e with `patches/mesa/*` (Turnip's
+darwin backend), by the kernel base's `scripts/build-turnip-darwin.py`, `build-adreno-metal-bridge.py` and
+`build-adreno-metal-plugin.py`; pins in `scripts/data/gpu-metal-vulkan-inputs.json`. It needs a Mac with
+Xcode 27.1. That stack passes MetalCheck 41/41 on an SM8650 / Adreno 750 phone under iPadOS 27.0.1 [F, references].
+Stage the result as `out/userland/NativeAdrenoMetal.bundle`; the hook picks it up, and the plug-in and Turnip
+CDHashes go to `owner-trust.json`.
+
+**It must not be staged as upstream builds it.** Read in `external/NativeMetal/NativeAdrenoMetalPlugin.mm`:
+the plug-in writes QuartzCore's options at fixed addresses of the iPad17,3 24A446 shared cache, taken
+relative to `CARenderServerStart` (0x1846dce88), with no check of which cache is loaded. In the iPhone's
+cache the same writes land on other memory of backboardd. So `roottweak` places a bundle only if it holds a
+file `oneios-target` with `iPhone18,2 24A446`, which whoever re-finds the addresses for the iPhone cache adds
+before signing; otherwise the line is `off` and the guest renders on the CPU (`--metal-plugin-unchecked`
+overrides). Also read there: `<Name>.publish` and `<Name>.primelist` are looked up beside the bundle, which
+is where they are placed; `<Name>.clients` is read by the kernel's GPU driver, not the plug-in; and the
+plug-in's debug switches are fixed paths under `/private/var/ngpu/debug`, not under `/private/var/oneios`.
+GPU tests once it runs: droidvm `package/metalcheck`, `gfxprobe`, `gfxbench`.
 
 ## 8. What launchd, backboardd and SpringBoard need
 
@@ -195,8 +217,8 @@ is placed, not built, by this part: its build needs a Mac (UniXNU `scripts/build
 1. A run on the real root. Needs the OS images (10.6 GiB fetch). The first run's report tells which policy labels the iPhone root lacks.
 2. iOS builds of the helpers (an SDK on the build machine), and their CDHashes in the kernel's owner trust module.
 3. The first-start Data path: the unpacker is written and host-tested; the store, `newfs_apfs`, the mount and the call are booter's and the kernel's and not written.
-4. The @3x scale: no fixup for the iPhone's QuartzCore yet. Without it the guest may come up @2x (660x1434 points) and lay out wrongly.
+4. The @3x scale: no fixup for the iPhone's QuartzCore yet, and the phone path of `-[CADisplayMode preferredScale]` has not been read (it needs `systemos.img`, not fetched here). Without it the guest may come up @2x (660x1434 points) and lay out wrongly.
 5. Kernel features of section 6 for this profile (release-kernel, booter).
 6. CommCenter without a baseband: kept by the iPhone evidence, unproven on this kernel.
-7. The Metal plugin: nothing built; its QuartzCore and RenderBox hooks are per shared cache and must be re-found for the iPhone's. Until then CPU rendering.
+7. The Metal plug-in: nothing built (needs a Mac with Xcode 27.1), and upstream's holds the iPad cache's QuartzCore addresses, which must be re-found in the iPhone's cache first (section 7.1). Until then CPU rendering.
 8. Camera, cellular, Face ID, NFC, haptics: idled or disabled, not provided.
