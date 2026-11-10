@@ -219,6 +219,14 @@ and feature handshake) at `0x0a000000 + n * 0x1000`, SPI `32 + n`, in this order
 | Bridge channel, network, sound | `runtime/bridges` (the bridges agent's; `docs/hardware.md`) | haptics and Bluetooth HCI; a tap with built-in DHCP; an AAudio helper process | `drivers/bridge`, `DroidVMVirtioNet.c`, `DroidVMVirtioSnd.c` |
 | CPU frequency | `runtime/bridges` | a plain MMIO window per vCPU at `0x09000000` (`/arm-io/cpufreq`) | `DroidVMCpufreq.c` |
 
+Read-only images are checked on read (`imageset.c`, `xh_verify_range`): each 1 MiB chunk is read whole and its
+SHA-256 compared with `<image>.hashes` the first time a read touches it. The chunk is read and hashed outside the
+image's lock, in a buffer of the reading thread, so several vCPUs check different chunks at once (the guest reads
+the 5.8 GiB shared cache on all of them before its first process runs); the lock covers only the checked bits. The
+hash uses the CPU's SHA-256 instructions when `AT_HWCAP` has `HWCAP_SHA2`, plain C otherwise. Tested: `make test`
+(host build in plain C, the arm64 build's test image under `qemu-aarch64 -cpu cortex-a710`, which has SHA2); not
+measured on the phone.
+
 The bridges are linked in as `libonebridges.a` and come after the GPU in the window order: `bridge`, `net`,
 `virtio-snd`. They are on in a takeover session and off in `--mode bench` (`--set bridges=0|1`). With them,
 `/cpus` gets the host's cluster types (E vCPUs first), each vCPU thread is put on its cluster's host CPUs,
@@ -383,5 +391,4 @@ In order. 1-3 are the kernel agent's with this ABI; the rest are split as noted.
    `/dev/kgsl-3d0` in-process, blob resources over the RAM memfd through `/dev/udmabuf`, per-ring fences;
    guest side UniXNU-droidvm's `DroidVMVirtioGpu3D.cpp` and the Metal plugin. `virtio_gpu.c` is 2D only.
 8. Then: the bridges' first run on the phone (network, sound, haptics, Bluetooth are wired and untested),
-   battery, a guest-initiated shutdown on `SIGTERM`, image chunk-hash checks on
-   read (`<image>.hashes`), the uid drop and trap batching.
+   battery, a guest-initiated shutdown on `SIGTERM`, the uid drop and trap batching.

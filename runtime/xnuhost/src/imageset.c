@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,8 +26,38 @@ static const uint32_t K[64] = {
   0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2 };
 #define ROR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
 
+#if defined(__aarch64__)
+// The CPU's SHA-256 instructions where it has them (every phone this runs on): the first read of each 1 MiB of an
+// image is hashed here, 5.8 GiB of shared cache before the guest's first process gets anywhere.
+#include <arm_neon.h>
+#include <sys/auxv.h>
+#ifndef HWCAP_SHA2
+#define HWCAP_SHA2 (1 << 6)
+#endif
+__attribute__((target("sha2")))
+static void sha_block_cpu(xh_sha256 *s, const uint8_t *p)
+{
+  uint32x4_t abcd = vld1q_u32(s->h), efgh = vld1q_u32(s->h + 4), w[4];
+  const uint32x4_t abcd0 = abcd, efgh0 = efgh;
+  for (int i = 0; i < 4; i++) w[i] = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(p + 16 * i)));
+  for (int i = 0; i < 16; i++) {
+    uint32x4_t t = vaddq_u32(w[i & 3], vld1q_u32(K + 4 * i)), a = abcd;
+    abcd = vsha256hq_u32(abcd, efgh, t);
+    efgh = vsha256h2q_u32(efgh, a, t);
+    if (i < 12) w[i & 3] = vsha256su1q_u32(vsha256su0q_u32(w[i & 3], w[(i + 1) & 3]), w[(i + 2) & 3], w[(i + 3) & 3]);
+  }
+  vst1q_u32(s->h, vaddq_u32(abcd, abcd0));
+  vst1q_u32(s->h + 4, vaddq_u32(efgh, efgh0));
+}
+static int sha_cpu = -1;
+#endif
+
 static void sha_block(xh_sha256 *s, const uint8_t *p)
 {
+#if defined(__aarch64__)
+  if (sha_cpu < 0) sha_cpu = (getauxval(AT_HWCAP) & HWCAP_SHA2) != 0;
+  if (sha_cpu) { sha_block_cpu(s, p); return; }
+#endif
   uint32_t w[64], v[8];
   for (int i = 0; i < 16; i++) w[i] = (uint32_t)p[i * 4] << 24 | (uint32_t)p[i * 4 + 1] << 16 | (uint32_t)p[i * 4 + 2] << 8 | p[i * 4 + 3];
   for (int i = 16; i < 64; i++)
@@ -294,8 +325,7 @@ struct xh_verify {
   uint64_t size, count;         // of the image
   uint32_t chunk;
   uint8_t  digest[32];
-  uint8_t *done;                // one bit per verified chunk
-  uint8_t *buffer;              // one chunk
+  uint8_t *done;                // one bit per verified chunk (under lock)
   pthread_mutex_t lock;
 };
 
@@ -318,39 +348,50 @@ xh_verify *xh_verify_open(const xh_imageset *set, const xh_imageset_file *file, 
       v->count != (v->size + v->chunk - 1) / v->chunk || v->count > (size - 32) / 32 || size != 32 + v->count * 32) FAIL("the chunk hash list does not describe its image");
   memcpy(v->digest, xh_imageset_find(set, file->hashes)->sha256, 32);
   v->done = calloc(1, (size_t)(v->count + 7) / 8 + 1);
-  v->buffer = malloc(v->chunk);
-  if (!v->done || !v->buffer) FAIL("out of memory");
+  if (!v->done) FAIL("out of memory");
   return v;
 bad:
   xh_verify_close(v);
   return NULL;
 }
 
+// Several vCPUs read at once (the guest hashes the shared cache on all of them): the chunk is read and hashed
+// outside the lock, in a buffer of the calling thread; the lock covers only the bits. Two threads that meet on
+// one unchecked chunk both check it.
 int xh_verify_range(xh_verify *v, int fd, uint64_t offset, uint64_t length)
 {
+  static __thread uint8_t *buffer;
+  static __thread uint32_t buffer_size;
   if (!length) return 0;
   if (offset >= v->size || length > v->size - offset) return -1;
-  int rc = 0;
-  pthread_mutex_lock(&v->lock);
-  for (uint64_t c = offset / v->chunk; c <= (offset + length - 1) / v->chunk && !rc; c++) {
-    if (v->done[c / 8] & (1u << (c % 8))) continue;
+  for (uint64_t c = offset / v->chunk; c <= (offset + length - 1) / v->chunk; c++) {
+    pthread_mutex_lock(&v->lock);
+    bool done = v->done[c / 8] & (1u << (c % 8));
+    pthread_mutex_unlock(&v->lock);
+    if (done) continue;
+    if (buffer_size < v->chunk) {
+      uint8_t *larger = realloc(buffer, v->chunk);
+      if (!larger) return -1;
+      buffer = larger; buffer_size = v->chunk;
+    }
     uint64_t at = c * v->chunk, want = v->size - at < v->chunk ? v->size - at : v->chunk;
     uint8_t digest[32];
     xh_sha256 sha;
-    for (uint64_t have = 0; have < want && !rc;) {
-      ssize_t n = pread(fd, v->buffer + have, (size_t)(want - have), (off_t)(at + have));
+    for (uint64_t have = 0; have < want;) {
+      ssize_t n = pread(fd, buffer + have, (size_t)(want - have), (off_t)(at + have));
       if (n < 0 && errno == EINTR) continue;
-      if (n <= 0) rc = -1; else have += (uint64_t)n;
+      if (n <= 0) return -1;
+      have += (uint64_t)n;
     }
-    if (rc) break;
     xh_sha256_init(&sha);
-    xh_sha256_update(&sha, v->buffer, (size_t)want);
+    xh_sha256_update(&sha, buffer, (size_t)want);
     xh_sha256_final(&sha, digest);
-    if (memcmp(digest, v->list + 32 + c * 32, 32)) rc = -1;
-    else v->done[c / 8] |= (uint8_t)(1u << (c % 8));
+    if (memcmp(digest, v->list + 32 + c * 32, 32)) return -1;
+    pthread_mutex_lock(&v->lock);
+    v->done[c / 8] |= (uint8_t)(1u << (c % 8));
+    pthread_mutex_unlock(&v->lock);
   }
-  pthread_mutex_unlock(&v->lock);
-  return rc;
+  return 0;
 }
 
 const uint8_t *xh_verify_digest(const xh_verify *v) { return v->digest; }
@@ -358,7 +399,7 @@ const uint8_t *xh_verify_digest(const xh_verify *v) { return v->digest; }
 void xh_verify_close(xh_verify *v)
 {
   if (!v) return;
-  free(v->list); free(v->done); free(v->buffer);
+  free(v->list); free(v->done);
   pthread_mutex_destroy(&v->lock);
   free(v);
 }
