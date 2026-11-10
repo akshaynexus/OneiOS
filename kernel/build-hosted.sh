@@ -105,6 +105,25 @@ if n != 1:
     raise SystemExit('build-hosted: the hosted defconfig has no CONFIG_XNU_EXTRA_LD_ARCHIVES')
 open(config, 'w').write(new)
 PY
+# The display (0020-display.patch): UniXNU's NativeMobileDisplay under the collection's IOMobileFramebufferLegacy, with
+# Droid-VM's probe and virtio-gpu scanout client, one more board archive of this build only
+# (kernel/patches/oneios-hosted/display/build-oneios-display.py). CONFIG_XNU_NATIVE_LEGACY_DISPLAY makes UniXNU's
+# build link build/native-legacy-display/libNativeLegacyDisplay.late.a and compile bsd_init's two calls into it.
+# After the GPU's archive in the list (it is the last): the scanout client uses that archive's transport.
+cp "$ROOT/kernel/patches/oneios-hosted/display/build-oneios-display.py" "$DEVICE/scripts/"
+python3 -I - "$DEVICE/board.toml" "$DEVICE/configs/oneios_hosted_defconfig" <<'PY'
+import re, sys
+board, config = sys.argv[1:]
+text = open(board).read()
+new, n = re.subn(r'("build-oneios-gpu\.py",?\s*\n)(\s*\])', lambda m: m.group(1).rstrip().rstrip(',') + ',\n  "build-oneios-display.py",\n' + m.group(2), text, count=1)
+if n != 1:
+    raise SystemExit('build-hosted: board.toml archives do not end with build-oneios-gpu.py')
+open(board, 'w').write(new)
+text = open(config).read()
+if 'CONFIG_XNU_NATIVE_LEGACY_DISPLAY' in text:
+    raise SystemExit('build-hosted: the hosted defconfig already sets CONFIG_XNU_NATIVE_LEGACY_DISPLAY')
+open(config, 'w').write(text.rstrip('\n') + '\nCONFIG_XNU_NATIVE_LEGACY_DISPLAY=y\n')
+PY
 mkdir -p "$UNIXNU_OUT_DIR"
 [ -e "$UNIXNU_OUT_DIR/feeds" ] || [ ! -d "$ROOT/out/kernel/unixnu/feeds" ] || ln -s "$ROOT/out/kernel/unixnu/feeds" "$UNIXNU_OUT_DIR/feeds"
 

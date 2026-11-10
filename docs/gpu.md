@@ -58,6 +58,9 @@ destroys the contexts and blobs on the device's thread and drops what was held.
 
 **Display.** `SET_SCANOUT_BLOB` makes a guest blob the scanout; `RESOURCE_FLUSH` copies its rows from the guest's
 pages to the display (a CPU copy per frame: crosvm's zero-copy import to the compositor is not done here).
+The guest side is `kernel/patches/oneios-hosted/display/` (its README): iOS's framebuffer hands each of
+`backboardd`'s surfaces to this device, as a guest blob with a renderer and as a 2D resource over the surface's
+pages without one (the PC). What the 3D path still needs from the display is listed there.
 
 **Options.** `--gpu auto` (default: 3D when `/dev/kgsl-3d0`, `/dev/udmabuf` and `/dev/dma_heap/system` open and
 KGSL takes the probe), `--gpu 3d` (or do not start), `--gpu 2d`. The reason for 2D is in the log (`gpu: 2D only: ...`).

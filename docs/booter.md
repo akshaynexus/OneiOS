@@ -100,7 +100,8 @@ multiple of 2 MiB away from the link base, which is the slide the kernel finds w
   one number names a byte for the kernel's pointers, its physical addresses (DMA addresses in virtqueues,
   page tables it may still write) and, minus the base, the offset a task maps.
 - The top of the memfd, outside the kernel's window, is the boot framebuffer (`boot_args.Video`); the main
-  loop shows it until the guest's display driver presents.
+  loop shows it until the guest is ready. The guest's display driver maps it too (`kernel_map` takes any page of
+  the memfd; kernel `0020`) and presents it itself through the virtio GPU.
 - The board's device windows are a `PROT_NONE` reservation at their physical addresses
   (`0x08000000..0x0b000000`), so a device register's physical address is also its pointer and every access
   traps.
@@ -214,7 +215,7 @@ and feature handshake) at `0x0a000000 + n * 0x1000`, SPI `32 + n`, in this order
 | Block, read-only (`F_RO`) | `virtio_blk.c`, `blk.c` | `os.img`, `systemos.img`, `app.img`, a tar `data.seed` | UniXNU `NativeVirtioBlock` (node `virtio-mmio-N`, `compatible` `virtio,mmio`) |
 | Block, writable | same | `<data>/data.img`, sparse, 32 GiB logical, flush = `fdatasync` | the Data store window (node `data-store`) |
 | Input | `virtio_input.c`, `input.c` | `/dev/input/event*`: the touchscreen's multitouch events and the three side keys, unchanged evdev codes, the panel's own axis ranges | UniXNU-droidvm `DroidVMVirtioInput.c` |
-| GPU, 2D scanout | `virtio_gpu.c`, `display.c` | the display back end | UniXNU-droidvm `DroidVMVirtioGpuDisplay.cpp` under IOMobileFramebufferLegacy |
+| GPU, 2D scanout | `virtio_gpu.c`, `display.c` | the display back end | UniXNU-droidvm `DroidVMVirtioGpuDisplay.cpp` under IOMobileFramebufferLegacy: `kernel/patches/oneios-hosted/display/` (a 2D resource per surface, up to 16384 backing entries each) |
 | Console | `uart.c` | the log | XNU's PL011 console (`uart0`) |
 | Bridge channel, network, sound | `runtime/bridges` (the bridges agent's; `docs/hardware.md`) | haptics and Bluetooth HCI; a tap with built-in DHCP; an AAudio helper process | `drivers/bridge`, `DroidVMVirtioNet.c`, `DroidVMVirtioSnd.c` |
 | CPU frequency | `runtime/bridges` | a plain MMIO window per vCPU at `0x09000000` (`/arm-io/cpufreq`) | `DroidVMCpufreq.c` |
@@ -254,7 +255,10 @@ Linux's page cache and a sparse file: the store is a raw image.
 - **`none`.** Frame in memory only.
 - **Input** is read from evdev directly and not grabbed, so the switch's Volume Up + Volume Down watcher
   keeps working beside it.
-- `session/ready` is created at the guest's first presented frame (or by the `ready` host call).
+- `session/ready` is created at the guest's first presented frame (or by the `ready` host call). The guest's
+  display driver also presents the boot framebuffer (the console, and later a blank or CPU-copied frame drawn
+  there): a flush of a resource whose backing starts at `boot_args.Video`'s address is shown but is not that
+  first frame (`virtio_gpu.c` `frame_shown`).
 
 ### 2.9 What xnuhost must never do in a session
 
@@ -379,6 +383,7 @@ In order. 1-3 are the kernel agent's with this ABI; the rest are split as noted.
 2. **A kernel collection**: the prelink with the iPhone18,2 kexts, with `TPIDR_EL1` reads rewritten.
 3. **Guest drivers for this board** linked in: virtio block (for the three images and the Data store),
    input, the 2D display under IOMobileFramebufferLegacy; UniXNU-droidvm's are for the iPad kernelcache.
+   (Block and the display are in: `kernel/patches/oneios-hosted/storage`, `display`.)
 4. **First run on the phone** of everything in section 6 that qemu cannot run: `--selftest`, the test kernel
    with seccomp, trap cost. Then fix what breaks.
 5. **launchd**: verified root over the block devices, the Data volume made by the guest on first start from

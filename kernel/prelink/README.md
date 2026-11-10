@@ -69,10 +69,11 @@ IOGPUFamily and what it links are roots; AGXG18P (the GPU's own driver) is left 
 ## The board's drivers
 
 xnuhost's virtio block, input and GPU guest drivers are **not** kexts: they are archives linked into `xnu.macho` by
-the kernel build (`0005-gpu-3d` is in; storage and HID are `kernel/patches/oneios-hosted/storage` and Q4 of the
-board). The prelink takes whatever kernel it is given; a driver that subclasses an original class
-(`IOMobileFramebufferLegacy`, `IOHIDDevice`) needs that class's addresses in this kernelcache, which are not derived
-here yet.
+the kernel build (`0005-gpu-3d` is in; storage is `kernel/patches/oneios-hosted/storage`, the display
+`kernel/patches/oneios-hosted/display`, HID Q4b of the board). The prelink takes whatever kernel it is given; a
+driver that subclasses an original class (`IOMobileFramebufferLegacy`, `IOHIDDevice`) needs that class's addresses
+in this kernelcache (next paragraph). The display's archive brings 428 branches into IOMobileGraphicsFamily and
+IOSurface (`native_original_branches`); both kexts are roots and keep their personalities.
 
 A driver that subclasses an original class needs that class's addresses in this kernelcache: `classes.py` reads
 them from the kexts' code (metaclass, size, parent, vtable and slots, constructors, destructors), and

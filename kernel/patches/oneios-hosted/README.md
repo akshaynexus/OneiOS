@@ -74,8 +74,14 @@ What that run showed is wrong or missing (none of it fixed yet unless a later li
 - Why SpringBoard exits: `+[FBDisplayManager sharedInstance]` traps in FrontBoardServices (no main display), and
   chronod aborts in QuartzCore's `query_displays`: backboardd offers no display. The display stand-in is the board's
   Q4a.
+- With the display (0020 and `display/`, its README): the framebuffer starts about ten seconds into the boot
+  (`oneios-display: late probe: stage 10`), the console reaches `display.sock` through the guest's virtio scanout,
+  and thermalmonitord, backboardd and MobileGestaltHelper open the framebuffer (`status 0`). No swap yet: in the
+  one run that got there backboardd died 4.5 minutes later in `_pthread_wqthread_setup` (a new workqueue thread's
+  first system call returned -1) and the kernel then stopped with `Console I/O from interrupt-disabled context`
+  from a `printf` in `hosted_user_loop` (seen twice). Both belong to Q6.
 
-Not reached: a frame from SpringBoard, `session/ready`. Nothing here has run on the phone.
+Not reached: a swap from backboardd, a frame from SpringBoard, `session/ready`. Nothing here has run on the phone.
 
 ## What the patch does (files, functions)
 

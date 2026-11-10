@@ -62,6 +62,10 @@ scripts/bg.sh kernel-hosted env HOSTED_OUT=me kernel/build-hosted.sh
 - The reference for the prelink (optional, worth thousands of paired functions; rebuild only when the source
   changes): `scripts/bg.sh ref env XNU_FILESET_REFERENCE=1 HOSTED_OUT=me kernel/build-hosted.sh` (see
   [kernel/prelink/README.md](../kernel/prelink/README.md) for where it lands).
+- The build also makes the hosted board's archives from `kernel/patches/oneios-hosted/`: the disks (`storage`), the
+  virtio GPU (`gpu`), software AES (`aes`) and the display (`display`: needs `external/NativeMobileDisplay` and
+  `external/UniXNU-droidvm` from `scripts/setup/get-references.sh`; its input for another kernelcache is remade with
+  `display/port-legacy-display.py`).
 - The VM kernel (UniXNU's own board, not used by xnuhost): `scripts/bg.sh kernel kernel/build-linux.sh`; on a Mac,
   `kernel/build-macos.sh`. See [kernel/README.md](../kernel/README.md).
 
@@ -119,6 +123,12 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   `apfs-fuse -o ro,vol=2 out/run/data/data.img MNT`, then `MNT/root/log/com.apple.xpc.launchd/launchd.log`, and
   `python3 -I userland/tweak boot-check --data MNT/root` says whether launchd applied the daemon policy
   ([userland.md](userland.md) section 10); `fusermount3 -u MNT` before the next run.
+- The display: the guest's framebuffer driver starts about ten seconds in (`oneios-display:` lines in the log: stage
+  10 is a started framebuffer; then who opened it, the first swaps and frames). To see the picture, boot with
+  `--display shm` instead of `none` and run, beside it,
+  `kernel/patches/oneios-hosted/display/display-capture.py --session out/run/session --out out/run/frame`: it prints a
+  line when the picture changed and writes `out/run/frame-NNN.png`. `out/run/session/ready` appears at the first
+  frame that is not the boot console's. Boot argument `oneios-display=0` leaves the display out.
 - What the PC cannot show: seccomp (qemu-user has none; a marked trap instruction stands in), real timing, the
   phone's GPU, panel, HALs, SELinux and KernelSU.
 

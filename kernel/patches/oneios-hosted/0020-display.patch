@@ -1,0 +1,79 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index 3e67fed..b2b5149 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -545,15 +545,38 @@ static void
+ native_mobile_graphics_load_probe(void)
+ {
+ 	int enabled = 0;
++#if XNU_HOSTED && defined(XNU_NATIVE_LEGACY_DISPLAY) && XNU_NATIVE_LEGACY_DISPLAY
++	/*
++	 * The hosted guest's display (kernel/patches/oneios-hosted/display) is part of the board, not an experiment a
++	 * boot argument asks for: the two switches below are on unless they are given, or oneios-display=0 turns the
++	 * display off (the archive's own switches follow the same rule, OneiOSDisplay.cpp).
++	 */
++	int hosted_display = 1;
++	PE_parse_boot_argn("oneios-display", &hosted_display, sizeof(hosted_display));
++	enabled = hosted_display != 0;
++	PE_parse_boot_argn("offline-mobile-graphics-load", &enabled, sizeof(enabled));
++	if (!enabled) {
++		return;
++	}
++#else
+ 	if (!PE_parse_boot_argn("offline-mobile-graphics-load", &enabled, sizeof(enabled)) || !enabled) {
+ 		return;
+ 	}
++#endif
+ 	native_mobile_graphics_load_status = OSKextLoadKextWithIdentifier("com.apple.iokit.IOMobileGraphicsFamily");
+ 	native_mobile_graphics_probe_checkpoint();
+ #if defined(XNU_NATIVE_LEGACY_DISPLAY) && XNU_NATIVE_LEGACY_DISPLAY
+ 	int legacy_register = 0;
++#if XNU_HOSTED
++	legacy_register = hosted_display != 0;
++	PE_parse_boot_argn("offline-legacy-register", &legacy_register, sizeof(legacy_register));
++	printf("hosted display: IOMobileGraphicsFamily load status %d, framebuffer backend %s\n",
++	    native_mobile_graphics_load_status, legacy_register ? "on" : "off");
++	if (native_mobile_graphics_load_status == 0 && legacy_register) {
++#else
+ 	if (native_mobile_graphics_load_status == 0 &&
+ 	    PE_parse_boot_argn("offline-legacy-register", &legacy_register, sizeof(legacy_register)) && legacy_register) {
++#endif
+ 		extern void native_legacy_display_probe(void);
+ 		native_legacy_display_probe();
+ 	}
+diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
+index b3905d3..da87405 100644
+--- a/osfmk/arm64/hosted/hosted_pmap.h
++++ b/osfmk/arm64/hosted/hosted_pmap.h
+@@ -119,6 +119,22 @@ hosted_pa_in_window(pmap_paddr_t pa)
+ 	return pa >= hosted_info.ram_phys && pa - hosted_info.ram_phys < hosted_info.ram_size;
+ }
+ 
++/*
++ * The boot framebuffer: memory of the host's RAM object above the kernel's window (xh_info.video: base, display,
++ * row bytes, width, height, depth). The kernel's console reaches it through io_map. The display driver maps it as
++ * IOKit maps any device memory (IODeviceMemory, IOMemoryMap: NativeLegacyDisplay's boot mapping, where a blank or
++ * CPU-copied frame is drawn), at an address of the kernel's own range; the host's kernel_map takes any page of its
++ * RAM object, so such a page is mapped like a page of the window. Kernel mappings only: no task maps it.
++ */
++static inline bool
++hosted_pa_in_boot_video(pmap_paddr_t pa)
++{
++	uint64_t base = hosted_info.video[0] & ~(uint64_t)ARM_PGMASK;
++	uint64_t end = (hosted_info.video[0] + hosted_info.video[2] * hosted_info.video[4] + ARM_PGMASK) & ~(uint64_t)ARM_PGMASK;
++
++	return hosted_info.video[0] != 0 && pa >= base && pa < end;
++}
++
+ /* mmu_kvtop: what the address translation instruction would say, for the part that needs no page table. */
+ uint64_t hosted_mmu_kvtop(uint64_t va);
+ uint64_t
+@@ -149,7 +165,7 @@ hosted_kernel_map_locked(uint64_t va, uint64_t size, uint32_t need)
+ 		uint32_t prot = hosted_pte_prot(pte, false);
+ 		pmap_paddr_t pa = pte_to_pa(pte);
+ 
+-		if (prot == 0 || (need & ~prot) || !hosted_pa_in_window(pa)) {
++		if (prot == 0 || (need & ~prot) || !(hosted_pa_in_window(pa) || hosted_pa_in_boot_video(pa))) {
+ 			prot = 0;
+ 		}
+ 		if (prot != 0 && run_size != 0 && prot == run_prot && pa == run_pa + run_size) {

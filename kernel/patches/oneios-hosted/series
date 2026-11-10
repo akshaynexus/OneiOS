@@ -37,3 +37,8 @@
 # started from the board's late start; owner-dataprotect (a file's protection class kept in an extended attribute) is
 # on by default. Not a security boundary: keystore/README.md.
 0022-keystore.patch
+# q4a-framebuffer (Q4a): the display. The graphics family is loaded and the framebuffer backend (display/: UniXNU's
+# NativeMobileDisplay under the collection's IOMobileFramebufferLegacy, scanned out through the virtio GPU) is started
+# without boot arguments (oneios-display=0 turns it off); the boot framebuffer, memory of the host's RAM object above
+# the kernel's window, may be mapped at a kernel address the way IOKit maps device memory.
+0020-display.patch

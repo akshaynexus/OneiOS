@@ -120,7 +120,9 @@ of 85 distinct registers, 127 `wfe`, 101 `tlbi`, 85 `dc`, 4 `ic`, 4 `at`, 4 `wfi
    legacy display, HID input, virtio-gpu and devices archives are not in `board.toml`. They are the ones xnuhost's
    virtio models need (references agent, `docs/agents.md`). Two of their reviewed inputs
    (`legacy-display-24A446.json`, `hid-device-24A446.json`) are for the iPad kernelcache and must be redone for
-   `kernelcache.release.v54`; the storage archive needs the owner keys.
+   `kernelcache.release.v54`; the storage archive needs the owner keys. For the hosted kernel the storage, GPU and
+   display archives exist (`patches/oneios-hosted/storage`, `gpu`, `display`; the display's input is redone there,
+   `display/legacy-display-24A446-v54.json`); the VM kernel still has none of them.
 3. **The prelink** (`kernel.kc`): needs the AMFI address, the class list and the reviewed fileset of the iPhone
    kernelcache (`profiles/iphone18-2-ios27.md` section 3). `kernelcache_sha256` is pinned.
 4. A Mac build, and a comparison of it with the Linux build.

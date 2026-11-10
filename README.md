@@ -26,7 +26,9 @@ iPhone18,2 kexts), the boot gets through:
   processes, among them `SpringBoard`, which starts and exits (signal 5) again and again.
 
 Not reached: a SpringBoard that stays up, a frame on the display, `session/ready`. What is missing for that, as
-seen in the log: the guest has no IOMobileFramebuffer and no touch digitizer yet (backboardd has nothing to draw on),
+seen in the log: the guest has an IOMobileFramebuffer since `0020` (`kernel/patches/oneios-hosted/display/`: it
+starts, the console reaches `display.sock` through it, and backboardd opens it), but backboardd has not submitted a
+frame: in the run that got there it died in a workqueue thread's start first. There is no touch digitizer yet,
 and some processes die with "Text page corruption detected". The key store is in since `0022`: an AppleKeyStore
 service in software (no passcode, class keys from a constant, key wrap by AES; **not a security boundary**), with
 which launchd's keybag task ends in `DONE MKB_INIT` instead of "FATAL KEYBAG ERROR: failed to load system bag";

@@ -135,7 +135,9 @@ gone), and feeds Samsung's software watchdog. Gone: zygote, zygote_secondary, sy
   kills by namespace; a process that leaves it is a failed return and the phone reboots.
 - **Write only under `/data/data` and `/data/session`.** Never to anything of One UI's.
 - **Ready signal:** create the file `/data/session/ready` when the guest's first frame is on screen
-  (or when it would be, while there is no display yet). Until then the switch's dead-man timer runs: no
+  (or when it would be, while there is no display yet). With the guest's framebuffer driver
+  (`kernel/patches/oneios-hosted/display/`) that is `backboardd`'s first frame; the kernel console, which the
+  driver also shows, does not count. Until then the switch's dead-man timer runs: no
   `ready` after `ONEIOS_RETURN_MAX` seconds (600) means an automatic return to One UI.
 - **Exit means return.** When the xnuhost process ends for any reason, the watcher returns to One UI.
   Exit code 0 = the guest shut down; anything else is logged as a failure.

@@ -24,6 +24,7 @@ void xh_stop(uint32_t reason, uint32_t code, const char *why) { (void)code; (voi
 bool xh_stopping(void) { return stop_reason != 99; }
 static int ready_count;
 void xh_guest_ready(void) { ready_count++; }
+struct xh_info g_info;                       // main.c's: the device asks it where the boot framebuffer is
 const struct xh_vector *xh_vector(void) { return NULL; }
 static xh_display fake_display;
 static unsigned flush_rect[4];
@@ -351,6 +352,35 @@ static void test_virtio_gpu(void)
   CHECK(SEND(6, 24) == 24 && resp[0] == 0x1200);
   cmd[0] = 0x102; cmd[6] = 1;                                                  // RESOURCE_UNREF
   CHECK(SEND(8, 24) == 24 && resp[0] == 0x1100);
+  {
+    // The boot framebuffer scanned out by the guest's display driver (the console) is shown but is not the guest's
+    // first frame; the first surface of its own is.
+    xh_virtio *boot_dev = xh_virtio_gpu_create(0x1000, 43, 8, 4);
+    driver b = { .dev = boot_dev };
+    uint64_t video = g_info.video[0];
+    int before = ready_count;
+    CHECK(boot_dev && driver_init(&b, 0, 2, GUEST_PA + 0x50000));
+#define SENDB(words) driver_send(&b, 0, (const uint64_t[][3]){ { GUEST_PA + 0x30000, (words) * 4, 0 }, { GUEST_PA + 0x31000, 24, 1 } }, 2, true)
+    for (uint32_t id = 1; id <= 2; id++) {
+      uint64_t backing = GUEST_PA + 0x40000 + (id - 1) * 0x1000;
+      if (id == 1) g_info.video[0] = backing;                                  // resource 1 is the boot framebuffer
+      memset(cmd, 0, 4096);
+      cmd[0] = 0x101; cmd[6] = id; cmd[7] = 2; cmd[8] = 8; cmd[9] = 4;         // RESOURCE_CREATE_2D, B8G8R8X8
+      CHECK(SENDB(10) == 24 && resp[0] == 0x1100);
+      cmd[0] = 0x106; cmd[6] = id; cmd[7] = 1; cmd[8] = (uint32_t)backing; cmd[9] = (uint32_t)(backing >> 32); cmd[10] = 8 * 4 * 4; cmd[11] = 0;
+      CHECK(SENDB(12) == 24 && resp[0] == 0x1100);
+      memset(cmd, 0, 4096);
+      cmd[0] = 0x103; cmd[8] = 8; cmd[9] = 4; cmd[10] = 0; cmd[11] = id;       // SET_SCANOUT
+      CHECK(SENDB(12) == 24 && resp[0] == 0x1100);
+      cmd[0] = 0x104; cmd[10] = id; cmd[11] = 0;                               // RESOURCE_FLUSH
+      flush_rect[2] = 0;
+      CHECK(SENDB(12) == 24 && resp[0] == 0x1100 && flush_rect[2] == 8);
+      CHECK(ready_count == before + (id == 2));
+    }
+#undef SENDB
+    g_info.video[0] = video;
+    memset(cmd, 0, 4096);
+  }
   W(&d, 0x70, 0);                                                              // reset frees what is left
   free(fake_display.pixels);
   fake_display.pixels = NULL;

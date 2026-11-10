@@ -34,7 +34,7 @@ enum { FLAG_FENCE = 1, FLAG_RING_IDX = 2, MAP_INFO_POOL = 1u << 31 };
 enum { F_VIRGL = 1u << 0, F_RESOURCE_BLOB = 1u << 3, F_CONTEXT_INIT = 1u << 4, F_CREATE_GUEST_HANDLE = 1u << 6 };
 
 #define MAX_RES 64
-#define MAX_BACKING 4096
+#define MAX_BACKING 16384              // as MAX_BLOB_ENTRIES: a 2D surface of scattered 4 KiB pages (1320x2868 has 3765)
 typedef struct {
   uint32_t id, format, width, height;
   uint8_t *pixels;                 // host copy, always B,G,R,X byte order
@@ -129,6 +129,17 @@ static bool backing_read(const resource *r, uint64_t offset, uint8_t *out, uint6
   return length == 0;
 }
 
+// The guest's display driver also scans out the boot framebuffer itself (DroidVMVirtioGpuDisplay.cpp's `boot`
+// resource: the kernel console until the compositor's first frame, and later whenever a blank or CPU-copied frame was
+// drawn there). That picture is shown like any other, but it is the console's: the guest is ready (session/ready)
+// at the first frame of a surface of its own.
+static void frame_shown(gpu_state *g, const gpu_entry *entries, unsigned n)
+{
+  if (g->first_frame || (n && g_info.video[0] && entries[0].addr == g_info.video[0])) return;
+  g->first_frame = true;
+  xh_guest_ready();
+}
+
 static bool rect_ok(const gpu_rect *r, uint32_t w, uint32_t h)
 {
   return r->w && r->h && r->x <= w && r->y <= h && r->w <= w - r->x && r->h <= h - r->y;
@@ -212,7 +223,7 @@ static uint32_t flush_blob(gpu_state *g, const blob *b, const gpu_rect *rect)
   free(row);
   if (status == RESP_OK_NODATA && w && hgt) {
     xh_display_flush(rect->x, rect->y, w, hgt);
-    if (!g->first_frame) { g->first_frame = true; xh_guest_ready(); }
+    frame_shown(g, b->entries, b->nentries);
   }
   return status;
 }
@@ -509,7 +520,7 @@ static uint32_t command(gpu_state *g, const uint8_t *req, size_t size, uint8_t *
         memcpy(d->pixels + (size_t)(rect.y + y) * d->stride + (size_t)rect.x * 4,
                r->pixels + ((size_t)(rect.y + y) * r->width + rect.x) * 4, (size_t)w * 4);
       if (w && hgt) xh_display_flush(rect.x, rect.y, w, hgt);
-      if (!g->first_frame) { g->first_frame = true; xh_guest_ready(); }
+      frame_shown(g, r->backing, r->nbacking);
     }
     return RESP_OK_NODATA;
   }

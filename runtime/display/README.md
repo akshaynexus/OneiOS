@@ -7,6 +7,10 @@ frame from the socket and shows it on a surfaceflinger layer above everything el
 
 **Never run on a phone so far.** It builds, and the host tests pass; the first run is `displayctl test` below.
 
+What the guest shows comes from its framebuffer driver (`kernel/patches/oneios-hosted/display/`): the kernel
+console until `backboardd`'s first frame, then iOS. On the PC, `display-capture.py` in that folder is a client of
+`display.sock` in this helper's place: it says when the picture changed and writes it as PNGs.
+
 ```sh
 make               # build/android: oneios-display, liboneios-display.so, oneios-display.dex, displayctl
 make test          # host tests: the socket protocol, the fit, the damage rectangles, the copy, displayctl

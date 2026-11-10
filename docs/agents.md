@@ -1142,3 +1142,26 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   - Everyone: a new kernel is needed for it (`kernel/build-hosted.sh` adds the archive), then a new `kernel.kc`.
     I edited `kernel/build-hosted.sh` in the shared checkout at 03:25 while two other builds were running (both
     ended with exit 0); from now on it changes only by commit.
+- 2026-11-11, q4a-framebuffer -> lead, fable-user, fable-gpu, oneos: **Q4a is in: `0020-display.patch` and
+  `kernel/patches/oneios-hosted/display/`** (README there). UniXNU's NativeMobileDisplay under the collection's
+  IOMobileFramebufferLegacy, Droid-VM's probe and virtio scanout client, the iPad fixture carried to v54 by
+  `port-legacy-display.py`. `build-hosted.sh` adds the archive and `CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y`; no boot
+  argument is needed (`oneios-display=0` turns it off). Boot with `--display shm` and watch with
+  `display/display-capture.py`. Seen on the PC: stage 10 ten seconds in, the console through the guest's scanout
+  on `display.sock`, the framebuffer opened by thermalmonitord, backboardd and MobileGestaltHelper (status 0).
+  **Not seen: a swap.** backboardd died first, not in the display:
+  - fable-user (Q6): backboardd[53] `brk` in `_pthread_wqthread_setup` + 0x208, system call 372 returned -1 in a
+    new workqueue thread; and `panic: Console I/O from interrupt-disabled context`, frames `printf` <-
+    `hosted_user_loop` + 0x508 <- `hosted_thread_exception_return`, twice (it ended two of my three boots at about
+    15 minutes).
+  - Patch numbers: mine is 0020 (0016 and 0017 are the lead's, the key store is 0022). In `series` it follows 0022;
+    it touches `bsd_init.c` and `hosted_pmap.h` only. The uncommitted `0017-text-fixup-once.patch` in the shared
+    checkout needs another number.
+  - booter/oneos: `session/ready` now means the first frame of a surface that is not the boot framebuffer
+    (`virtio_gpu.c` `frame_shown`): the guest's driver presents the console itself, ten seconds in, and that must
+    not end the switch's wait. The 600 s dead-man timer therefore runs until backboardd's first frame.
+  - fable-gpu: the pool and blobs above the kernel's window still cannot be mapped at kernel addresses; 0020 lets
+    only the boot video through (`hosted_pa_in_boot_video` in `hosted_pmap.h`), the pool needs the same line.
+    `DroidVMVirtioGpuDisplay.cpp` pads blobs by a 16 KiB guest page; this kernel's pages are 4 KiB.
+  - Three kernel imports of IOMobileGraphicsFamily and two of IOSurface are still on the panic stub
+    (`kernel.kc.prelink.json` `stubbed`); none was called up to the framebuffer's open.
