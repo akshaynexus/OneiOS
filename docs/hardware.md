@@ -24,7 +24,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 | Bluetooth | `drivers/bluetooth` (port of iOSPlus10's transport) on `drivers/bridge` | `runtime/bridges/bt`: the HAL over `/dev/hwbinder` | both built; HAL client untested on the phone |
 | Haptics | `drivers/haptics` (port of iOSPlus10's LaurelVibrator and haptic node) | `runtime/bridges/haptics`: evdev force feedback | both built; host tested with a fake actuator |
 | Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp` (unchanged) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | host built and tested with a fake back end; AAudio as root without system_server is [U] |
-| Camera | design only (section 7) | design only | not built |
+| Camera | `drivers/camera`: the `oneios,camera` transport, `/dev/oneios-camera`; `userland/camera`: the capture plug-in (its device object not written) | `runtime/bridges/camera`: helper `oneios-camera` (provider HAL in a session, Camera2 NDK with One UI), ring, device, `camctl` | host and kernel sides built and host-tested; iOS shows no camera yet; nothing run on the phone (section 7) |
 | Backlight and light sensor | `drivers/brightness`: the backlight service (port of iOSPlus10's `AppleARMBacklight`), the light readings; the HID light sensor device is written, not built | `runtime/bridges/brightness`: the backlight sysfs node, `als_rear` by evdev, `brightctl` | both built; host tested; never run on the phone or in a session (section 7a) |
 
 Common pieces:
@@ -321,7 +321,11 @@ ports; `DroidVMVirtioSnd.c`: virtio-snd transport, node `/arm-io/virtio-snd`, co
 - Routing (speaker, receiver, wired or Bluetooth headset) is One UI's audio policy's default for a media stream.
   Calls are out of scope (no baseband in the guest).
 
-## 7. Camera (design only)
+## 7. Camera (fable-camera, 2026-11-11)
+
+Built on all three sides; **never run on the phone** (it was not attached), and iOS shows no camera yet: the capture
+device object in the plug-in is not written. Details: `runtime/bridges/camera/README.md` (the host, the route, the
+phone commands), `drivers/camera/README.md`, `userland/camera/README.md`.
 
 ### The phone [F]
 
@@ -329,49 +333,59 @@ ports; `DroidVMVirtioSnd.c`: virtio-snd transport, node `/arm-io/virtio-snd`, co
   [android_device_samsung_sm8650-common@48c66f6](https://github.com/samsung-sm8650/android_device_samsung_sm8650-common/blob/48c66f6543b31784fce4e7d23ea855897f18ce6e/proprietary-files.txt),
   slots 0, 1, 2, 3, 6, 12 in the DT, `qcom,cam-sensor*`, lines 15571-16040):
 
-  | Slot | Module file | Sensor | Role [I from the slot names] |
-  |---|---|---|---|
-  | 0 | `com.samsung.sensormodule.0_lsi_s5khp2.bin` | Samsung S5KHP2 (200 MP) | rear wide |
-  | 1, 12 | `1_lsi_s5k3lu.bin`, `12_lsi_s5k3lu_full.bin` | Samsung S5K3LU (12 MP) | front |
-  | 2 | `2_sony_imx564.bin` | Sony IMX564 (12 MP) | rear ultra-wide |
-  | 3 | `3_sony_imx754_x3.bin` | Sony IMX754 (10 MP) | rear 3x |
-  | 6 | `6_sony_imx854.bin` | Sony IMX854 (50 MP) | rear 5x |
+  | Slot | Module file | Sensor | Role [I from the slot names] | Bridge role |
+  |---|---|---|---|---|
+  | 0 | `com.samsung.sensormodule.0_lsi_s5khp2.bin` | Samsung S5KHP2 (200 MP) | rear wide | `wide` |
+  | 1, 12 | `1_lsi_s5k3lu.bin`, `12_lsi_s5k3lu_full.bin` | Samsung S5K3LU (12 MP) | front | `front` |
+  | 2 | `2_sony_imx564.bin` | Sony IMX564 (12 MP) | rear ultra-wide | `ultrawide` |
+  | 3 | `3_sony_imx754_x3.bin` | Sony IMX754 (10 MP) | rear 3x | `tele3` |
+  | 6 | `6_sony_imx854.bin` | Sony IMX854 (50 MP) | rear 5x | `tele5` |
 
 - Services running in a session: the provider HAL `vendor.samsung.hardware.camera.provider`
   (`ICameraProvider/internal/0`), `media.camera` (cameraserver), and the vendor-facing
   `android.frameworks.cameraservice.service.ICameraService/default`.
+- [U] which camera ids the provider lists, and whether the 3x and 5x sensors are among them for a plain client:
+  the bridge gives roles by facing and 35 mm equivalent focal length (below 18 mm ultra-wide, below 45 wide, below
+  90 3x, else 5x); `camctl list` shows what the phone has.
 
-### What iOS needs [F iOSPlus10 `docs/laurel_sprout/camera.md` section 3, `docs/camera-plan.md`]
+### The path
 
-Apple's path (`AppleH1xCamIn`, its ISP firmware protocol) cannot be served by another camera. The path that has
-worked on other ports (HakiOS, negroni, the Mi A3): a CFPlugIn in the media server replaces
-`+[BWFigCaptureDeviceVendor sharedCaptureDeviceVendor]` and a few more CMCapture methods and makes a
-FigCaptureDevice whose stream reads frames from a kernel device (`NCFRAME1`: a 120-byte header and the frame) and
-hands CVPixelBuffers to the capture graph. The app needs, in order: the Camera icon (`/arm-io/isp` `camera-rear`,
-`/product/camera`; only when a frame path exists, else the launch hangs), the capture servers running, a
-FigCaptureDevice with a steady preview stream, a still from the same stream.
+| Part | Where | State |
+|---|---|---|
+| Helper process `bin/oneios-camera`: opens a camera, NV12 frames with the sensor's time into a memfd ring | `runtime/bridges/camera` | built for Android; 130 host checks with a test picture; not run on the phone |
+| xnuhost: the helper's socket and ring, the `oneios,camera` virtio device (`/arm-io/camera`, `XL_DEV_CAMERA`) | `runtime/bridges/camera` (`libonecamera.a`), `runtime/xnuhost/src/main.c` | linked into xnuhost; the device tested on xnuhost's transport against a guest of plain memory |
+| Kernel: the transport and `/dev/oneios-camera` (the `NCFRAME1` layout of iOSPlus10's and HakiOS's node, NV12) | `drivers/camera` | compiles with the kernel's records, links against `xnu.macho`; 37 host checks of the pure parts; not run |
+| Plug-in: the node's reader, IOSurface-backed 420f pixel buffers, the report of what CMCapture 27 has, the vendor hook | `userland/camera` | reader host-tested (26 checks); the plug-in syntax-checked only (no SDK); **the FigCaptureDevice for CMCapture 27 is not written** |
 
-### A minimal bridge
+- **Route on the host** [F AOSP android15-release for the reason, I for Samsung's build]: the provider HAL directly
+  when system_server is gone, Camera2 NDK through cameraserver while One UI runs (`auto`). cameraserver refuses every
+  client outside its own process without system_server: its camera-permission check asks the `permission_checker`
+  service, waits 10 s for it and denies (uid 0 too). The uid-state and app-op checks would pass. The HAL needs
+  nothing of system_server. Both back ends are in the helper and in `camctl`.
+- **No ISP in the guest**: the HAL's pictures are finished. Exposure, focus and gain commands of a raw-sensor reader
+  are accepted and ignored.
+- **A frame**: NV12, at most 1920x1080, 4:2:0 BT.601 full range (iOS's `420f`), a sequence number that rises by one
+  per frame the camera made, the sensor's time, the camera's role and how it is turned. Copies: gralloc buffer ->
+  ring (conversion), ring -> guest buffer, guest buffer -> reader (read()), reader -> IOSurface.
+- **What iOS needs** [F iOSPlus10 `docs/laurel_sprout/camera.md` section 3, `docs/camera-plan.md`]: Apple's path
+  (`AppleH1xCamIn`, its ISP firmware protocol) cannot be served by another camera, so no IOKit stand-in: a plug-in in
+  the capture server (`cameracaptured` on iOS 27 [I]) replaces `+[BWFigCaptureDeviceVendor
+  sharedCaptureDeviceVendor]` and makes a FigCaptureDevice whose stream hands CVPixelBuffers to the capture graph.
+  The app needs, in order: the capture servers running, a FigCaptureDevice with a steady preview stream, a still
+  from the same stream, and only then the Camera icon's device tree nodes (`/arm-io/isp` `camera-rear`,
+  `camera-front`; `/product/camera`): with the nodes and no frame path the launch hangs.
 
-- Host: a second helper process (`oneios-camera`, dynamic: `libcamera2ndk.so`, `libmediandk.so`): `ACameraManager`,
-  one `ACameraDevice`, a repeating request into an `AImageReader` (YUV_420_888, 1920x1080 or 1280x720), a second
-  reader for stills (JPEG or full-size YUV). The provider HAL does the ISP work, so the frames are finished NV12:
-  **no CPU ISP in the guest**, unlike the raw-sensor ports.
-- Transport: a frame is megabytes, so not the 4 KiB bridge channel. A virtio device whose receive buffers are whole
-  frames (the guest posts page lists, the host copies one NV12 frame in), or a window of guest RAM both sides map.
-  `OB_CH_CAMERA` is reserved for the control messages (open, mode, exposure, a frame-ready note).
-- Guest kernel: a char device with the `NCFRAME1` ABI on top (so the existing plug-in's reader fits), or an
-  IOSurface filled in the kernel.
-- Guest user space (userland agent): the plug-in with a "frames are NV12" mode, its hook table re-found for the
-  iPhone18,2 27.0.1 shared cache (the tables in iOSPlus10 are for 20H392); on iOS 17 and later the capture servers
-  live in `cameracaptured`, not mediaserverd [I].
+### Missing, unknown
 
-### Unknown
-
-- [U] `ACameraManager` from a root process with system_server gone: cameraserver checks the camera permission and
-  the app-op for the calling uid. The vendor-facing `ICameraService` (AIDL, made for native vendor clients) skips
-  the app layer and is the fallback; it needs an AIDL binder client.
-- [U] whether Samsung's provider serves the 200 MP sensor's binned modes to a plain Camera2 client as on One UI.
+- **The capture device object** (`oneios_camera_device_create`, `userland/camera/README.md`, "Not written"): needs
+  the 24A446 shared cache on the build machine and a guest that reaches SpringBoard. Also there: how the plug-in is
+  loaded into `cameracaptured`, the device tree nodes, the camera permission.
+- [U] everything on the phone: `runtime/bridges/camera/README.md`, "On the phone" (with One UI running) and "In a
+  session" (the HAL back end with system_server stopped; whether Samsung's HAL takes a plain YCbCr_420_888 stream
+  from a client that is not cameraserver; what a killed helper leaves in the provider).
+- oneos: if a killed helper leaves the camera "in use" in the provider, the provider's init service has to be
+  restarted at the return; its name is not known yet (`getprop | grep -i 'init.svc.*camera'` on the phone).
+- Stills above 1920x1080, exposure/focus/zoom/flash from iOS, two cameras at once: not done.
 
 ## 7a. Panel backlight and ambient light (fable-brightness, 2026-11-11)
 

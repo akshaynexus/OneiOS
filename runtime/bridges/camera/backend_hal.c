@@ -172,8 +172,8 @@ static AParcel *call(AIBinder *binder, uint32_t method, const char *what, void (
   AStatus *status = NULL;
   if (AParcel_readStatusHeader(out, &status) != STATUS_OK || !status) { cam_log("hal: %s: no status in the reply", what); AParcel_delete(out); return NULL; }
   if (!AStatus_isOk(status)) {
-    // The HAL's errors are service-specific: 1 illegal argument, 2 camera in use, 3 too many cameras in
-    // use, 4 method not supported, 5 operation not supported, 6 camera disconnected, 7 internal error.
+    // The HAL's errors are service-specific (camera/common Status): 1 illegal argument, 2 camera in use,
+    // 3 too many cameras in use, 4 operation not supported, 5 camera disconnected, 6 internal error.
     cam_log("hal: %s: exception %d, camera status %d", what, AStatus_getExceptionCode(status), AStatus_getServiceSpecificError(status));
     AStatus_delete(status);
     AParcel_delete(out);

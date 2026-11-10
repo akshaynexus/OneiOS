@@ -11,7 +11,8 @@ These sources are built into the kernel (not loaded later). Each talks to its ho
 | `haptics/` | `OneiOSVibrator.cpp` (the `vibrator` IOService and the closed-loop node), `oneios_haptic.c` (the Actuator stream node, requests to the host) | iOSPlus10 `2700-laurel-pmi632-haptics.patch`: the iOS side as is, the PMI632 motor replaced by the host |
 | `bluetooth/` | bluetoothd's transport: `oneios_bt_ctl.c` (kernel control), `oneios_bt_dev.c` (`/dev` nodes), `oneios_bt_h4.c` (framing, answers), `oneios_bt_ios.c` (core), `oneios_bt.c` (start), `OneiOSBluetooth.cpp` (device-tree nub) | iOSPlus10 `2600-laurel-bluetooth-wcn3990.patch`: the iOS side as is, UART/firmware/power replaced by the host |
 | `brightness/` | `OneiOSBacklight.cpp` (the backlight service CoreBrightness drives; the host's light readings), `oneios_als_hid.h` and `OneiOSALSDevice.cpp` (the light sensor as a HID device; not built) | iOSPlus10 `2201-laurel-backlight-panel-power.patch`, `9005-laurel-backlight-calibration.patch`: the iOS side as is, the DSI panel replaced by the host |
-| `cpu/`, `net/`, `audio/`, `gpu/`, `camera/` | notes only: these use UniXNU-droidvm's drivers unchanged, or are not built yet | `README.md` in each |
+| `camera/` | `oneios_camera.c` (the guest end of the `oneios,camera` virtio device: whole NV12 frames), `oneios_camera_dev.c` (`/dev/oneios-camera`), `oneios_camera_abi.h` (what the capture plug-in reads) | new; the node's layout is iOSPlus10's `/dev/negronicam` (HakiOS's, MIT) with finished pictures; `camera/README.md` |
+| `cpu/`, `net/`, `audio/`, `gpu/` | notes only: these use UniXNU-droidvm's drivers unchanged, or are not built yet | `README.md` in each |
 
 ## Build
 

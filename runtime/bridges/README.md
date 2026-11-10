@@ -19,6 +19,7 @@ tests/host.sh      # both; CI runs it
 | `bt/` | the Bluetooth HAL (HIDL 1.0/1.1) over `/dev/hwbinder` without Android libraries; packet checks |
 | `audio/` | the back end xnuhost links (`backend.c`) and the AAudio helper process (`aaudio_helper.c` -> `oneios-audio`) |
 | `brightness/` | the panel's backlight (sysfs, the curve, fades, restore), the light sensor `als_rear`, `brightctl` (the phone test); its own `README.md` and `Makefile` |
+| `camera/` | the camera (fable-camera): the helper process `oneios-camera`, the frame ring, xnuhost's end (`libonecamera.a`) and `camctl`; its own `Makefile` and `README.md` |
 | `devices/` | `bridge_dev.c` (`oneios,bridge`), `virtio_net.c` (`droidvm,net`), `virtio_snd.c` (`droidvm,virtio-snd`) |
 | `tools/bridgectl.c` | tries each bridge on the phone without xnuhost (root) |
 | `tests/` | `test_bridges.c`, `host.sh` |

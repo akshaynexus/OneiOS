@@ -151,6 +151,18 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   - Every create returns NULL with a log line when its Linux side is missing; that feature is then off, nothing else.
     Stop: `br_haptic_close()` and `oneios-net.sh down` on SIGTERM. No bridge uses signals; their threads take
     `xh_virtio_lock`.
+- camera (fable-camera) -> booter, release-kernel, userland, oneos: `docs/hardware.md` section 7.
+  - xnuhost (done): `br_camera_helper` + `br_camera_create` in `main.c` (`runtime/bridges/camera/build/android/libonecamera.a`,
+    header `bridges/camera.h`, `-I drivers/camera`), `XL_DEV_CAMERA` -> `/arm-io/camera`, compatible `oneios,camera`;
+    `runtime/build.sh` stages `bin/oneios-camera` (dynamic) and `bin/camctl`. `ONEIOS_CAMERA=0` leaves it out,
+    `ONEIOS_CAMERA_BACKEND=test` gives the guest a moving picture without a camera.
+  - kernel: `drivers/camera/oneios_camera.c` (Mach) and `oneios_camera_dev.c` (BSD) are in `drivers/build.py`'s list;
+    `oneios_drivers_start()` starts them; `/dev/oneios-camera` (root:mobile 0660); boot argument `oneios-camera=0`.
+  - userland: `userland/camera` (`build.sh` -> `out/userland/camera/OneiOSCamera.dylib`); the device object and the way
+    into `cameracaptured` are open (`userland/camera/README.md`, "Not written"). No `/arm-io/isp` or `/product/camera`
+    node until that works: with the nodes and no frame path the Camera app hangs at launch.
+  - oneos: the helper is in the session's cgroup and ends with xnuhost. In a session it drives the camera provider
+    HAL directly; whether a killed helper leaves the camera held is not known until tried on the phone.
 - drivers -> release-kernel: `drivers/README.md`, "Into the kernel".
   - `drivers/build.py` -> `out/drivers/liboneiosdrivers.a` (compiled with the kernel build's own compile records; 9
     sources, all symbols resolve in today's `xnu.macho`). Link it with `CONFIG_XNU_EXTRA_LD_ARCHIVES`
@@ -942,3 +954,16 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   (fable-user: nothing failed in it in this run). **Every boot to this point now costs about 9 minutes of hashing
   under qemu before the first new line**, so each pairing stop is a 10-minute run: fable-prelink, pair ahead with the
   import order rather than by panic. PC runs need `oneios-data-wait=3000` in the boot arguments.
+- 2026-11-11, fable-camera -> lead, all: **the camera path is in, up to the capture device object; nothing ran on
+  the phone** (not attached). Host: `runtime/bridges/camera` (helper `bin/oneios-camera`: provider HAL over binder in
+  a session, Camera2 NDK while One UI runs; memfd ring; `libonecamera.a` with the `oneios,camera` device; `camctl`;
+  130 host checks). Why two back ends [F AOSP android15-release]: cameraserver's permission check asks system_server's
+  `permission_checker` service and denies every outside client after a 10 s wait when it is gone; the HAL needs
+  nothing of system_server. Kernel: `drivers/camera` (transport + `/dev/oneios-camera`, the `NCFRAME1` layout with NV12;
+  compiles with the records, 34 undefined symbols all in `xnu.macho`). iOS: `userland/camera` (reader host-tested;
+  plug-in syntax-checked only; **`oneios_camera_device_create`, the FigCaptureDevice for CMCapture 27, is not
+  written**: it needs the 24A446 shared cache, which is not on this machine (no `systemos.img` under `out/image`),
+  an iPhoneOS SDK, and a guest at SpringBoard). Shared files I touched, one small hunk each: `drivers/build.py`,
+  `drivers/bridge/OneiOSBridge.c` and `oneios_bridge.h` (the start call), `runtime/xnuhost/src/main.c` and `Makefile`,
+  `runtime/loader` (`XL_DEV_CAMERA`), `runtime/build.sh`. First thing when the phone is attached:
+  `runtime/bridges/camera/README.md`, "On the phone", then "In a session" (`su -c stop` is a quick stand-in).
