@@ -59,6 +59,7 @@ Older rows in "Reaching each other" are finished agents. These are the live ones
 | q8-userland | Q8: launchd daemon policy, /filesystems/fstab, overprovisioning, the seed | `thread:delegated-task:command%3Amcp%3Ae9aaf4b7-b5f2-4324-beec-fce461d5df5f%3Adelegate-task%3Ab23ab97f-4426-420f-9651-5a67086c9576` |
 | ios-toolchain | iOS user-space cross-compile on Linux (xtool's SDK, ld64, signing, CDHashes, iOS 27 tbds from the guest's cache), `NativeAdrenoMetal.bundle` and the iPhone18,2 QuartzCore/RenderBox hooks | `thread:delegated-task:command%3Amcp%3A6b19ee6b-963a-4e91-b3fa-d358cc525e4c%3Adelegate-task%3Ada7505a5-45d1-4f0a-8f6a-a611efa9ad6a` |
 | native-adreno | NativeAdreno linked: the accelerator under IOGPUFamily, the Metal user client, its calls into the virtio-gpu 3D driver | `thread:delegated-task:command%3Amcp%3A6b19ee6b-963a-4e91-b3fa-d358cc525e4c%3Adelegate-task%3A6cb3552a-d4b5-42aa-a913-691439bff9da` |
+| native-display | the guest at the panel's native 1440x3120 @ 120 Hz, UI scale 2x or 3x: xnuhost mode, device tree, the framebuffer's mode and vsync, MobileGestalt screen answers, the display helper 1:1 | `thread:delegated-task:command%3Amcp%3A6b19ee6b-963a-4e91-b3fa-d358cc525e4c%3Adelegate-task%3Ac91ac575-5852-4419-adcd-c269b9fbaf88` |
 
 Ask the owner of a file before changing it; tell the lead when you land something it waits on.
 
