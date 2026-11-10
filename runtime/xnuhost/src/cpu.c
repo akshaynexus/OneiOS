@@ -38,7 +38,7 @@ void xh_upcall_tramp(void);
 void xh_arch_enter(struct xh_cpu *, uint64_t entry, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t sp) __attribute__((noreturn));
 void xh_cpu_signal(int signo, siginfo_t *info, void *context, struct xh_cpu *cpu);
 
-uint64_t xh_counter(void) { uint64_t v; __asm__("mrs %0, cntvct_el0" : "=r"(v)); return v; }
+uint64_t xh_counter(void) { uint64_t v; __asm__ volatile("mrs %0, cntvct_el0" : "=r"(v)); return v; }
 uint64_t xh_counter_hz(void) { uint64_t v; __asm__("mrs %0, cntfrq_el0" : "=r"(v)); return v; }
 xh_vcpu *xh_cpu_self(void) { return self_vcpu; }
 

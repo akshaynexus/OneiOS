@@ -12,6 +12,8 @@
 struct xh_info g_info;
 
 #if defined(__aarch64__) && defined(__linux__)
+#include <fcntl.h>
+#include <linux/falloc.h>
 #include <sys/mman.h>
 
 #define V(cpu) ((xh_vcpu *)(cpu))
@@ -79,7 +81,7 @@ int64_t xh_impl_ram_discard(struct xh_cpu *cpu, uint64_t phys, uint64_t size)
   uint8_t *p = xh_ram(phys, size);
   if (!p || ((phys | size) & (g_info.host_page_size - 1))) return -EINVAL;
   // The pages go back to Linux and read as zero afterwards, in every mapping of them.
-  return madvise(p, size, MADV_REMOVE) ? -errno : 0;
+  return fallocate(g_mem.fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, (off_t)(phys - g_mem.phys), (off_t)size) ? -errno : 0;
 }
 
 uint32_t xh_impl_text_fixup(struct xh_cpu *cpu, void *text, uint64_t size) { (void)cpu; return xh_text_fixup(text, size); }

@@ -51,6 +51,7 @@
 #define PR_PAC_SET_ENABLED_KEYS 60
 #define FPSIMD_MAGIC 0x46508001u
 #define ESR_MAGIC 0x45535201u
+#define SVE_MAGIC 0x53564501u
 
 extern char __xs_start[];                  // the blob's first byte = the region's base
 
@@ -183,6 +184,14 @@ void xs_handler(int signo, struct k_siginfo *info, struct k_ucontext *uc)
     copy(fp + 8, &st->fpsr, 4);
     copy(fp + 12, &st->fpcr, 4);
     copy(fp + 16, st->v, sizeof st->v);
+  }
+  // A thread with live SVE state (none of iOS's code has any, but the host's may) is restored from
+  // the SVE record instead: V[n] is the low 128 bits of Z[n]. Record: head, u16 vl, ..., then Z0..Z31.
+  uint8_t *sve = find_record(mc, SVE_MAGIC);
+  if (sve) {
+    uint32_t size = ((struct k_record *)sve)->size, vl = *(uint16_t *)(sve + 8);
+    if (vl >= 16 && size >= 16 + 32 * vl)
+      for (unsigned n = 0; n < 32; n++) copy(sve + 16 + n * vl, &st->v[n], 16);
   }
   __asm__ volatile("msr tpidr_el0, %0" : : "r"(st->tsd));
 }

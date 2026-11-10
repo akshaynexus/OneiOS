@@ -28,7 +28,7 @@ static struct {
   uint32_t icfgr[NIDS / 16];
   gic_cpu  cpu[XH_MAX_CPUS];
   uint64_t dist_base, redist_base;
-} g = { .lock = PTHREAD_MUTEX_INITIALIZER };
+} g;
 
 void (*xh_gic_notify)(unsigned cpu, bool line);
 
@@ -61,6 +61,11 @@ static void update(void)
 
 void xh_gic_init(unsigned ncpu, uint64_t dist_base, uint64_t redist_base)
 {
+  // Recursive: the notify hook, called with the lock held, asks xh_gic_pending for the calling CPU.
+  pthread_mutexattr_t attr;
+  pthread_mutexattr_init(&attr);
+  pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+  pthread_mutex_init(&g.lock, &attr);
   memset(g.enabled, 0, sizeof g.enabled);
   memset(g.pending, 0, sizeof g.pending);
   memset(g.level, 0, sizeof g.level);

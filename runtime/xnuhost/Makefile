@@ -72,7 +72,7 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	@if [ -z "$(QEMU)" ]; then echo "check-arm64: qemu-aarch64 not installed: skipped"; else \
 	  rm -f $(A)/testdata/data.img; \
 	  echo "check-arm64: booting the test kernel under $(QEMU)"; \
-	  timeout 120 $(QEMU) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M \
+	  timeout 30 $(QEMU) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M \
 	     --display none --no-input --width 64 --height 64 2>&1 | tee $(A)/check.log; \
 	  grep -q 'TESTKERNEL: all passed' $(A)/check.log; fi
 
