@@ -5,6 +5,7 @@
 #define _GNU_SOURCE
 #include "xnuhost.h"
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
@@ -60,6 +61,57 @@ int xh_mem_io(uint64_t phys, uint64_t size)
   g_mem.io_phys = phys;
   g_mem.io_size = size;
   return 0;
+}
+
+// The kernel's own address space outside the window (hostcall.h, kernel_map): reserved, no access.
+int xh_mem_kva(void)
+{
+  const uint64_t top = 0x3c00000000ull;
+  uint64_t base = ((uint64_t)(uintptr_t)g_mem.host + g_mem.size + 0x3fffffffull) & ~0x3fffffffull;
+  if (base >= top) { LOGE("no room for the kernel's address space below 0x%llx", (unsigned long long)top); return -1; }
+  void *p = mmap((void *)(uintptr_t)base, top - base, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+  if (p == MAP_FAILED || (uint64_t)(uintptr_t)p != base) {
+    if (p != MAP_FAILED) munmap(p, top - base);
+    LOGE("cannot reserve the kernel's address space at 0x%llx: %s", (unsigned long long)base, strerror(errno));
+    return -1;
+  }
+  g_mem.kva = base;
+  g_mem.kva_size = top - base;
+  return 0;
+}
+
+int64_t xh_mem_kernel_map(uint64_t va, uint64_t size, uint32_t prot, uint64_t phys)
+{
+  uint64_t page = (uint64_t)sysconf(_SC_PAGESIZE) - 1;
+  if (!size || ((va | size | phys) & page) || va < g_mem.kva || va - g_mem.kva > g_mem.kva_size || size > g_mem.kva_size - (va - g_mem.kva) ||
+      !xh_ram(phys, size)) return -EINVAL;
+  int p = (prot & XH_PROT_READ ? PROT_READ : 0) | (prot & XH_PROT_WRITE ? PROT_WRITE : 0) | (prot & XH_PROT_EXEC ? PROT_EXEC : 0);
+  void *at = mmap((void *)(uintptr_t)va, size, p, MAP_SHARED | MAP_FIXED, g_mem.fd, (off_t)(phys - g_mem.phys));
+  return at == MAP_FAILED ? -errno : 0;
+}
+
+int64_t xh_mem_kernel_unmap(uint64_t va, uint64_t size)
+{
+  uint64_t page = (uint64_t)sysconf(_SC_PAGESIZE) - 1;
+  if (!size || ((va | size) & page) || va < g_mem.kva || va - g_mem.kva > g_mem.kva_size || size > g_mem.kva_size - (va - g_mem.kva)) return -EINVAL;
+  void *at = mmap((void *)(uintptr_t)va, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0);
+  return at == MAP_FAILED ? -errno : 0;
+}
+
+// The kernel's heap and every task's map are page-granular mappings of one memfd: far more areas
+// than Linux's default limit of 65530 per process. Root may raise it.
+void xh_mem_map_limit(void)
+{
+  const long want = 1048576;
+  long have = 0;
+  FILE *f = fopen("/proc/sys/vm/max_map_count", "r");
+  if (f) { if (fscanf(f, "%ld", &have) != 1) have = 0; fclose(f); }
+  if (have < want && (f = fopen("/proc/sys/vm/max_map_count", "w"))) {
+    fprintf(f, "%ld\n", want);
+    if (fclose(f) == 0) { LOGI("memory: vm.max_map_count raised from %ld to %ld", have, want); return; }
+  }
+  if (have < want) LOGE("memory: vm.max_map_count is %ld and could not be raised to %ld (not root?): the kernel's mappings may run out", have, want);
+  else LOGI("memory: vm.max_map_count is %ld", have);
 }
 
 void *xh_ram(uint64_t pa, uint64_t len)

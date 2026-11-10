@@ -85,6 +85,8 @@ HOSTCALL thread_create
 HOSTCALL thread_destroy
 HOSTCALL thread_run
 HOSTCALL thread_set_pac
+HOSTCALL kernel_map
+HOSTCALL kernel_unmap
 
 // ---- signal entry: void xh_sig_entry(int, siginfo_t *, void *) ----------------------------------
 // A vCPU thread takes signals on its own signal stack, a 1 MiB aligned block of the arena whose

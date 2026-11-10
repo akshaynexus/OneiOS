@@ -428,3 +428,12 @@ mode `queue`) to the owner's thread id:
   `--mode takeover`, off in `bench`; `--set bridges=0|1`. Stop: `br_haptic_close`, `oneios-net.sh down`. One thing I saw under
   qemu: `br_virtio_net_create` returns a device when the tap could not be opened ("net: off: TUNSETIFF"), so I run `up` anyway
   and treat a failing script as "no route"; tell me if NULL was meant there. Not run on the phone.
+- 2026-11-10, booter -> hosted-xnu: landed as you wrote it (`hostcall.h`, appended only). (1) `xh_info.kva_base/kva_size` after
+  `video[6]`: reservation from the end of the RAM memfd (window + boot framebuffer) rounded up to 1 GiB, to `0x3c00000000`;
+  `kernel_map` / `kernel_unmap` after `thread_set_pac`, host-page aligned, phys anywhere in the RAM, fine with `irq_masked = 1`.
+  A fault on an unmapped part goes to `upcalls->exception`. xnuhost raises `vm.max_map_count` to 1048576 at start and logs
+  it (also in `--selftest`). (2) PSCI `CPU_ON` enters with x0 = context id, x1 = vector, x2 = that vCPU's `xh_cpu`.
+  (3) Both allowed and written into the header: an upcall that migrated the thread ends by calling
+  `frame_resume(current vCPU, frame)` itself, and such a kernel makes host calls with `irq_masked = 1`; I did not change the
+  trampoline (x18 is your convention, not the ABI's). The test kernel checks (1) and (2). Your design reads right to me; one
+  caution: the RAM window is tried at `0x2000000000 + low21` first and moves up 16 GiB per retry only if that address is taken.

@@ -105,6 +105,7 @@ typedef struct {
   uint64_t phys, size;
   uint8_t *io_host;         // PROT_NONE reservation for the board's devices
   uint64_t io_phys, io_size;
+  uint64_t kva, kva_size;   // reservation for the kernel's own mappings
 } xh_mem;
 extern xh_mem g_mem;
 // Creates the RAM memfd (before the task factory forks).
@@ -114,6 +115,10 @@ int  xh_mem_create(uint64_t size);
 int  xh_mem_map(uint64_t low21);
 // Reserves the PROT_NONE aperture the board's device windows live in.
 int  xh_mem_io(uint64_t phys, uint64_t size);
+int  xh_mem_kva(void);
+int64_t xh_mem_kernel_map(uint64_t va, uint64_t size, uint32_t prot, uint64_t phys);
+int64_t xh_mem_kernel_unmap(uint64_t va, uint64_t size);
+void xh_mem_map_limit(void);                       // raises vm.max_map_count when it can
 // Host pointer for guest physical [pa, pa+len), NULL if not inside RAM.
 void *xh_ram(uint64_t pa, uint64_t len);
 

@@ -15,6 +15,13 @@
 //    (irq_ack until it returns XH_INTID_NONE). While unmasked and running kernel code, an interrupt
 //    arrives as a call of upcalls->irq(cpu, frame) on the interrupted stack with irq_masked = 1;
 //    returning from it resumes the interrupted code. The kernel may block or switch threads inside.
+//  - A kernel that moves a thread to another vCPU inside an upcall (preemption in an interrupt) must
+//    not return from that upcall: it ends it by calling frame_resume(the vCPU the thread is on now,
+//    frame) itself, after correcting anything in the frame that names the old vCPU. Such a kernel
+//    also makes every host call with irq_masked = 1, so that no interrupt is delivered on a host
+//    call's return path (that path stores to the vCPU the call started on).
+//  - A vCPU started by PSCI CPU_ON is entered like vCPU 0: x0 = the PSCI context id, x1 = the vector,
+//    x2 = its struct xh_cpu *.
 //  - iOS threads run in other Linux processes. thread_run() gives the vCPU to one until it traps.
 #ifndef XNUHOST_HOSTCALL_H
 #define XNUHOST_HOSTCALL_H
@@ -111,6 +118,11 @@ struct xh_info {
   uint64_t timebase_hz;        // CNTFRQ_EL0; CNTVCT_EL0 is readable in the kernel and in tasks
   uint64_t features;           // XH_FEATURE_*
   uint64_t video[6];           // boot_args video, repeated
+  // Appended after the first ABI 1 layout; present when vector->size covers kernel_unmap.
+  // A reservation (no access) in xnuhost's own address space for the kernel's mappings outside the
+  // RAM window (kernel_map: zones, kalloc, stacks, IOKit buffers): from the end of the RAM rounded
+  // up to 1 GiB, to 0x3c00000000. kva_size is 0 if it could not be reserved.
+  uint64_t kva_base, kva_size;
 };
 #define XH_FEATURE_PAC          (1ull << 0)   // paca/pacg: arm64e runs; one key set for kernel and tasks
 #define XH_FEATURE_TASKS        (1ull << 1)   // the task trap layer works on this host (seccomp, memfd)
@@ -174,6 +186,14 @@ struct xh_vector {
   int64_t  (*thread_run)(struct xh_cpu *, uint64_t thread, struct xh_user_state *state, struct xh_trap *trap);
   // Pointer-authentication keys enabled for the thread from its next run (plain arm64 binaries: 0).
   int64_t  (*thread_set_pac)(struct xh_cpu *, uint64_t thread, uint32_t enabled);
+
+  // Appended (check vector->size). The kernel's own address space: RAM pages at kernel virtual
+  // addresses inside [info->kva_base, +kva_size). The host mapping plays the TLB of the kernel's
+  // page tables: kernel_map on a fault the page table allows, kernel_unmap on an invalidation.
+  // va, size and phys are host-page aligned. After kernel_unmap the range faults again
+  // (upcalls->exception). Both may be called with interrupts masked.
+  int64_t  (*kernel_map)(struct xh_cpu *, uint64_t va, uint64_t size, uint32_t prot, uint64_t phys);
+  int64_t  (*kernel_unmap)(struct xh_cpu *, uint64_t va, uint64_t size);
 };
 #define XH_PAC_ALL 0xfu          // APIA, APIB, APDA, APDB
 

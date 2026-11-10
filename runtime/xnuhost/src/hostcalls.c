@@ -98,12 +98,15 @@ int64_t xh_impl_thread_destroy(struct xh_cpu *cpu, uint64_t thread) { (void)cpu;
 int64_t xh_impl_thread_run(struct xh_cpu *cpu, uint64_t thread, struct xh_user_state *state, struct xh_trap *trap) { return xh_thread_run(V(cpu), thread, state, trap); }
 int64_t xh_impl_thread_set_pac(struct xh_cpu *cpu, uint64_t thread, uint32_t enabled) { (void)cpu; return xh_thread_set_pac(thread, enabled); }
 
+int64_t xh_impl_kernel_map(struct xh_cpu *cpu, uint64_t va, uint64_t size, uint32_t prot, uint64_t phys) { (void)cpu; return xh_mem_kernel_map(va, size, prot, phys); }
+int64_t xh_impl_kernel_unmap(struct xh_cpu *cpu, uint64_t va, uint64_t size) { (void)cpu; return xh_mem_kernel_unmap(va, size); }
+
 #define THUNK(name) extern void xh_hc_##name(void);
 THUNK(console_write) THUNK(halt) THUNK(ready) THUNK(set_upcalls) THUNK(wall_time) THUNK(cpu_start) THUNK(cpu_idle)
 THUNK(irq_ack) THUNK(irq_eoi) THUNK(irq_enable) THUNK(ipi) THUNK(timer_set) THUNK(frame_resume) THUNK(io_map)
 THUNK(mmio_read) THUNK(mmio_write) THUNK(ram_discard) THUNK(text_fixup) THUNK(task_create) THUNK(task_destroy)
 THUNK(task_map) THUNK(task_unmap) THUNK(task_protect) THUNK(task_read) THUNK(task_write) THUNK(thread_create)
-THUNK(thread_destroy) THUNK(thread_run) THUNK(thread_set_pac)
+THUNK(thread_destroy) THUNK(thread_run) THUNK(thread_set_pac) THUNK(kernel_map) THUNK(kernel_unmap)
 
 const struct xh_vector *xh_vector(void)
 {
@@ -116,7 +119,7 @@ const struct xh_vector *xh_vector(void)
   SET(irq_ack); SET(irq_eoi); SET(irq_enable); SET(ipi); SET(timer_set); SET(frame_resume); SET(io_map);
   SET(mmio_read); SET(mmio_write); SET(ram_discard); SET(text_fixup); SET(task_create); SET(task_destroy);
   SET(task_map); SET(task_unmap); SET(task_protect); SET(task_read); SET(task_write); SET(thread_create);
-  SET(thread_destroy); SET(thread_run); SET(thread_set_pac);
+  SET(thread_destroy); SET(thread_run); SET(thread_set_pac); SET(kernel_map); SET(kernel_unmap);
   return &v;
 }
 

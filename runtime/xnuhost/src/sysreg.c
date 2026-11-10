@@ -43,7 +43,8 @@ static int64_t psci(xh_vcpu *v, xh_regs *r)
     if ((r->x[1] & 0xff00ffff00ull) || index >= g_ncpu) return -2;       // INVALID_PARAMETERS
     void *entry = xh_ram(r->x[2], 4);                        // a physical entry address
     if (!entry) return -9;                                   // INVALID_ADDRESS
-    int rc = xh_cpu_start(index, (uint64_t)(uintptr_t)entry, r->x[3], 0, 0);
+    // Entered like vCPU 0: x0 = the context id, x1 = the vector, x2 = its struct xh_cpu.
+    int rc = xh_cpu_start(index, (uint64_t)(uintptr_t)entry, r->x[3], (uint64_t)(uintptr_t)xh_vector(), (uint64_t)(uintptr_t)&g_vcpu[index].cpu);
     return rc == 0 ? 0 : rc == -2 ? -4 : -6;                 // ALREADY_ON, INTERNAL_FAILURE
   }
   case XH_PSCI_CPU_OFF:

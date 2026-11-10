@@ -24,6 +24,7 @@ void xh_stop(uint32_t reason, uint32_t code, const char *why) { (void)code; (voi
 bool xh_stopping(void) { return stop_reason != 99; }
 static int ready_count;
 void xh_guest_ready(void) { ready_count++; }
+const struct xh_vector *xh_vector(void) { return NULL; }
 static xh_display fake_display;
 static unsigned flush_rect[4];
 xh_display *xh_display_get(void) { return fake_display.pixels ? &fake_display : NULL; }

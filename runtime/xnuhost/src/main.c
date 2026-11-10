@@ -198,6 +198,7 @@ static int boot(void)
   if (xh_mem_map(kernel.base) || xh_mem_io(XL_BOARD_IO_BASE, XL_BOARD_IO_SIZE)) return -1;
   uint64_t phys = g_mem.phys;                       // physical = where it is mapped (mem.c)
   boot_fb_pa = phys + window;
+  if (xh_mem_kva() == 0) { g_info.kva_base = g_mem.kva; g_info.kva_size = g_mem.kva_size; }
   LOGI("memory: %llu MiB at 0x%llx, physical = virtual (slide 0x%llx); I/O aperture 0x%llx",
        (unsigned long long)(window >> 20), (unsigned long long)phys,
        (unsigned long long)((uintptr_t)g_mem.host - kernel.base), (unsigned long long)(uintptr_t)g_mem.io_host);
@@ -391,6 +392,7 @@ int main(int argc, char **argv)
     int fd = (int)syscall(SYS_memfd_create, "xnuhost-selftest", 0u);
     void *x = fd >= 0 && ftruncate(fd, 16384) == 0 ? mmap(NULL, 16384, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_SHARED, fd, 0) : MAP_FAILED;
     LOGI("selftest: executable shared memfd mapping: %s", x != MAP_FAILED ? "yes" : strerror(errno));
+    xh_mem_map_limit();
     ok = ok && x != MAP_FAILED;
     if (xh_mem_create(64 << 20) == 0 && xh_tasks_init(&config) == 0) {
       LOGI("selftest: task factory: started; system-call trapping (seccomp): %s", xh_tasks_available() ? "yes" : "NO");
@@ -403,6 +405,7 @@ int main(int argc, char **argv)
 
   // Order matters: the RAM memfd and the task factory come first, while this process is still
   // single-threaded and has nothing of the guest mapped.
+  xh_mem_map_limit();
   if (xh_mem_create(config.ram_bytes)) return EXIT_SETUP;
   if (config.tasks && xh_tasks_init(&config)) return EXIT_SETUP;
 

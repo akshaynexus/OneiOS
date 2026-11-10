@@ -25,7 +25,7 @@ static int failures;
 static uint64_t next_page;                      // physical bump allocator above topOfKernelData
 
 static volatile uint32_t irq_count, last_intid, timer_fires, sgi_seen, rearm;
-static volatile uint64_t secondary_seen, psci_seen;
+static volatile uint64_t secondary_seen, psci_seen, psci_ok;
 
 static void put(const char *s) { size_t n = 0; while (s[n]) n++; H->console_write(C0, s, n); }
 static void hex(uint64_t v)
@@ -107,9 +107,10 @@ static void secondary_entry(struct xh_cpu *cpu, uint64_t arg)
   for (;;) H->cpu_idle(cpu);
 }
 
-__attribute__((noreturn)) void psci_entry(uint64_t context);
-void psci_entry(uint64_t context)
+__attribute__((noreturn)) void psci_entry(uint64_t context, const struct xh_vector *vector, struct xh_cpu *cpu);
+void psci_entry(uint64_t context, const struct xh_vector *vector, struct xh_cpu *cpu)
 {
+  psci_ok = vector == H && cpu->index == 2;     // entered like vCPU 0
   psci_seen = context;
   for (;;) __asm__ volatile("wfi");
 }
@@ -337,6 +338,20 @@ void kernel_main(const struct boot_args *args, const struct xh_vector *vector, s
   start = now();
   while (!psci_seen && now() - start < hz * 5) {}
   check(psci_result == 0 && psci_seen == 0xabcdef, "PSCI CPU_ON (hvc) starts CPU 2 at a physical entry address");
+  check(psci_ok, "and gives it the vector in x1 and its xh_cpu in x2");
+
+  // 6b. The kernel's own address space: a RAM page mapped at a kernel virtual address outside the window.
+  const struct xh_info *info = H->info;
+  check(vector->size >= offsetof(struct xh_vector, kernel_unmap) + sizeof vector->kernel_unmap && info->kva_size >= (1ull << 30) &&
+        info->kva_base >= info->ram_virt + info->ram_size && info->kva_base + info->kva_size == 0x3c00000000ull, "the kernel address space reservation");
+  uint64_t kpage = page_alloc(), kv = info->kva_base + 0x10000000;
+  check(H->kernel_map(cpu, kv, 0x4000, XH_PROT_READ | XH_PROT_WRITE, kpage) == 0, "kernel_map");
+  *(volatile uint64_t *)(uintptr_t)kv = 0x600dcafe;
+  check(*(volatile uint64_t *)(uintptr_t)kva(kpage) == 0x600dcafe, "the mapping and the window show the same page");
+  check(H->kernel_map(cpu, info->ram_virt, 0x4000, XH_PROT_READ, kpage) < 0 && H->kernel_map(cpu, kv, 0x4000, XH_PROT_READ, 0x1000) < 0,
+        "kernel_map refuses addresses outside the reservation and outside RAM");
+  check(H->kernel_unmap(cpu, kv, 0x4000) == 0 && H->kernel_map(cpu, kv + 0x4000, 0x4000, XH_PROT_READ, kpage) == 0 &&
+        *(volatile uint64_t *)(uintptr_t)(kv + 0x4000) == 0x600dcafe, "kernel_unmap, and the page mapped again elsewhere");
 
   // 7. Devices and tasks.
   test_devices();

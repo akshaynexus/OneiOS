@@ -104,6 +104,13 @@ multiple of 2 MiB away from the link base, which is the slide the kernel finds w
 - The board's device windows are a `PROT_NONE` reservation at their physical addresses
   (`0x08000000..0x0b000000`), so a device register's physical address is also its pointer and every access
   traps.
+- **The kernel's own address space** outside the window (zones, kalloc, stacks, IOKit buffers) is a
+  no-access reservation from the end of the RAM, rounded up to 1 GiB, to `0x3c00000000`
+  (`xh_info.kva_base/kva_size`). `kernel_map(va, size, prot, phys)` maps RAM pages into it and
+  `kernel_unmap` makes a range fault again. The kernel's page tables stay its source of truth; the host
+  mapping plays the TLB (map on a fault the table allows, unmap on an invalidation). Tasks work the same
+  way through `task_map/unmap`. This makes many small mappings, so xnuhost raises `vm.max_map_count` to
+  1048576 at start when it may (it logs the value either way, also in `--selftest`).
 - An iOS task starts with an empty address space (the stub unmaps everything but its own 1 GiB region at
   `0x7e00000000`). XNU's pmap fills it with `task_map(va, size, prot, phys)`: an `mmap(MAP_SHARED|MAP_FIXED)`
   of the RAM memfd in the task. Shared memory between tasks, the shared region at `0x180000000` and the
@@ -126,7 +133,7 @@ and does the same swap. So the kernel may keep its current-thread pointer in `TP
 Apple's kexts' inlined `mrs xN, TPIDR_EL1` be rewritten to `mrs xN, TPIDR_EL0` in place at prelink.
 
 The contract is one header, `runtime/xnuhost/include/xnuhost/hostcall.h` (freestanding C, ABI 1): entry
-registers, `struct xh_cpu`, `struct xh_vector` (29 calls), `struct xh_upcalls`, `struct xh_info`, frames
+registers, `struct xh_cpu`, `struct xh_vector` (31 calls; additions are appended and `vector->size` says which exist), `struct xh_upcalls`, `struct xh_info`, frames
 and traps.
 
 ### 2.4 Interrupts and the timer
@@ -141,6 +148,9 @@ and traps.
   switch threads inside the upcall. When the upcall returns, `frame_resume` builds a Linux signal frame
   from the `xh_frame` and calls `rt_sigreturn`, which restores every register and the signal mask in one step.
 - If the vCPU is inside a host call, the interrupt is only noted and delivered when the call returns.
+- A kernel that moves the interrupted thread to another vCPU inside the upcall does not return from it:
+  it calls `frame_resume(the vCPU the thread is on now, frame)` itself, and makes its host calls with
+  interrupts masked (the return path of a host call belongs to the vCPU the call started on).
 - The timer is CNTVCT_EL0 (the kernel and iOS tasks read it directly; `/cpus` timebase = CNTFRQ_EL0) with a
   per-CPU POSIX timer (`SIGEV_THREAD_ID`) for the deadline; its line is INTID 27, a level, as ArmCpu takes it.
 - The controller is a GICv3 model (`gic.c`): distributor and redistributor frames by trapped MMIO, the CPU
@@ -302,14 +312,14 @@ XnuPrelink and VerifiedRoot are the kernel's and the image set's. vphone-android
 | --- | --- | --- |
 | `runtime/loader`: `make test` | PC, ASan/UBSan | 150 checks pass: Mach-O and fileset parsing with DarwinBoot's rejected variants, the tree round trip and malformed trees, the board's tree, sidecars, placement in both `boot_args` layouts, hosted and firmware |
 | `runtime/xnuhost`: `test_xnuhost` | PC, ASan/UBSan | 149 checks pass: instruction decoding, MMIO emulation, the GIC by registers and by calls, system registers and PSCI, virtio block/GPU/input driven as a guest driver does, the seccomp filter run in a BPF interpreter, configuration, the Data store |
-| `make check-arm64` | the Android binary under `qemu-aarch64` | the test kernel's 53 checks pass, 5 runs of 5 |
+| `make check-arm64` | the Android binary under `qemu-aarch64` | the test kernel's 59 checks pass |
 | cross-build | NDK 28.2, `aarch64-linux-android30`, `-Wall -Wextra -Werror` | clean |
 
 The test kernel (`tests/testkernel.c`) is our own freestanding program wrapped as a Mach-O linked at
 `0xfffffff007004000`. xnuhost loads it by the real path (parse, place, device tree, `boot_args`, enter on
 vCPU 0) and it checks: `boot_args` and the tree; the emulated registers; the timer waking `cpu_idle`; five
 timer interrupts taken inside a running computation with integer and floating-point state intact; the timer
-by `CNTV_*`; a second CPU by `cpu_start` with an SGI back; a third by PSCI `CPU_ON`; the GIC and a virtio
+by `CNTV_*`; a second CPU by `cpu_start` with an SGI back; a third by PSCI `CPU_ON` (entered with the vector and its `xh_cpu`); a RAM page mapped into the kernel's address space; the GIC and a virtio
 disk by trapped loads and stores, with a sector read through a virtqueue; `text_fixup`, `ram_discard`; and a
 task: a mapped code page, a fault on an unmapped page, the kernel mapping it, the store retried and visible
 in the kernel's view, a breakpoint, a looping thread preempted by the timer.
