@@ -1,0 +1,175 @@
+# OneiOS build profile: iOS 27.0.1 (24A446) for iPhone18,2 (iPhone 17 Pro Max, V54AP, T8150).
+#
+# What scripts/fetch/fetch.sh takes from Apple's restore file and what scripts/image/build.sh makes of it.
+# Every pin below was read on 2026-11-10 from Apple's own data, without downloading the restore file:
+#   - the IPSW's URL, size and SHA-256: https://api.ipsw.me/v4/device/iPhone18,2?type=ipsw
+#   - member names, sizes and CRC-32: the IPSW's ZIP directory (scripts/fetch/fetch.sh --list PROFILE)
+#   - component -> member, and sha384: BuildManifest.plist, identity "Customer Erase Install (IPSW)" of v54ap.
+#     For a member that is not AEA, the BuildManifest digest is the SHA-384 of the file as shipped.
+# Format of this file: docs/image-format.md, "Profile".
+schema = 1
+
+[os]
+name = "ios-27.0.1-24A446-iPhone18,2"
+version = "27.0.1"
+build = "24A446"
+device = "iPhone18,2"
+board = "v54ap"
+platform = "t8150"
+chip_id = 0x8150
+board_id = 0x0E
+arch = "arm64e"
+
+[ipsw]
+url = "https://updates.cdn-apple.com/2026FallFCS/3b7299da-a6a5-4bf6-82db-cd37f8c2d160/iPhone18,2_27.0.1_24A446_Restore.ipsw"
+size = 12708916186
+# of the whole file (ipsw.me). The fetch never has the whole file, so it cannot check this one; it checks the members.
+sha256 = "b1535ded2e84bf1d7c716372e498bd10720b2b47374e7e1b4f885a6075b921eb"
+metadata = "https://api.ipsw.me/v4/device/iPhone18,2?type=ipsw"
+variant = "Customer Erase Install (IPSW)"
+# free space the fetch wants in inputs/: both AEA files (10.6 GiB) next to their decrypted images (15.4 GiB)
+need_gib = 30
+
+# --- members: 13 of the IPSW's 165, 10.59 GiB of its 11.84 GiB ---------------------------------------------
+
+[[member]]
+role = "os"
+component = "OS"
+path = "043-69487-662.dmg.aea"
+size = 8992587776
+crc32 = "7ceca2a1"
+aea = true
+buildmanifest_digest = "c4061ed7897d2c3d80e9b67f398a1fb745f98bd016c8864f097764b396341dbc13b8853c933ec03e3e5b73d94a46fbfd"
+
+[[member]]
+role = "systemos"
+component = "Cryptex1,SystemOS"
+path = "043-70037-715.dmg.aea"
+size = 2348810240
+crc32 = "4c327239"
+aea = true
+buildmanifest_digest = "d50a364d8335e00bb37c1807bd9f8ef9ce84573eaccdc2ef41cc848526ef12b97ac22554cf78d187750eb160d9fb7109"
+
+[[member]]
+role = "app"
+component = "Cryptex1,AppOS"
+path = "043-69297-793.dmg"
+size = 16777216
+crc32 = "fe13ee1d"
+sha384 = "0b2e502deac6702e00d31d7b625b02cb59b8076ee8a7731220488ba5f4ad7619f7cccfd24193b0962abf3eaad56cdc90"
+
+[[member]]
+role = "trust-static"
+component = "StaticTrustCache"
+path = "Firmware/043-69487-662.dmg.aea.trustcache"
+size = 92017
+crc32 = "2f01ed7a"
+sha384 = "59cce9c42506dc5e53233fc6cf65f622dbcf66fb6838cb7268e50a74f007b2d791969cce47304243c6819fb2b512d58a"
+
+[[member]]
+role = "trust-system"
+component = "Cryptex1,SystemTrustCache"
+path = "Firmware/043-70037-715.dmg.aea.trustcache"
+size = 3191
+crc32 = "1e3f682b"
+sha384 = "032e01dacb0fb55a3a782a83117813ad8c457b1156f3820e9b297abffff5bc6f71d6bbbcea3676d0c86b19912bc0d822"
+
+[[member]]
+role = "trust-app"
+component = "Cryptex1,AppTrustCache"
+path = "Firmware/043-69297-793.dmg.trustcache"
+size = 863
+crc32 = "c6675b15"
+sha384 = "9889202c29568a8132fecb056d3848fa3a8d91dc17118a76fd7d4ad3cd6d6b9429c6e7f1f14e68f2bd586561a6f34d36"
+
+[[member]]
+role = "roothash-os"
+component = "SystemVolume"
+path = "Firmware/043-69487-662.dmg.aea.root_hash"
+size = 229
+crc32 = "d6a0a8de"
+sha384 = "61292901230fd8a8dbfe9a566608e810967d4737dfa13f2b4986c0f9a1aae49c96c0742b61a279f11c8a32fa22a45c12"
+
+[[member]]
+role = "roothash-system"
+component = "Cryptex1,SystemVolume"
+path = "Firmware/043-70037-715.dmg.aea.root_hash"
+size = 229
+crc32 = "11d835c8"
+sha384 = "3b5f57c94c4042a4ae53b951cb555255f2a28ce85e490bdb4dffbd8852fa5ad0172e58e1084035b7a6606244455fa0c8"
+
+[[member]]
+role = "roothash-app"
+component = "Cryptex1,AppVolume"
+path = "Firmware/043-69297-793.dmg.root_hash"
+size = 229
+crc32 = "c39654e2"
+sha384 = "2c2b68d863460a1a1e24345885b00d1fb94fef18d645e6f8951b909eab67f89d49af6dc49896fabee485f39cac5d0654"
+
+# Build inputs for the kernel and the booter. They stay in inputs/ and are not part of the image set.
+[[member]]
+role = "kernelcache"
+component = "KernelCache"
+path = "kernelcache.release.v54"
+size = 23390449
+crc32 = "7495bb9b"
+sha384 = "8180aef0a22282b33a2173ec8beac7ac25331e0ba87c3827480661495be6fcc83db3c268be4d026d4214156301f86198"
+
+[[member]]
+role = "devicetree"
+component = "DeviceTree"
+path = "Firmware/all_flash/DeviceTree.v54ap.im4p"
+size = 68480
+crc32 = "6dab8854"
+sha384 = "55f2043878d795ce59f82e3ddcc49f317626167633273c3a727487dea4a159586587cf1c18e244ea7fcd389794093f07"
+
+[[member]]
+role = "buildmanifest"
+path = "BuildManifest.plist"
+size = 816945
+crc32 = "99c0c3e0"
+sha256 = "33b3ea4c7a62514bca979b5cd76c70f29f95d1e35c23f7cd6f559d50e05bfd7a"
+
+[[member]]
+role = "restore"
+path = "Restore.plist"
+size = 1093
+crc32 = "a4dac751"
+sha256 = "882c182f661226c55c85a30acaa48ea2bebd216cccd3923a218be46129e1ff68"
+
+# --- the image set (out/image/24A446/) ----------------------------------------------------------------------
+
+[image]
+format = 1
+id = "ios-27.0.1-24A446-iPhone18-2"
+# where the OneOS fork unpacks the set on the phone (oneos/interface.md, section 3)
+stage = "/data/local/tmp/oneios/image"
+archive = "OneiOS_iOS27.0.1_24A446_iPhone18-2.tar.zst"
+# bytes per entry of an image's hash list (NAME.hashes)
+chunk = 1048576
+seed = "data.seed"
+# the kernel collection the kernel build makes (out/kernel/24A446/kernel.kc); it holds Apple's kexts, so it
+# travels in the image set and not in the runtime package
+kernel = "kernel.kc"
+
+[image.files]
+os = "os.img"
+systemos = "systemos.img"
+app = "app.img"
+trust-static = "trust/static.trustcache"
+trust-system = "trust/system.trustcache"
+trust-app = "trust/app.trustcache"
+roothash-os = "trust/os.root_hash"
+roothash-system = "trust/system.root_hash"
+roothash-app = "trust/app.root_hash"
+
+[data]
+# The Data volume the guest makes from the seed on its first start. The kernel mounts Data by this UUID.
+volume_uuid = "1B7DB2B7-5ECA-4FDA-98AF-55DF8632E355"
+volume_name = "Data"
+# size of the sparse Data store the runtime creates beside the image, in GiB
+store_gib = 16
+# the folder of the OS volume the seed starts from
+source = "private/var"
+# time of every seed file the build adds or rewrites: the build's release time (2026-09-28T18:54:15Z)
+epoch = 1790621655
