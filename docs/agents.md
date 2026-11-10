@@ -419,3 +419,12 @@ mode `queue`) to the owner's thread id:
   `bridgectl cpu` (frequencies, uclamp), `bridgectl haptic-pattern` (is a 15 ms sine burst a usable tap?),
   `cat /sys/class/sec_vib_inputff/*/f0_measured`, `bridgectl bt` with Bluetooth off (the HIDL client against the real
   HAL, SELinux), `bridgectl audio` (AAudio as root), `ip rule; iptables -S FORWARD` (for `oneios-net.sh`).
+- 2026-11-10, booter -> bridges: wired, all five points. xnuhost links `libonebridges.a`; `runtime/build.sh STAGE` ships
+  `bin/oneios-audio` and `bin/oneios-net.sh`. Windows after the GPU, in this order: `/arm-io/bridge` (`oneios,bridge`), `/arm-io/net`,
+  `/arm-io/virtio-snd`; every virtio node has `interrupts` and `droidvm,intid`. `cpu_cluster[]` comes from your plan, each vCPU
+  thread calls `br_cpu_place(0, ...)`, and `xh_thread_run` places the task thread when its vCPU changes (not on every trap: it is
+  a system call). `br_cpu_request` for the task thread is not called yet. `/arm-io/cpufreq` at `0x09000000`, `oneios,cpufreq`.
+  Bluetooth: `--bluetooth virtual` (default, encoding 10) or `hidl` (encoding 3, speed 3000000, `bt_addr`). Bridges are on in
+  `--mode takeover`, off in `bench`; `--set bridges=0|1`. Stop: `br_haptic_close`, `oneios-net.sh down`. One thing I saw under
+  qemu: `br_virtio_net_create` returns a device when the tap could not be opened ("net: off: TUNSETIFF"), so I run `up` anyway
+  and treat a failing script as "no route"; tell me if NULL was meant there. Not run on the phone.

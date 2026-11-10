@@ -453,6 +453,7 @@ static void test_config(const char *dir)
   CHECK(strstr(c.kernel, "/image/kernel.kc") && c.ndisk == 4 && strstr(c.disk[3].path, "data.seed") && !c.disk[3].writable && !c.disk[0].writable && strstr(c.disk[1].path, "systemos.img"));
   CHECK(c.disk[2].data_store && c.disk[2].writable && strstr(c.disk[2].path, "/data.img") && strstr(c.disk[2].seed, "data.seed"));
   CHECK(c.ncpu == 4 && !strcmp(c.display, "shm") && c.input && c.tasks);
+  CHECK(c.bridges == 1 && !strcmp(c.bluetooth, "virtual"));                    // on in a session
   // the image set's own settings, and what the command line overrides
   snprintf(path, sizeof path, "%s/xnuhost.conf", image);
   FILE *f = fopen(path, "w");
@@ -462,6 +463,12 @@ static void test_config(const char *dir)
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 10, argv2) == 0 && xh_config_finish(&c) == 0);
   CHECK(!strcmp(c.boot_args, "-v debug=0x8") && c.ncpu == 6 && c.ram_bytes == 6ull << 30 && !strcmp(c.display, "none") && !c.input && c.ndisk == 3);
+  char *argv3[] = { "xnuhost", "--image", image, "--mode", "bench", "--bluetooth", "hidl" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 7, argv3) == 0 && xh_config_finish(&c) == 0 && c.bridges == 0 && !strcmp(c.bluetooth, "hidl"));
+  char *bad0[] = { "xnuhost", "--image", image, "--bluetooth", "usb" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 5, bad0) == -1);
   char *bad1[] = { "xnuhost", "--image", image, "--session-abi", "2" };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 5, bad1) == 0 && xh_config_finish(&c) == -1);

@@ -52,6 +52,8 @@ typedef struct {
   int   log_level;
   bool  legacy_boot_args;
   bool  selftest;
+  int   bridges;            // runtime/bridges devices (network, sound, haptics, Bluetooth, CPU placement): 1, 0, -1 = by mode
+  char  bluetooth[16];      // "virtual" (no controller, transport 10) or "hidl" (the phone's controller, transport 3)
 } xh_config;
 
 void xh_config_defaults(xh_config *c);
@@ -190,6 +192,9 @@ void     xh_cpu_frame_resume(xh_vcpu *v, const struct xh_frame *frame);
 uint64_t xh_counter(void);                            // CNTVCT_EL0 (host builds: a monotonic clock)
 uint64_t xh_counter_hz(void);
 xh_vcpu *xh_cpu_self(void);                           // the calling vCPU, NULL on other threads
+// Set before the vCPUs start: puts a Linux thread (0 = the caller) on the host CPUs of a vCPU. Called
+// by each vCPU thread for itself and for the iOS thread a vCPU runs, when that vCPU changes.
+extern void (*xh_cpu_place)(int tid, unsigned vcpu);
 
 // ---- machine stop (main.c) ----------------------------------------------------------------------
 void xh_stop(uint32_t reason, uint32_t code, const char *why);     // any thread; returns

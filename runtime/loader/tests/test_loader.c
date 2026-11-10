@@ -209,6 +209,11 @@ static void test_machine(void)
   p = xl_adt_get(xl_adt_find(t, "arm-io/data-store"), "reg");
   memcpy(r, p->value, 16);
   CHECK(r[0] == XL_BOARD_VIRTIO + 2 * XL_BOARD_VIRTIO_SIZE - 0x1000 && r[1] == XL_BOARD_VIRTIO_SIZE);
+  uint32_t intid;
+  memcpy(&intid, xl_adt_get(xl_adt_find(t, "arm-io/data-store"), "droidvm,intid")->value, 4);
+  CHECK(intid == XL_BOARD_VIRTIO_SPI + 2);
+  memcpy(&v32, xl_adt_get(xl_adt_find(t, "bluetooth"), "transport-encoding")->value, 4);
+  CHECK(v32 == 10 && !xl_adt_get(xl_adt_find(t, "bluetooth"), "transport-speed") && !xl_adt_find(t, "arm-io/cpufreq"));
   // memory-map placeholders and the host node
   const xl_adt_node *map = xl_adt_find(t, "chosen/memory-map");
   CHECK(xl_adt_get(map, "TrustCache") && !xl_adt_get(map, "RAMDisk"));
@@ -252,6 +257,26 @@ static void test_machine(void)
   xl_adt_remove(donor, "product");
   CHECK(xl_machine_tree(&m, &err) == NULL && err);
   xl_adt_free(donor);
+
+  // the bridged Bluetooth controller, the cpufreq windows and the bridge channel
+  machine_default(&m);
+  m.bt_transport = 3; m.bt_speed = 3000000; memcpy(m.bt_mac, "\x10\x20\x30\x40\x50\x60", 6);
+  m.cpufreq_base = XL_BOARD_CPUFREQ; m.cpufreq_size = 4 * 0x1000;
+  m.dev[4].kind = XL_DEV_BRIDGE;
+  t = xl_machine_tree(&m, &err);
+  CHECK(t != NULL);
+  if (t) {
+    const xl_adt_node *b = xl_adt_find(t, "bluetooth");
+    memcpy(&v32, xl_adt_get(b, "transport-encoding")->value, 4);
+    CHECK(v32 == 3 && !memcmp(xl_adt_get(b, "local-mac-address")->value, m.bt_mac, 6) && xl_adt_get(b, "transport-speed"));
+    CHECK(!memcmp(xl_adt_get(xl_adt_find(t, "arm-io/bridge"), "compatible")->value, "oneios,bridge", 14));
+    memcpy(r, xl_adt_get(xl_adt_find(t, "arm-io/cpufreq"), "reg")->value, 16);
+    CHECK(r[0] == XL_BOARD_CPUFREQ - 0x1000 && r[1] == 0x4000);
+    uint8_t wifi[6], eth[6];
+    xl_machine_mac(&m, 1, wifi); xl_machine_mac(&m, 2, eth);
+    CHECK(wifi[0] == 0x02 && memcmp(wifi, eth, 6) && !memcmp(xl_adt_get(xl_adt_find(t, "chosen"), "mac-address-wifi0")->value, wifi, 6));
+    xl_adt_free(t);
+  }
 
   // refused machines
   machine_default(&m); m.ncpu = 9;

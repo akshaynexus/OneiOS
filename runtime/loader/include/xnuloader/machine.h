@@ -23,6 +23,7 @@ typedef enum {
   XL_DEV_NET,         // "droidvm,net"
   XL_DEV_GPU,         // "droidvm,virtio-gpu"
   XL_DEV_SND,         // "droidvm,virtio-snd"
+  XL_DEV_BRIDGE,      // "oneios,bridge": the message channel of runtime/bridges (haptics, Bluetooth HCI)
 } xl_device_kind;
 
 typedef struct { xl_device_kind kind; uint64_t base, size; } xl_device;
@@ -39,6 +40,11 @@ typedef struct {
   const char *psci_method;                // "hvc" or "smc"
   xl_device   dev[XL_MAX_DEVICES];
   unsigned    ndev;
+  uint64_t    cpufreq_base, cpufreq_size; // /arm-io/cpufreq: one 4 KiB window per CPU; size 0 for none
+  // /bluetooth: transport-encoding 10 (the virtual transport, no controller) when bt_transport is 0;
+  // else that encoding (3 = the phone's controller behind the bridge) with bt_speed and bt_mac.
+  uint32_t    bt_transport, bt_speed;
+  uint8_t     bt_mac[6];
   uint64_t    panic_base, panic_size;     // /pram; size 0 for none
   uint8_t     random_seed[256];           // xnu-12377 takes 4 x 64 seed bytes
   bool        have_chip_id;
@@ -71,6 +77,7 @@ typedef struct {
 #define XL_BOARD_GIC_DIST_SIZE  0x10000ull
 #define XL_BOARD_GIC_REDIST     0x080a0000ull
 #define XL_BOARD_GIC_STRIDE     0x20000ull
+#define XL_BOARD_CPUFREQ        0x09000000ull   // + cpu * 0x1000
 #define XL_BOARD_VIRTIO         0x0a000000ull
 #define XL_BOARD_VIRTIO_SIZE    0x1000ull   // one page per device, so each is its own trapped page
 #define XL_BOARD_IO_BASE        XL_BOARD_GIC_DIST
@@ -80,6 +87,9 @@ typedef struct {
 
 // Fills the windows of *m for `ncpu` CPUs and the given devices from the XL_BOARD_* layout.
 void xl_machine_board(xl_machine *m, unsigned ncpu, const xl_device_kind *kinds, unsigned ndev);
+
+// The guest's stable addresses, from its unique chip ID: which = 0 Bluetooth, 1 Wi-Fi (en0), 2 Ethernet.
+void xl_machine_mac(const xl_machine *m, unsigned which, uint8_t mac[6]);
 
 // Builds the tree. NULL with *error set for a machine that cannot be described.
 xl_adt_node *xl_machine_tree(const xl_machine *m, const char **error);

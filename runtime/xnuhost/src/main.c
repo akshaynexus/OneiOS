@@ -14,6 +14,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include "bridges/devices.h"
 #include "xnuloader/boot.h"
 #include "xnuloader/machine.h"
 #include "xnuloader/macho.h"
@@ -159,6 +160,26 @@ static void host_facts(void)
 
 static void gic_line(unsigned cpu, bool line) { xh_cpu_line(cpu, line); }
 
+// ---- the host bridges (runtime/bridges): CPU placement, cpufreq, haptics, Bluetooth, network, sound ---
+static br_cpu_plan cpu_plan;
+static br_haptic *haptic;
+static bool net_up;
+
+static void bridge_log(int level, const char *line) { xh_log(level == 0 ? XH_LOG_ERROR : level == 1 ? XH_LOG_INFO : XH_LOG_DEBUG, "%s", line); }
+static void place(int tid, unsigned vcpu) { br_cpu_place(tid, &cpu_plan, vcpu); }
+static int vcpu_tid(unsigned vcpu) { return vcpu < g_ncpu ? g_vcpu[vcpu].tid : 0; }
+static uint64_t cpufreq_read(void *opaque, uint64_t offset, unsigned size) { return br_cpufreq_read(opaque, offset, size); }
+static void cpufreq_write(void *opaque, uint64_t offset, unsigned size, uint64_t value) { br_cpufreq_write(opaque, offset, size, value); }
+
+static bool net_script(const char *verb)
+{
+  char command[700];
+  if (!*config.runtime || snprintf(command, sizeof command, "sh %s/bin/oneios-net.sh %s", config.runtime, verb) >= (int)sizeof command) return false;
+  int status = system(command);
+  if (status) LOGE("network: `oneios-net.sh %s` ended with status %d: the guest has no route out", verb, status);
+  return status == 0;
+}
+
 static int boot(void)
 {
   const char *error = NULL;
@@ -202,20 +223,10 @@ static int boot(void)
   kinds[ndev++] = XL_DEV_GPU;
   if (config.input && xh_input_start(input, fb_width, fb_height)) LOGE("input: could not start; continuing without");
 
-  // The device tree.
   static xl_machine machine;
-  xl_machine_board(&machine, config.ncpu, kinds, ndev);
-  machine.timebase_hz = (uint32_t)g_info.timebase_hz;
-  machine.dram_base = phys;
-  machine.dram_size = window;
-  machine.model = "iPhone18,2";
-  machine.host_vector = (uint64_t)(uintptr_t)xh_vector();
-  machine.user_va_limit = xh_tasks_va_limit();
-  machine.host_page_size = g_info.host_page_size;
-  if (getentropy(machine.random_seed, sizeof machine.random_seed)) { LOGE("no entropy for the kernel's seed"); return -1; }
+  machine.chip_id = 0x8150;
   // The guest's unique chip ID: made once, kept with the guest's data, so its MAC addresses and
   // everything keyed on the ID stay the same across sessions.
-  machine.chip_id = 0x8150;
   if (*config.data) {
     char path[600];
     size_t size = 0;
@@ -230,6 +241,58 @@ static int boot(void)
     free(saved);
     machine.have_chip_id = machine.unique_chip_id != 0;
   }
+
+  // The bridges. Each one whose Linux side is missing says so and is left out; nothing else changes.
+  if (config.bridges) {
+    br_log_sink = bridge_log;
+    br_cpu_topology host;
+    if (br_cpu_read("/sys", &host) == 0 && br_cpu_plan_make(&host, config.ncpu, false, &cpu_plan) == 0) {
+      for (unsigned i = 0; i < config.ncpu; i++) machine.cpu_cluster[i] = cpu_plan.v[i].type;      // E vCPUs first, then P
+      xh_cpu_place = place;
+      br_cpufreq *cpufreq = br_cpufreq_create(&cpu_plan, vcpu_tid);
+      if (cpufreq && xh_mmio_add(&(xh_mmio_region){ .base = XL_BOARD_CPUFREQ, .size = (uint64_t)config.ncpu * BR_CPUFREQ_WINDOW, .name = "cpufreq",
+                                                    .opaque = cpufreq, .read = cpufreq_read, .write = cpufreq_write }) == 0) {
+        machine.cpufreq_base = XL_BOARD_CPUFREQ;
+        machine.cpufreq_size = (uint64_t)config.ncpu * BR_CPUFREQ_WINDOW;
+      }
+      LOGI("cpu: %u E + %u P vCPUs on the host's %u E + %u P cores", cpu_plan.n_e, cpu_plan.n_p, host.n_e, host.n_p);
+    } else LOGI("cpu: no host topology under /sys: vCPUs are not placed");
+
+    bool hidl = !strcmp(config.bluetooth, "hidl");
+    haptic = br_haptic_open(NULL);
+    br_bridge_config bridge = { .haptic = haptic, .hci_factory = hidl ? br_hci_open_hidl : NULL };
+    if (br_bridge_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &bridge)) kinds[ndev++] = XL_DEV_BRIDGE;
+    if (hidl && br_bt_address("/mnt/vendor/efs/bluetooth/bt_addr", machine.bt_mac) == 0) {
+      machine.bt_transport = 3;                     // the phone's controller, H4 over the bridge
+      machine.bt_speed = 3000000;
+    }
+
+    br_net_config net;
+    br_net_config_defaults(&net);
+    xl_machine_mac(&machine, 1, net.guest_mac);     // en0
+    if (br_virtio_net_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &net, br_net_open_tap)) {
+      kinds[ndev++] = XL_DEV_NET;
+      net_up = net_script("up");                    // address, forwarding and NAT for the tap; undone at stop
+    }
+
+    char helper[600];
+    void *audio_ctx = NULL;
+    const br_audio_backend *audio = NULL;
+    if (*config.runtime && snprintf(helper, sizeof helper, "%s/bin/oneios-audio", config.runtime) < (int)sizeof helper) audio = br_audio_helper(helper, &audio_ctx);
+    if (!audio) audio = br_audio_null(&audio_ctx);
+    if (audio && br_virtio_snd_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, audio, audio_ctx)) kinds[ndev++] = XL_DEV_SND;
+  }
+
+  // The device tree.
+  xl_machine_board(&machine, config.ncpu, kinds, ndev);
+  machine.timebase_hz = (uint32_t)g_info.timebase_hz;
+  machine.dram_base = phys;
+  machine.dram_size = window;
+  machine.model = "iPhone18,2";
+  machine.host_vector = (uint64_t)(uintptr_t)xh_vector();
+  machine.user_va_limit = xh_tasks_va_limit();
+  machine.host_page_size = g_info.host_page_size;
+  if (getentropy(machine.random_seed, sizeof machine.random_seed)) { LOGE("no entropy for the kernel's seed"); return -1; }
   xl_blob ramdisk = sidecar("ramdisk", 1ull << 30), trust = sidecar("trustcache", 16 << 20), addon = sidecar("gpuaddon", 64 << 20),
           policies = sidecar("vroot", 128 << 20);
   machine.ramdisk = ramdisk.data != NULL;
@@ -386,6 +449,8 @@ int main(int argc, char **argv)
          (unsigned long long)g_vcpu[i].stat_irqs, (unsigned long long)g_vcpu[i].stat_mmio, (unsigned long long)g_vcpu[i].stat_sysreg,
          (unsigned long long)g_vcpu[i].stat_traps);
   xh_tasks_shutdown();
+  if (haptic) br_haptic_close(haptic);      // stops the motor
+  if (net_up) net_script("down");
   xh_input_stop();
   xh_display_close();
   sync();                                   // the Data store's pages

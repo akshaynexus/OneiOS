@@ -38,6 +38,15 @@ void xl_nvram_proxy(uint8_t image[8192])
   memcpy(image + 16, &sum, 4);
 }
 
+void xl_machine_mac(const xl_machine *m, unsigned which, uint8_t mac[6])
+{
+  static const uint8_t salt[3] = { 0, 0x5a, 0x69 };
+  uint64_t seed = m->have_chip_id && m->unique_chip_id ? m->unique_chip_id : 0x4f6e6569;
+  mac[0] = 0x02; mac[1] = 0xd7;                    // locally administered
+  mac[2] = (uint8_t)(seed >> 24) ^ salt[which % 3];
+  mac[3] = (uint8_t)(seed >> 16); mac[4] = (uint8_t)(seed >> 8); mac[5] = (uint8_t)seed;
+}
+
 void xl_machine_board(xl_machine *m, unsigned ncpu, const xl_device_kind *kinds, unsigned ndev)
 {
   m->ncpu = ncpu;
@@ -248,14 +257,18 @@ xl_adt_node *xl_machine_tree(const xl_machine *m, const char **error)
   xl_adt_node *bt = xl_adt_add(root, "bluetooth");
   xl_adt_set_str(bt, "device_type", "bluetooth");
   xl_adt_set_u32(bt, "transport-encoding", 10);
-  uint64_t seed = m->have_chip_id && m->unique_chip_id ? m->unique_chip_id : 0x4f6e6569;
-  uint8_t mac[6] = { 0x02, 0xd7, (uint8_t)(seed >> 24), (uint8_t)(seed >> 16), (uint8_t)(seed >> 8), (uint8_t)seed };
+  uint8_t mac[6];
+  if (m->bt_transport) {
+    xl_adt_set_u32(bt, "transport-encoding", m->bt_transport);
+    if (m->bt_speed) xl_adt_set_u32(bt, "transport-speed", m->bt_speed);
+    memcpy(mac, m->bt_mac, 6);
+  } else xl_machine_mac(m, 0, mac);
   xl_adt_set(bt, "local-mac-address", mac, 6);
   // The three addresses the userland's boot contract requires, each stable for one unique chip ID.
   xl_adt_set(chosen, "mac-address-bluetooth0", mac, 6);
-  mac[2] ^= 0x5a;
+  xl_machine_mac(m, 1, mac);
   xl_adt_set(chosen, "mac-address-wifi0", mac, 6);
-  mac[2] ^= 0x33;
+  xl_machine_mac(m, 2, mac);
   xl_adt_set(chosen, "mac-address-ethernet0", mac, 6);
 
   xl_adt_node *buttons = xl_adt_add(root, "buttons");
@@ -309,6 +322,7 @@ xl_adt_node *xl_machine_tree(const xl_machine *m, const char **error)
     case XL_DEV_NET:        snprintf(name, sizeof name, "net"); compat = "droidvm,net"; break;
     case XL_DEV_GPU:        snprintf(name, sizeof name, "virtio-gpu"); compat = "droidvm,virtio-gpu"; break;
     case XL_DEV_SND:        snprintf(name, sizeof name, "virtio-snd"); compat = "droidvm,virtio-snd"; break;
+    case XL_DEV_BRIDGE:     snprintf(name, sizeof name, "bridge"); compat = "oneios,bridge"; break;
     default: FAIL("unknown device kind");
     }
     if (xl_adt_child(io, name)) FAIL("two devices of a kind that has one node");
@@ -318,6 +332,12 @@ xl_adt_node *xl_machine_tree(const xl_machine *m, const char **error)
     xl_adt_set(n, "dma-coherent", "", 0);
     // The line of the window on the board's GIC: SPI INTID 32 + its index.
     xl_adt_set_u32(n, "interrupts", XL_BOARD_VIRTIO_SPI + i);
+    xl_adt_set_u32(n, "droidvm,intid", XL_BOARD_VIRTIO_SPI + i);     // the name UniXNU-droidvm's transports read
+  }
+  if (m->cpufreq_size) {
+    xl_adt_node *freq = xl_adt_add(io, "cpufreq");
+    xl_adt_set_str(freq, "compatible", "oneios,cpufreq");
+    reg(freq, m->armio_base, m->cpufreq_base, m->cpufreq_size);
   }
   // XNU's PL011 console finds the node named "uart0" at soc_base + reg.
   if (m->uart_size) {

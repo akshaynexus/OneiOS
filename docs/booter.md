@@ -14,7 +14,8 @@ uses this host (the hosted machine layer inside XNU) does not exist yet. Section
 ## 1. Use
 
 ```sh
-runtime/build.sh STAGE        # Android binary -> STAGE/bin/xnuhost (static, 1.1 MB; the task stub is inside)
+runtime/build.sh STAGE        # Android binary -> STAGE/bin/xnuhost (static, 1.2 MB; the task stub is inside),
+                              # and the bridges' bin/oneios-audio, bin/oneios-net.sh
 runtime/build.sh --test       # loader tests, xnuhost tests, and the binary booting the test kernel under qemu-aarch64
 ```
 
@@ -205,6 +206,17 @@ and feature handshake) at `0x0a000000 + n * 0x1000`, SPI `32 + n`, in this order
 | Input | `virtio_input.c`, `input.c` | `/dev/input/event*`: the touchscreen's multitouch events and the three side keys, unchanged evdev codes, the panel's own axis ranges | UniXNU-droidvm `DroidVMVirtioInput.c` |
 | GPU, 2D scanout | `virtio_gpu.c`, `display.c` | the display back end | UniXNU-droidvm `DroidVMVirtioGpuDisplay.cpp` under IOMobileFramebufferLegacy |
 | Console | `uart.c` | the log | XNU's PL011 console (`uart0`) |
+| Bridge channel, network, sound | `runtime/bridges` (the bridges agent's; `docs/hardware.md`) | haptics and Bluetooth HCI; a tap with built-in DHCP; an AAudio helper process | `drivers/bridge`, `DroidVMVirtioNet.c`, `DroidVMVirtioSnd.c` |
+| CPU frequency | `runtime/bridges` | a plain MMIO window per vCPU at `0x09000000` (`/arm-io/cpufreq`) | `DroidVMCpufreq.c` |
+
+The bridges are linked in as `libonebridges.a` and come after the GPU in the window order: `bridge`, `net`,
+`virtio-snd`. They are on in a takeover session and off in `--mode bench` (`--set bridges=0|1`). With them,
+`/cpus` gets the host's cluster types (E vCPUs first), each vCPU thread is put on its cluster's host CPUs,
+and so is the iOS thread a vCPU runs (when the vCPU changes). `--bluetooth hidl` bridges the phone's
+controller (`/bluetooth` transport-encoding 3, the phone's address); the default `virtual` keeps encoding 10.
+A bridge whose Linux side is missing logs one line and is left out. At a stop the motor is stopped and
+`bin/oneios-net.sh down` removes the tap's rules. Every virtio node carries its SPI as `interrupts` and as
+`droidvm,intid` (the name UniXNU-droidvm's transports read).
 
 Where UniXNU's RamBlock keeps the Data seed in RAM and changed pages in a store window, xnuhost has
 Linux's page cache and a sparse file: the store is a raw image.
@@ -288,8 +300,8 @@ XnuPrelink and VerifiedRoot are the kernel's and the image set's. vphone-android
 
 | Test | Where it runs | Result (2026-11-10) |
 | --- | --- | --- |
-| `runtime/loader`: `make test` | PC, ASan/UBSan | 143 checks pass: Mach-O and fileset parsing with DarwinBoot's rejected variants, the tree round trip and malformed trees, the board's tree, sidecars, placement in both `boot_args` layouts, hosted and firmware |
-| `runtime/xnuhost`: `test_xnuhost` | PC, ASan/UBSan | 146 checks pass: instruction decoding, MMIO emulation, the GIC by registers and by calls, system registers and PSCI, virtio block/GPU/input driven as a guest driver does, the seccomp filter run in a BPF interpreter, configuration, the Data store |
+| `runtime/loader`: `make test` | PC, ASan/UBSan | 150 checks pass: Mach-O and fileset parsing with DarwinBoot's rejected variants, the tree round trip and malformed trees, the board's tree, sidecars, placement in both `boot_args` layouts, hosted and firmware |
+| `runtime/xnuhost`: `test_xnuhost` | PC, ASan/UBSan | 149 checks pass: instruction decoding, MMIO emulation, the GIC by registers and by calls, system registers and PSCI, virtio block/GPU/input driven as a guest driver does, the seccomp filter run in a BPF interpreter, configuration, the Data store |
 | `make check-arm64` | the Android binary under `qemu-aarch64` | the test kernel's 53 checks pass, 5 runs of 5 |
 | cross-build | NDK 28.2, `aarch64-linux-android30`, `-Wall -Wextra -Werror` | clean |
 
@@ -343,6 +355,6 @@ In order. 1-3 are the kernel agent's with this ABI; the rest are split as noted.
 7. **SpringBoard**: Metal. virtio-gpu 3D: the DRM native context (capset 6) with drm2kgsl on
    `/dev/kgsl-3d0` in-process, blob resources over the RAM memfd through `/dev/udmabuf`, per-ring fences;
    guest side UniXNU-droidvm's `DroidVMVirtioGpu3D.cpp` and the Metal plugin. `virtio_gpu.c` is 2D only.
-8. Then: network (virtio-net on a tun device), audio (virtio-snd; a static binary cannot use AAudio, so a
-   helper or a dynamic build), battery, a guest-initiated shutdown on `SIGTERM`, image chunk-hash checks on
+8. Then: the bridges' first run on the phone (network, sound, haptics, Bluetooth are wired and untested),
+   battery, a guest-initiated shutdown on `SIGTERM`, image chunk-hash checks on
    read (`<image>.hashes`), the uid drop and trap batching.

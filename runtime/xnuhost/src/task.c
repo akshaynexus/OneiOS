@@ -101,7 +101,7 @@ typedef struct {
   uint8_t areas[XS_MAX_THREADS / 8 + 1];     // thread areas in use
 } task;
 
-typedef struct { bool used; uint16_t task; uint16_t area; } thread;
+typedef struct { bool used; uint16_t task; uint16_t area; uint8_t placed; /* vCPU + 1 it was last put with */ } thread;
 
 static struct {
   bool available;
@@ -530,6 +530,11 @@ int64_t xh_thread_run(xh_vcpu *v, uint64_t handle, struct xh_user_state *state, 
   if (t->dead) { trap->kind = XH_TRAP_EXITED; trap->exit_status = t->exit_status; return 0; }
   // An interrupt already waiting is taken before any user instruction runs.
   if (v->cpu.irq_pending) { trap->kind = XH_TRAP_INTERRUPT; return 0; }
+  // iOS code runs on the task's Linux thread, not on the vCPU's: it follows the vCPU's host CPUs.
+  if (xh_cpu_place && th->placed != v->cpu.index + 1) {
+    uint32_t tid = __atomic_load_n(&tp->tid, __ATOMIC_ACQUIRE);
+    if (tid) { xh_cpu_place((int)tid, v->cpu.index); th->placed = (uint8_t)(v->cpu.index + 1); }
+  }
   tp->state = *state;
   tp->command = XS_RUN;
   __atomic_store_n(&tp->to_host, 0, __ATOMIC_RELEASE);

@@ -21,6 +21,8 @@ void xh_config_defaults(xh_config *c)
   c->tasks = true;
   c->task_uid = -1;
   c->log_level = XH_LOG_INFO;
+  c->bridges = -1;
+  strcpy(c->bluetooth, "virtual");
 }
 
 uint64_t xh_parse_size(const char *text, bool *ok)
@@ -72,6 +74,8 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
   else if (!strcmp(key, "input")) return flag(value, &c->input);
   else if (!strcmp(key, "tasks")) return flag(value, &c->tasks);
   else if (!strcmp(key, "task-uid")) c->task_uid = atoi(value);
+  else if (!strcmp(key, "bridges")) { bool on; if (flag(value, &on)) return -1; c->bridges = on; }
+  else if (!strcmp(key, "bluetooth")) { ok = !strcmp(value, "virtual") || !strcmp(value, "hidl"); if (ok) strcpy(c->bluetooth, value); }
   else if (!strcmp(key, "legacy-boot-args")) return flag(value, &c->legacy_boot_args);
   else if (!strcmp(key, "log-level")) c->log_level = atoi(value);
   else if (!strcmp(key, "disk") || !strcmp(key, "disk-rw") || !strcmp(key, "data-store")) {
@@ -173,6 +177,8 @@ int xh_config_finish(xh_config *c)
   if (c->session_abi != 1) { fprintf(stderr, "xnuhost: session ABI %d is not supported (this build: 1)\n", c->session_abi); return -1; }
   if (strcmp(c->mode, "takeover") && strcmp(c->mode, "bench")) { fprintf(stderr, "xnuhost: mode %s is not supported\n", c->mode); return -1; }
   if (strcmp(c->display, "shm") && strcmp(c->display, "drm") && strcmp(c->display, "none")) { fprintf(stderr, "xnuhost: display %s is not supported\n", c->display); return -1; }
+  // The host bridges change the phone's state (a tap, routing rules, the motor): on in a session.
+  if (c->bridges < 0) c->bridges = !strcmp(c->mode, "takeover");
   if (c->selftest) return 0;
   if (!*c->image) { fprintf(stderr, "xnuhost: --image DIR is required\n"); return -1; }
   // The image set may carry settings of its own; the command line was applied first and a setting
