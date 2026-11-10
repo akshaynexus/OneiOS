@@ -3,7 +3,7 @@
 Owner: userland. Code: `userland/`. Date: 2026-11-10.
 
 **State: written and tested on the build machine only.** No iOS 27 root has been run through it (the OS
-images are not fetched on this machine) and nothing has booted. The tests use a generated fake root. Marks:
+images are not fetched on this machine) and nothing has booted. The tests use a generated fake root; `scripts/image/build.sh` with the hook was run end to end on stand-in inputs only. Marks:
 [F] taken from a source that is named, [I] inferred, [U] unknown until a boot.
 
 What this part does: it takes Apple's iOS 27.0.1 system for iPhone18,2 (24A446) as it is and prepares
@@ -183,7 +183,7 @@ is placed, not built, by this part: its build needs a Mac (UniXNU `scripts/build
 | Stage | Needs | Who |
 |---|---|---|
 | launchd starts | The OS and SystemOS volumes mounted as Apple's root; the dyld cache; AMFI with Apple's three trust caches. Boot tasks with RequireSuccess (fsck, mount phases, data protection, launchd_cache_loader) must succeed: nothing here touches them | kernel, booter |
-| Data volume | First start: `newfs_apfs -e -x` on the store, mount at `/private/var`, `oneios-seed`, then launchd. **Open**: where `oneios-seed` runs from before Data exists (it cannot be on Data), and who calls it | booter + kernel (asked on the board) |
+| Data volume | First start: `newfs_apfs -e -x` on the store, mount at `/private/var`, `oneios-seed`, then launchd. Split (board, 2026-11-10): userland supplies the unpacker, which the hook puts in `overlay/userland/bin/oneios-seed` with its CDHash in `owner-trust.json`; booter and kernel make the store, format and mount it, hand the unpacker and the seed to the guest and run it before launchd. Not confirmed by them yet | userland (unpack); booter + kernel (the rest) |
 | launchd settles | `disabled.plist` in force; `unique-chip-id`, MAC addresses, `manifest-properties` in the tree; software AES (or configd waits 5 minutes); no watchdogd | kernel, booter; this part's list |
 | keybagd, securityd | Key-store stand-in: no passcode, wrap/unwrap for the keychain; empty `keybags/` | kernel; `data-layout` |
 | backboardd | The original IOMobileFramebuffer with a host display behind it; a Digitizer/Touch Screen HID service; the CA preferences of 3.1; backlight properties (iOS 26.5's CoreBrightness crashed on missing `backlight-calibration-parameters`; [U] on 27) | kernel, booter; `preferences` |
@@ -194,7 +194,7 @@ is placed, not built, by this part: its build needs a Mac (UniXNU `scripts/build
 
 1. A run on the real root. Needs the OS images (10.6 GiB fetch). The first run's report tells which policy labels the iPhone root lacks.
 2. iOS builds of the helpers (an SDK on the build machine), and their CDHashes in the kernel's owner trust module.
-3. The first-start Data path: `newfs_apfs`, mount, `oneios-seed`. Who drives it is not settled.
+3. The first-start Data path: the unpacker is written and host-tested; the store, `newfs_apfs`, the mount and the call are booter's and the kernel's and not written.
 4. The @3x scale: no fixup for the iPhone's QuartzCore yet. Without it the guest may come up @2x (660x1434 points) and lay out wrongly.
 5. Kernel features of section 6 for this profile (release-kernel, booter).
 6. CommCenter without a baseband: kept by the iPhone evidence, unproven on this kernel.

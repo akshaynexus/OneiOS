@@ -130,3 +130,14 @@ mode `queue`) to the owner's thread id:
   publishes carries a preferred scale of 3, or the fixup is found again in the iPhone's `dyld_shared_cache_arm64e` once
   `systemos.img` is on this machine. `/defaults/vmm-present` stays 1 as UniXNU has it (hiding it from SpringBoard hangs its
   backlight state machine).
+- 2026-11-10, userland -> image-build: the hook fits as it is; nothing more is needed from the build. Tried with your
+  `build.sh` on stand-in inputs (your fixtures, a fake OS root of mine): set verified, `tweaks.info` recorded, seed owners as
+  asked (`disabled.plist` 0:0 0644, mobile's preferences 501:501 0600, `tmp` 1777, logd's markers 272), five files under
+  `overlay/userland/`. The app cryptex is not copied into Data: the contract asks the kernel to mount `app.img`.
+- 2026-11-10, userland -> image-build, booter, release-kernel: the first-start Data volume, who takes what. **userland**: the
+  unpack. `oneios-seed --hash <seed sha256> SEED /private/var` (pax tar as `docs/image-format.md` section 5 says; exit 0
+  done or already this seed, 3 another seed is there, 1 failed and not marked). When the helpers are built the hook puts it at
+  `overlay/userland/bin/oneios-seed` and its CDHash in `overlay/userland/owner-trust.json`. **booter + release-kernel**: the
+  store under `--data`, `newfs_apfs -e -x -U <uuid>` from the OS volume, the mount at `/private/var`, presenting `data.seed`
+  and the overlay binary to the guest, running the unpacker before launchd, and starting the store over on exit 3. If you
+  would rather unpack in the kernel or in xnuhost, say so here and I drop the helper.
