@@ -112,6 +112,24 @@ bool xh_sysreg_emulate(xh_vcpu *v, xh_regs *r, uint32_t insn)
     if (s.read) value = (uint32_t)(v->sys.cntv_cval - xh_counter());
     else { v->sys.cntv_cval = xh_counter() + (uint64_t)(int64_t)(int32_t)value; timer_update(v); }
     break;
+  case XH_SYSREG(3, 1, 0, 0, 1):                             // CLIDR_EL1: L1 separate instruction and data, L2 unified
+    value = 3u | 4u << 3 | 2u << 24 | 2u << 27;              // (LoC and LoUU 2)
+    break;
+  case XH_SYSREG(3, 1, 0, 0, 0): {                           // CCSIDR_EL1 of the cache CSSELR_EL1 selects
+    // The geometry XNU reads at each CPU's start (cpuid.c do_cacheid): the line size is the host's
+    // (CTR_EL0.DminLine: 64 bytes on every core this runs on); sizes are those of a current big core
+    // (64 KiB 4-way L1, 1 MiB 8-way L2). A shadow answered 0 here: 16-byte lines, and the kernel then
+    // aligned its per-CPU page queues to 16 bytes ("pointer can't be packed" in vm_page_init_local_q).
+    uint64_t ctr = 4u << 16, *selected = shadow(&v->sys, XH_SYSREG(3, 2, 0, 0, 0));
+#if defined(__aarch64__)
+    __asm__("mrs %0, ctr_el0" : "=r"(ctr));
+#endif
+    unsigned line = 4u << ((ctr >> 16) & 15), level = selected ? (unsigned)(*selected >> 1) & 7 : 0;
+    unsigned ways = level == 0 ? 4 : 8, bytes = level == 0 ? 64u << 10 : 1u << 20, log2 = 0;
+    while ((1u << log2) < line) log2++;
+    value = (log2 - 4) | (ways - 1) << 3 | (uint64_t)(bytes / (line * ways) - 1) << 13;
+    break;
+  }
   default:
     if (xh_gic_sysreg(v->cpu.index, &s, &value)) break;
     // Any other EL1 or EL2 register: a per-CPU shadow that reads back what was written. This lets
