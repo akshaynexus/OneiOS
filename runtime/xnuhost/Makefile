@@ -14,14 +14,46 @@ QEMU ?= $(shell command -v qemu-aarch64 2>/dev/null)
 WARN := -Wall -Wextra -Werror
 INC := -Iinclude -Isrc -Istub -I../loader/include -I../bridges/include -I../../drivers/bridge
 CFLAGS ?= -O2 -g
-SRC := main log config insn mem mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input virtio_gpu display input cpu hostcalls task
-PORTABLE := log config insn mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input virtio_gpu cpu task
+SRC := main log config insn mem mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input virtio_gpu gpu3d display input cpu hostcalls task
+PORTABLE := log config insn mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input virtio_gpu gpu3d cpu task
 LOADER_SRC := $(wildcard ../loader/src/*.c)
 HDR := $(wildcard include/xnuhost/*.h src/*.h stub/*.h ../loader/include/xnuloader/*.h)
 A := build/android
 H := build/host
 
-all: $(A)/xnuhost
+all: $(A)/xnuhost $(A)/gpuctl
+
+# ---- the GPU: Droid-VM's drm2kgsl, linked in (src/gpu3d_kgsl.c) ----
+# The renderer and the few virglrenderer and mesa-util sources under it, from external/virglrenderer at the commit
+# scripts/setup/get-references.sh pins; not virglrenderer.c (GL, libdrm). Without that checkout xnuhost builds with
+# the 2D device only and says so at start.
+VIRGL ?= ../../external/virglrenderer
+DRM2KGSL_SRC := src/drm/drm2kgsl/drm2kgsl_renderer.c src/drm/drm_context.c src/drm/drm_fence.c src/drm/drm_util.c \
+                src/virgl_context.c src/virgl_resource.c src/virgl_util.c src/virgl_fence.c \
+                src/gallium/auxiliary/util/u_hash_table.c src/mesa/util/hash_table.c src/mesa/util/ralloc.c \
+                src/mesa/util/os_file.c src/mesa/util/anon_file.c src/mesa/util/u_debug.c src/mesa/util/u_math.c \
+                src/mesa/util/u_cpu_detect.c
+VIRGL_INC := -imacros drm2kgsl/config.h -DHAVE_CONFIG_H=1 -D_GNU_SOURCE -Idrm2kgsl -I$(VIRGL)/src -I$(VIRGL)/src/drm -I$(VIRGL)/src/mesa \
+             -I$(VIRGL)/src/mesa/util -I$(VIRGL)/src/mesa/compat -I$(VIRGL)/src/mesa/pipe -I$(VIRGL)/src/gallium/include \
+             -I$(VIRGL)/src/gallium/auxiliary -I$(VIRGL)/src/gallium/auxiliary/util
+ifneq ($(wildcard $(VIRGL)/src/drm/drm2kgsl/drm2kgsl_renderer.c),)
+GPU3D := $(A)/gpu3d_kgsl.o $(A)/libdrm2kgsl.a
+GPU3D_DEF := -DXH_DRM2KGSL=1
+DRM2KGSL_OBJ := $(patsubst %.c,$(A)/drm2kgsl/%.o,$(notdir $(DRM2KGSL_SRC)))
+vpath %.c $(sort $(dir $(addprefix $(VIRGL)/,$(DRM2KGSL_SRC))))
+$(A)/drm2kgsl/%.o: %.c drm2kgsl/config.h
+	@mkdir -p $(A)/drm2kgsl
+	$(ANDROID_CC) -std=gnu11 -O2 -g -w $(VIRGL_INC) -c $< -o $@
+$(A)/libdrm2kgsl.a: $(DRM2KGSL_OBJ)
+	rm -f $@ && $(TOOLS)/llvm-ar rcs $@ $^
+$(A)/gpu3d_kgsl.o: src/gpu3d_kgsl.c src/gpu3d.h drm2kgsl/config.h
+	@mkdir -p $(A)
+	$(ANDROID_CC) -std=gnu11 $(CFLAGS) -Wall -Wextra -Werror -Wno-unused-parameter -Isrc $(VIRGL_INC) -c $< -o $@
+endif
+$(A)/gpu3d.o: CFLAGS += $(GPU3D_DEF)
+# gpuctl: the renderer alone, for a check on the phone (tools/gpuctl.c).
+$(A)/gpuctl: tools/gpuctl.c $(A)/gpu3d.o $(GPU3D) src/gpu3d.h
+	$(ANDROID_CC) -std=gnu11 $(CFLAGS) $(WARN) -Wno-unused-parameter -Isrc -static -o $@ tools/gpuctl.c $(A)/gpu3d.o $(GPU3D) -lm
 
 # ---- the task stub: a flat, position-independent blob ----
 STUB_FLAGS := -O2 -ffreestanding -fno-builtin -fno-stack-protector -fpie -fvisibility=hidden -mgeneral-regs-only \
@@ -51,7 +83,7 @@ BRIDGES := ../bridges/build/android/libonebridges.a
 $(BRIDGES): FORCE
 	$(MAKE) -s -C ../bridges NDK=$(NDK) build/android/libonebridges.a
 FORCE:
-$(A)/xnuhost: $(SRC:%=$(A)/%.o) $(A)/kctx.o $(A)/arch.o $(patsubst ../loader/src/%.c,$(A)/loader_%.o,$(LOADER_SRC)) $(BRIDGES)
+$(A)/xnuhost: $(SRC:%=$(A)/%.o) $(A)/kctx.o $(A)/arch.o $(patsubst ../loader/src/%.c,$(A)/loader_%.o,$(LOADER_SRC)) $(BRIDGES) $(GPU3D)
 	$(ANDROID_CC) -static -o $@ $^ -lm
 
 # ---- host unit tests ----

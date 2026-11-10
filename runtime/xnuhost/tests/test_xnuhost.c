@@ -357,6 +357,338 @@ static void test_virtio_gpu(void)
 #undef SEND
 }
 
+// ---- virtio-gpu 3D: the device against a recording renderer, driven by generated command streams --------------------
+#include "gpu3d.h"
+#include <errno.h>
+#include <sys/mman.h>
+#include <sys/syscall.h>
+static uint32_t rnd_seed;
+static uint32_t rnd(void) { rnd_seed = rnd_seed * 1664525u + 1013904223u; return rnd_seed >> 8; }
+static struct {
+  unsigned contexts, blobs, submits, unrefs, attaches, fences;
+  uint32_t live[8];                                  // context ids
+  uint8_t last[256]; size_t last_size;               // the last SUBMIT_3D's bytes
+  xh_gpu_entry entries[4]; unsigned nentries; uint64_t blob_id, blob_size; uint32_t blob_mem, blob_flags, blob_ctx;
+  uint32_t host_blob[4]; unsigned nhost;             // HOST3D blobs: pool slot i
+} fake;
+static unsigned fake_capset_count(xh_gpu3d *b) { (void)b; return 1; }
+static bool fake_capset_info(xh_gpu3d *b, unsigned i, uint32_t *id, uint32_t *version, uint32_t *size) { (void)b; if (i) return false; *id = 6; *version = 0; *size = 64; return true; }
+static size_t fake_capset(xh_gpu3d *b, uint32_t id, uint32_t version, void *out, size_t max)
+{
+  (void)b; (void)version;
+  if (id != 6 || max < 64) return 0;
+  for (unsigned i = 0; i < 64; i++) ((uint8_t *)out)[i] = (uint8_t)(0xc0 + i);
+  return 64;
+}
+static int fake_ctx_create(xh_gpu3d *b, uint32_t ctx, uint32_t capset, const char *name, size_t n)
+{
+  (void)b;
+  if (capset != 6 || ctx == 99) return -ENOMEM;
+  if (n != 4 || memcmp(name, "test", 4)) return -EINVAL;
+  for (unsigned i = 0; i < 8; i++) if (!fake.live[i]) { fake.live[i] = ctx; fake.contexts++; return 0; }
+  return -ENOMEM;
+}
+static void fake_ctx_destroy(xh_gpu3d *b, uint32_t ctx) { (void)b; for (unsigned i = 0; i < 8; i++) if (fake.live[i] == ctx) { fake.live[i] = 0; fake.contexts--; } }
+static int fake_submit(xh_gpu3d *b, uint32_t ctx, const void *commands, size_t size)
+{
+  (void)b; (void)ctx;
+  if (size >= 4 && !memcmp(commands, "\xad\xde\0\0", 4)) return -EINVAL;
+  fake.submits++;
+  fake.last_size = size;
+  memcpy(fake.last, commands, size < sizeof fake.last ? size : sizeof fake.last);
+  return 0;
+}
+// Ring 0 is retired inside the call (the host's own timeline); ring 9 is refused; the others wait for the test.
+static int fake_submit_fence(xh_gpu3d *b, uint32_t ctx, uint32_t ring, uint64_t fence)
+{
+  fake.fences++;
+  if (ring == 9) return -EINVAL;
+  if (ring == 0) b->retire(b->dev, ctx, ring, fence);
+  return 0;
+}
+static int fake_create_blob(xh_gpu3d *b, uint32_t ctx, uint32_t res, uint32_t mem, uint32_t flags, uint64_t blob_id, uint64_t size, const xh_gpu_entry *entries, unsigned n)
+{
+  (void)b;
+  if (blob_id == 0xbad) return -EINVAL;
+  fake.blobs++;
+  fake.blob_ctx = ctx; fake.blob_mem = mem; fake.blob_flags = flags; fake.blob_id = blob_id; fake.blob_size = size;
+  fake.nentries = n;
+  if (n) memcpy(fake.entries, entries, (n < 4 ? n : 4) * sizeof *entries);
+  if (mem == XH_GPU_BLOB_HOST3D && fake.nhost < 4) fake.host_blob[fake.nhost++] = res;
+  return 0;
+}
+static int fake_map_blob(xh_gpu3d *b, uint32_t res, uint64_t *offset, uint32_t *info)
+{
+  (void)b;
+  for (unsigned i = 0; i < fake.nhost; i++) if (fake.host_blob[i] == res) { *offset = 0x200000 + i * 0x4000; *info = XH_GPU_MAP_CACHE_CACHED; return 0; }
+  return -EINVAL;
+}
+static int fake_attach(xh_gpu3d *b, uint32_t ctx, uint32_t res, bool on) { (void)b; (void)ctx; (void)res; fake.attaches += on ? 1 : 100; return 0; }
+static void fake_unref(xh_gpu3d *b, uint32_t res) { (void)b; (void)res; fake.unrefs++; fake.blobs--; }
+
+// Posts one command and lets the device's thread finish. Returns how many commands the device has returned since the last call.
+static unsigned gpu3d_send(driver *d, xh_virtio *dev, unsigned words, unsigned extra_bytes, unsigned resp_bytes)
+{
+  uint16_t *used = xh_ram(d->queue_pa[0] + 0x2000, 0x1000), seen = d->used_seen[0];
+  if (extra_bytes) driver_send(d, 0, (const uint64_t[][3]){ { GUEST_PA + 0x30000, words * 4, 0 }, { GUEST_PA + 0x32000, extra_bytes, 0 }, { GUEST_PA + 0x31000, resp_bytes, 1 } }, 3, true);
+  else driver_send(d, 0, (const uint64_t[][3]){ { GUEST_PA + 0x30000, words * 4, 0 }, { GUEST_PA + 0x31000, resp_bytes, 1 } }, 2, true);
+  xh_virtio_gpu_idle(dev);
+  unsigned n = (uint16_t)(used[1] - seen);           // driver_send takes an answer that came before it looked
+  d->used_seen[0] = used[1];
+  return n;
+}
+
+static void test_virtio_gpu3d(void)
+{
+  static xh_gpu3d b = { .capset_count = fake_capset_count, .capset_info = fake_capset_info, .capset = fake_capset, .ctx_create = fake_ctx_create,
+                        .ctx_destroy = fake_ctx_destroy, .submit = fake_submit, .submit_fence = fake_submit_fence, .create_blob = fake_create_blob,
+                        .map_blob = fake_map_blob, .attach = fake_attach, .unref = fake_unref };
+  fake_display = (xh_display){ .width = 8, .height = 4, .stride = 32, .pixels = calloc(4, 32) };
+  ready_count = 0;
+  driver d = { .dev = xh_virtio_gpu_create_3d(0, 43, 8, 4, &b) };
+  xh_virtio *dev = d.dev;
+  uint16_t *used = xh_ram(GUEST_PA + 0x10000 + 0x2000, 0x1000);
+  CHECK(dev && b.retire && b.dev == dev);
+  W(&d, 0x14, 0);
+  CHECK(R(&d, 8) == 16 && (R(&d, 0x10) & 0x59) == 0x59 && R(&d, 0x108) == 1 && R(&d, 0x10c) == 1);       // VIRGL, BLOB, CONTEXT_INIT, GUEST_HANDLE; one capset
+  CHECK(driver_init(&d, 0x59, 2, GUEST_PA + 0x10000));
+  uint32_t *cmd = xh_ram(GUEST_PA + 0x30000, 4096), *resp = xh_ram(GUEST_PA + 0x31000, 4096), *extra = xh_ram(GUEST_PA + 0x32000, 4096);
+#define G(words, resp_bytes) gpu3d_send(&d, dev, words, 0, resp_bytes)
+#define GX(words, extra_bytes, resp_bytes) gpu3d_send(&d, dev, words, extra_bytes, resp_bytes)
+#define CLEAR() (memset(cmd, 0, 4096), memset(resp, 0xee, 256))
+  // capsets
+  CLEAR(); cmd[0] = 0x108; cmd[6] = 0;
+  CHECK(G(8, 40) == 1 && resp[0] == 0x1102 && resp[6] == 6 && resp[7] == 0 && resp[8] == 64);
+  cmd[6] = 1;
+  CHECK(G(8, 40) == 1 && resp[0] == 0x1102 && resp[6] == 0 && resp[8] == 0);                              // past the last: zeros
+  CLEAR(); cmd[0] = 0x109; cmd[6] = 6;
+  CHECK(G(8, 24 + 64) == 1 && resp[0] == 0x1103 && ((uint8_t *)resp)[24] == 0xc0 && ((uint8_t *)resp)[87] == 0xff);
+  cmd[6] = 2;
+  CHECK(G(8, 24 + 64) == 1 && resp[0] == 0x1205);                                                         // no such capset
+  // contexts
+  CLEAR(); cmd[0] = 0x200; cmd[4] = 5; cmd[6] = 4; cmd[7] = 6; memcpy(&cmd[8], "test", 4);
+  CHECK(G(24, 24) == 1 && resp[0] == 0x1100 && fake.contexts == 1 && fake.live[0] == 5);
+  CHECK(G(24, 24) == 1 && resp[0] == 0x1204 && fake.contexts == 1);                                       // the id is taken
+  cmd[4] = 0;
+  CHECK(G(24, 24) == 1 && resp[0] == 0x1204);
+  cmd[4] = 99;
+  CHECK(G(24, 24) == 1 && resp[0] == 0x1201 && fake.contexts == 1);                                       // the renderer has no memory
+  cmd[4] = 6;
+  CHECK(G(24, 24) == 1 && resp[0] == 0x1100 && fake.contexts == 2);
+  // a context's shmem: a HOST3D blob, mapped from the pool
+  CLEAR(); cmd[0] = 0x10c; cmd[4] = 5; cmd[6] = 10; cmd[7] = 2; cmd[8] = 1; cmd[9] = 0; cmd[10] = 0; cmd[12] = 16384;
+  CHECK(G(14, 24) == 1 && resp[0] == 0x1100 && fake.blobs == 1 && fake.blob_ctx == 5 && fake.blob_mem == 2 && fake.blob_size == 16384 && fake.nentries == 0);
+  CHECK(G(14, 24) == 1 && resp[0] == 0x1203 && fake.blobs == 1);                                          // the id is taken
+  cmd[6] = 12; cmd[4] = 7;
+  CHECK(G(14, 24) == 1 && resp[0] == 0x1204);                                                             // no such context
+  cmd[4] = 5; cmd[9] = 1;
+  CHECK(GX(14, 16, 24) == 1 && resp[0] == 0x1205);                                                        // a host blob has no guest pages
+  CLEAR(); cmd[0] = 0x208; cmd[4] = 5; cmd[6] = 10;
+  CHECK(G(10, 32) == 1 && resp[0] == 0x1106 && resp[6] == (0x80000000u | 1) && resp[7] == 0x200000);     // MAP_INFO_POOL | cached, pool offset
+  cmd[6] = 77;
+  CHECK(G(10, 32) == 1 && resp[0] == 0x1203);
+  // a BO: the guest's pages (HOST3D_GUEST + CREATE_GUEST_HANDLE), two segments
+  CLEAR(); cmd[0] = 0x10c; cmd[4] = 5; cmd[6] = 11; cmd[7] = 3; cmd[8] = 9; cmd[9] = 2; cmd[10] = 7; cmd[12] = 0x3000;
+  uint64_t segs[4] = { GUEST_PA + 0x50000, 0x2000, GUEST_PA + 0x60000, 0x1000 };
+  memcpy(extra, segs, sizeof segs);
+  CHECK(GX(14, 32, 24) == 1 && resp[0] == 0x1100 && fake.blobs == 2 && fake.blob_mem == 3 && fake.blob_flags == 9 && fake.blob_id == 7 && fake.nentries == 2);
+  CHECK(fake.entries[0].addr == GUEST_PA + 0x50000 && fake.entries[0].length == 0x2000 && fake.entries[1].addr == GUEST_PA + 0x60000 && fake.entries[1].length == 0x1000);
+  CLEAR(); cmd[0] = 0x208; cmd[4] = 5; cmd[6] = 11;
+  CHECK(G(10, 32) == 1 && resp[0] == 0x1205);                                                             // the guest's own pages are not in the pool
+  CLEAR(); cmd[0] = 0x10c; cmd[4] = 5; cmd[6] = 13; cmd[7] = 3; cmd[8] = 9; cmd[9] = 2; cmd[10] = 8; cmd[12] = 0x3000;
+  segs[1] = 0x1800; memcpy(extra, segs, sizeof segs);
+  CHECK(GX(14, 32, 24) == 1 && resp[0] == 0x1205);                                                        // not whole pages
+  segs[1] = 0x2000; segs[2] = 0x1000; memcpy(extra, segs, sizeof segs);
+  CHECK(GX(14, 32, 24) == 1 && resp[0] == 0x1205);                                                        // not guest RAM
+  segs[2] = GUEST_PA + 0x60000; cmd[12] = 0x4000; memcpy(extra, segs, sizeof segs);
+  CHECK(GX(14, 32, 24) == 1 && resp[0] == 0x1205);                                                        // smaller than the blob
+  cmd[12] = 0x3000;
+  CHECK(GX(14, 16, 24) == 1 && resp[0] == 0x1205);                                                        // fewer segments than it says
+  cmd[10] = 0xbad;
+  CHECK(GX(14, 32, 24) == 1 && resp[0] == 0x1200 && fake.blobs == 2);                                     // the renderer refuses
+  cmd[10] = 8;
+  CHECK(GX(14, 32, 24) == 1 && resp[0] == 0x1100 && fake.blobs == 3);                                     // and the id is still free
+  // attach, detach
+  CLEAR(); cmd[0] = 0x202; cmd[4] = 6; cmd[6] = 11;
+  CHECK(G(8, 24) == 1 && resp[0] == 0x1100 && fake.attaches == 1);
+  cmd[0] = 0x203;
+  CHECK(G(8, 24) == 1 && resp[0] == 0x1100 && fake.attaches == 101);
+  cmd[6] = 55;
+  CHECK(G(8, 24) == 1 && resp[0] == 0x1203);
+  // SUBMIT_3D: the stream reaches the renderer whole, also when it is a part of its own in the chain
+  CLEAR(); cmd[0] = 0x207; cmd[4] = 5; cmd[6] = 12; cmd[8] = 0x11111111; cmd[9] = 0x22222222; cmd[10] = 0x33333333;
+  CHECK(G(11, 24) == 1 && resp[0] == 0x1100 && resp[1] == 0 && fake.submits == 1 && fake.last_size == 12 && !memcmp(fake.last, &cmd[8], 12));
+  for (unsigned i = 0; i < 50; i++) extra[i] = i * 0x01010101u;
+  cmd[6] = 200;
+  CHECK(GX(8, 200, 24) == 1 && resp[0] == 0x1100 && fake.submits == 2 && fake.last_size == 200 && !memcmp(fake.last, extra, 200));
+  cmd[6] = 204;
+  CHECK(GX(8, 200, 24) == 1 && resp[0] == 0x1205 && fake.submits == 2);                                   // longer than the chain
+  cmd[6] = 0;
+  CHECK(G(8, 24) == 1 && resp[0] == 0x1205);
+  cmd[6] = 8; cmd[8] = 0xdead;
+  CHECK(G(10, 24) == 1 && resp[0] == 0x1200 && fake.submits == 2);                                        // the renderer refuses the stream
+  cmd[4] = 8; cmd[8] = 1;
+  CHECK(G(10, 24) == 1 && resp[0] == 0x1204);
+  // fences. On the context's ring 1: the command stays with the device until the ring passes the fence.
+  CLEAR(); cmd[0] = 0x207; cmd[1] = 3; cmd[2] = 1; cmd[4] = 5; cmd[5] = 1; cmd[6] = 4; cmd[8] = 0xaa;
+  uint16_t before = used[1];
+  CHECK(G(9, 24) == 0 && fake.submits == 3 && fake.fences == 1 && used[1] == before);
+  CHECK(resp[0] == 0x1100 && resp[1] == 3 && resp[2] == 1 && resp[4] == 5 && (resp[5] & 0xff) == 1);      // the response is written, the chain is held
+  cmd[2] = 2;
+  CHECK(G(9, 24) == 0 && fake.submits == 4);
+  cmd[2] = 3;
+  CHECK(G(9, 24) == 0 && fake.submits == 5);
+  cmd[1] = 0; cmd[2] = 0;
+  CHECK(G(9, 24) == 1 && fake.submits == 6);                                                              // an unfenced one passes the held ones
+  b.retire(dev, 6, 1, 3);                                                                                 // another context's ring: nothing
+  b.retire(dev, 5, 2, 3);                                                                                 // another ring: nothing
+  CHECK(used[1] == d.used_seen[0]);
+  b.retire(dev, 5, 1, 2);                                                                                 // fences 1 and 2 (the renderer may name only the latest)
+  CHECK((uint16_t)(used[1] - d.used_seen[0]) == 2);
+  b.retire(dev, 5, 1, 3);
+  CHECK((uint16_t)(used[1] - d.used_seen[0]) == 3 && R(&d, 0x60) == 1);
+  d.used_seen[0] = used[1];
+  cmd[1] = 3; cmd[2] = 9; cmd[5] = 0;
+  CHECK(G(9, 24) == 1 && resp[2] == 9);                                                                   // ring 0: retired inside the call
+  cmd[5] = 9;
+  CHECK(G(9, 24) == 1);                                                                                   // a fence the renderer refuses is not held
+  cmd[1] = 1; cmd[2] = 0x77; cmd[5] = 0;
+  CHECK(G(9, 24) == 1 && resp[1] == 1 && resp[2] == 0x77 && fake.fences == 5);                            // the device's own ring: at once, the renderer not asked
+  // a fenced command of a context that is destroyed comes back
+  cmd[1] = 3; cmd[2] = 4; cmd[5] = 1;
+  CHECK(G(9, 24) == 0);
+  CLEAR(); cmd[0] = 0x201; cmd[4] = 5;
+  CHECK(G(6, 24) == 2 && resp[0] == 0x1100 && fake.contexts == 1 && fake.live[0] == 0);
+  CHECK(G(6, 24) == 1 && resp[0] == 0x1204);
+  // the display's surface: a guest blob as the scanout, its rows copied at the flush
+  CLEAR(); cmd[0] = 0x10c; cmd[6] = 20; cmd[7] = 1; cmd[8] = 8; cmd[9] = 1; cmd[12] = 0x1000;
+  segs[0] = GUEST_PA + 0x40000; segs[1] = 0x1000; memcpy(extra, segs, 16);
+  CHECK(GX(14, 16, 24) == 1 && resp[0] == 0x1100 && fake.blob_mem == 1 && fake.blob_ctx == 0);
+  uint32_t *pixels = xh_ram(GUEST_PA + 0x40000, 0x1000);
+  for (int i = 0; i < 4 * 10; i++) pixels[i] = 0x00102000u | (uint32_t)i;                                 // BGRX, stride 40: B = index
+  CLEAR(); cmd[0] = 0x10d; cmd[8] = 8; cmd[9] = 4; cmd[10] = 0; cmd[11] = 20; cmd[12] = 8; cmd[13] = 4; cmd[14] = 2; cmd[16] = 40;
+  CHECK(G(24, 24) == 1 && resp[0] == 0x1100);
+  cmd[16] = 16;
+  CHECK(G(24, 24) == 1 && resp[0] == 0x1205);                                                             // a stride shorter than a row
+  cmd[16] = 40; cmd[13] = 200;
+  CHECK(G(24, 24) == 1 && resp[0] == 0x1205);                                                             // more rows than the blob holds
+  cmd[13] = 4; cmd[11] = 11;
+  CHECK(G(24, 24) == 1 && resp[0] == 0x1100);                                                             // any guest blob can be one
+  cmd[11] = 10;
+  CHECK(G(24, 24) == 1 && resp[0] == 0x1203);                                                             // not the renderer's own
+  cmd[11] = 20;
+  CHECK(G(24, 24) == 1 && resp[0] == 0x1100);
+  CLEAR(); cmd[0] = 0x104; cmd[1] = 1; cmd[2] = 5; cmd[6] = 1; cmd[7] = 2; cmd[8] = 3; cmd[9] = 2; cmd[10] = 20;                    // flush (1,2) 3x2, fenced
+  CHECK(G(12, 24) == 1 && resp[0] == 0x1100 && resp[2] == 5 && ready_count == 1);
+  CHECK(flush_rect[0] == 1 && flush_rect[1] == 2 && flush_rect[2] == 3 && flush_rect[3] == 2);
+  const uint8_t *px = fake_display.pixels + 2 * 32 + 1 * 4;
+  CHECK(px[0] == 21 && px[1] == 0x20 && px[2] == 0x10 && fake_display.pixels[3 * 32 + 3 * 4] == 33 && fake_display.pixels[0] == 0 && fake_display.pixels[2 * 32 + 4 * 4] == 0);
+  // the 2D commands stay
+  CLEAR(); cmd[0] = 0x100;
+  CHECK(G(6, 24 + 16 * 24) == 1 && resp[0] == 0x1101 && resp[8] == 8 && resp[9] == 4);
+  cmd[0] = 0x101; cmd[6] = 20; cmd[7] = 67; cmd[8] = 8; cmd[9] = 4;
+  CHECK(G(10, 24) == 1 && resp[0] == 0x1203);                                                             // a blob has the id
+  cmd[6] = 1;
+  CHECK(G(10, 24) == 1 && resp[0] == 0x1100);
+  // unref
+  CLEAR(); cmd[0] = 0x102; cmd[6] = 11;
+  unsigned blobs = fake.blobs;
+  CHECK(G(8, 24) == 1 && resp[0] == 0x1100 && fake.blobs == blobs - 1);
+  CHECK(G(8, 24) == 1 && resp[0] == 0x1203);
+  cmd[6] = 1;
+  CHECK(G(8, 24) == 1 && resp[0] == 0x1100);                                                              // the 2D resource
+
+  // A generated stream: 4000 commands of every type and of none, with lengths, ids and flags drawn at random. The
+  // device answers each one in order with a response or an error, never touches memory it should not (the sanitizers
+  // watch), and its contexts stay the renderer's.
+  rnd_seed = getenv("XNUHOST_TEST_SEED") ? (uint32_t)strtoul(getenv("XNUHOST_TEST_SEED"), NULL, 0) : 0x1234567;
+#define RND() rnd()
+  static const uint32_t types[] = { 0x100, 0x101, 0x102, 0x103, 0x104, 0x105, 0x106, 0x107, 0x108, 0x109, 0x10a, 0x10c, 0x10d, 0x200, 0x201, 0x202, 0x203, 0x207, 0x208, 0x209, 0x300, 0x999 };
+  unsigned answered = 0, errors = 0, held = 0;
+  for (unsigned i = 0; i < 4000; i++) {
+    for (unsigned w = 0; w < 40; w++) { uint32_t r = RND(); cmd[w] = r % 7 ? RND() % 24 : r << 8; }
+    for (unsigned w = 0; w < 64; w++) { uint32_t r = RND(), q = RND(); extra[w] = r % 3 == 0 ? q : w % 4 == 0 ? (uint32_t)(GUEST_PA + (q % 512) * 0x1000) : w % 4 == 2 ? (q % 4) * 0x1000 : 0; }
+    cmd[0] = types[RND() % (sizeof types / sizeof *types)];
+    cmd[1] = RND() % 4; cmd[4] = RND() % 10; cmd[5] = RND() % 3;
+    if (cmd[0] == 0x200 && RND() % 2) { cmd[6] = 4; cmd[7] = 6; memcpy(&cmd[8], "test", 4); }
+    if (cmd[0] == 0x10c) { cmd[6] = 30 + RND() % 20; cmd[7] = 1 + RND() % 3; cmd[9] = cmd[7] == 2 ? 0 : 1 + RND() % 3; cmd[11] = 0; cmd[12] = (1 + RND() % 3) * 0x1000; cmd[13] = 0; }
+    if (cmd[0] == 0x102 || cmd[0] == 0x208 || cmd[0] == 0x202) cmd[6] = 30 + RND() % 20;
+    if (cmd[0] == 0x207) cmd[6] = RND() % 80;
+    unsigned words = 6 + RND() % 30, more = RND() % 3 ? 0 : (RND() % 64) * 4, room = RND() % 9 ? 24 + RND() % 200 : RND() % 24;
+    memset(resp, 0xee, 24);
+    unsigned n = more ? GX(words, more, room) : G(words, room);
+    bool fenced = (cmd[1] & 3) == 3 && cmd[5] != 0;
+    if (!n && fenced) {                                                                                   // held on a context's ring: retire it
+      held++;
+      b.retire(dev, cmd[4], cmd[5], cmd[2] | (uint64_t)cmd[3] << 32);
+      n = (uint16_t)(used[1] - d.used_seen[0]);
+      d.used_seen[0] = used[1];
+    }
+    if (n != 1) fprintf(stderr, "i %u n %u type %x flags %x ctx %u ring %u words %u more %u room %u\n", i, n, cmd[0], cmd[1], cmd[4], cmd[5], words, more, room);
+    CHECK(n == 1);
+    if (room < 24) continue;                                                                              // no room for a response: returned unused
+    answered++;
+    CHECK((resp[0] >= 0x1100 && resp[0] <= 0x1106) || (resp[0] >= 0x1200 && resp[0] <= 0x1205));
+    if (resp[0] >= 0x1200) errors++;
+    if (cmd[1] & 1) CHECK((resp[1] & 1) && resp[2] == cmd[2]);
+    unsigned live = 0;
+    for (unsigned c = 0; c < 8; c++) live += fake.live[c] != 0;
+    CHECK(live == fake.contexts && live <= 8);
+  }
+  CHECK(answered > 3000 && errors > 500 && errors < answered && held > 5);
+  // a reset forgets the contexts and the blobs, and the device starts again
+  CLEAR(); cmd[0] = 0x200; cmd[4] = 3; cmd[6] = 4; cmd[7] = 6; memcpy(&cmd[8], "test", 4);
+  G(24, 24);
+  cmd[0] = 0x207; cmd[1] = 3; cmd[2] = 50; cmd[5] = 1; cmd[6] = 4;
+  G(9, 24);                                                                                               // may be held across the reset
+  W(&d, 0x70, 0);
+  xh_virtio_gpu_idle(dev);
+  CHECK(fake.contexts == 0 && fake.blobs == 0);
+  b.retire(dev, 3, 1, 50);                                                                                // late: its chain was the old queue's
+  CHECK(driver_init(&d, 0x59, 2, GUEST_PA + 0x10000));
+  CLEAR(); cmd[0] = 0x200; cmd[4] = 5; cmd[6] = 4; cmd[7] = 6; memcpy(&cmd[8], "test", 4);
+  CHECK(G(24, 24) == 1 && resp[0] == 0x1100 && fake.contexts == 1);
+  // a udmabuf over guest segments: refused without touching the device node when a segment is not the RAM's
+  xh_gpu_entry outside = { .addr = 0x1000, .length = 0x1000 }, odd = { .addr = GUEST_PA + 0x800, .length = 0x1000 };
+  errno = 0;
+  CHECK(xh_gpu3d_udmabuf(-1, GUEST_PA, sizeof guest, &outside, 1) == -1 && errno == EINVAL);
+  CHECK(xh_gpu3d_udmabuf(-1, GUEST_PA, sizeof guest, &odd, 1) == -1 && errno == EINVAL);
+  CHECK(xh_gpu3d_udmabuf(-1, GUEST_PA, sizeof guest, &odd, 0) == -1);
+  // and a real one where this host has /dev/udmabuf: three segments of a sealed memfd, two of them adjacent, read back
+  // through the dma-buf in the blob's order; a memfd without the shrink seal is refused (mem.c seals the RAM for this)
+  int node = open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
+  if (node >= 0) {
+    close(node);
+    int ram_fd = (int)syscall(SYS_memfd_create, "test-ram", 2u), bare = (int)syscall(SYS_memfd_create, "test-bare", 0u);
+    CHECK(ram_fd >= 0 && bare >= 0 && ftruncate(ram_fd, 1 << 20) == 0 && ftruncate(bare, 1 << 20) == 0 && fcntl(ram_fd, 1033, 2) == 0);
+    uint8_t *ram = mmap(NULL, 1 << 20, PROT_READ | PROT_WRITE, MAP_SHARED, ram_fd, 0);
+    CHECK(ram != MAP_FAILED);
+    for (unsigned i = 0; i < 256; i++) ram[i * 0x1000] = (uint8_t)i;
+    xh_gpu_entry three[3] = { { GUEST_PA + 0x9000, 0x1000, 0 }, { GUEST_PA + 0x20000, 0x1000, 0 }, { GUEST_PA + 0x21000, 0x2000, 0 } };
+    int buf = xh_gpu3d_udmabuf(ram_fd, GUEST_PA, 1 << 20, three, 3);
+    CHECK(buf >= 0);
+    uint8_t *view = buf >= 0 ? mmap(NULL, 0x4000, PROT_READ | PROT_WRITE, MAP_SHARED, buf, 0) : MAP_FAILED;
+    CHECK(view != MAP_FAILED && lseek(buf, 0, SEEK_END) == 0x4000);
+    if (view != MAP_FAILED) {
+      CHECK(view[0] == 9 && view[0x1000] == 0x20 && view[0x2000] == 0x21 && view[0x3000] == 0x22);
+      view[0x1001] = 0x5a;                                                                               // the same pages, not a copy
+      CHECK(ram[0x20001] == 0x5a);
+      munmap(view, 0x4000);
+    }
+    if (buf >= 0) close(buf);
+    errno = 0;
+    CHECK(xh_gpu3d_udmabuf(bare, GUEST_PA, 1 << 20, three, 3) == -1 && errno == EINVAL);
+    munmap(ram, 1 << 20); close(ram_fd); close(bare);
+    printf("virtio-gpu 3D: udmabuf checked on this host\n");
+  } else printf("virtio-gpu 3D: no /dev/udmabuf here (%s): the real import is not checked\n", strerror(errno));
+  const char *why = NULL;
+  CHECK(!xh_gpu3d_kgsl_open(-1, GUEST_PA, sizeof guest, guest, GUEST_PA, 8 << 20, NULL, &why) && why && *why);   // no drm2kgsl in the host build
+#undef G
+#undef GX
+#undef CLEAR
+#undef RND
+}
+
 static void test_virtio_input(void)
 {
   driver d = { .dev = xh_virtio_input_create(0, 43) };
@@ -503,6 +835,7 @@ int main(void)
   test_sysreg();
   test_virtio_blk(dir);
   test_virtio_gpu();
+  test_virtio_gpu3d();
   test_virtio_input();
   test_filter();
   freopen("/dev/null", "w", stderr);          // the refusals below print their reasons

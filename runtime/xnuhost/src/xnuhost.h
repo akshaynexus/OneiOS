@@ -46,6 +46,7 @@ typedef struct {
   xh_disk_config disk[XH_MAX_DISKS];
   unsigned ndisk;
   char  display[16];        // "shm", "drm", "none"
+  char  gpu[8];             // "auto" (3D when the host has KGSL, udmabuf and a dma heap), "3d" (or do not start), "2d"
   unsigned width, height;   // guest framebuffer; 0 = the panel's
   bool  input;              // read /dev/input
   bool  tasks;              // start the task factory

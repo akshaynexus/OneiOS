@@ -206,6 +206,7 @@ static void test_machine(void)
   p = xl_adt_get(xl_adt_find(t, "arm-io/virtio-mmio-1"), "compatible");
   CHECK(p && p->length == 12 && !memcmp(p->value, "virtio,mmio", 12));
   CHECK(xl_adt_find(t, "arm-io/data-store") && xl_adt_find(t, "arm-io/input-0") && xl_adt_find(t, "arm-io/virtio-gpu"));
+  CHECK(!xl_adt_get(xl_adt_find(t, "arm-io/virtio-gpu"), "drm-host-pool"));                 // no 3D renderer: no pool
   p = xl_adt_get(xl_adt_find(t, "arm-io/data-store"), "reg");
   memcpy(r, p->value, 16);
   CHECK(r[0] == XL_BOARD_VIRTIO + 2 * XL_BOARD_VIRTIO_SIZE - 0x1000 && r[1] == XL_BOARD_VIRTIO_SIZE);
@@ -289,6 +290,14 @@ static void test_machine(void)
   CHECK(xl_machine_tree(&m, &err) == NULL);
   machine_default(&m); m.dev[1].kind = XL_DEV_GPU;
   CHECK(xl_machine_tree(&m, &err) == NULL);     // two GPUs
+  // the 3D renderer's pool: base and size on the GPU's node, as UniXNU-droidvm's DroidVMVirtioGpu3D.cpp reads them
+  machine_default(&m); m.gpu_pool_base = 0x8ff800000ull; m.gpu_pool_size = 8 << 20;
+  xl_adt_node *gt = xl_machine_tree(&m, &err);
+  const xl_adt_prop *pool = gt ? xl_adt_get(xl_adt_find(gt, "arm-io/virtio-gpu"), "drm-host-pool") : NULL;
+  uint64_t pv[2] = { 0, 0 };
+  if (pool && pool->length == 16) memcpy(pv, pool->value, 16);
+  CHECK(pv[0] == 0x8ff800000ull && pv[1] == 8 << 20);
+  xl_adt_free(gt);
 }
 
 static void test_sidecars(void)

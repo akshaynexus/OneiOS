@@ -21,5 +21,9 @@ mkdir -p "$STAGE/bin"
 make -s -C "$ROOT/runtime/bridges" NDK="$NDK" build/android/oneios-audio
 "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" -o "$STAGE/bin/oneios-audio" "$ROOT/runtime/bridges/build/android/oneios-audio"
 cp "$ROOT/runtime/bridges/net/oneios-net.sh" "$STAGE/bin/oneios-net.sh"
+# gpuctl: the GPU path alone, for a check on the phone (runtime/xnuhost/tools/gpuctl.c, docs/gpu.md)
+make -s -C "$ROOT/runtime/xnuhost" NDK="$NDK" build/android/gpuctl
+"$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" -o "$STAGE/bin/gpuctl" "$ROOT/runtime/xnuhost/build/android/gpuctl"
+chmod 0755 "$STAGE/bin/gpuctl"
 chmod 0755 "$STAGE/bin/xnuhost" "$STAGE/bin/oneios-audio" "$STAGE/bin/oneios-net.sh"
 echo "build: $STAGE/bin/xnuhost ($(stat -c %s "$STAGE/bin/xnuhost") bytes)"

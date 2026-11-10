@@ -41,6 +41,9 @@ typedef struct {
   xl_device   dev[XL_MAX_DEVICES];
   unsigned    ndev;
   uint64_t    cpufreq_base, cpufreq_size; // /arm-io/cpufreq: one 4 KiB window per CPU; size 0 for none
+  // /arm-io/virtio-gpu drm-host-pool: physical base and size of the memory, outside the kernel's window, in which
+  // the host's 3D renderer keeps what the guest maps (UniXNU-droidvm DroidVMVirtioGpu3D.cpp); size 0 for no 3D.
+  uint64_t    gpu_pool_base, gpu_pool_size;
   // /bluetooth: transport-encoding 10 (the virtual transport, no controller) when bt_transport is 0;
   // else that encoding (3 = the phone's controller behind the bridge) with bt_speed and bt_mac.
   uint32_t    bt_transport, bt_speed;

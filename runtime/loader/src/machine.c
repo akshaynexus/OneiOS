@@ -334,6 +334,10 @@ xl_adt_node *xl_machine_tree(const xl_machine *m, const char **error)
     // transports read. Not "interrupts": the tree has no interrupt-controller node (ArmCpu owns the GIC), and
     // IOKit's IODTMapOneInterrupt walks the parents of a node with "interrupts" forever looking for one.
     xl_adt_set_u32(n, "droidvm,intid", XL_BOARD_VIRTIO_SPI + i);
+    if (d->kind == XL_DEV_GPU && m->gpu_pool_size) {
+      uint64_t pool[2] = { m->gpu_pool_base, m->gpu_pool_size };
+      xl_adt_set(n, "drm-host-pool", pool, sizeof pool);
+    }
   }
   if (m->cpufreq_size) {
     xl_adt_node *freq = xl_adt_add(io, "cpufreq");

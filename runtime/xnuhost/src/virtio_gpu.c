@@ -1,15 +1,27 @@
 // SPDX-License-Identifier: MIT
-// virtio-gpu device (VirtIO 1.2, 5.7), 2D commands only: the scanout the guest's display driver
-// presents frames on (UniXNU-droidvm's DroidVMVirtioGpuDisplay.cpp under IOMobileFramebufferLegacy).
-// No virgl, no native context: Metal goes another way (docs/booter.md, "GPU").
+// virtio-gpu device (VirtIO 1.2, 5.7).
+// 2D: the scanout the guest's display driver presents frames on (UniXNU-droidvm's DroidVMVirtioGpuDisplay.cpp under
+// IOMobileFramebufferLegacy); the first frame says the guest is up.
+// 3D (xh_virtio_gpu_create_3d): crosvm's DRM native context as UniXNU-droidvm's DroidVMVirtioGpu3D.cpp drives it --
+// capset 6, CTX_CREATE, RESOURCE_CREATE_BLOB (HOST3D for a context's shmem, HOST3D_GUEST over guest pages),
+// MAP_BLOB answered with MAP_INFO_POOL and the offset in /arm-io/virtio-gpu drm-host-pool, SUBMIT_3D with per-ring
+// fences (a fenced command is returned when its fence retires). The renderer is behind gpu3d.h (drm2kgsl on KGSL).
 #include "xnuhost.h"
+#include "gpu3d.h"
+#include <errno.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/eventfd.h>
 
 enum {
   CMD_GET_DISPLAY_INFO = 0x100, CMD_RESOURCE_CREATE_2D, CMD_RESOURCE_UNREF, CMD_SET_SCANOUT, CMD_RESOURCE_FLUSH,
   CMD_TRANSFER_TO_HOST_2D, CMD_RESOURCE_ATTACH_BACKING, CMD_RESOURCE_DETACH_BACKING,
-  RESP_OK_NODATA = 0x1100, RESP_OK_DISPLAY_INFO,
+  CMD_GET_CAPSET_INFO = 0x108, CMD_GET_CAPSET = 0x109, CMD_RESOURCE_CREATE_BLOB = 0x10c, CMD_SET_SCANOUT_BLOB = 0x10d,
+  CMD_CTX_CREATE = 0x200, CMD_CTX_DESTROY, CMD_CTX_ATTACH_RESOURCE, CMD_CTX_DETACH_RESOURCE,
+  CMD_SUBMIT_3D = 0x207, CMD_RESOURCE_MAP_BLOB, CMD_RESOURCE_UNMAP_BLOB,
+  RESP_OK_NODATA = 0x1100, RESP_OK_DISPLAY_INFO, RESP_OK_CAPSET_INFO, RESP_OK_CAPSET, RESP_OK_MAP_INFO = 0x1106,
   RESP_ERR_UNSPEC = 0x1200, RESP_ERR_OUT_OF_MEMORY, RESP_ERR_INVALID_SCANOUT_ID, RESP_ERR_INVALID_RESOURCE_ID,
   RESP_ERR_INVALID_CONTEXT_ID, RESP_ERR_INVALID_PARAMETER,
 };
@@ -17,7 +29,9 @@ enum { FMT_BGRA = 1, FMT_BGRX = 2, FMT_ARGB = 3, FMT_XRGB = 4, FMT_RGBA = 67, FM
 
 typedef struct { uint32_t type, flags; uint64_t fence; uint32_t ctx; uint8_t ring, pad[3]; } gpu_hdr;
 typedef struct { uint32_t x, y, w, h; } gpu_rect;
-typedef struct { uint64_t addr; uint32_t length, pad; } gpu_entry;
+typedef xh_gpu_entry gpu_entry;
+enum { FLAG_FENCE = 1, FLAG_RING_IDX = 2, MAP_INFO_POOL = 1u << 31 };
+enum { F_VIRGL = 1u << 0, F_RESOURCE_BLOB = 1u << 3, F_CONTEXT_INIT = 1u << 4, F_CREATE_GUEST_HANDLE = 1u << 6 };
 
 #define MAX_RES 64
 #define MAX_BACKING 4096
@@ -28,11 +42,47 @@ typedef struct {
   unsigned nbacking;
 } resource;
 
+#define MAX_CTX 128
+#define MAX_BLOB_ENTRIES 16384         // DroidVMVirtioGpu.h MaxEntries
+#define BLOB_SLOTS (1u << 15)          // open addressing, linear probing: blob resource id -> blob
+#define WORKER_IOV 256
+
+// A blob resource. Guest blobs (GUEST: the display's surfaces; HOST3D_GUEST: a context's BOs) keep the guest's
+// segments, so a blob can be a scanout; HOST3D blobs (a context's shmem) are the renderer's alone.
+typedef struct {
+  uint32_t id, ctx, mem;
+  uint64_t size;
+  gpu_entry *entries;
+  unsigned nentries;
+} blob;
+
+// A fenced command whose chain goes back to the guest when its context's ring passes the fence.
+typedef struct pending {
+  struct pending *next;
+  uint16_t head;
+  uint32_t written, ctx, ring;
+  uint64_t fence, gen;
+} pending;
+
 typedef struct {
   unsigned width, height;
   resource res[MAX_RES];
   uint32_t scanout_resource;
   bool first_frame;
+  // 3D. The worker is the only thread that changes the state above and the tables below. `pl` guards the list of
+  // pending fences and the worker's bookkeeping; `gen` (bumped at every device reset) changes under the device's lock.
+  xh_gpu3d *b;
+  xh_virtio *dev;
+  uint32_t ctx[MAX_CTX];               // live context ids
+  blob *blobs;                         // BLOB_SLOTS of them; id 0 = free
+  unsigned nblobs;
+  struct { uint32_t width, height, format, stride, offset; } scan;      // the scanout when it is a blob
+  pthread_mutex_t pl;
+  pthread_cond_t idle;
+  pending *fences;
+  uint64_t gen, kicks, served;
+  bool reset_requested;
+  int wake;                            // eventfd: the control queue was kicked (written from the trap handler)
 } gpu_state;
 
 static resource *find(gpu_state *g, uint32_t id)
@@ -84,12 +134,265 @@ static bool rect_ok(const gpu_rect *r, uint32_t w, uint32_t h)
   return r->w && r->h && r->x <= w && r->y <= h && r->w <= w - r->x && r->h <= h - r->y;
 }
 
+// ---- 3D --------------------------------------------------------------------------------------------------------------
+static unsigned blob_hash(uint32_t id) { return (id * 2654435761u) >> 17 & (BLOB_SLOTS - 1); }
+
+static blob *blob_find(gpu_state *g, uint32_t id)
+{
+  if (!id) return NULL;
+  for (unsigned i = blob_hash(id); g->blobs[i].id; i = (i + 1) & (BLOB_SLOTS - 1)) if (g->blobs[i].id == id) return &g->blobs[i];
+  return NULL;
+}
+
+static blob *blob_add(gpu_state *g, uint32_t id)
+{
+  if (g->nblobs >= BLOB_SLOTS / 4 * 3) return NULL;
+  unsigned i = blob_hash(id);
+  while (g->blobs[i].id) i = (i + 1) & (BLOB_SLOTS - 1);
+  g->blobs[i] = (blob){ .id = id };
+  g->nblobs++;
+  return &g->blobs[i];
+}
+
+static void blob_del(gpu_state *g, blob *b)
+{
+  unsigned i = (unsigned)(b - g->blobs), j = i;
+  free(b->entries);
+  g->nblobs--;
+  for (;;) {                                         // backward shift: the probe chains stay whole
+    g->blobs[i].id = 0;
+    for (;;) {
+      j = (j + 1) & (BLOB_SLOTS - 1);
+      if (!g->blobs[j].id) return;
+      unsigned k = blob_hash(g->blobs[j].id);
+      if (i <= j ? (i < k && k <= j) : (i < k || k <= j)) continue;
+      break;
+    }
+    g->blobs[i] = g->blobs[j];
+    i = j;
+  }
+}
+
+static uint32_t *ctx_find(gpu_state *g, uint32_t id)
+{
+  for (unsigned i = 0; id && i < MAX_CTX; i++) if (g->ctx[i] == id) return &g->ctx[i];
+  return NULL;
+}
+
+// Copies `length` bytes at linear `offset` of a guest blob into `out`.
+static bool blob_read(const blob *b, uint64_t offset, uint8_t *out, uint64_t length)
+{
+  for (unsigned i = 0; i < b->nentries && length; i++) {
+    uint64_t size = b->entries[i].length;
+    if (offset >= size) { offset -= size; continue; }
+    uint64_t n = size - offset < length ? size - offset : length;
+    const uint8_t *p = xh_virtio_translate(b->entries[i].addr + offset, n);
+    if (!p) return false;
+    memcpy(out, p, n);
+    out += n; length -= n; offset = 0;
+  }
+  return length == 0;
+}
+
+// RESOURCE_FLUSH of a blob: when it is the scanout (SET_SCANOUT_BLOB), its rows go from the guest's pages to the display.
+static uint32_t flush_blob(gpu_state *g, const blob *b, const gpu_rect *rect)
+{
+  xh_display *d = xh_display_get();
+  if (b->id != g->scanout_resource || !g->scan.width || !d || !d->pixels) return RESP_OK_NODATA;
+  if (!rect_ok(rect, g->scan.width, g->scan.height)) return RESP_ERR_INVALID_PARAMETER;
+  uint32_t w = rect->x < d->width ? (rect->w < d->width - rect->x ? rect->w : d->width - rect->x) : 0;
+  uint32_t hgt = rect->y < d->height ? (rect->h < d->height - rect->y ? rect->h : d->height - rect->y) : 0;
+  uint8_t *row = malloc((size_t)w * 4 + 4);
+  if (!row) return RESP_ERR_OUT_OF_MEMORY;
+  uint32_t status = RESP_OK_NODATA;
+  for (uint32_t y = 0; y < hgt && w; y++) {
+    if (!blob_read(b, g->scan.offset + (uint64_t)(rect->y + y) * g->scan.stride + (uint64_t)rect->x * 4, row, (uint64_t)w * 4)) { status = RESP_ERR_INVALID_PARAMETER; break; }
+    convert(d->pixels + (size_t)(rect->y + y) * d->stride + (size_t)rect->x * 4, row, g->scan.format, w);
+  }
+  free(row);
+  if (status == RESP_OK_NODATA && w && hgt) {
+    xh_display_flush(rect->x, rect->y, w, hgt);
+    if (!g->first_frame) { g->first_frame = true; xh_guest_ready(); }
+  }
+  return status;
+}
+
+static void push_pending(gpu_state *g, pending *p)
+{
+  xh_virtio_lock(g->dev);
+  if (p->gen == g->gen) xh_virtio_push(g->dev, 0, p->head, p->written);       // a chain from before a reset is the old queue's
+  xh_virtio_unlock(g->dev);
+  free(p);
+}
+
+// Takes the pending fences that match off the list and returns their commands. ring < 0: every ring of the context.
+static void retire(gpu_state *g, uint32_t ctx, int ring, uint64_t fence)
+{
+  pending *done = NULL, **tail = &done;
+  pthread_mutex_lock(&g->pl);
+  for (pending **link = &g->fences; *link;) {
+    pending *p = *link;
+    if (p->ctx == ctx && (ring < 0 || (p->ring == (uint32_t)ring && p->fence <= fence))) { *link = p->next; p->next = NULL; *tail = p; tail = &p->next; }
+    else link = &p->next;
+  }
+  pthread_mutex_unlock(&g->pl);
+  while (done) { pending *p = done; done = p->next; push_pending(g, p); }
+}
+
+static void gpu_retire(xh_virtio *dev, uint32_t ctx, uint32_t ring, uint64_t fence)
+{
+  retire(xh_virtio_opaque(dev), ctx, (int)ring, fence);
+}
+
+// The 3D commands and the blob ones. 0: not one of them (command() goes on to the 2D ones).
+static uint32_t command3d(gpu_state *g, const gpu_hdr *h, const uint8_t *body, size_t left, uint8_t *resp, size_t resp_max, size_t *resp_size)
+{
+  xh_gpu3d *b = g->b;
+  uint32_t a[4];
+  switch (h->type) {
+  case CMD_GET_CAPSET_INFO: {
+    if (left < 8 || resp_max < sizeof *h + 16) return RESP_ERR_INVALID_PARAMETER;
+    memcpy(a, body, 4);
+    uint32_t info[4] = { 0 };
+    if (b && a[0] < b->capset_count(b)) b->capset_info(b, a[0], &info[0], &info[1], &info[2]);
+    memcpy(resp + sizeof *h, info, sizeof info);
+    *resp_size = sizeof *h + 16;
+    return RESP_OK_CAPSET_INFO;
+  }
+  case CMD_GET_CAPSET: {
+    if (left < 8) return RESP_ERR_INVALID_PARAMETER;
+    memcpy(a, body, 8);
+    size_t n = b ? b->capset(b, a[0], a[1], resp + sizeof *h, resp_max - sizeof *h) : 0;
+    if (!n) return RESP_ERR_INVALID_PARAMETER;
+    *resp_size = sizeof *h + n;
+    return RESP_OK_CAPSET;
+  }
+  case CMD_CTX_CREATE: {
+    if (left < 8) return RESP_ERR_INVALID_PARAMETER;
+    memcpy(a, body, 8);
+    size_t name = left - 8 < 64 ? left - 8 : 64;
+    if (a[0] < name) name = a[0];
+    if (!b || !h->ctx || ctx_find(g, h->ctx)) return RESP_ERR_INVALID_CONTEXT_ID;
+    uint32_t *slot = NULL;
+    for (unsigned i = 0; i < MAX_CTX && !slot; i++) if (!g->ctx[i]) slot = &g->ctx[i];
+    if (!slot) return RESP_ERR_OUT_OF_MEMORY;
+    int r = b->ctx_create(b, h->ctx, a[1] & 0xff, (const char *)body + 8, name);
+    if (r) return r == -ENOMEM ? RESP_ERR_OUT_OF_MEMORY : RESP_ERR_UNSPEC;
+    *slot = h->ctx;
+    return RESP_OK_NODATA;
+  }
+  case CMD_CTX_DESTROY: {
+    uint32_t *slot = ctx_find(g, h->ctx);
+    if (!slot) return RESP_ERR_INVALID_CONTEXT_ID;
+    b->ctx_destroy(b, h->ctx);
+    *slot = 0;
+    retire(g, h->ctx, -1, 0);                        // its rings are gone: nothing would retire these
+    return RESP_OK_NODATA;
+  }
+  case CMD_SUBMIT_3D: {
+    if (left < 8) return RESP_ERR_INVALID_PARAMETER;
+    memcpy(a, body, 4);
+    if (!ctx_find(g, h->ctx)) return RESP_ERR_INVALID_CONTEXT_ID;
+    if (!a[0] || a[0] > left - 8) return RESP_ERR_INVALID_PARAMETER;
+    return b->submit(b, h->ctx, body + 8, a[0]) ? RESP_ERR_UNSPEC : RESP_OK_NODATA;
+  }
+  case CMD_RESOURCE_CREATE_BLOB: {
+    uint64_t wide[2];
+    if (left < 32) return RESP_ERR_INVALID_PARAMETER;
+    memcpy(a, body, 16);                             // resource, blob_mem, blob_flags, nr_entries
+    memcpy(wide, body + 16, 16);                     // blob_id, size
+    if (!a[0] || find(g, a[0]) || blob_find(g, a[0])) return RESP_ERR_INVALID_RESOURCE_ID;
+    bool guest = a[1] == XH_GPU_BLOB_GUEST || a[1] == XH_GPU_BLOB_HOST3D_GUEST, host = a[1] == XH_GPU_BLOB_HOST3D || a[1] == XH_GPU_BLOB_HOST3D_GUEST;
+    if ((!guest && !host) || !wide[1] || a[3] > MAX_BLOB_ENTRIES || (guest ? !a[3] : a[3] != 0) || left - 32 < (size_t)a[3] * sizeof(gpu_entry)) return RESP_ERR_INVALID_PARAMETER;
+    if (host && !ctx_find(g, h->ctx)) return RESP_ERR_INVALID_CONTEXT_ID;
+    gpu_entry *entries = NULL;
+    if (guest) {
+      // The segments are guest RAM, whole host pages each (udmabuf takes nothing else), and cover the blob.
+      uint64_t total = 0;
+      if (!(entries = malloc(a[3] * sizeof *entries))) return RESP_ERR_OUT_OF_MEMORY;
+      memcpy(entries, body + 32, a[3] * sizeof *entries);
+      for (unsigned i = 0; i < a[3]; i++) {
+        if (!entries[i].length || ((entries[i].addr | entries[i].length) & 0xfff) || !xh_virtio_translate(entries[i].addr, entries[i].length)) { free(entries); return RESP_ERR_INVALID_PARAMETER; }
+        total += entries[i].length;
+      }
+      if (total < wide[1]) { free(entries); return RESP_ERR_INVALID_PARAMETER; }
+    }
+    blob *nb = blob_add(g, a[0]);
+    if (!nb) { free(entries); return RESP_ERR_OUT_OF_MEMORY; }
+    // The renderer makes every blob of a context, and a display blob it may be asked to attach to one later.
+    int r = b && (host || (a[2] & XH_GPU_BLOB_FLAG_GUEST_HANDLE)) ? b->create_blob(b, host ? h->ctx : 0, a[0], a[1], a[2], wide[0], wide[1], entries, a[3]) : 0;
+    if (r && host) { nb->entries = entries; blob_del(g, nb); return r == -ENOMEM ? RESP_ERR_OUT_OF_MEMORY : RESP_ERR_UNSPEC; }
+    nb->ctx = host ? h->ctx : 0; nb->mem = a[1]; nb->size = wide[1]; nb->entries = entries; nb->nentries = a[3];
+    return RESP_OK_NODATA;
+  }
+  case CMD_RESOURCE_MAP_BLOB: {
+    if (left < 16 || resp_max < sizeof *h + 8) return RESP_ERR_INVALID_PARAMETER;
+    memcpy(a, body, 4);
+    blob *bl = blob_find(g, a[0]);
+    if (!bl) return RESP_ERR_INVALID_RESOURCE_ID;
+    uint64_t offset = 0;
+    uint32_t info[2] = { 0 };
+    // Only what lies in the pool can be mapped: the guest maps pool base + offset from its own RAM.
+    if (!b || bl->mem != XH_GPU_BLOB_HOST3D || b->map_blob(b, a[0], &offset, &info[0]) || offset > UINT32_MAX) return RESP_ERR_INVALID_PARAMETER;
+    info[0] |= MAP_INFO_POOL;
+    info[1] = (uint32_t)offset;
+    memcpy(resp + sizeof *h, info, sizeof info);
+    *resp_size = sizeof *h + 8;
+    return RESP_OK_MAP_INFO;
+  }
+  case CMD_RESOURCE_UNMAP_BLOB:
+    if (left < 4) return RESP_ERR_INVALID_PARAMETER;
+    memcpy(a, body, 4);
+    return blob_find(g, a[0]) ? RESP_OK_NODATA : RESP_ERR_INVALID_RESOURCE_ID;
+  case CMD_CTX_ATTACH_RESOURCE: case CMD_CTX_DETACH_RESOURCE: {
+    if (left < 4) return RESP_ERR_INVALID_PARAMETER;
+    memcpy(a, body, 4);
+    if (!ctx_find(g, h->ctx)) return RESP_ERR_INVALID_CONTEXT_ID;
+    if (!blob_find(g, a[0])) return RESP_ERR_INVALID_RESOURCE_ID;
+    return b->attach(b, h->ctx, a[0], h->type == CMD_CTX_ATTACH_RESOURCE) ? RESP_ERR_UNSPEC : RESP_OK_NODATA;
+  }
+  case CMD_RESOURCE_UNREF: {
+    if (left < 4) return RESP_ERR_INVALID_PARAMETER;
+    memcpy(a, body, 4);
+    blob *bl = blob_find(g, a[0]);
+    if (!bl) return 0;                               // a 2D resource, or nothing
+    if (g->scanout_resource == a[0]) { g->scanout_resource = 0; g->scan.width = 0; }
+    if (b) b->unref(b, a[0]);
+    blob_del(g, bl);
+    return RESP_OK_NODATA;
+  }
+  case CMD_SET_SCANOUT_BLOB: {
+    gpu_rect rect;
+    uint32_t v[14];                                  // scanout, resource, width, height, format, padding, strides[4], offsets[4]
+    if (left < 16 + sizeof v) return RESP_ERR_INVALID_PARAMETER;
+    memcpy(&rect, body, 16);
+    memcpy(v, body + 16, sizeof v);
+    if (v[0] != 0) return RESP_ERR_INVALID_SCANOUT_ID;
+    if (v[1] == 0) { g->scanout_resource = 0; g->scan.width = 0; return RESP_OK_NODATA; }
+    blob *bl = blob_find(g, v[1]);
+    if (!bl || !bl->entries) return RESP_ERR_INVALID_RESOURCE_ID;
+    if (v[4] != FMT_BGRA && v[4] != FMT_BGRX && v[4] != FMT_ARGB && v[4] != FMT_XRGB && v[4] != FMT_RGBA && v[4] != FMT_XBGR &&
+        v[4] != FMT_ABGR && v[4] != FMT_RGBX) return RESP_ERR_INVALID_PARAMETER;
+    if (!v[2] || !v[3] || v[2] > 16384 || v[3] > 16384 || v[6] < v[2] * 4 || !rect_ok(&rect, v[2], v[3]) ||
+        v[10] + (uint64_t)(v[3] - 1) * v[6] + (uint64_t)v[2] * 4 > bl->size) return RESP_ERR_INVALID_PARAMETER;
+    g->scanout_resource = v[1];
+    g->scan.width = v[2]; g->scan.height = v[3]; g->scan.format = v[4]; g->scan.stride = v[6]; g->scan.offset = v[10];
+    return RESP_OK_NODATA;
+  }
+  }
+  return 0;
+}
+
 static uint32_t command(gpu_state *g, const uint8_t *req, size_t size, uint8_t *resp, size_t resp_max, size_t *resp_size)
 {
   const gpu_hdr *h = (const gpu_hdr *)req;
   const uint8_t *body = req + sizeof *h;
   size_t left = size - sizeof *h;
   *resp_size = sizeof *h;
+  if (g->blobs) {
+    uint32_t status = command3d(g, h, body, left, resp, resp_max, resp_size);
+    if (status) return status;
+  }
   switch (h->type) {
   case CMD_GET_DISPLAY_INFO: {
     if (resp_max < sizeof *h + 16 * 24) return RESP_ERR_UNSPEC;
@@ -103,7 +406,7 @@ static uint32_t command(gpu_state *g, const uint8_t *req, size_t size, uint8_t *
     uint32_t a[4];
     if (left < 16) return RESP_ERR_INVALID_PARAMETER;
     memcpy(a, body, 16);
-    if (!a[0] || find(g, a[0])) return RESP_ERR_INVALID_RESOURCE_ID;
+    if (!a[0] || find(g, a[0]) || (g->blobs && blob_find(g, a[0]))) return RESP_ERR_INVALID_RESOURCE_ID;
     if (!a[2] || !a[3] || a[2] > 16384 || a[3] > 16384) return RESP_ERR_INVALID_PARAMETER;
     if (a[1] != FMT_BGRA && a[1] != FMT_BGRX && a[1] != FMT_ARGB && a[1] != FMT_XRGB && a[1] != FMT_RGBA &&
         a[1] != FMT_XBGR && a[1] != FMT_ABGR && a[1] != FMT_RGBX) return RESP_ERR_INVALID_PARAMETER;
@@ -163,6 +466,7 @@ static uint32_t command(gpu_state *g, const uint8_t *req, size_t size, uint8_t *
     if (!r) return RESP_ERR_INVALID_RESOURCE_ID;
     if (!rect_ok(&rect, r->width, r->height)) return RESP_ERR_INVALID_PARAMETER;
     g->scanout_resource = a[1];
+    g->scan.width = 0;
     return RESP_OK_NODATA;
   }
   case CMD_TRANSFER_TO_HOST_2D: {
@@ -193,6 +497,7 @@ static uint32_t command(gpu_state *g, const uint8_t *req, size_t size, uint8_t *
     if (left < 20) return RESP_ERR_INVALID_PARAMETER;
     memcpy(&rect, body, 16);
     memcpy(&id, body + 16, 4);
+    if (g->blobs && blob_find(g, id)) return flush_blob(g, blob_find(g, id), &rect);
     resource *r = find(g, id);
     if (!r) return RESP_ERR_INVALID_RESOURCE_ID;
     if (!rect_ok(&rect, r->width, r->height)) return RESP_ERR_INVALID_PARAMETER;
@@ -212,10 +517,10 @@ static uint32_t command(gpu_state *g, const uint8_t *req, size_t size, uint8_t *
   return RESP_ERR_UNSPEC;
 }
 
-static int64_t gpu_handle(xh_virtio *dev, unsigned queue, uint16_t head, xh_viov *iov, unsigned n)
+// Runs the command of a chain and writes its response. Returns the response's length (0: a chain that is no command)
+// and the command's header in `in`.
+static int64_t serve(gpu_state *g, unsigned queue, xh_viov *iov, unsigned n, gpu_hdr *in, uint32_t *status)
 {
-  (void)head;
-  gpu_state *g = xh_virtio_opaque(dev);
   // Gather the readable parts (the command), find the writable ones (the response).
   size_t req_size = 0, resp_max = 0;
   for (unsigned i = 0; i < n; i++) { if (iov[i].writable) resp_max += iov[i].length; else req_size += iov[i].length; }
@@ -226,9 +531,9 @@ static int64_t gpu_handle(xh_virtio *dev, unsigned queue, uint16_t head, xh_viov
   for (unsigned i = 0; i < n; i++) if (!iov[i].writable) { memcpy(req + at, iov[i].data, iov[i].length); at += iov[i].length; }
   size_t resp_size = sizeof(gpu_hdr);
   gpu_hdr out = { 0 };
-  const gpu_hdr *in = (const gpu_hdr *)req;
+  memcpy(in, req, sizeof *in);
   out.type = queue == 0 ? command(g, req, req_size, resp, resp_max, &resp_size) : RESP_OK_NODATA;     // cursor queue: accepted, not drawn
-  if (in->flags & 1) { out.flags = 1; out.fence = in->fence; out.ctx = in->ctx; out.ring = in->ring; }
+  if (in->flags & FLAG_FENCE) { out.flags = in->flags & (FLAG_FENCE | FLAG_RING_IDX); out.fence = in->fence; out.ctx = in->ctx; out.ring = in->ring; }
   memcpy(resp, &out, sizeof out);
   if (resp_size > resp_max) resp_size = resp_max;
   at = 0;
@@ -240,24 +545,132 @@ static int64_t gpu_handle(xh_virtio *dev, unsigned queue, uint16_t head, xh_viov
   }
   free(req);
   free(resp);
+  *status = out.type;
   return (int64_t)resp_size;
+}
+
+static int64_t gpu_handle(xh_virtio *dev, unsigned queue, uint16_t head, xh_viov *iov, unsigned n)
+{
+  (void)head;
+  gpu_hdr in;
+  uint32_t status;
+  return serve(xh_virtio_opaque(dev), queue, iov, n, &in, &status);
 }
 
 static uint32_t gpu_config(xh_virtio *dev, uint32_t offset, unsigned size)
 {
-  (void)dev; (void)size;
-  return offset == 8 ? 1 : 0;        // events_read, events_clear, num_scanouts = 1, num_capsets = 0
+  (void)size;
+  gpu_state *g = xh_virtio_opaque(dev);
+  // events_read, events_clear, num_scanouts = 1, num_capsets
+  return offset == 8 ? 1 : offset == 12 && g->b ? g->b->capset_count(g->b) : 0;
 }
 
-static void gpu_reset(xh_virtio *dev)
+static void teardown(gpu_state *g)
 {
-  gpu_state *g = xh_virtio_opaque(dev);
   for (unsigned i = 0; i < MAX_RES; i++) if (g->res[i].id) release(&g->res[i]);
   g->scanout_resource = 0;
+  g->scan.width = 0;
+  if (!g->blobs) return;
+  for (unsigned i = 0; i < BLOB_SLOTS; i++) if (g->blobs[i].id) {
+    if (g->b) g->b->unref(g->b, g->blobs[i].id);
+    free(g->blobs[i].entries);
+  }
+  memset(g->blobs, 0, BLOB_SLOTS * sizeof *g->blobs);
+  g->nblobs = 0;
+  for (unsigned i = 0; i < MAX_CTX; i++) if (g->ctx[i]) { g->b->ctx_destroy(g->b, g->ctx[i]); g->ctx[i] = 0; }
+  pthread_mutex_lock(&g->pl);
+  pending *list = g->fences;
+  g->fences = NULL;
+  pthread_mutex_unlock(&g->pl);
+  while (list) { pending *p = list; list = p->next; free(p); }                // their chains were the old queue's
+}
+
+static void gpu_reset(xh_virtio *dev) { teardown(xh_virtio_opaque(dev)); }
+
+// ---- the 3D device's control queue: its own thread -------------------------------------------------------------------
+static void wake(gpu_state *g, bool reset)
+{
+  pthread_mutex_lock(&g->pl);
+  g->kicks++;
+  if (reset) g->reset_requested = true;
+  pthread_mutex_unlock(&g->pl);
+  uint64_t one = 1;
+  while (write(g->wake, &one, 8) < 0 && errno == EINTR) {}
+}
+
+static void gpu_kick(xh_virtio *dev, unsigned queue) { (void)queue; wake(xh_virtio_opaque(dev), false); }
+
+// With the device's lock held (virtio.c): the queues are already gone; the worker forgets the rest before its next command.
+static void gpu_reset_3d(xh_virtio *dev)
+{
+  gpu_state *g = xh_virtio_opaque(dev);
+  g->gen++;
+  wake(g, true);
+}
+
+static void work(gpu_state *g, uint16_t head, xh_viov *iov, unsigned n, uint64_t gen)
+{
+  gpu_hdr in;
+  uint32_t status = 0;
+  int64_t written = serve(g, 0, iov, n, &in, &status);
+  // A command fenced on a context's ring is returned when the ring passes the fence; any other at once (a fence on
+  // the device's own ring has nothing to wait for: the 2D commands are done when they return).
+  bool hold = written > 0 && status < RESP_ERR_UNSPEC && (in.flags & FLAG_FENCE) && (in.flags & FLAG_RING_IDX) && ctx_find(g, in.ctx);
+  pending *p = calloc(1, sizeof *p);
+  if (!p) return;                                    // the chain is lost; so is the guest's command
+  *p = (pending){ .head = head, .written = (uint32_t)written, .ctx = in.ctx, .ring = in.ring, .fence = in.fence, .gen = gen };
+  if (!hold) { push_pending(g, p); return; }
+  pthread_mutex_lock(&g->pl);
+  p->next = g->fences;
+  g->fences = p;
+  pthread_mutex_unlock(&g->pl);
+  // May retire it before it returns. A refused fence is retired here.
+  if (g->b->submit_fence(g->b, in.ctx, in.ring, in.fence)) retire(g, in.ctx, (int)in.ring, in.fence);
+}
+
+static void *worker(void *arg)
+{
+  gpu_state *g = arg;
+  static _Thread_local xh_viov iov[WORKER_IOV];
+  for (;;) {
+    uint64_t count;
+    if (read(g->wake, &count, 8) < 0 && errno != EINTR) break;
+    pthread_mutex_lock(&g->pl);
+    uint64_t upto = g->kicks;
+    bool reset = g->reset_requested;
+    g->reset_requested = false;
+    pthread_mutex_unlock(&g->pl);
+    if (reset) teardown(g);
+    for (;;) {
+      uint16_t head;
+      xh_virtio_lock(g->dev);
+      uint64_t gen = g->gen;
+      unsigned n = xh_virtio_pop(g->dev, 0, &head, iov, WORKER_IOV);
+      xh_virtio_unlock(g->dev);
+      if (!n) break;
+      work(g, head, iov, n, gen);
+    }
+    pthread_mutex_lock(&g->pl);
+    g->served = upto;
+    pthread_cond_broadcast(&g->idle);
+    pthread_mutex_unlock(&g->pl);
+  }
+  return NULL;
+}
+
+void xh_virtio_gpu_idle(xh_virtio *dev)
+{
+  gpu_state *g = xh_virtio_opaque(dev);
+  if (!g->blobs) return;
+  pthread_mutex_lock(&g->pl);
+  while (g->served != g->kicks) pthread_cond_wait(&g->idle, &g->pl);
+  pthread_mutex_unlock(&g->pl);
 }
 
 static const xh_virtio_ops gpu_ops = { .device_id = 16, .features = 0, .nqueues = 2, .handle = gpu_handle,
                                        .config_read = gpu_config, .reset = gpu_reset };
+static const xh_virtio_ops gpu_3d_ops = { .device_id = 16, .features = F_VIRGL | F_RESOURCE_BLOB | F_CONTEXT_INIT | F_CREATE_GUEST_HANDLE, .nqueues = 2,
+                                          .handle = gpu_handle, .config_read = gpu_config, .reset = gpu_reset_3d, .manual = 1, .kick = gpu_kick };
 
 xh_virtio *xh_virtio_gpu_create(uint64_t base, unsigned spi, unsigned width, unsigned height)
 {
@@ -266,4 +679,25 @@ xh_virtio *xh_virtio_gpu_create(uint64_t base, unsigned spi, unsigned width, uns
   g->width = width;
   g->height = height;
   return xh_virtio_create(base, spi, &gpu_ops, g, "virtio-gpu");
+}
+
+xh_virtio *xh_virtio_gpu_create_3d(uint64_t base, unsigned spi, unsigned width, unsigned height, xh_gpu3d *b)
+{
+  if (!b) return xh_virtio_gpu_create(base, spi, width, height);
+  gpu_state *g = calloc(1, sizeof *g);
+  pthread_t thread;
+  if (!g) return NULL;
+  g->width = width;
+  g->height = height;
+  g->b = b;
+  g->blobs = calloc(BLOB_SLOTS, sizeof *g->blobs);
+  g->wake = eventfd(0, EFD_CLOEXEC);
+  pthread_mutex_init(&g->pl, NULL);
+  pthread_cond_init(&g->idle, NULL);
+  if (!g->blobs || g->wake < 0 || !(g->dev = xh_virtio_create(base, spi, &gpu_3d_ops, g, "virtio-gpu"))) return NULL;
+  b->retire = gpu_retire;
+  b->dev = g->dev;
+  if (pthread_create(&thread, NULL, worker, g)) return NULL;
+  pthread_detach(thread);
+  return g->dev;
 }

@@ -17,6 +17,7 @@ void xh_config_defaults(xh_config *c)
   c->ncpu = 4;
   c->ram_bytes = 4ull << 30;
   strcpy(c->display, "shm");
+  strcpy(c->gpu, "auto");
   c->input = true;
   c->tasks = true;
   c->task_uid = -1;
@@ -67,6 +68,7 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
   else if (!strcmp(key, "identity")) return copy(c->identity, sizeof c->identity, value);
   else if (!strcmp(key, "boot-args")) return copy(c->boot_args, sizeof c->boot_args, value);
   else if (!strcmp(key, "display")) return copy(c->display, sizeof c->display, value);
+  else if (!strcmp(key, "gpu")) { ok = !strcmp(value, "auto") || !strcmp(value, "3d") || !strcmp(value, "2d"); if (ok) return copy(c->gpu, sizeof c->gpu, value); }
   else if (!strcmp(key, "cpus")) { c->ncpu = (unsigned)atoi(value); ok = c->ncpu >= 1 && c->ncpu <= XH_MAX_CPUS; }
   else if (!strcmp(key, "ram")) c->ram_bytes = xh_parse_size(value, &ok);
   else if (!strcmp(key, "width")) c->width = (unsigned)atoi(value);
@@ -123,7 +125,7 @@ static void usage(void)
 {
   fputs("usage: xnuhost --image DIR [--kernel FILE] [--data DIR] [--session DIR] [--runtime DIR]\n"
         "               [--session-abi 1] [--mode takeover|bench] [--cpus N] [--ram SIZE]\n"
-        "               [--boot-args TEXT] [--display shm|drm|none] [--width W --height H]\n"
+        "               [--boot-args TEXT] [--display shm|drm|none] [--gpu auto|3d|2d] [--width W --height H]\n"
         "               [--no-input] [--no-tasks] [--config FILE] [--set KEY=VALUE] [-v]\n"
         "       xnuhost --selftest      checks of this host (trap layer, PAC, memory), no kernel\n"
         "docs/booter.md describes the image set's files, the session files and the exit codes.\n", stderr);

@@ -5,6 +5,7 @@
 #define _GNU_SOURCE
 #include "xnuhost.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -21,9 +22,12 @@ xh_mem g_mem = { .fd = -1 };
 
 int xh_mem_create(uint64_t size)
 {
-  int fd = (int)syscall(SYS_memfd_create, "xnuhost-ram", 0u);     // inherited by the task factory: no CLOEXEC
+  // Inherited by the task factory: no CLOEXEC. Sealable, and sealed against shrinking once it has its size: udmabuf,
+  // which turns the guest's pages into the dma-bufs the GPU imports (gpu3d.c), takes no other memfd.
+  int fd = (int)syscall(SYS_memfd_create, "xnuhost-ram", 2u /* MFD_ALLOW_SEALING */);
   if (fd < 0) { LOGE("memfd_create: %s", strerror(errno)); return -1; }
   if (ftruncate(fd, (off_t)size)) { LOGE("RAM of %llu MiB: %s", (unsigned long long)(size >> 20), strerror(errno)); close(fd); return -1; }
+  if (fcntl(fd, 1033 /* F_ADD_SEALS */, 2 /* F_SEAL_SHRINK */)) LOGE("RAM: no shrink seal (%s): the GPU cannot import guest pages", strerror(errno));
   g_mem.fd = fd;
   g_mem.size = size;
   return 0;

@@ -2,6 +2,7 @@
 // xnuhost: boots a source-built XNU as a process on Android's Linux kernel (docs/booter.md).
 #define _GNU_SOURCE
 #include "xnuhost.h"
+#include "gpu3d.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -161,6 +162,11 @@ static void host_facts(void)
 
 static void gic_line(unsigned cpu, bool line) { xh_cpu_line(cpu, line); }
 
+// The pool behind /arm-io/virtio-gpu drm-host-pool, as Droid-VM's boards size it (--pre-alloc drm-host-mb=8):
+// drm2kgsl keeps its first 2 MiB unused, the rest holds 16 KiB of response buffer per 3D context.
+#define GPU_POOL_BYTES (8ull << 20)
+static void gpu_log(int level, const char *line) { xh_log(level == 0 ? XH_LOG_ERROR : level == 1 ? XH_LOG_INFO : XH_LOG_DEBUG, "%s", line); }
+
 // ---- the host bridges (runtime/bridges): CPU placement, cpufreq, haptics, Bluetooth, network, sound ---
 static br_cpu_plan cpu_plan;
 static br_haptic *haptic;
@@ -247,12 +253,14 @@ static int boot(void)
        kernel.cpusubtype == 2 ? "arm64e" : "arm64", (unsigned long long)kernel.base, kernel.nseg, kernel.nentries);
   if (kernel.cpusubtype == 2 && !(g_info.features & XH_FEATURE_PAC)) { LOGE("an arm64e kernel needs pointer authentication with keys shared across fork; this host has none"); return -1; }
 
-  // RAM: the kernel's window, then the boot framebuffer the kernel's console draws into.
+  // RAM: the kernel's window, then the GPU's pool (the memory of the renderer's that the guest maps: each 3D
+  // context's response buffer), then the boot framebuffer the kernel's console draws into.
   uint64_t fb_bytes = ((uint64_t)fb_width * fb_height * 4 + 0x1fffff) & ~0x1fffffull;
-  uint64_t window = config.ram_bytes - fb_bytes;
+  uint64_t pool_bytes = strcmp(config.gpu, "2d") ? GPU_POOL_BYTES : 0;
+  uint64_t window = config.ram_bytes - fb_bytes - pool_bytes;
   if (xh_mem_map(kernel.base) || xh_mem_io(XL_BOARD_IO_BASE, XL_BOARD_IO_SIZE)) return -1;
   uint64_t phys = g_mem.phys;                       // physical = where it is mapped (mem.c)
-  boot_fb_pa = phys + window;
+  boot_fb_pa = phys + window + pool_bytes;
   if (xh_mem_kva() == 0) { g_info.kva_base = g_mem.kva; g_info.kva_size = g_mem.kva_size; }
   LOGI("memory: %llu MiB at 0x%llx, physical = virtual (slide 0x%llx); I/O aperture 0x%llx",
        (unsigned long long)(window >> 20), (unsigned long long)phys,
@@ -278,12 +286,21 @@ static int boot(void)
   }
   xh_virtio *input = xh_virtio_input_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev);
   kinds[ndev++] = XL_DEV_INPUT;
-  if (!input || !xh_virtio_gpu_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, fb_width, fb_height)) return -1;
+  // The GPU: the 2D scanout always; with it the 3D half on the phone's Adreno (drm2kgsl on KGSL), when the host has it.
+  xh_gpu3d *gpu3d = NULL;
+  if (pool_bytes) {
+    const char *why = "";
+    gpu3d = xh_gpu3d_kgsl_open(g_mem.fd, phys, g_mem.size, xh_ram(phys + window, pool_bytes), phys + window, pool_bytes, gpu_log, &why);
+    if (!gpu3d && !strcmp(config.gpu, "3d")) { LOGE("gpu: no 3D: %s", why); return -1; }
+    if (!gpu3d) LOGI("gpu: 2D only: %s", why);
+  }
+  if (!input || !xh_virtio_gpu_create_3d(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, fb_width, fb_height, gpu3d)) return -1;
   kinds[ndev++] = XL_DEV_GPU;
   if (config.input && xh_input_start(input, fb_width, fb_height)) LOGE("input: could not start; continuing without");
 
   static xl_machine machine;
   machine.chip_id = 0x8150;
+  if (gpu3d) { machine.gpu_pool_base = phys + window; machine.gpu_pool_size = pool_bytes; }
   // The guest's unique chip ID: made once, kept with the guest's data, so its MAC addresses and
   // everything keyed on the ID stay the same across sessions.
   if (*config.data) {
