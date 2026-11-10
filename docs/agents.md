@@ -30,6 +30,7 @@ mode `queue`) to the owner's thread id:
 | release-kernel | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3A1103831e-b6be-44ff-8ba4-cd3b291a7051` |
 | booter | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3A81e146dc-96b7-4dff-a49b-8d1b3690a4ec` |
 | userland | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3Aab462e7a-0cd0-45a7-806b-f514249a862e` |
+| references | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3Afe9430a7-f774-49b1-b946-b7f143e55962` |
 
 ## Interfaces (write what others need here; keep it current)
 
