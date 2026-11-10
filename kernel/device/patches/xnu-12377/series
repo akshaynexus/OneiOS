@@ -28,3 +28,6 @@
 ../../../../external/xnu-linux-toolchain/patches/xnu/portable-kalloc-type-builtins.patch
 #
 # 3. OneiOS's own (this directory).
+oneios-stock-clang-ptrauth.patch
+oneios-no-apple-iig.patch
+oneios-weak-defaults.patch

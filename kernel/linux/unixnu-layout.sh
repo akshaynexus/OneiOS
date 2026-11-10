@@ -32,6 +32,8 @@ ln -s clang "$CLT/bin/clang++"
 mkdir -p "$DST/usrbin"
 for shim in xcrun plutil codesign; do install -m755 "$UNIXNU/scripts/linux/$shim" "$DST/usrbin/$shim"; done
 ln -s ../usrbin/xcrun "$DST/bin/xcrun"
+# xnu's SETUP/config/doconf starts with #!/bin/csh; a host without csh gets the toolchain's tcsh there the same way.
+install -m755 "$SRC/bin/tcsh" "$DST/usrbin/csh"
 install -m755 "$SRC/bin/mig" "$CLT/bin/mig"
 ln -s "$SRC/bin/migcom" "$CLT/libexec/migcom"
 for tool in unifdef tcsh csh; do ln -s "$SRC/bin/$tool" "$CLT/bin/$tool"; done

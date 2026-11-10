@@ -76,7 +76,11 @@ fi
 # 3. The kernel, when one was built: only the native XNU and its record (pack.py checks the record).
 KERNEL_DIR=${KERNEL_DIR:-$ROOT/out/kernel/current}
 HAVE_KERNEL=0
-if [ -f "$KERNEL_DIR/xnu.macho" ]; then
+if [ -f "$KERNEL_DIR/xnu.macho" ] && grep -q '"releasable": false' "$KERNEL_DIR/xnu.macho.build.json" && [ "${REQUIRE_KERNEL:-0}" != 1 ]; then
+  # A local build that links a source that may not be redistributed (its record says which): it stays out, and the
+  # package is runtime only. REQUIRE_KERNEL=1 makes this an error instead (pack.py refuses the kernel).
+  echo "package: the kernel at $KERNEL_DIR is not releasable (see its build record): runtime only"
+elif [ -f "$KERNEL_DIR/xnu.macho" ]; then
   HAVE_KERNEL=1
   mkdir -p "$STAGE/kernel"
   cp "$KERNEL_DIR/xnu.macho" "$KERNEL_DIR/xnu.macho.build.json" "$STAGE/kernel/"

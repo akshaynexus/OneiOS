@@ -29,8 +29,11 @@ fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustC
 tool = "kits/XnuPrelink/emit_prelink.py"
 kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
 slide = "-0x1000000"
+# The decoded kernelcache.release.v54 (78,135,296 bytes), as scripts/image/kernel-inputs.sh writes it to
+# out/kernel-inputs/24A446/kernelcache.macho (image-build, docs/agents.md).
+kernelcache_sha256 = "349c4692a6a85df0d396681f28d2d48dc04b95c6d60df0f94d84501e3d0c57e3"
 # TO PIN from kernelcache.release.v54 of the owner's IPSW (kernel/profiles/iphone18-2-ios27.md, "Kernelcache pins"):
-#   kernelcache_sha256, early_security_init (the AMFI wrapper's address), regression_policy, abi/original-classes.json.
+#   early_security_init (the AMFI wrapper's address), regression_policy, abi/original-classes.json.
 # Until they are here the prelink step refuses this profile; the native kernel (--skip-prelink) needs none of them.
 extra_args = ["--fileset-reference", "build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf", "--allow-missing"]
 # The iPadOS profile's roots, without the two iPad-only audio/video families checked against the iPhone kernelcache yet.

@@ -1,0 +1,59 @@
+diff --git a/osfmk/arm64/oneios_host.c b/osfmk/arm64/oneios_host.c
+new file mode 100644
+index 0000000..bf3a2f8
+--- /dev/null
++++ b/osfmk/arm64/oneios_host.c
+@@ -0,0 +1,42 @@
++/*
++ * OneiOS (https://github.com/akshaynexus/OneiOS, kernel/): defaults for symbols that a board or a toolchain
++ * supplies, so the kernel links without them. Every definition is weak: the real one wins when it is linked.
++ */
++#include <stdint.h>
++#include <sys/cdefs.h>
++
++/*
++ * Droid-VM's source-storage-start.patch calls this after the IOKit bootstrap when a board's source-built
++ * storage is linked (XNU_EXTRA_LD_ARCHIVES). Without one there is nothing to start.
++ */
++__attribute__((weak)) void
++native_source_storage_start(void)
++{
++}
++
++/*
++ * OSKext's PGO export calls these two in compiler-rt's profile runtime (libcc_kext.a of an Apple toolchain).
++ * The kernel is not built with profile instrumentation: no data, and a write reports failure.
++ */
++__attribute__((weak)) uint64_t
++__llvm_profile_get_size_for_buffer_internal(
++	const char *data_begin __unused, const char *data_end __unused,
++	const char *counters_begin __unused, const char *counters_end __unused,
++	const char *bitmap_begin __unused, const char *bitmap_end __unused,
++	const char *names_begin __unused, const char *names_end __unused,
++	const char *vtable_begin __unused, const char *vtable_end __unused,
++	const char *vnames_begin __unused, const char *vnames_end __unused)
++{
++	return 0;
++}
++
++__attribute__((weak)) int
++__llvm_profile_write_buffer_internal(
++	char *buffer __unused,
++	const char *data_begin __unused, const char *data_end __unused,
++	const char *counters_begin __unused, const char *counters_end __unused,
++	const char *bitmap_begin __unused, const char *bitmap_end __unused,
++	const char *names_begin __unused, const char *names_end __unused)
++{
++	return -1;
++}
+diff --git a/osfmk/conf/files.arm64 b/osfmk/conf/files.arm64
+index 0db4600..ae0880e 100644
+--- a/osfmk/conf/files.arm64
++++ b/osfmk/conf/files.arm64
+@@ -129,3 +129,6 @@ osfmk/kern/ecc_init.c		standard
+ osfmk/kern/ecc_logging.c	optional config_ecc_logging
+ 
+ osfmk/kern/memory_error_logging.c	standard
++
++# OneiOS: weak defaults for board and toolchain symbols
++osfmk/arm64/oneios_host.c	standard

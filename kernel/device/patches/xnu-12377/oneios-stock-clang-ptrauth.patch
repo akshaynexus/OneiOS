@@ -1,0 +1,23 @@
+diff --git a/libkern/os/base.h b/libkern/os/base.h
+index 243507d..890d70b 100644
+--- a/libkern/os/base.h
++++ b/libkern/os/base.h
+@@ -355,7 +355,18 @@ typedef void (^os_block_t)(void);
+ #if __has_feature(ptrauth_calls)
+ #include <ptrauth.h>
+ #define OS_PTRAUTH_SIGNED_PTR(type) __ptrauth(ptrauth_key_process_independent_data, 1, ptrauth_string_discriminator(type))
++#if defined(__apple_build_version__)
+ #define OS_PTRAUTH_SIGNED_PTR_AUTH_NULL(type) __ptrauth(ptrauth_key_process_independent_data, 1, ptrauth_string_discriminator(type), "authenticates-null-values")
++#else
++/*
++ * OneiOS: the fourth __ptrauth argument is Apple clang's. Upstream clang signs with the same key and
++ * discriminator but stores a null pointer as plain 0, where Apple's stores it signed. Code built with
++ * Apple clang (the kexts of the kernelcache) that loads such a field from this kernel authenticates
++ * correctly for every non-null value; a null one fails its authentication there.
++ * The fields: ucred.cr_label, and the queue of IOCircularDataQueue. kernel/README.md, "Linux build".
++ */
++#define OS_PTRAUTH_SIGNED_PTR_AUTH_NULL(type) __ptrauth(ptrauth_key_process_independent_data, 1, ptrauth_string_discriminator(type))
++#endif
+ #define OS_PTRAUTH_DISCRIMINATOR(str) ptrauth_string_discriminator(str)
+ #define __ptrauth_only
+ #else //  __has_feature(ptrauth_calls)

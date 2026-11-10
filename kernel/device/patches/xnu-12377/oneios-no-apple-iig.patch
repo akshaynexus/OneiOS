@@ -1,0 +1,37 @@
+diff --git a/iokit/Kernel/IOUserServer.cpp b/iokit/Kernel/IOUserServer.cpp
+index 14d77fb..4318672 100644
+--- a/iokit/Kernel/IOUserServer.cpp
++++ b/iokit/Kernel/IOUserServer.cpp
+@@ -8046,3 +8046,19 @@ IOEventLink::SetEventlinkPort_Impl(mach_port_t port __unused)
+ {
+ 	return kIOReturnUnsupported;
+ }
++
++#if !defined(__apple_build_version__)
++/*
++ * OneiOS: Apple's iig generates this method from IOUserClient.iig. The iig of xnu-linux-toolchain, which a
++ * build without Xcode uses, declares it and does not define it. Such a kernel has no DriverKit RPC at all
++ * (its *_Invoke methods answer unsupported), so an asynchronous kernel completion cannot be made either.
++ */
++kern_return_t
++IOUserClient::CreateActionKernelCompletion(size_t referenceSize __unused, OSAction ** action)
++{
++	if (action) {
++		*action = NULL;
++	}
++	return kIOReturnUnsupported;
++}
++#endif /* !__apple_build_version__ */
+diff --git a/iokit/conf/files b/iokit/conf/files
+index c72c690..ac2aa95 100644
+--- a/iokit/conf/files
++++ b/iokit/conf/files
+@@ -111,8 +111,6 @@ iokit/Tests/TestServices/TestIODeviceMemoryRosetta.cpp optional iokitcpp
+ iokit/Tests/TestServices/TestIOUserClient2022Entitlements.cpp optional iokitcpp
+ iokit/Tests/TestServices/TestIOServiceUserNotification.cpp optional iokitcpp
+ iokit/Tests/TestServices/TestIODataQueues.cpp optional iokitcpp
+-./Tests/TestServices/TestDextRematch.iig.cpp optional iokitcpp
+-iokit/Tests/TestServices/TestDextRematchKernel.cpp optional iokitcpp
+ 
+ iokit/Kernel/IOStatistics.cpp				optional iokitcpp
+ iokit/Kernel/IOInterruptAccounting.cpp			optional iokitcpp

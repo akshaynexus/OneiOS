@@ -29,14 +29,15 @@ stage_sources
 [ "${CLEAN:-0}" = 1 ] && rm -rf "${UNIXNU_OUT_DIR:?}/oneios"
 
 # xnu's makefiles call /usr/bin/xcrun, /usr/bin/plutil and /usr/bin/codesign by their full paths, and UniXNU's driver
-# checks for xcrun there. Its installer writes those three as root; here the build runs in a mount namespace where
-# /usr/bin has three more files (bubblewrap: a temporary overlay, nothing on disk changes). A machine that already
+# checks for xcrun there; doconf wants /bin/csh. UniXNU's installer writes the three as root and installs tcsh; here
+# the build runs in a mount namespace where /usr/bin has those files (bubblewrap: a temporary overlay, nothing on disk changes). A machine that already
 # has the shims there (CI: sudo install) needs no namespace.
 run_build() {
-  if [ -x /usr/bin/xcrun ] && [ -x /usr/bin/plutil ] && [ -x /usr/bin/codesign ]; then "$@"; return; fi
+  if [ -x /usr/bin/xcrun ] && [ -x /usr/bin/plutil ] && [ -x /usr/bin/codesign ] && [ -x /bin/csh ]; then "$@"; return; fi
+  [ "$(readlink -f /bin)" = /usr/bin ] || [ -x /bin/csh ] || { echo "build-linux: /bin is not /usr/bin here and there is no /bin/csh: install tcsh" >&2; return 1; }
   command -v bwrap >/dev/null || { echo "build-linux: /usr/bin has no xcrun, plutil, codesign and there is no bubblewrap (install bubblewrap, or as root: install -m755 $TOOLCHAIN/unixnu/usrbin/* /usr/bin/)" >&2; return 1; }
   local binds=() shim
-  for shim in xcrun plutil codesign; do
+  for shim in xcrun plutil codesign csh; do
     [ -e "/usr/bin/$shim" ] || binds+=(--ro-bind "$TOOLCHAIN/unixnu/usrbin/$shim" "/usr/bin/$shim")
   done
   bwrap --dev-bind / / --overlay-src /usr/bin --tmp-overlay /usr/bin "${binds[@]}" -- "$@"

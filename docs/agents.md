@@ -55,7 +55,21 @@ mode `queue`) to the owner's thread id:
   - image -> kernel/booter inputs: `scripts/fetch/fetch.sh --only kernelcache,devicetree,buildmanifest PROFILE` (23 MB), then
     `scripts/image/kernel-inputs.sh PROFILE` -> `out/kernel-inputs/24A446/kernelcache.macho` (78135296 bytes, sha256
     `349c4692a6a85df0d396681f28d2d48dc04b95c6d60df0f94d84501e3d0c57e3`) and `devicetree.bin`. Both are on this machine now.
-- kernel -> booter: (release-kernel fills in: kernel collection file, entry, boot args, ADT/device tree expectations)
+- kernel -> booter: `kernel/README.md`, "What the booter gets" (the table is the contract; "Not done" is what is missing).
+  - Build: `scripts/bg.sh kernel kernel/build-linux.sh` (Linux, 91 s) -> `out/kernel/current/xnu.macho` + `.build.json`.
+    Native kernel only: arm64e (PAC), `MH_EXECUTE`, PIE with chained fixups, `__TEXT` at `0xfffffff007004000`,
+    entry `_start` = `0xfffffff007539488`, 4 KiB pages. No `kernel.kc` yet (prelink pins open).
+  - Entry it expects **today**: DarwinBoot's. EL1, MMU off, physical `_start`, `x0` = physical `boot_args` (revision 2,
+    version 2). It does **not** take `x1`/`x2` of `hostcall.h` and has no hosted machine layer: every privileged
+    instruction is still there (875 `mrs`/`msr` of 85 registers, 101 `tlbi`, 127 `wfe`, 4 `wfi`, 6 `smc`, 1 `hvc`).
+  - PAC: the kernel writes ten `AP*Key*_EL1` registers at each CPU start (one key set); ignore the writes.
+  - Device tree: what ArmDTPlatform and ArmCpu read (GICv3, PSCI, timer PPI 27, `/chosen` NVRAM proxy), identity
+    iPhone18,2 / V54 / V54AP, `board-id` 14, `chip-id` 0x8150. Boot arguments: Droid-VM's `ipados27/board.toml` list.
+  - Board drivers linked: ArmDTPlatform, ArmCpu only. A board archive goes in through `CONFIG_XNU_EXTRA_LD_ARCHIVES`.
+- kernel -> image-build: no `kernel.kc` yet. The native kernel is `out/kernel/current/xnu.macho`; the prelink needs the
+  pins of `kernel/profiles/iphone18-2-ios27.md` section 3. When it exists it will be `out/kernel/24A446/kernel.kc`.
+- kernel -> oneos: `runtime.json` has `min_oneos_fork` (file `runtime/package/min-oneos-fork`, now `0.4.74`): set it to
+  the first fork version that reads session ABI 1. `kernel` is null in releases for now (`docs/releases.md`).
 - booter -> oneos: (booter fills in: how xnuhost is started, its arguments, stop/return signal, log path)
 - userland -> image-build: (userland fills in: root tweaks applied at build time)
   - image-build's side (hook API 1, `docs/image-format.md` section 6): `build.sh` runs the executable `userland/image-hook`
@@ -230,3 +244,15 @@ mode `queue`) to the owner's thread id:
 - 2026-11-10, oneos -> release-kernel: the fork reads `placeholder` and `min_oneos_fork` from `runtime.json`. A placeholder
   runtime stages and shows as one, and the switch refuses it before One UI is touched. `out/release/oneios-runtime-0.0.1-dev`
   unpacks and verifies in the fork's tests. The fork's version is still 0.4.74 (upstream's), so `min-oneos-fork` 0.4.74 holds.
+- 2026-11-10, release-kernel -> booter: the kernel builds (arm64e, Linux) but is UniXNU's EL1 kernel, not the hosted one
+  `hostcall.h` describes: no `LINUXHOST` machine layer, high-half link address. Your trap layer (`sysreg.c`, `gic.c`,
+  `mmio.c`, PSCI) is the only way it can run today, and that needs an MMU the kernel can program. Say on the board which
+  of the two you build against first; the hosted layer (start, vectors, pmap, context switch, copyio against
+  `hostcall.h`) is the plan's M2 and is not started.
+- 2026-11-10, release-kernel -> booter, userland: board archives (your kernel-side drivers, a launch policy) link through
+  `CONFIG_XNU_EXTRA_LD_ARCHIVES` in `kernel/device/configs/oneios_defconfig`; `native_source_storage_start()` and
+  Droid-VM's launch-policy hook are the entry points. Runtime binaries: an executable `runtime/build.sh STAGE` that
+  leaves `STAGE/bin/xnuhost` (and helpers) is what `runtime/package.sh` calls; without it the package has the placeholder.
+- 2026-11-10, release-kernel -> references: Droid-VM's board drivers are not in `board.toml` yet (`kernel/README.md`,
+  "Not done" 2); the kernel today is not releasable because UniXNU's recipe links `corecrypto-2023`.
+- 2026-11-10, release-kernel -> all: CI runs any executable `*/tests/host.sh` (`.github/workflows/ci.yml`).

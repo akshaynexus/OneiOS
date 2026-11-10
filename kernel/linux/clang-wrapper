@@ -7,6 +7,10 @@
 #   -mllvm -disable-atexit-based-global-dtor-lowering  C++ static destructors go to __mod_term_func
 #   -D__ARM_ARCH_8_2__ .. 8_5__                       Apple clang predefines them for its CPUs
 # Dropped: -mno-implicit-sme (Apple-only; upstream emits no SME here).
+# -w: stock clang 23 has diagnostics Apple's clang of Xcode 27.1 does not, on nearly every kernel header; with 20
+# jobs the log reached 2.8 million lines in three minutes. Warnings are off for the kernel's own sources (errors still
+# stop the build), as in iOSPlus10's Linux kernel builds. The driver archives are compiled by UniXNU's builders with
+# their own -Wall -Wextra -Werror and are not affected. ONEIOS_KERNEL_WARNINGS=1 keeps the warnings.
 real=${CROSS_CLANG:-clang}
 case "$(basename "$0")" in *++) real=${real%clang}clang++ ;; esac
 arch=arm64
@@ -18,9 +22,19 @@ for a in "$@"; do
   case "$a" in -mno-implicit-sme) continue ;; esac
   args+=("$a")
 done
+# A link: cctools' ld64 next to this wrapper. The host's clang sits in /usr/bin and would take the ELF ld there.
+link=1
+for a in "${args[@]}"; do
+  case "$a" in -c|-E|-S|-M|-MM|-fsyntax-only) link=0 ;; esac
+done
+[ "$link" = 1 ] && args=(--ld-path="$(dirname "$0")/ld" "${args[@]}")
 ios=${ONEIOS_IOS_VERSION:-27.0}
+[ "${ONEIOS_KERNEL_WARNINGS:-0}" = 1 ] || args+=(-w)
 if [ "$arch" = arm64e ]; then
-  exec "$real" -target "arm64e-apple-ios$ios" -fptrauth-function-pointer-type-discrimination \
+  # The BCM2837 machine config passes no -mcpu, and stock clang's default CPU for arm64e is ARMv8.3: the assembler
+  # then refuses `msr DIT` (ARMv8.4) in cswitch.s, which Apple's accepts. For the assembler only: ARMv8.5.
+  # Compiled code keeps the default CPU. (The S24 Ultra's cores are ARMv9.2.)
+  exec "$real" -target "arm64e-apple-ios$ios" -Wa,-march=armv8.5-a -fptrauth-function-pointer-type-discrimination \
     -mllvm -disable-atexit-based-global-dtor-lowering \
     -D__ARM_ARCH_8_2__=1 -D__ARM_ARCH_8_3__=1 -D__ARM_ARCH_8_4__=1 -D__ARM_ARCH_8_5__=1 "${args[@]}"
 fi
