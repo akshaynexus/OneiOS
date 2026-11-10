@@ -10,6 +10,9 @@
 #          --no-hook       do not run a hook: the seed is the OS volume's own /private/var
 #          --seed tar|apfs the Data seed's format. tar (default) is made anywhere; apfs needs macOS
 #          --no-pack       stop after the set folder; no .tar.zst
+#          --os-root DIR, --systemos-root DIR, --app-root DIR
+#                          the volumes' files are already readable here (mounted by other means, or a
+#                          fixture): do not mount the images. With --os-root, apfs-fuse/hdiutil is not needed
 # Env: INPUTS (default inputs/<build>), OUT (default out/image).
 #
 # What it makes:
@@ -32,7 +35,7 @@ TOOL=$ROOT/scripts/image/imagetool.py
 die() { echo "build: $*" >&2; exit 1; }
 tool() { python3 -I "$TOOL" "$@"; }
 
-kernel= no_kernel=0 hook= no_hook=0 seed=tar pack=1 profile=
+kernel= no_kernel=0 hook= no_hook=0 seed=tar pack=1 profile= os_root= sys_root= app_root=
 while [ $# -gt 0 ]; do
   case "$1" in
   --kernel) kernel=${2:?--kernel FILE}; shift ;;
@@ -41,6 +44,9 @@ while [ $# -gt 0 ]; do
   --no-hook) no_hook=1 ;;
   --seed) seed=${2:?--seed tar|apfs}; shift ;;
   --no-pack) pack=0 ;;
+  --os-root) os_root=${2:?--os-root DIR}; shift ;;
+  --systemos-root) sys_root=${2:?--systemos-root DIR}; shift ;;
+  --app-root) app_root=${2:?--app-root DIR}; shift ;;
   -*) die "unknown option $1" ;;
   *) [ -z "$profile" ] || die "one profile at a time"; profile=$1 ;;
   esac
@@ -58,14 +64,18 @@ need python3 "3.11 or newer"
 [ "$pack" = 0 ] || need zstd
 case "$OS" in
 Linux)
-  need apfs-fuse "github.com/sgan81/apfs-fuse; reads the OS volume without root"
-  command -v fusermount3 >/dev/null 2>&1 || command -v fusermount >/dev/null 2>&1 || missing+=("fusermount3 (fuse3)")
+  if [ -z "$os_root" ]; then
+    need apfs-fuse "github.com/sgan81/apfs-fuse; reads the OS volume without root"
+    command -v fusermount3 >/dev/null 2>&1 || command -v fusermount >/dev/null 2>&1 || missing+=("fusermount3 (fuse3)")
+  fi
   [ "$seed" = tar ] || missing+=("macOS (--seed apfs makes an APFS volume; Linux builds --seed tar)") ;;
 Darwin)
-  need hdiutil
   [ "$seed" = tar ] || need newfs_apfs
-  # an attached volume enforces the image's own permissions: only root reads all of /private/var
-  [ "$(id -u)" = 0 ] || missing+=("root (on macOS run it with sudo)") ;;
+  if [ -z "$os_root" ]; then
+    need hdiutil
+    # an attached volume enforces the image's own permissions: only root reads all of /private/var
+    [ "$(id -u)" = 0 ] || missing+=("root (on macOS run it with sudo)")
+  fi ;;
 *) missing+=("Linux or macOS (this is $OS)") ;;
 esac
 [ ${#missing[@]} = 0 ] || die "missing tools: $(IFS=';'; echo "${missing[*]}" | sed 's/;/; /g')"
@@ -141,8 +151,10 @@ done < <(tool profile "$profile" --members)
 
 # ---- the Data seed: the OS volume's /private/var, then the userland hook
 echo "reading $P_DATA_SOURCE of the OS volume"
-mounts+=("$WORK/mnt/os")
-os_root=$(mount_ro "$NEW/$os_out" "$WORK/mnt/os")
+if [ -z "$os_root" ]; then
+  mounts+=("$WORK/mnt/os")
+  os_root=$(mount_ro "$NEW/$os_out" "$WORK/mnt/os")
+fi
 [ -d "$os_root/$P_DATA_SOURCE" ] || die "the OS volume has no /$P_DATA_SOURCE"
 tool tree-copy "$os_root/$P_DATA_SOURCE" "$WORK/data" "$WORK/data.meta.json"
 mkdir -p "$WORK/overlay"
@@ -151,9 +163,14 @@ tweaks=$WORK/tweaks.json
 echo null > "$tweaks"
 if [ -n "$hook" ]; then
   echo "running the userland hook $hook"
-  mounts+=("$WORK/mnt/systemos" "$WORK/mnt/app")
-  sys_root=$(mount_ro "$NEW/$sys_out" "$WORK/mnt/systemos")
-  app_root=$(mount_ro "$NEW/$app_out" "$WORK/mnt/app")
+  if [ -z "$sys_root" ]; then
+    mounts+=("$WORK/mnt/systemos")
+    sys_root=$(mount_ro "$NEW/$sys_out" "$WORK/mnt/systemos")
+  fi
+  if [ -z "$app_root" ]; then
+    mounts+=("$WORK/mnt/app")
+    app_root=$(mount_ro "$NEW/$app_out" "$WORK/mnt/app")
+  fi
   : > "$WORK/hook-info.json"
   ONEIOS_HOOK_API=1 ONEIOS_PROFILE=$(cd "$(dirname "$profile")" && pwd)/$(basename "$profile") \
   ONEIOS_BUILD=$P_BUILD ONEIOS_VERSION=$P_VERSION ONEIOS_DEVICE=$P_DEVICE ONEIOS_BOARD=$P_BOARD \
@@ -175,11 +192,10 @@ if text:
     out["info"] = json.loads(text)
 print(json.dumps(out))
 PY
-  unmount "$WORK/mnt/systemos"; unmount "$WORK/mnt/app"
 else
   echo "no userland hook: the seed is the OS volume's own /$P_DATA_SOURCE"
 fi
-unmount "$WORK/mnt/os"; mounts=()
+cleanup; mounts=()
 
 tool seed-pack "$WORK/data" "$WORK/data.meta.json" "$WORK/data.seed.tar" --epoch "$P_EPOCH" --owners "$WORK/owners.tsv" > "$WORK/seed.json"
 if [ "$seed" = apfs ]; then

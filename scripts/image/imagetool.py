@@ -63,8 +63,9 @@ ROLES = {
     "buildmanifest":   (None, False, "input"),
     "restore":         (None, False, "input"),
 }
-# xattrs that describe on-disk compression; apfs-fuse and macOS hand out the plain content, so they are dropped
-DROP_XATTRS = {"com.apple.decmpfs", "com.apple.ResourceFork"}
+# xattrs that only describe how APFS stores an entry (compression, a link target): the copy has the plain
+# content and the link itself, so they are dropped
+DROP_XATTRS = {"com.apple.decmpfs", "com.apple.ResourceFork", "com.apple.fs.symlink"}
 
 
 class Error(Exception):
@@ -137,7 +138,7 @@ def load_profile(path):
             raise Error(f"{path}: member {role}: component must be {ROLES[role][0]}")
         if m.get("aea", False) != m["path"].endswith(".aea"):
             raise Error(f"{path}: member {role}: aea must be true exactly when the path ends in .aea")
-        for key in ("sha256", "sha384"):
+        for key in ("sha256", "sha384", "plain_sha256"):
             if key in m and not re.match(r"^[0-9a-f]+$", m[key]):
                 raise Error(f"{path}: member {role}: {key} is not hex")
     for role in ("os", "systemos", "app", "trust-static", "trust-system", "trust-app", "buildmanifest"):
@@ -773,6 +774,9 @@ def make_manifest(profile, setdir, inputs=None, seed_info=None, tweaks=None):
                 want = rec.get("plain_sha256") if m.get("aea") else rec.get("sha256")
                 if want and want != entry["sha256"]:
                     raise Error(f"{rel}: differs from the input the fetch recorded ({want})")
+                pin = m.get("plain_sha256") if m.get("aea") else m.get("sha256")
+                if pin and pin != entry["sha256"]:
+                    raise Error(f"{rel}: SHA-256 {entry['sha256']}, the profile pins {pin}")
             else:
                 entry["format"] = "img4-payload" if role.startswith("trust-") else "root-hash"
         elif rel == image["seed"]:
@@ -786,7 +790,7 @@ def make_manifest(profile, setdir, inputs=None, seed_info=None, tweaks=None):
         else:
             raise Error(f"{rel}: not a file of this profile's set (names: [image.files], [image] seed, kernel, overlay/)")
         files.append(entry)
-    for rel in present:
+    for rel in set_files(setdir):
         if rel.endswith(".hashes"):
             if not any(f.get("hashes") == rel for f in files):
                 raise Error(f"{rel}: a hash list without its image")
