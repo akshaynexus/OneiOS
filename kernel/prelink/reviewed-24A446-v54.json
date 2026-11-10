@@ -26,6 +26,26 @@
  ],
  "functions": [
   {
+   "original": "0xfffffe000b386eac",
+   "native_symbol": "__ZN17IOSharedDataQueue12setQueueSizeEj",
+   "check": {
+    "address": "0xfffffe000b386eac",
+    "size": 28,
+    "sha256": "53583839c68df74c12fee0b8c94307471abfae56491d516724ee5d5b626eb2cd"
+   },
+   "evidence": "fable-hid, 2026-11-11. Stores w1 through the pointer at this+32 (IOSharedDataQueue::_reserved) when it is not NULL: IOSharedDataQueue::setQueueSize. The slot after getQueueSize in IOHIDFamily's name-sorted __auth_got, 28 bytes before it in the kernel. (Record from fable-hid, out/hid/reviewed-hid-records.json; checked by fable-prelink: the first loads and the second stores the 32-bit size through the pointer at +32.)"
+  },
+  {
+   "original": "0xfffffe000b386ec8",
+   "native_symbol": "__ZN17IOSharedDataQueue12getQueueSizeEv",
+   "check": {
+    "address": "0xfffffe000b386ec8",
+    "size": 28,
+    "sha256": "466a13665990f7c1549f7fda1ad5723e2993582a51566ca83991a7b723b6b6ea"
+   },
+   "evidence": "fable-hid, 2026-11-11. Returns the 32-bit word the pointer at this+32 (IOSharedDataQueue::_reserved) points at, or 0 for a NULL pointer: IOSharedDataQueue::getQueueSize of iokit/Kernel/IOSharedDataQueue.cpp. In IOHIDFamily's name-sorted __auth_got it and the next slot lie between IOUserClient2022::~IOUserClient2022 and IOSharedDataQueue::IOSharedDataQueue(const OSMetaClass *); getQueueSize sorts before setQueueSize. Hit when backboardd opens the HID event service (IOHIDFamily 0xfffffe000a0f0748). (Record from fable-hid, out/hid/reviewed-hid-records.json; checked by fable-prelink: the first loads and the second stores the 32-bit size through the pointer at +32.)"
+  },
+  {
    "original": "0xfffffe000ad58f54",
    "native_symbol": "_ml_mcache_flush_callback_register",
    "check": {

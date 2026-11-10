@@ -126,8 +126,8 @@ Debugging: `qemu-aarch64 -g PORT` and gdb (`set architecture aarch64`, `target r
 is at 0x2000004000, so an original address A is at A - 0xfffffe0007004000 + 0x2000004000.
 
 Pairing: the matcher with the reference, the inferred pairs (order, structors and factories, slots, kernel class
-objects), 615 functions and 27 data reviewed by hand here, the lead's and fable-user's records (below), and
-50 carried over from XnuPrelink's iPad fixture. 223 original functions that kexts reference are on the panic stub
+objects), 617 functions and 27 data reviewed by hand here, the lead's and fable-user's records (below), and
+50 carried over from XnuPrelink's iPad fixture. 221 original functions that kexts reference are on the panic stub
 and 18 data targets are unpaired; `kernel.kc.build.json` lists them per kext.
 
 ## Records of several agents, and the import-order check
