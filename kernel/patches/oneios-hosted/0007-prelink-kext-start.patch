@@ -15,6 +15,25 @@ index b921bd8..06f606b 100644
  		    (target & 3)) {
  			panic("NativePrelink: invalid early security initializer or phase for %s", getIdentifierCString());
  		}
+diff --git a/libkern/libkern/Block_private.h b/libkern/libkern/Block_private.h
+index d1f1a36..58139de 100644
+--- a/libkern/libkern/Block_private.h
++++ b/libkern/libkern/Block_private.h
+@@ -440,6 +440,14 @@ _Block_get_descriptor(struct Block_layout *aBlock)
+ 	uintptr_t disc = ptrauth_blend_discriminator(
+ 		&aBlock->descriptor, _Block_descriptor_ptrauth_discriminator);
+ 	return ptrauth_auth_data(aBlock->descriptor, ptrauth_key_asda, disc);
++#elif XNU_HOSTED && __has_feature(ptrauth_calls)
++	/*
++	 * OneiOS hosted: the kexts of the collection are built by Apple's clang with signed block descriptor
++	 * pointers (key DA, the field's address blended with 0xC0BB); the clang this kernel is built with has no
++	 * ptrauth_signed_block_descriptors, so its own blocks carry a plain pointer. Take either: strip the
++	 * signature. (Block_copy of a kext's stack block read the signed pointer as an address: data abort.)
++	 */
++	return ptrauth_strip(aBlock->descriptor, ptrauth_key_asda);
+ #else
+ 	return aBlock->descriptor;
+ #endif
 diff --git a/osfmk/prng/prng_random.c b/osfmk/prng/prng_random.c
 index 310719a..7f35aa0 100644
 --- a/osfmk/prng/prng_random.c

@@ -2265,6 +2265,101 @@
    "original": "0xfffffe0007ef80c0",
    "native_symbol": "_kOSBooleanTrue",
    "evidence": "A constant pointer variable whose value is the object at 0xfffffe000b856178, 8 bytes before the object kOSBooleanFalse (paired by name at 0xfffffe0007ef7288) points to; apfs selects between the two with csel on a boolean and compares the first with a property value: kOSBooleanTrue. 69 kexts name it; unpaired it kept its collection address, and apfs faulted reading through it (data abort at 0xfffffe000a981974)."
+  },
+  {
+   "original": "0xfffffe0007ef2f28",
+   "native_symbol": "__ZTV16IOUserClient2022",
+   "evidence": "A vtable whose slot 7 (getMetaClass) is the three-instruction function that returns the metaclass the matcher pairs by name: slot 7 (getMetaClass) returns __ZN16IOUserClient202210gMetaClassE. 12 kext(s) name it for their subclasses."
+  },
+  {
+   "original": "0xfffffe0007ec49b8",
+   "native_symbol": "__ZTV21IOInterruptController",
+   "evidence": "A vtable whose slot 7 (getMetaClass) is the three-instruction function that returns the metaclass the matcher pairs by name: slot 7 (getMetaClass) returns __ZN21IOInterruptController10gMetaClassE. 6 kext(s) name it for their subclasses."
+  },
+  {
+   "original": "0xfffffe000b719228",
+   "native_symbol": "_vnop_create_desc",
+   "evidence": "vdesc_name \"vnop_create\": the object is named by its own content. 3 kext(s) name it; unpaired it kept its collection address inside another object of this kernel (APFS reads the vnode operation descriptors when it registers its file system)."
+  },
+  {
+   "original": "0xfffffe000b7192e8",
+   "native_symbol": "_vnop_setattr_desc",
+   "evidence": "vdesc_name \"vnop_setattr\": the object is named by its own content. 3 kext(s) name it; unpaired it kept its collection address inside another object of this kernel (APFS reads the vnode operation descriptors when it registers its file system)."
+  },
+  {
+   "original": "0xfffffe000b719328",
+   "native_symbol": "_vnop_write_desc",
+   "evidence": "vdesc_name \"vnop_write\": the object is named by its own content. 3 kext(s) name it; unpaired it kept its collection address inside another object of this kernel (APFS reads the vnode operation descriptors when it registers its file system)."
+  },
+  {
+   "original": "0xfffffe000b720b50",
+   "native_symbol": "_vnop_getattr_desc",
+   "evidence": "vdesc_name \"vnop_getattr\": the object is named by its own content. 3 kext(s) name it; unpaired it kept its collection address inside another object of this kernel (APFS reads the vnode operation descriptors when it registers its file system)."
+  },
+  {
+   "original": "0xfffffe000b7190b0",
+   "native_symbol": "_vnop_getnamedstream_desc",
+   "evidence": "vdesc_name \"vnop_getnamedstream\": the object is named by its own content. 2 kext(s) name it; unpaired it kept its collection address inside another object of this kernel (APFS reads the vnode operation descriptors when it registers its file system)."
+  },
+  {
+   "original": "0xfffffe000b7190f0",
+   "native_symbol": "_vnop_makenamedstream_desc",
+   "evidence": "vdesc_name \"vnop_makenamedstream\": the object is named by its own content. 2 kext(s) name it; unpaired it kept its collection address inside another object of this kernel (APFS reads the vnode operation descriptors when it registers its file system)."
+  },
+  {
+   "original": "0xfffffe000b719130",
+   "native_symbol": "_vnop_removenamedstream_desc",
+   "evidence": "vdesc_name \"vnop_removenamedstream\": the object is named by its own content. 2 kext(s) name it; unpaired it kept its collection address inside another object of this kernel (APFS reads the vnode operation descriptors when it registers its file system)."
+  },
+  {
+   "original": "0xfffffe000b7192a8",
+   "native_symbol": "_vnop_mknod_desc",
+   "evidence": "vdesc_name \"vnop_mknod\": the object is named by its own content. 2 kext(s) name it; unpaired it kept its collection address inside another object of this kernel (APFS reads the vnode operation descriptors when it registers its file system)."
+  },
+  {
+   "original": "0xfffffe0007ebfd18",
+   "native_symbol": "__ZTV12IOPlatformIO",
+   "evidence": "A vtable whose slot 7 (getMetaClass) is the three-instruction function that returns the metaclass the matcher pairs by name: slot 7 (getMetaClass) returns __ZN12IOPlatformIO10gMetaClassE. 1 kext(s) name it for their subclasses."
+  },
+  {
+   "original": "0xfffffe0007ebc018",
+   "native_symbol": "__ZTV8IOMapper",
+   "evidence": "A vtable whose slot 7 (getMetaClass) is the three-instruction function that returns the metaclass the matcher pairs by name: slot 7 (getMetaClass) returns __ZN8IOMapper10gMetaClassE. 1 kext(s) name it for their subclasses."
+  },
+  {
+   "original": "0xfffffe000b718900",
+   "native_symbol": "_vnop_searchfs_desc",
+   "evidence": "vdesc_name \"vnop_searchfs\": the object is named by its own content. 1 kext(s) name it; unpaired it kept its collection address inside another object of this kernel (APFS reads the vnode operation descriptors when it registers its file system)."
+  },
+  {
+   "original": "0xfffffe000b7191b0",
+   "native_symbol": "_vnop_access_desc",
+   "evidence": "vdesc_name \"vnop_access\": the object is named by its own content. 1 kext(s) name it; unpaired it kept its collection address inside another object of this kernel (APFS reads the vnode operation descriptors when it registers its file system)."
+  },
+  {
+   "original": "0xfffffe000b7b33a0",
+   "native_symbol": "__NSConcreteStackBlock",
+   "evidence": "Kexts store its address, signed with the block isa discriminator 0x6ae1 (pacda), as the first word of a block literal built on the stack; 0x108 bytes before _NSConcreteGlobalBlock (paired by name). 47 kexts name it; unpaired, every stack block of a kext had a wrong isa."
+  },
+  {
+   "original": "0xfffffe000b7b2440",
+   "native_symbol": "_gIOPublishNotification",
+   "evidence": "IOService.cpp's notification type symbols, six consecutive pointers in declaration order: publish, first publish, matched, first match, terminated, will terminate. The last two are paired by name at 0xfffffe000b7b2460 and 0xfffffe000b7b2468 (8 apart, as in our kernel), and kexts pass the four slots before them as the first argument of addMatchingNotification (apfs 0x...2448, the sandbox 0x...2458). By position before the two named ones."
+  },
+  {
+   "original": "0xfffffe000b7b2448",
+   "native_symbol": "_gIOFirstPublishNotification",
+   "evidence": "IOService.cpp's notification type symbols, six consecutive pointers in declaration order: publish, first publish, matched, first match, terminated, will terminate. The last two are paired by name at 0xfffffe000b7b2460 and 0xfffffe000b7b2468 (8 apart, as in our kernel), and kexts pass the four slots before them as the first argument of addMatchingNotification (apfs 0x...2448, the sandbox 0x...2458). By position before the two named ones."
+  },
+  {
+   "original": "0xfffffe000b7b2450",
+   "native_symbol": "_gIOMatchedNotification",
+   "evidence": "IOService.cpp's notification type symbols, six consecutive pointers in declaration order: publish, first publish, matched, first match, terminated, will terminate. The last two are paired by name at 0xfffffe000b7b2460 and 0xfffffe000b7b2468 (8 apart, as in our kernel), and kexts pass the four slots before them as the first argument of addMatchingNotification (apfs 0x...2448, the sandbox 0x...2458). By position before the two named ones."
+  },
+  {
+   "original": "0xfffffe000b7b2458",
+   "native_symbol": "_gIOFirstMatchNotification",
+   "evidence": "IOService.cpp's notification type symbols, six consecutive pointers in declaration order: publish, first publish, matched, first match, terminated, will terminate. The last two are paired by name at 0xfffffe000b7b2460 and 0xfffffe000b7b2468 (8 apart, as in our kernel), and kexts pass the four slots before them as the first argument of addMatchingNotification (apfs 0x...2448, the sandbox 0x...2458). By position before the two named ones."
   }
  ]
 }
