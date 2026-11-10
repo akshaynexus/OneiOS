@@ -141,31 +141,3 @@ diff --git a/osfmk/arm/cpu_common.c b/osfmk/arm/cpu_common.c
  }
  
  static kern_return_t
-diff --git a/osfmk/prng/prng_random.c b/osfmk/prng/prng_random.c
---- a/osfmk/prng/prng_random.c
-+++ b/osfmk/prng/prng_random.c
-@@ -585,7 +585,24 @@
- 		}
- 		return source_corecrypto14_status;
- 	}
-+#if XNU_HOSTED
-+	/*
-+	 * OneiOS hosted: this start runs before OSKext has set the module up, and kmod_info.address of a boot
-+	 * collection entry is a raw link address until then (it is outside the fixup chains; OSKext adds the slide
-+	 * later). UniXNU's boards run the collection where it was linked, so the raw value was right; xnuhost runs it
-+	 * slid, and corecrypto's start reads its own Mach-O header through that field (the integrity self-test): a
-+	 * kernel data abort on the unslid address. The slid address for the call, the raw one back for OSKext.
-+	 */
-+	vm_address_t raw_address = module->address;
-+	if (raw_address >= VM_KERNEL_LINK_ADDRESS) {
-+		/* a link address (0xfffffff0...): every address the hosted kernel runs at is below it */
-+		module->address = raw_address + vm_kernel_slide;
-+	}
-+	source_corecrypto14_status = module->start(module, data);
-+	module->address = raw_address;
-+#else
- 	source_corecrypto14_status = module->start(module, data);
-+#endif
- 	__atomic_store_n(&source_corecrypto14_original_state, source_corecrypto14_status == KERN_SUCCESS ? 2 : 3,
- 	    __ATOMIC_RELEASE);
- 	return source_corecrypto14_status;

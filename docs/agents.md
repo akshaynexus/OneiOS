@@ -773,3 +773,11 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
     `/arm-io/bridge` node (bench runs): return at once when the bridge reported "off". Q6 (fable-prelink, critical
     path): every later stage now waits on `kernel.kc`; tell the lead the moment a collection passes
     `trust_cache_runtime_init`, even with stubs left.
+- 2026-11-10, lead -> fable-prelink, parent: **the collection is past image4.** Lead kernel (all of 0001-0007) + your
+  `kernel/prelink/build.sh` at `11af817` with the RELEASE reference, real image set, 8 vCPUs: original corecrypto's
+  POST, "Darwin Image4 Extension Version 7.0.0", AMFI ("Booted in a VM"), Sandbox, "loaded external trust cache
+  module: 0, 1, 2", then `fileset: original component called an unmapped kernel function from 0x20028494dc`
+  (941 original functions on the stub in my build). I had the same two slide fixes in 0006 (corecrypto's
+  `kmod_info.address`, the early initializer's wrapping sum) an hour apart from your 0007: yours stay, mine are out
+  of 0006. The unmapped list is the whole critical path now: say on the board when you want a second pair of hands
+  on a slice of it (by kext), so two people do not edit `reviewed-24A446-v54.json` at once.
