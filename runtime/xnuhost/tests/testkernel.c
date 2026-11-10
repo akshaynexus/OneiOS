@@ -248,6 +248,14 @@ void kernel_main(const struct boot_args *args, const struct xh_vector *vector, s
 {
   H = vector; C0 = cpu; BA = args;
   put("TESTKERNEL: entered\n");
+  // boot-args "testkernel-restart": ask for a restart at once, every time (xnuhost starts again in place,
+  // then gives up: `make check-arm64` counts the starts).
+  for (const char *c = args->command_line; *c; c++) {
+    static const char want[] = "testkernel-restart";
+    unsigned i = 0;
+    while (want[i] && c[i] == want[i]) i++;
+    if (!want[i]) { put("TESTKERNEL: restart\n"); H->halt(cpu, XH_HALT_RESTART, 0); }
+  }
   // 1. What the loader handed over.
   check(args->revision == 2 && args->version == 2, "boot_args revision and version");
   check(args->virt_base == (uint64_t)(uintptr_t)__base, "boot_args.virtBase is where the kernel runs (no MMU switch)");

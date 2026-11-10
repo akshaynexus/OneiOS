@@ -494,24 +494,6 @@ bad:
   return blob;
 }
 
-// ---- the seed helper ----------------------------------------------------------------------------
-int xh_imageset_helper_disk(const xh_imageset *set, char *path, size_t path_size, uint64_t *bytes, const char **error)
-{
-  static const char name[] = "overlay/userland/bin/oneios-seed";
-  size_t size = 0;
-  if (!xh_imageset_find(set, name)) return 1;
-  uint8_t *data = listed(set, name, 64 << 20, &size, error);
-  if (!data) return -1;
-  size_t padded = (size + 511) & ~(size_t)511;
-  int fd = (int)syscall(SYS_memfd_create, "oneios-seed-helper", 0u);
-  bool ok = size && fd >= 0 && ftruncate(fd, (off_t)padded) == 0 && pwrite(fd, data, size, 0) == (ssize_t)size &&
-            snprintf(path, path_size, "/proc/self/fd/%d", fd) < (int)path_size;
-  free(data);
-  if (!ok) { if (fd >= 0) close(fd); *error = "the seed helper cannot be made a disk"; return -1; }
-  *bytes = size;
-  return 0;                     // the descriptor stays open: it is the disk
-}
-
 // ---- the device tree ----------------------------------------------------------------------------
 void xh_imageset_describe(xl_adt_node *node, const xh_disk_identity *identity)
 {

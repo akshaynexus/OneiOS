@@ -63,19 +63,14 @@ xl_blob xh_imageset_trustcaches(const xh_imageset *set, const char **error);
 // The payload of an IM4P ("IM4P", type, description, OCTET STRING): pointer into `data`.
 bool xh_im4p_payload(const uint8_t *data, size_t size, const char type[4], const uint8_t **payload, size_t *length);
 
-// ---- the seed helper ----
-// overlay/userland/bin/oneios-seed as a disk: copied into a memfd padded to 512 bytes, checked
-// against the manifest. Writes "/proc/self/fd/N" to path. 0 = made; 1 = the set has none; -1 = bad.
-int xh_imageset_helper_disk(const xh_imageset *set, char *path, size_t path_size, uint64_t *bytes, const char **error);
-
 // ---- the device tree ----
 // What the hosted kernel's storage reads from a disk's node (kernel/patches/oneios-hosted, README):
-//   oneios,role         "os" | "systemos" | "app" | "data" | "seed" | "seed-helper"
+//   oneios,role         "os" | "systemos" | "app" | "data" | "seed"
 //   oneios,verified     32 bytes, the SHA-256 of the disk's chunk hash list (only on a disk whose
 //                       reads xnuhost checks)
 //   oneios,volume-uuid  the APFS volume to mount from it (for "data": the UUID asked of newfs_apfs)
 //   oneios,volume-name  "data" only
-//   oneios,bytes        u64, the file's length ("seed", "seed-helper": the disk is padded)
+//   oneios,bytes        u64, the file's length ("seed": the disk is padded)
 //   oneios,sha256       64 hex digits + NUL ("seed": what oneios-seed records in the volume)
 typedef struct {
   const char    *role;

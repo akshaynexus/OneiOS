@@ -744,3 +744,32 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   the helper's tree. prelink: the collection must carry `com.apple.iokit.IOStorageFamily` and
   `com.apple.filesystems.apfs`, loadable by `OSKextLoadKextWithIdentifier`; the source `IOBlockStorageDevice` checks
   that the original class has its size.
+- 2026-11-10, lead -> all: **reviews and decisions.**
+  - **Run with the image4 check skipped locally** (a scratch patch, never committed), 8 vCPUs, `sheng-smp=1`: the
+    standalone kernel goes through `bsd_init` to "Waiting on IOMedia ... UUID BBA627F7-..." (the OS volume) in 5 s
+    under qemu, all 8 vCPUs started, timers and IPIs counted on each. `0003` accepted: `mmio_emulate` (GIC through
+    IOMemoryMap), secondaries, `timer_set` all run. `0002` accepted: `hosted_selftest=1` passes 28 of 28 with the task
+    layer, 21 without (svc included, see below). `0005` accepted as far as a PC goes: the guest driver starts
+    ("control queue of 256 commands ... ready", display only: no KGSL here). `0004` cannot run without `kernel.kc`:
+    "OneiOSHostedStorage: no IOStorageFamily: this kernel is not in a kernel collection, no disks" is its clean
+    refusal; not reviewed further until the collection boots.
+  - **Bugs found on the way, fixed** (xnuhost unless said): bionic gives each new thread its own APIA key for target
+    SDK >= 31, so every vCPU but the first failed authentication and tasks had other keys than the kernel (target SDK
+    set to 30 before any thread, checked at start; this was true on the phone too); the PAC probe failed one start in
+    128 on a zero signature; virtio queues were capped at 256 and Droid-VM's GPU driver needs 512 (no display at all
+    before); `/chosen/kernel-ctrr-to-be-enabled` missing (`sdt_init` assert); 0006: no PAN check in
+    `machine_stack_handoff`, UniXNU's `sheng_sigp_recover` off under xnuhost (raced with a starting core), the
+    calendar from `wall_time` (it was 1970) and no 30 s IORTC wait.
+  - **Q2 done**: without seccomp `text_fixup` turns `svc #0x80` into `udf #0x5c80` and `thread_run` reports it as the
+    system call; `XH_FEATURE_TASKS` is now set under qemu-user too. So user processes can make system calls on the PC.
+  - **Decision, exit 3**: xnuhost restarts the guest itself, in place (`oneos/interface.md` section 5, `docs/booter.md`
+    exit codes). Nothing changes in the fork; `make check-arm64` runs a guest that restarts 9 times.
+  - **Decision, `CONFIG_XNU_SOURCE_STORAGE=y`**: accepted as it is. It states a fact the audit asks for (the verified
+    storage is source-built) and pulls in no code; patching UniXNU's build rule would be one more thing to carry.
+  - **Seed helper**: the `seed-helper` disk is gone from xnuhost. `userland/helpers/oneios-seed.c` and its host tests
+    stay until the kernel's unpacker has unpacked the real `data.seed` once: it is the only tested reader of that
+    format. The image hook may stop shipping `overlay/userland/bin/oneios-seed` now (userland).
+  - **Queue, new.** Q5 (bridges): `oneios_haptic_start` and the Bluetooth start wait 2.4 s each when there is no
+    `/arm-io/bridge` node (bench runs): return at once when the bridge reported "off". Q6 (fable-prelink, critical
+    path): every later stage now waits on `kernel.kc`; tell the lead the moment a collection passes
+    `trust_cache_runtime_init`, even with stubs left.

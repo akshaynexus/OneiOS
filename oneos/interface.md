@@ -120,6 +120,11 @@ gone), and feeds Samsung's software watchdog. Gone: zygote, zygote_secondary, sy
   `ready` after `ONEIOS_RETURN_MAX` seconds (600) means an automatic return to One UI.
 - **Exit means return.** When the xnuhost process ends for any reason, the watcher returns to One UI.
   Exit code 0 = the guest shut down; anything else is logged as a failure.
+- **A guest restart is not an exit.** When the guest restarts itself (iOS's own restart, or the kernel starting the
+  Data volume over for a new image set's seed), xnuhost starts again in place: same pid, cgroup and namespace
+  (`exec` of itself), so the watcher sees nothing and `ready` stays as it was. Only a guest that restarts 8 times in
+  a row without getting ready ends xnuhost, with exit code 3, which is a return like any other exit. Nothing for
+  the fork to do.
 - **Return asked from inside** (a guest app, a shutdown): create `/data/session/return.request`
   (content free, one line is logged). The watcher sees it within a second.
 

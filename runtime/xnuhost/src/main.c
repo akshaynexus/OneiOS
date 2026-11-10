@@ -227,17 +227,7 @@ static int image_set_open(void)
   have_image_set = true;
   const xh_imageset_file *seed = xh_imageset_role(&image_set, "data-seed");
   for (unsigned i = 0; seed && i < 32; i++) snprintf(seed_sha256 + i * 2, 3, "%02x", seed->sha256[i]);
-  // The unpacker of the Data seed has to run before the Data volume exists: the guest gets it as a disk.
-  char path[64];
-  uint64_t bytes = 0;
-  rc = xh_imageset_helper_disk(&image_set, path, sizeof path, &bytes, &error);
-  if (rc < 0) { LOGE("image set %s: %s", config.image, error); return -1; }
-  if (rc == 0 && config.ndisk < XH_MAX_DISKS) {
-    xh_disk_config *d = &config.disk[config.ndisk];
-    memset(d, 0, sizeof *d);
-    strcpy(d->path, path);
-    disk_identity[config.ndisk++] = (xh_disk_identity){ .role = "seed-helper", .bytes = bytes };
-  } else LOGI("image set: no overlay/userland/bin/oneios-seed: a new Data volume cannot be filled");
+  // The seed is unpacked by the kernel (0004: its node carries the hash); no helper disk.
   return 0;
 }
 
@@ -499,8 +489,49 @@ static int boot(void)
   return xh_cpu_start(0, layout.entry_va, layout.args_va, (uint64_t)(uintptr_t)xh_vector(), (uint64_t)(uintptr_t)&g_vcpu[0].cpu);
 }
 
+// A guest restart (PSCI SYSTEM_RESET, XH_HALT_RESTART: iOS restarting itself, or the kernel starting the
+// Data volume over for a new seed) is not the end of the session: for the OneOS fork xnuhost exiting means
+// "back to One UI". xnuhost starts itself again in place, same pid, cgroup and namespace: exec ends every
+// vCPU thread, the tasks went with xh_tasks_shutdown, and every descriptor but the log is closed (the RAM
+// memfd would otherwise stay alive). XNUHOST_RESTARTS counts them: a guest that restarts 8 times in a row
+// without ever getting ready is left, with exit 3.
+static char **start_argv;
+static void guest_restart(void)
+{
+  const char *counted = getenv("XNUHOST_RESTARTS");
+  int n = counted ? atoi(counted) : 0;
+  if (guest_ready) n = 0;
+  if (n >= 8) { LOGE("the guest restarted %d times without getting ready: not starting it again", n); return; }
+  char text[16];
+  snprintf(text, sizeof text, "%d", n + 1);
+  setenv("XNUHOST_RESTARTS", text, 1);
+  LOGI("the guest asked for a restart: starting again (%d)", n + 1);
+#ifdef SYS_close_range
+  if (syscall(SYS_close_range, 3u, ~0u, 0u))
+#endif
+    for (int fd = 3; fd < 4096; fd++) close(fd);
+  // XNUHOST_RUNNER: the emulator xnuhost itself runs under ("qemu-aarch64 -cpu cortex-a710"), which a PC with
+  // no binfmt entry needs in front of the program; unset on the phone.
+  const char *runner = getenv("XNUHOST_RUNNER");
+  if (runner && *runner) {
+    static char words[256];
+    static char *args[64];
+    int n = 0, argc = 0;
+    snprintf(words, sizeof words, "%s", runner);
+    for (char *w = strtok(words, " "); w && n < 8; w = strtok(NULL, " ")) args[n++] = w;
+    while (start_argv[argc]) argc++;
+    if (n && n + argc < 63) {
+      for (int i = 0; i < argc; i++) args[n + i] = start_argv[i];
+      execvp(args[0], args);
+    }
+  }
+  execv("/proc/self/exe", start_argv);
+  LOGE("restart: exec /proc/self/exe: %s", strerror(errno));
+}
+
 int main(int argc, char **argv)
 {
+  start_argv = argv;
 #if defined(__ANDROID__) && defined(__aarch64__)
   // Before any thread exists: bionic gives each new thread of a program with target SDK >= 31 its own
   // APIA key. The kernel's vCPUs and the tasks need one key set (pac_shared_by_threads).
@@ -591,6 +622,7 @@ int main(int argc, char **argv)
   xh_display_close();
   sync();                                   // the Data store's pages
   if (stop_state.reason == XH_HALT_RETURN) session_file("return.request", "the guest asked to return\n");
+  if (stop_state.reason == XH_HALT_RESTART) guest_restart();     // returns only if it could not
   int code = stop_state.reason == XH_HALT_RESTART ? EXIT_RESTART : stop_state.reason == XH_HALT_PANIC ? EXIT_PANIC :
              stop_state.code ? EXIT_PANIC : EXIT_GUEST_OFF;
   LOGI("exit %d", code);

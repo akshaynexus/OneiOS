@@ -51,7 +51,7 @@ is not asked to shut down first (there is no guest to ask); APFS is crash-consis
 | --- | --- |
 | 0 | the guest shut down (halt, PSCI SYSTEM_OFF), a stop signal, or a return asked from inside (then `session/return.request` exists) |
 | 2 | bad arguments or a failed setup (no kernel, bad image, no memory) |
-| 3 | the guest asked for a restart (PSCI SYSTEM_RESET) |
+| 3 | the guest asked for a restart (PSCI SYSTEM_RESET, `XH_HALT_RESTART`) and xnuhost could not start it again: it restarts in place (`exec` of itself, same pid; `XNUHOST_RUNNER` names an emulator in front on a PC) and gives up after 8 restarts in a row with no `ready` |
 | 4 | kernel panic, or a kernel fault the kernel did not take |
 | 5 | a fault in xnuhost's own code (it re-raises the signal) |
 

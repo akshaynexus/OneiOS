@@ -115,7 +115,11 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	  echo "check-arm64: booting the test kernel under $(QEMU)"; \
 	  timeout 30 $(QEMU) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M \
 	     --display none --no-input --width 64 --height 64 2>&1 | tee $(A)/check.log; \
-	  grep -q 'TESTKERNEL: all passed' $(A)/check.log; fi
+	  grep -q 'TESTKERNEL: all passed' $(A)/check.log && \
+	  echo "check-arm64: a guest that keeps restarting: xnuhost starts again in place 8 times, then exit 3" && \
+	  { XNUHOST_RUNNER="$(QEMU)" timeout 60 $(QEMU) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 1 --ram 256M \
+	     --display none --no-input --width 64 --height 64 --boot-args testkernel-restart > $(A)/restart.log 2>&1; code=$$?; \
+	    [ $$code = 3 ] && [ "$$(grep -c 'TESTKERNEL: restart' $(A)/restart.log)" = 9 ] || { tail -5 $(A)/restart.log; echo "check-arm64: restart: exit $$code"; false; }; }; fi
 
 # The tests create devices and never free them: leak detection off, the other checks on.
 test: $(H)/test_xnuhost $(H)/test_imageset check-arm64

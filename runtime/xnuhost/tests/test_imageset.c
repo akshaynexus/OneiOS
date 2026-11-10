@@ -178,12 +178,6 @@ int main(void)
   blob = xh_imageset_trustcaches(&set, &error);
   CHECK(!blob.data && error);
 
-  // the helper as a disk: padded to a sector, its true length reported
-  uint64_t bytes = 0;
-  CHECK(xh_imageset_helper_disk(&set, path, sizeof path, &bytes, &error) == 0 && bytes == sizeof helper);
-  struct stat st;
-  CHECK(stat(path, &st) == 0 && st.st_size == 1024);
-
   // the device tree properties
   xl_adt_node *node = xl_adt_new("virtio-mmio-0");
   xh_imageset_describe(node, &(xh_disk_identity){ .role = "os", .verified = abc, .volume_uuid = os ? os->volume_uuid : "" });
