@@ -26,6 +26,186 @@
  ],
  "functions": [
   {
+   "original": "0xfffffe000ab8d024",
+   "native_symbol": "_io_rate_update",
+   "check": {
+    "address": "0xfffffe000ab8d024",
+    "size": 20,
+    "sha256": "e95b72250be8d296b8c8be2a5d1453eec61a597be285a5c055c27e90073753f4"
+   },
+   "evidence": "Tail-calls a function pointer global (authenticated) with its five arguments unchanged: io_rate_update(flags, ops_read, ops_write, bytes_read, bytes_write) of osfmk/kern/energy_perf.c, between the callback registration and the GPU ceiling functions, before task_id_token_to_energy_id as in our kernel. IOStorageFamily calls it with five arguments (flags, 0/1 operations, the byte count) for each request."
+  },
+  {
+   "original": "0xfffffe000ab84524",
+   "native_symbol": "_clock_get_uptime",
+   "check": {
+    "address": "0xfffffe000ab84524",
+    "size": 52,
+    "sha256": "964bde8ab9402cea559d37b4392e351f2ce9065ecd5d9339d68ed93421373201"
+   },
+   "evidence": "The inlined mach_absolute_time (per-CPU base timebase read twice around the Apple counter S3_4_C15_C10_6, retried when it changed) stored to *x0, no return value: clock_get_uptime(uint64_t *) of osfmk/kern/clock.c; Droid-VM's reviewed list names the same body in the iPad kernelcache. IOStorageFamily calls it for each request."
+  },
+  {
+   "original": "0xfffffe000b3b8258",
+   "native_symbol": "__ZN19IOPerfControlClient18querySubmitterRoleEP9IOServiceP4taskPj",
+   "check": {
+    "address": "0xfffffe000b3b8258",
+    "size": 44,
+    "sha256": "fd30e036dd074f740cea15e17420986a67233201820d587870fb78a5f0e3970d"
+   },
+   "evidence": "IOPerfControlClient's work-context interface, the seven functions between copyClient (0xfffffe000b3b7b78) and IOParseWorkloadConfig, in our kernel's order of the same seven names: copyWorkContext allocates the 80-byte context object; querySubmitterRole, the last, returns kIOReturnUnsupported... (0xe00002f0) unless a flag at +12 is 1 and else stores the task's byte at +1041 through the fourth argument; the five between are the WithContext calls (the two that begin with a NULL test of the context argument are update and begin). Both ends read from the disassembly, the middle by position. IOStorageFamily's block storage driver calls copyWorkContext for each request."
+  },
+  {
+   "original": "0xfffffe000b3b8090",
+   "native_symbol": "__ZN19IOPerfControlClient18workEndWithContextEP9IOServiceP8OSObjectPNS_11WorkEndArgsEb",
+   "check": {
+    "address": "0xfffffe000b3b8090",
+    "size": 456,
+    "sha256": "33db1c46df07393f6ce333390c785416fbe9898469a8b00e5349556f3a637732"
+   },
+   "evidence": "IOPerfControlClient's work-context interface, the seven functions between copyClient (0xfffffe000b3b7b78) and IOParseWorkloadConfig, in our kernel's order of the same seven names: copyWorkContext allocates the 80-byte context object; querySubmitterRole, the last, returns kIOReturnUnsupported... (0xe00002f0) unless a flag at +12 is 1 and else stores the task's byte at +1041 through the fourth argument; the five between are the WithContext calls (the two that begin with a NULL test of the context argument are update and begin). Both ends read from the disassembly, the middle by position. IOStorageFamily's block storage driver calls copyWorkContext for each request."
+  },
+  {
+   "original": "0xfffffe000b3b7fb4",
+   "native_symbol": "__ZN19IOPerfControlClient20workBeginWithContextEP9IOServiceP8OSObjectPNS_13WorkBeginArgsE",
+   "check": {
+    "address": "0xfffffe000b3b7fb4",
+    "size": 220,
+    "sha256": "f35e7edf702137d3dd668f478bb88c86f701de52b903316b9a4186b40901d2f6"
+   },
+   "evidence": "IOPerfControlClient's work-context interface, the seven functions between copyClient (0xfffffe000b3b7b78) and IOParseWorkloadConfig, in our kernel's order of the same seven names: copyWorkContext allocates the 80-byte context object; querySubmitterRole, the last, returns kIOReturnUnsupported... (0xe00002f0) unless a flag at +12 is 1 and else stores the task's byte at +1041 through the fourth argument; the five between are the WithContext calls (the two that begin with a NULL test of the context argument are update and begin). Both ends read from the disassembly, the middle by position. IOStorageFamily's block storage driver calls copyWorkContext for each request."
+  },
+  {
+   "original": "0xfffffe000b3b7ee0",
+   "native_symbol": "__ZN19IOPerfControlClient21workUpdateWithContextEP9IOServiceP8OSObjectPNS_14WorkUpdateArgsE",
+   "check": {
+    "address": "0xfffffe000b3b7ee0",
+    "size": 212,
+    "sha256": "4ae652bb57191f3c26177fe2ec81204241815a16e21ee5c34632acc852cfc1c3"
+   },
+   "evidence": "IOPerfControlClient's work-context interface, the seven functions between copyClient (0xfffffe000b3b7b78) and IOParseWorkloadConfig, in our kernel's order of the same seven names: copyWorkContext allocates the 80-byte context object; querySubmitterRole, the last, returns kIOReturnUnsupported... (0xe00002f0) unless a flag at +12 is 1 and else stores the task's byte at +1041 through the fourth argument; the five between are the WithContext calls (the two that begin with a NULL test of the context argument are update and begin). Both ends read from the disassembly, the middle by position. IOStorageFamily's block storage driver calls copyWorkContext for each request."
+  },
+  {
+   "original": "0xfffffe000b3b7d5c",
+   "native_symbol": "__ZN19IOPerfControlClient21workSubmitWithContextEP9IOServiceP8OSObjectPNS_14WorkSubmitArgsE",
+   "check": {
+    "address": "0xfffffe000b3b7d5c",
+    "size": 388,
+    "sha256": "9b4d7030ef8bb52225f844c233a730a88e9f6446c235a4ac189ff644e31d39f2"
+   },
+   "evidence": "IOPerfControlClient's work-context interface, the seven functions between copyClient (0xfffffe000b3b7b78) and IOParseWorkloadConfig, in our kernel's order of the same seven names: copyWorkContext allocates the 80-byte context object; querySubmitterRole, the last, returns kIOReturnUnsupported... (0xe00002f0) unless a flag at +12 is 1 and else stores the task's byte at +1041 through the fourth argument; the five between are the WithContext calls (the two that begin with a NULL test of the context argument are update and begin). Both ends read from the disassembly, the middle by position. IOStorageFamily's block storage driver calls copyWorkContext for each request."
+  },
+  {
+   "original": "0xfffffe000b3b7c7c",
+   "native_symbol": "__ZN19IOPerfControlClient29workSubmitAndBeginWithContextEP9IOServiceP8OSObjectPNS_14WorkSubmitArgsEPNS_13WorkBeginArgsE",
+   "check": {
+    "address": "0xfffffe000b3b7c7c",
+    "size": 224,
+    "sha256": "8e1f49dbc45af6d5d81e167ca73addf3c79ebd15e8d8a68348070b4a13370b44"
+   },
+   "evidence": "IOPerfControlClient's work-context interface, the seven functions between copyClient (0xfffffe000b3b7b78) and IOParseWorkloadConfig, in our kernel's order of the same seven names: copyWorkContext allocates the 80-byte context object; querySubmitterRole, the last, returns kIOReturnUnsupported... (0xe00002f0) unless a flag at +12 is 1 and else stores the task's byte at +1041 through the fourth argument; the five between are the WithContext calls (the two that begin with a NULL test of the context argument are update and begin). Both ends read from the disassembly, the middle by position. IOStorageFamily's block storage driver calls copyWorkContext for each request."
+  },
+  {
+   "original": "0xfffffe000b3b7b84",
+   "native_symbol": "__ZN19IOPerfControlClient15copyWorkContextEv",
+   "check": {
+    "address": "0xfffffe000b3b7b84",
+    "size": 248,
+    "sha256": "5f8e3b5a0a5b624fa97f02cd35747c078aac7ebf273e8a88ff1b6a9c5d27c079"
+   },
+   "evidence": "IOPerfControlClient's work-context interface, the seven functions between copyClient (0xfffffe000b3b7b78) and IOParseWorkloadConfig, in our kernel's order of the same seven names: copyWorkContext allocates the 80-byte context object; querySubmitterRole, the last, returns kIOReturnUnsupported... (0xe00002f0) unless a flag at +12 is 1 and else stores the task's byte at +1041 through the fourth argument; the five between are the WithContext calls (the two that begin with a NULL test of the context argument are update and begin). Both ends read from the disassembly, the middle by position. IOStorageFamily's block storage driver calls copyWorkContext for each request."
+  },
+  {
+   "original": "0xfffffe000b3394a4",
+   "native_symbol": "__ZN24IOBufferMemoryDescriptor12withCapacityEmjb",
+   "check": {
+    "address": "0xfffffe000b3394a4",
+    "size": 212,
+    "sha256": "4bfbedbfb6f2beaef0f9cc401c238de41e9ea869c4f453649bbe429d8e9d8edc"
+   },
+   "evidence": "IOBufferMemoryDescriptor's six factories before withBytes (paired by the matcher at the next address), each allocating from the class's metaclass and calling an init virtual; our kernel has exactly six there in this order: inTaskWithOptions (4 and 6 arguments), inTaskWithPhysicalMask, inTaskWithGuardPages, withOptions, withCapacity. The last takes (capacity, direction, contiguous), as IOStorageFamily calls it with (0x200, 1, ...)."
+  },
+  {
+   "original": "0xfffffe000b3393dc",
+   "native_symbol": "__ZN24IOBufferMemoryDescriptor11withOptionsEjmm",
+   "check": {
+    "address": "0xfffffe000b3393dc",
+    "size": 200,
+    "sha256": "794dcbb7b4879a6b860a6ed082ac6127967c381525a42a532642307faafacbf0"
+   },
+   "evidence": "IOBufferMemoryDescriptor's six factories before withBytes (paired by the matcher at the next address), each allocating from the class's metaclass and calling an init virtual; our kernel has exactly six there in this order: inTaskWithOptions (4 and 6 arguments), inTaskWithPhysicalMask, inTaskWithGuardPages, withOptions, withCapacity. The last takes (capacity, direction, contiguous), as IOStorageFamily calls it with (0x200, 1, ...)."
+  },
+  {
+   "original": "0xfffffe000b3392f8",
+   "native_symbol": "__ZN24IOBufferMemoryDescriptor20inTaskWithGuardPagesEP4taskjy",
+   "check": {
+    "address": "0xfffffe000b3392f8",
+    "size": 228,
+    "sha256": "73d740c6d88b223526e246b1d122e91cccddd73c761cdc1df6982c3d561a019c"
+   },
+   "evidence": "IOBufferMemoryDescriptor's six factories before withBytes (paired by the matcher at the next address), each allocating from the class's metaclass and calling an init virtual; our kernel has exactly six there in this order: inTaskWithOptions (4 and 6 arguments), inTaskWithPhysicalMask, inTaskWithGuardPages, withOptions, withCapacity. The last takes (capacity, direction, contiguous), as IOStorageFamily calls it with (0x200, 1, ...)."
+  },
+  {
+   "original": "0xfffffe000b339228",
+   "native_symbol": "__ZN24IOBufferMemoryDescriptor22inTaskWithPhysicalMaskEP4taskjyy",
+   "check": {
+    "address": "0xfffffe000b339228",
+    "size": 208,
+    "sha256": "54889a320e01a75f60be2dc7ad9e2f8d8edbae92010e32dbae7c27bf7d03396a"
+   },
+   "evidence": "IOBufferMemoryDescriptor's six factories before withBytes (paired by the matcher at the next address), each allocating from the class's metaclass and calling an init virtual; our kernel has exactly six there in this order: inTaskWithOptions (4 and 6 arguments), inTaskWithPhysicalMask, inTaskWithGuardPages, withOptions, withCapacity. The last takes (capacity, direction, contiguous), as IOStorageFamily calls it with (0x200, 1, ...)."
+  },
+  {
+   "original": "0xfffffe000b339148",
+   "native_symbol": "__ZN24IOBufferMemoryDescriptor17inTaskWithOptionsEP4taskjmmjj",
+   "check": {
+    "address": "0xfffffe000b339148",
+    "size": 224,
+    "sha256": "23061054a8918ccccbb921120fa7231e41aa0bd1189b993f957f39daf45710c5"
+   },
+   "evidence": "IOBufferMemoryDescriptor's six factories before withBytes (paired by the matcher at the next address), each allocating from the class's metaclass and calling an init virtual; our kernel has exactly six there in this order: inTaskWithOptions (4 and 6 arguments), inTaskWithPhysicalMask, inTaskWithGuardPages, withOptions, withCapacity. The last takes (capacity, direction, contiguous), as IOStorageFamily calls it with (0x200, 1, ...)."
+  },
+  {
+   "original": "0xfffffe000b339078",
+   "native_symbol": "__ZN24IOBufferMemoryDescriptor17inTaskWithOptionsEP4taskjmm",
+   "check": {
+    "address": "0xfffffe000b339078",
+    "size": 208,
+    "sha256": "b30aed926c419b080d5be1e904c7bc758b282fed2809b7a2cf7438f1c2295406"
+   },
+   "evidence": "IOBufferMemoryDescriptor's six factories before withBytes (paired by the matcher at the next address), each allocating from the class's metaclass and calling an init virtual; our kernel has exactly six there in this order: inTaskWithOptions (4 and 6 arguments), inTaskWithPhysicalMask, inTaskWithGuardPages, withOptions, withCapacity. The last takes (capacity, direction, contiguous), as IOStorageFamily calls it with (0x200, 1, ...)."
+  },
+  {
+   "original": "0xfffffe000b3b7b78",
+   "native_symbol": "__ZN19IOPerfControlClient10copyClientEP9IOServicey",
+   "check": {
+    "address": "0xfffffe000b3b7b78",
+    "size": 12,
+    "sha256": "bd1259bbcffa1fce42b55382c97199045d06113757478ac5113cdb1cc1ae48cf"
+   },
+   "evidence": "Sets the third argument to 0 and tail-calls the function 93 instructions before it, which the matcher pairs as copyClientForDeviceType: IOPerfControlClient::copyClient(driver, maxWorkCapacity). IOStorageFamily's block storage driver calls it at start."
+  },
+  {
+   "original": "0xfffffe000ad58f08",
+   "native_symbol": "_ml_get_cpu_count",
+   "check": {
+    "address": "0xfffffe000ad58f08",
+    "size": 16,
+    "sha256": "353c8ea056d629ade7f49db779d2124943370967ac4819c73ec5e9a353430685"
+   },
+   "evidence": "Returns the 32-bit word at +4 of the CPU topology structure (num_cpus): ml_get_cpu_count, the accessor after ml_readprop/ml_io_map in machine_routines.c; Droid-VM's reviewed list names the same body in the iPad kernelcache. APFS calls it at module start."
+  },
+  {
+   "original": "0xfffffe000b303778",
+   "native_symbol": "__ZN9IOService15publishResourceEPKcP8OSObject",
+   "check": {
+    "address": "0xfffffe000b303778",
+    "size": 240,
+    "sha256": "dc5748066b1a0606d53f2d77fcb4936c295f38dff2ab9c561033799f7439ce5d"
+   },
+   "evidence": "(key, value): OSSymbol::withCString(key) (the callee IOService::nameMatching(const char *) also uses), value defaults to a global (kOSBooleanTrue) when NULL, then the resources service global's setProperty(symbol, value) (vtable +184) and the publish: IOService::publishResource(const char *, OSObject *), directly before resourceMatching(const OSString *) in IOService.cpp. IOTimeSyncFamily tail-calls it from a thread call."
+  },
+  {
    "original": "0xfffffe000b2ffafc",
    "native_symbol": "_IOSetCoreAnalyticsSendEventProc",
    "check": {
@@ -2080,6 +2260,11 @@
    "original": "0xfffffe0007ec7f88",
    "native_symbol": "__ZTV12IOUserClient",
    "evidence": "A vtable with OSObject's and IORegistryEntry's methods in its first entries; AMFI's user client calls entries +1360 and +1376 (slots 168 and 170, past IOService's own) directly as super calls: IOUserClient's vtable. 56 kexts name it."
+  },
+  {
+   "original": "0xfffffe0007ef80c0",
+   "native_symbol": "_kOSBooleanTrue",
+   "evidence": "A constant pointer variable whose value is the object at 0xfffffe000b856178, 8 bytes before the object kOSBooleanFalse (paired by name at 0xfffffe0007ef7288) points to; apfs selects between the two with csel on a boolean and compares the first with a property value: kOSBooleanTrue. 69 kexts name it; unpaired it kept its collection address, and apfs faulted reading through it (data abort at 0xfffffe000a981974)."
   }
  ]
 }
