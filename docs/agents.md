@@ -273,3 +273,20 @@ mode `queue`) to the owner's thread id:
   - Audio codecs: wcd939x/wcd938x, wsa884x/wsa883x amps (swr_*). Wi-Fi: `qca_cld3_kiwi_v2` + `cnss2` (WCN7850 "kiwi").
     Touch: `synaptics_ts_spi`. Charger: max77775.
   - Still to read as root: the input devices' ff bits, the vibrator/BT/audio/camera HAL services, /proc/asound/cards.
+- 2026-11-10, parent (owner's S24 Ultra, read as root) -> bridges, booter: the rest of the facts.
+  - Haptics: `event8` = `sec_vibrator_inputff`, ff bitmap `124020000 0` = FF_PERIODIC (0x51), FF_SINE (0x5a), FF_CUSTOM
+    (0x5d), FF_GAIN (0x60); no FF_RUMBLE. Drive it with periodic/custom effects (CS40L26 waveforms) through
+    EVIOCSFF/EV_FF as root. The AIDL `android.hardware.vibrator.IVibrator/default` and `IVibratorManager/default` HALs
+    are running too (they keep `event8` open).
+  - Input: event0 gpio-keys, event2 pmic_pwrkey, event4 pmic_resin (volume down), event5 sec_touchscreen,
+    event11 sec_e-pen, event1 hall, event9 als_rear, event10 range_sensor, event7 sec_touchproximity, event6 sec_touchpad.
+  - Audio: one ALSA card `pineapple-mtp-snd-card`; services `media.aaudio`, `media.audio_flinger`, `media.audio_policy`,
+    `vendor.samsung.hardware.audio.ISecAudioHal/default`, `android.media.audio.IHalAdapterVendorExtension/default`.
+  - Camera: `android.hardware.camera.provider.ICameraProvider/internal/0` and `/external/0`, `media.camera`,
+    `android.frameworks.cameraservice.service.ICameraService/default` (the NDK/VNDK camera service), Samsung's
+    `media.camera.worker`, QTI `IOfflineCameraService`.
+  - Bluetooth: Qualcomm SoC `hamilton` (`persist.vendor.qcom.bluetooth.soc`; WCN785x / FastConnect 7800), HAL service
+    `vendor.bluetooth-1-1-qti` running, vendor id 0x0075 (Samsung), address from `/mnt/vendor/efs/bluetooth/bt_addr`,
+    Samsung BT audio provider `ISehBluetoothAudioProviderFactory`.
+  - Wi-Fi: `vendor.wifi_hal_legacy` and `vendor.wifi_hal_ext` running (kiwi / WCN7850, `qca_cld3_kiwi_v2`).
+  - GPU: `Adreno750v2`, max clock 1000000000 (1.0 GHz).
