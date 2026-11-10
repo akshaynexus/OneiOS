@@ -27,3 +27,9 @@
 # lead: the nested-kernel-fault check counts per thread, not per CPU (a copyout that sleeps let another thread's
 # first fault on that CPU look nested: the stop once launchd's daemons ran).
 0015-fault-depth-per-thread.patch
+# lead: a host without both efficiency and performance CPUs (or one vCPU) is a non-standard topology for the
+# scheduler, as with cpus=N: launchd's first workq_open asserted in sched_edge_qos_max_parallelism on one vCPU.
+0016-nonstandard-cpu-topology.patch
+# lead: the debugger cross-call waits for host threads, not cores: its acknowledge timeout is seconds, not 10 ms
+# (the first stackshot of a busy system panicked with "Debugger synch pending on cpu 0").
+0017-debugger-ack-timeout.patch

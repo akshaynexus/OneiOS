@@ -692,6 +692,44 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   failed to get filesystem entry at: /filesystems/fstab`; mount-phase-2's overprovisioning volume fails (ignored);
   `tzinit: Unable to locate data`. Say which of these the image or the tree should answer.
 
+- 2026-11-11, lead -> Q4a, Q4b, Q5, all: **why SpringBoard dies: no display from backboardd. Q4a is the one.**
+  With `sheng-exc-name=SpringBoard,backboardd,liveactivitiesd,chronod,runningboardd` in the boot arguments and
+  `scripts/debug/dsc.py` (new: names user addresses in the shared cache; `docs/building.md` 5):
+  - `SpringBoard` (signal 5, `brk #0`): `SBSystemAppMain` -> `FBSystemShellInitialize` ->
+    `+[FBDisplayManager sharedInstance]` block -> FrontBoardServices, which traps: no main display.
+  - `chronod` (signal 6): SwiftUI -> UIKit class initialize -> QuartzCore `ensure_displays` -> `query_displays`
+    -> `abort`: CoreAnimation has no display list. `liveactivitiesd` traps the same way after its own start.
+  - Nothing in these stacks is about touch or the key store: Q4b and Q5 are needed, but not for this stop.
+  `backboardd` itself logged no exit and no exception in three runs; whether it runs or waits is not known yet
+  (the kernel prints exits only for chronod, backboardd and SpringBoard).
+- 2026-11-11, lead -> fable-user (Q6): two corrections and one new stop.
+  - **The "order N took long: answered after 1 s" lines were my bug**, not slow answers: the log compared whole
+    seconds. Fixed (milliseconds, reported from 1000 ms); drop that item.
+  - `hosted: kernel fault inside the fault handler` was the per-CPU depth count: fixed, `0015`.
+  - New, seen once in three runs, with the PC loaded by five agents' boots:
+    `hosted: thread_create in task 85 failed (-110)` then `panic: hosted: no task process or thread for thread ...
+    @hosted_user.c:383`. xnuhost side: the CLONE order was answered, the new thread did not reach its first stop
+    (`XH_TRAP_BOOT`) in 10 s. xnuhost now logs the thread's tid and whether the process is still there. Two things
+    to settle: why (qemu-user's thread creation under load, or ours), and that a task whose thread cannot be made
+    must lose that task, not panic the kernel. The vCPU also sits 10 s in the host call with interrupts masked.
+- 2026-11-11, lead: two more kernel patches. `0016`: a host with fewer than two kinds of CPU (one vCPU, or all the
+  same) is a non-standard topology for the scheduler, as with `cpus=N` (fable-prelink's `sched_clutch.c:6589` at
+  launchd's first `workq_open`); built, **not booted yet with one kind**. `0017`: the debugger cross-call's
+  acknowledge timeout is 100000000 ticks, not 240000 (10 ms): the first stackshot of a busy system panicked with
+  `Debugger synch pending on cpu 0`; a vCPU is a host thread and answers when it runs.
+- 2026-11-11, lead, review of fable-brightness's `3dc790a` and fable-camera's `2f3e28c` (read, not run: the guest
+  has no user-space client for either yet).
+  - Brightness: the superclass link is the risky part, as its author says. What makes it safe today and must stay
+    true: three kexts of the collection name `AppleARMBacklight` besides AppleARMPlatform (AppleEmbeddedLightSensor,
+    AppleM68Buttons, AppleSPU). If one of them starts and casts our service to the original class it calls through
+    the original's vtable on our object. None starts now (no node for them in our tree). **Q4b: the light sensor
+    must not be done by letting AppleEmbeddedLightSensor match**; keep `oneios_bl_conform=0` as the first thing to
+    try if a kernel fault shows a backlight frame.
+  - Camera: the helper exits when its socket to xnuhost closes, so a SIGKILL of xnuhost takes it along; no input
+    grab, no realtime thread, no priority change in `runtime/bridges/camera`. The driver's 9.3 MiB
+    `kmem_alloc_contig` is `KMA_PERMANENT` at every boot where the node exists (the default): acceptable in 4 GiB,
+    but make it lazy (first open of `/dev/oneios-camera`) before the phone run.
+
 ### Rules for the parallel kernel work (lead, 2026-11-10)
 
 - **One work tree per agent.** `out/kernel-hosted` and `out/kernel/current-hosted` are the lead's. Build with

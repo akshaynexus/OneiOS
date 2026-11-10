@@ -340,9 +340,10 @@ static int64_t order(task *t, const struct xs_op *ops, unsigned count)
   int rc = wait_word(t, &sp->done, 10);
   clock_gettime(CLOCK_MONOTONIC, &ended);
   // An order the task's service thread takes long over, or never answers, stalls the vCPU that gave it: say which.
-  if (rc || ended.tv_sec - began.tv_sec >= 1)
-    LOGE("tasks: pid %d: order %u (va 0x%llx, size 0x%llx, prot %u) %s after %ld s", t->pid, ops[0].op, (unsigned long long)ops[0].va,
-         (unsigned long long)ops[0].size, ops[0].prot, rc ? "was not answered" : "took long: answered", (long)(ended.tv_sec - began.tv_sec));
+  long took_ms = (long)((ended.tv_sec - began.tv_sec) * 1000 + (ended.tv_nsec - began.tv_nsec) / 1000000);
+  if (rc || took_ms >= 1000)
+    LOGE("tasks: pid %d: order %u (va 0x%llx, size 0x%llx, prot %u) %s after %ld ms", t->pid, ops[0].op, (unsigned long long)ops[0].va,
+         (unsigned long long)ops[0].size, ops[0].prot, rc ? "was not answered" : "took long: answered", took_ms);
   if (rc) result = rc;
   else for (unsigned i = 0; i < count; i++) if (sp->ops[i].result < 0) { result = sp->ops[i].result; break; }
   pthread_mutex_unlock(&t->lock);
@@ -476,7 +477,13 @@ int64_t xh_thread_create(uint64_t handle, uint64_t *out)
   struct xs_trap_page *tp = slot_page((uint32_t)slot);
   struct xs_op op = { .op = XS_OP_CLONE, .va = (uint64_t)area, .offset = (uint64_t)slot * XS_SLOT_SIZE };
   int64_t rc = order(t, &op, 1);
-  if (!rc) rc = wait_word(t, &tp->to_host, 10);      // its first stop (XH_TRAP_BOOT)
+  if (!rc) {
+    rc = wait_word(t, &tp->to_host, 10);             // its first stop (XH_TRAP_BOOT)
+    // The clone was answered and the new thread never reported: say what the host knows about it.
+    if (rc) LOGE("tasks: pid %d: the thread made in area %d did not reach its first stop (%s): tid %u, the process is %s",
+                 t->pid, area, rc == -ESRCH ? "the task died" : "10 s", __atomic_load_n(&tp->tid, __ATOMIC_ACQUIRE),
+                 kill(t->pid, 0) == 0 ? "there" : "gone");
+  }
   if (rc) {
     pthread_mutex_lock(&T.lock);
     t->areas[area / 8] &= (uint8_t)~(1 << (area % 8));

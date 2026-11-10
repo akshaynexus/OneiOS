@@ -1,0 +1,23 @@
+diff --git a/osfmk/arm/model_dep.c b/osfmk/arm/model_dep.c
+--- a/osfmk/arm/model_dep.c
++++ b/osfmk/arm/model_dep.c
+@@ -182,7 +182,19 @@
+ #define FP_MAX_NUM_TO_EVALUATE (50)
+ 
+ /* Timeout for all processors responding to debug crosscall */
++#if XNU_HOSTED
++/*
++ * OneiOS hosted: a CPU is a thread of the host. It answers the debugger cross-call when the host runs it and it is
++ * not inside a host call (a disk read, an order to a task's process), which takes milliseconds to hundreds of them,
++ * not the microseconds of an interrupt on a core. 240000 ticks (10 ms at 24 MHz, 4 ms at qemu's 62.5 MHz) made the
++ * first stackshot of a busy system (osanalyticshelper after SpringBoard's crashes) panic with "Debugger synch
++ * pending on cpu 0". 100000000 ticks are 1.6 s under qemu and about 5 s at the phone's 19.2 MHz; the boot argument
++ * ml-timeout-debug-ack still overrides it.
++ */
++MACHINE_TIMEOUT_ALWAYS_ENABLED(debug_ack_timeout, "debug-ack", 100000000, MACHINE_TIMEOUT_UNIT_TIMEBASE);
++#else
+ MACHINE_TIMEOUT_ALWAYS_ENABLED(debug_ack_timeout, "debug-ack", 240000, MACHINE_TIMEOUT_UNIT_TIMEBASE);
++#endif
+ 
+ /* Forward functions definitions */
+ void panic_display_times(void);

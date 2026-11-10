@@ -1,0 +1,25 @@
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -1355,6 +1355,21 @@
+ 	cluster_offsets[0] = 0;
+ #endif
+ 	assert(topology_info.boot_cpu != NULL);
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted: the CPUs are the host's, as many and of whatever kinds xnuhost was given. This kernel is
++	 * built for an SoC with efficiency and performance clusters, and the scheduler asserts things that hold
++	 * only on that SoC (sched_edge_qos_max_parallelism: the E node and the P node are different nodes). A host
++	 * with one kind of CPU, or a session with one vCPU, is the case the kernel already has a flag for: the
++	 * topology is not the standard one, as with cpus=N. Without this, launchd's first workq_open stopped the
++	 * boot at sched_clutch.c:6589 on one vCPU.
++	 */
++	if ((topology_info.cluster_type_num_cpus[CLUSTER_TYPE_E] != 0) +
++	    (topology_info.cluster_type_num_cpus[CLUSTER_TYPE_M] != 0) +
++	    (topology_info.cluster_type_num_cpus[CLUSTER_TYPE_P] != 0) < 2) {
++		cpu_config_modified = true;         /* fewer than two kinds of CPU */
++	}
++#endif
+ 	ml_read_chip_revision(&topology_info.chip_revision);
+ 	ml_cluster_power_override(&topology_info.cluster_power_down);
+ 

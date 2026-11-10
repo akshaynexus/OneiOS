@@ -68,6 +68,12 @@ What that run showed is wrong or missing (none of it fixed yet unless a later li
   get filesystem entry at: /filesystems/fstab`.
 - `OneiOS launch policy: no /private/var/oneios/bin/oneios-init in this seed: no service manager`.
 
+- Later runs: `Debugger synch pending on cpu 0` at the first stackshot (fixed by 0017); once,
+  `hosted: thread_create in task 85 failed (-110)` and a panic in `hosted_user.c:383` (open, the board's Q6).
+- Why SpringBoard exits: `+[FBDisplayManager sharedInstance]` traps in FrontBoardServices (no main display), and
+  chronod aborts in QuartzCore's `query_displays`: backboardd offers no display. The display stand-in is the board's
+  Q4a.
+
 Not reached: a frame from SpringBoard, `session/ready`. Nothing here has run on the phone.
 
 ## What the patch does (files, functions)

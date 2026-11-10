@@ -110,6 +110,10 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   hashes (emulated SHA); the committed default (300 s) is for the phone.
 - `guest` lines in the log are the kernel's console. `kill -QUIT <xnuhost pid>` logs every vCPU and every iOS
   thread; `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
+- A user process that dies: the kernel logs its registers and a backtrace (`sheng-exc`, `sheng-ubt` lines) for the
+  processes named in the boot argument `sheng-exc-name=SpringBoard,backboardd,...` (default: backboardd, chronod,
+  liveactivitiesd; launchd always). `scripts/debug/dsc.py ADDR...` names those addresses in the image set's dyld
+  shared cache (it finds the slide from a whole backtrace; its header says how to give it the cache).
 - What the PC cannot show: seccomp (qemu-user has none; a marked trap instruction stands in), real timing, the
   phone's GPU, panel, HALs, SELinux and KernelSU.
 
