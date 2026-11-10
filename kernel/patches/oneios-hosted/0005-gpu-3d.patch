@@ -1,0 +1,34 @@
+diff --git a/osfmk/arm64/oneios_host.c b/osfmk/arm64/oneios_host.c
+index 9823554..08a5918 100644
+--- a/osfmk/arm64/oneios_host.c
++++ b/osfmk/arm64/oneios_host.c
+@@ -32,6 +32,19 @@ droidvm_cpufreq_attach(void)
+ {
+ }
+ 
++#if XNU_HOSTED
++/*
++ * The hosted kernel's 3D GPU: Droid-VM's virtio-gpu 3D driver on xnuhost's device, which the phone's Adreno serves
++ * through drm2kgsl (kernel/patches/oneios-hosted/gpu: OneiOSGpu.cpp and build-oneios-gpu.py, an archive that
++ * kernel/build-hosted.sh adds to the link). Weak, as the others: a hosted kernel linked without the archive starts
++ * no GPU.
++ */
++__attribute__((weak)) void
++oneios_gpu3d_start(void)
++{
++}
++#endif /* XNU_HOSTED */
++
+ void oneios_board_late_start(void);
+ 
+ void
+@@ -39,6 +52,9 @@ oneios_board_late_start(void)
+ {
+ 	droidvm_cpufreq_attach();
+ 	oneios_drivers_start();
++#if XNU_HOSTED
++	oneios_gpu3d_start();
++#endif /* XNU_HOSTED */
+ }
+ 
+ /*

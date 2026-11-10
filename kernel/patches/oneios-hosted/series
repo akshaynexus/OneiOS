@@ -5,3 +5,4 @@
 0003-smp-timer-irq.patch
 # 0002 is a diff on top of 0001 + 0003 (made in a tree that has both): it stays after them.
 0002-return-to-user-copyio.patch
+0005-gpu-3d.patch

@@ -36,6 +36,23 @@ if n != 1:
     raise SystemExit('build-hosted: board.toml has no [kernel] patch_series')
 open(path, 'w').write(new)
 PY
+# The GPU (0005-gpu-3d.patch): Droid-VM's virtio-gpu 3D driver as one more board archive of this build only
+# (kernel/patches/oneios-hosted/gpu/build-oneios-gpu.py), force-loaded like the board's others.
+cp "$ROOT/kernel/patches/oneios-hosted/gpu/build-oneios-gpu.py" "$DEVICE/scripts/"
+python3 -I - "$DEVICE/board.toml" "$DEVICE/configs/oneios_hosted_defconfig" <<'PY'
+import re, sys
+board, config = sys.argv[1:]
+text = open(board).read()
+new, n = re.subn(r'("build-oneios-board\.py",?\s*\n)(\s*\])', lambda m: m.group(1).rstrip().rstrip(',') + ',\n  "build-oneios-gpu.py",\n' + m.group(2), text, count=1)
+if n != 1:
+    raise SystemExit('build-hosted: board.toml archives do not end with build-oneios-board.py')
+open(board, 'w').write(new)
+text = open(config).read()
+new, n = re.subn(r'^(CONFIG_XNU_EXTRA_LD_ARCHIVES="[^"\n]*)"', lambda m: m.group(1) + ' -Wl,-force_load,{tree}/build/oneios-gpu/liboneiosgpu.a"', text, count=1, flags=re.M)
+if n != 1:
+    raise SystemExit('build-hosted: the hosted defconfig has no CONFIG_XNU_EXTRA_LD_ARCHIVES')
+open(config, 'w').write(new)
+PY
 mkdir -p "$UNIXNU_OUT_DIR"
 [ -e "$UNIXNU_OUT_DIR/feeds" ] || [ ! -d "$ROOT/out/kernel/unixnu/feeds" ] || ln -s "$ROOT/out/kernel/unixnu/feeds" "$UNIXNU_OUT_DIR/feeds"
 

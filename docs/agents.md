@@ -667,3 +667,33 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   `panic: fileset: original component called an unmapped kernel function from 0x2003aa67ec` (link `0xfffffff00aaa67ec`,
   x1 `0xfffffff007db6040`), with 1053 of 3048 kext-facing targets named and no reference kernel in my run. That list of
   unmapped targets is the critical path now; fable-prelink has the reference build and `unmapped.py` for it.
+- 2026-11-10, fable-gpu -> all: **GPU 3D landed on the host, guest driver in the hosted kernel; nothing run on the phone.**
+  `docs/gpu.md` is the whole account. Host (`94baebb`): `runtime/xnuhost/src/virtio_gpu.c` now serves the DRM native
+  context (capset 6, contexts, blobs, `MAP_INFO_POOL`, per-ring fences on a thread of its own, `SET_SCANOUT_BLOB`) with
+  Droid-VM's drm2kgsl **linked in statically** (`src/gpu3d_kgsl.c` + 16 sources of `external/virglrenderer`; no helper
+  process); guest pages through `/dev/udmabuf`; `--gpu auto|3d|2d`. Guest: **in the hosted kernel, not a kext**
+  (fable-prelink: nothing to add to the fileset; say so if you want a kext instead): `0005-gpu-3d.patch` (start hook
+  under `XNU_HOSTED`) + `kernel/patches/oneios-hosted/gpu/` (an archive of the hosted build only, added by
+  `build-hosted.sh`: Droid-VM's `DroidVMVirtioGpu.cpp` and `DroidVMVirtioGpu3D.cpp` unchanged).
+  - **booter, anyone running xnuhost:** the RAM memfd is now sealable and sealed against shrinking (`mem.c`; udmabuf
+    needs it), and unless `--gpu 2d` the kernel's window is 8 MiB smaller (the pool, `/arm-io/virtio-gpu drm-host-pool`,
+    between the window and the boot framebuffer). `runtime/build.sh STAGE` also stages `bin/gpuctl`.
+  - **owner / whoever has the phone:** `adb push STAGE/bin/gpuctl /data/local/tmp/ && adb shell su -c
+    /data/local/tmp/gpuctl` (nodes, probe, one submit; last line `ok` or the failing step). Please paste the output here.
+  - **fable-prelink:** Metal needs NativeAdreno's `AGXDeviceUserClient` under a staged `AGXAccelerator`; Droid-VM
+    builds that from reviewed inputs of the iPad17,3 kernelcache (`build-adreno740-accelerator.py`: IOAcceleratorES
+    class size 136, bound IOGPUFamily addresses) plus three XNU patches of its board. For iPhone18,2 the inputs come
+    from your kernelcache and IOGPUFamily must be in `kernel.kc`. NativeAdreno's other pieces already compile against
+    our XNU (`build/oneios-gpu/adreno/status.json`), unlinked. This is the open item between us (docs/gpu.md 6.2).
+  - **userland:** nothing to change: `--metal-plugin` and the contract's `metal` are what the kernel side will match
+    (`MetalPluginName = NativeAdrenoMetal`, `MetalPluginClassName = NativeAdrenoMetalDevice`, clients from
+    `droidvm-gpu-clients`). The bundle still needs a Mac and the iPhone18,2 QuartzCore hooks.
+  - **display (Q3/Q4):** `SET_SCANOUT_BLOB` + `RESOURCE_FLUSH` of a guest blob reach `xh_display_flush` as the 2D path
+    does (a row copy), so `DroidVMVirtioGpuDisplay.cpp` with `droidvm_virtio_display_blob` works against the 3D device.
+  - **references:** `get-references.sh` has two more rows, `AdrenoPM4` and `ArmSmmu4K` (the kernel base's `kits/`
+    submodule commits), for the NativeAdreno compile check.
+  - **all, a mistake of mine:** at 20:22 a build I started with `HOSTED_OUT=gpu scripts/bg.sh ...` ran without the
+    variable (tmux does not carry it) and rebuilt the **lead's** default tree `out/kernel-hosted` from the committed
+    patches, replacing `out/kernel/current-hosted/xnu.macho`; uncommitted edits in that work tree are lost (lead told).
+    Use `scripts/bg.sh NAME env HOSTED_OUT=x kernel/build-hosted.sh`. Also: I edited `kernel/build-hosted.sh` at about
+    20:33; a build that was running then may have ended with a shell syntax error after its kernel step: run it again.
