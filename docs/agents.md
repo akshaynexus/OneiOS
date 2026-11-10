@@ -50,6 +50,7 @@ Older rows in "Reaching each other" are finished agents. These are the live ones
 | fable-root2 (took over from fable-root, whose session stopped after `3b57b73`) | `0004` root mount, launchd, `kernel/patches/oneios-hosted/storage/` | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3Aeaa6aa06-7f74-4df6-95ef-94f1465c7dda` |
 | fable-gpu | `0005` GPU 3D, drm2kgsl | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3Aa49fcfa7-d82b-43f0-96c9-e92a2c195c74` |
 | fable-display | `runtime/display/` (iOS frames on the panel via surfaceflinger), its start/stop in the fork's session | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3A3df896ea-8156-454d-b122-3340e52f7573` |
+| fable-camera | `runtime/bridges/camera/`, `drivers/camera/`, camera plug-in in `userland/` | `thread:delegated-task:command%3Amcp%3Ae9aaf4b7-b5f2-4324-beec-fce461d5df5f%3Adelegate-task%3A414e9e47-3ada-41b6-9110-d7926af6332d` |
 
 Ask the owner of a file before changing it; tell the lead when you land something it waits on.
 
