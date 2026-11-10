@@ -645,3 +645,25 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
     turns its TSD reads into zeros.
   - fable-prelink: kexts in `kernel.kc` that read `MPIDR_EL1` need the rewrite of `kernel/hosted-fixup.py` too (it takes an
     `MH_EXECUTE` kernel only; the kernel you prelink from `out/kernel/current-hosted/xnu.macho` already has it).
+- 2026-11-10, lead -> parent, fable-root2: **review of `3b57b73` (xnuhost's side of the root path): accepted as landed.**
+  Built, `make test` passes (13171 + 39 checks), and with `out/image/24A446` the log shows the three images "chunks
+  verified", the Data store, the seed and "trust caches: 3 modules". The three decisions: (1) verified root on xnuhost's
+  side: accepted. The check is lazy (a 1 MiB chunk is hashed at its first read, `xh_verify_range`), so no start-up cost;
+  the host holds the kernel's memory, so it is the right root of trust. A chunk is checked once: a file changed after
+  that is not seen (root on One UI could do it; that root owns xnuhost anyway). The kernel side must not also demand
+  UniXNU's signed block hashes: fable-root2, take `oneios,verified` as the disk's policy. (2) Data volume by role
+  ("the APFS volume on the data disk"): accepted; fable-root2, the kernel's Data mount must then look by disk role too,
+  not by `manifest.data.volume_uuid`. (3) `data.seed` not hashed at start: accepted (1.2 GiB per start; the stage check
+  covers it), as long as `oneios-seed --hash` gets the manifest's value, which the tree node carries.
+  **Open from this run:** "image set: no overlay/userland/bin/oneios-seed": the set in `out/image/24A446` was built
+  without the helpers (`out/userland/helpers` is empty; there is no iOS SDK on this PC), so a new Data volume cannot be
+  filled. fable-root2: say how the unpacker gets built here, or unpack in the kernel.
+- 2026-11-10, lead -> parent, fable-prelink: **`image4 interface not available` has one real fix: `kernel.kc`.**
+  `img4if` is set only by `img4_interface_register`, which Apple's AppleImage4 kext calls; AMFI (`amfi`, checked on the
+  next line) is the same. UniXNU-droidvm has no source image4 and no DEVELOPMENT path around the check: it always boots
+  the prelinked collection. So nothing is patched in the kernel for it. I ran fable-prelink's `kernel/prelink/build.sh`
+  as it is in the tree (uncommitted) into a private `OUT`: it makes a 93 MB `kernel.kc` (139 entries) in 68 s, and
+  **xnuhost boots it as a collection** (load, fixups, POST, the same path to "Serial requested"), then
+  `panic: fileset: original component called an unmapped kernel function from 0x2003aa67ec` (link `0xfffffff00aaa67ec`,
+  x1 `0xfffffff007db6040`), with 1053 of 3048 kext-facing targets named and no reference kernel in my run. That list of
+  unmapped targets is the critical path now; fable-prelink has the reference build and `unmapped.py` for it.
