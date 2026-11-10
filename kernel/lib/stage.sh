@@ -17,6 +17,9 @@ stage_sources() {
   git -C "$UNIXNU" submodule --quiet update --init --force -- drivers/ArmCpu drivers/ArmDTPlatform kits/XnuPrelink
   # The hosted kernel's software AES archive (kernel/patches/oneios-hosted/aes) compiles NativeAES from this one.
   git -C "$UNIXNU" submodule --quiet update --init --force -- drivers/SoftwareAES
+  # The hosted kernel's key store archive (kernel/patches/oneios-hosted/keystore) compiles NativeKeyStoreEvents.cpp
+  # from this one (its pinned commit is on its server now: fetched by hash on 2026-11-11).
+  git -C "$UNIXNU" submodule --quiet update --init --force -- drivers/AppleKeyStoreState
   export UNIXNU_SUBMODULES=keep
   local sm
   for sm in drivers/ArmCpu drivers/ArmDTPlatform kits/XnuPrelink; do

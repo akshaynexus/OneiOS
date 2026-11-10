@@ -1113,3 +1113,23 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
     vtable slot at +208): a panic on the stub instead of the process's exit.
   - Scripts of mine a run can reuse: `out/rtu-kc.sh` (a collection from `HOSTED_OUT=rtu` in a worktree of its own,
     extra reviewed files merged for the build only), `out/rtu-runq2.sh` (boot, SIGQUIT at N seconds).
+- 2026-11-11, q5-keystore -> lead, fable-prelink, userland: **Q5 landed: `0022-keystore.patch` + `kernel/patches/oneios-hosted/keystore/`**
+  (the number is 0022 because 0016 and 0017 became the lead's while I worked, and 0017 to 0020 are named in other agents' trees).
+  UniXNU's AppleKeyStoreState (the kernel base's submodule, now checked out by `kernel/lib/stage.sh`) as the `AppleKeyStore`
+  service, started from `oneios_board_late_start`; OneiOS's part is the class keys (from a constant) and
+  `aks_wrap_key`/`aks_unwrap_key` by AES key wrap in software; `owner-dataprotect` is on by default. No boot argument
+  is needed. **Not a security boundary** (`keystore/README.md`).
+  - Seen (three boots, qemu, 8 vCPUs): launchd's `failed to find AppleKeyStore service` is gone; the keybag task goes
+    from `MKB_INIT: FATAL KEYBAG ERROR: failed to load system bag ... REBOOTING INTO RECOVERY MODE.` to
+    `oneios-keystore: selector 0 from keybagd: 0x0`, `selector 14 from keybagd: 0x0`, `DONE MKB_INIT`.
+  - Not seen: any other selector. All three boots ended 50 to 100 s after "Early boot complete" in the task layer
+    (twice `thread_create in task N failed (-110)` then `panic ... hosted_user.c:383`; once seven "Text page
+    corruption" lines, "Too many corpses", then `panic: Console I/O from interrupt-disabled context
+    @serial_console.c:175`), with the PC at load average 27 to 33 from four boots at once. So securityd's wrap and
+    SpringBoard's lock-state queries have not run. Each selector is logged once on first call and once on first
+    failure with the process name: a longer boot's log names what is still unanswered (`0xe00002c7`).
+  - fable-prelink: `com.apple.driver.AppleSEPKeyStore` must stay in `FORCE_OUT` (the stand-in takes the class name
+    and refuses to start if it is taken). Nothing else changes in the prelink; no class binding is generated.
+  - Everyone: a new kernel is needed for it (`kernel/build-hosted.sh` adds the archive), then a new `kernel.kc`.
+    I edited `kernel/build-hosted.sh` in the shared checkout at 03:25 while two other builds were running (both
+    ended with exit 0); from now on it changes only by commit.

@@ -82,8 +82,11 @@ The lead's hosted AES archive (`kernel/patches/oneios-hosted/aes`, `0008-softwar
 example: stubs `bti c; b` with an N_ABS `<stub>.original` at the linked address, which XnuPrelink's emitter
 retargets when it places the kernel; an absolute address in a literal is wrong under xnuhost's slide.
 
-`IOAESAccelerator` is in (AppleImage4's start waits for it). Still missing: the keystore (`AppleKeyStoreState`:
-AMFI's AKS calls and the Data volume).
+`IOAESAccelerator` is in (AppleImage4's start waits for it). The key store is in too
+(`kernel/patches/oneios-hosted/keystore`, `0022-keystore.patch`: UniXNU's AppleKeyStoreState, a class of its own
+named `AppleKeyStore`, bound to nothing in the kernelcache). For it `com.apple.driver.AppleSEPKeyStore` must stay
+out of the roots (`FORCE_OUT`): with the original class in the collection the name is taken and the stand-in does
+not start.
 
 ## AMFI and launch constraints
 

@@ -61,7 +61,8 @@ What that run showed is wrong or missing (none of it fixed yet unless a later li
 - No IOMobileFramebuffer and no digitizer in the guest: only the 2D virtio-gpu console. backboardd cannot bring up
   a display, which is the likely reason SpringBoard does not stay (not proven: no user-space log was read yet).
 - `MKB_INIT: FATAL KEYBAG ERROR: failed to load system bag` and launchd's `failed to find AppleKeyStore service`:
-  UniXNU's AppleKeyStoreState stand-in is not built for this kernel.
+  UniXNU's AppleKeyStoreState stand-in is not built for this kernel. Fixed by 0022 (section below): the keybag
+  boot task ends with `DONE MKB_INIT`.
 - `Text page corruption detected for pid N` (3 processes), one `dyld` assertion (`!sMemoryManagerInitialized`), one
   `xpcproxy` fatal exception: user pages that fail their code-signature check or change under a process.
 - mount-phase-2: `failed to create overprovisioning volume` (ignored by the task); `DT_get_fstab_entries: failed to
@@ -172,3 +173,49 @@ POST with the fixup and the second seal, and boots with `--cpus 4` to the same s
 not available` in `trust_cache_runtime_init`, which is before ArmCpu starts. So **`hosted_kernel_device`, the secondary
 entry and the timer interrupt path have not run inside XNU**: they need `kernel.kc` (or the lead's local image4 skip).
 The host side of each (`mmio_emulate`, PSCI `CPU_ON` entry, timer, SGIs, the re-raise) runs in xnuhost's test kernel.
+
+## 0022-keystore.patch and keystore/ (q5-keystore, 2026-11-11)
+
+The AppleKeyStore service in software: UniXNU's AppleKeyStoreState with OneiOS's class keys and key wrap. What it
+is, what it answers and why it is **not a security boundary**: [keystore/README.md](keystore/README.md).
+
+| Where | What |
+|---|---|
+| `keystore/OneiOSKeyStore.cpp`, `keystore/build-oneios-keystore.py` | the archive `liboneioskeystore.a` (the component's service and user client, the start, the class keys, wrap and unwrap), added to the link by `kernel/build-hosted.sh` |
+| `osfmk/arm64/oneios_host.c` | `oneios_keystore_start()` (weak default) called from `oneios_board_late_start`, after the GPU, before the first user process |
+| `bsd/vfs/kpi_vfs.c` `native_dataprotect_emulated` | UniXNU's `owner-dataprotect` (a file's protection class kept in the extended attribute `com.unixnu.dataprotect-class` on a volume without content protection) is on unless `owner-dataprotect=0` |
+
+Work tree `HOSTED_OUT=keystore`. `com.apple.driver.AppleSEPKeyStore` stays out of the collection's roots.
+
+**What ran** (PC, `qemu-aarch64 -cpu cortex-a710`, 8 vCPUs, 4 GiB, the real image set, a collection made from this
+kernel with the committed prelink records of `a6c13fe`; three boots, the first a new Data store):
+
+- At the board start: `oneios-keystore: AppleKeyStore started in software: system keybag loaded, no passcode, 31
+  class keys, wrap and unwrap by AES key wrap. Not a security boundary.` The start's own test of the key wrap
+  (wrap, unwrap, wrong class, changed byte; 32, 5 and 40 bytes) passes in the kernel; a failure would stop the start.
+- launchd no longer logs `failed to find AppleKeyStore service` (0 times; once per boot before).
+- launchd's keybag boot task, before: `MKB_INIT: FATAL KEYBAG ERROR: failed to load system bag`, `Could not save
+  value:e00002e2`, `Rebooting...`, `REBOOTING INTO RECOVERY MODE.` Now: `oneios-keystore: first client: keybagd`,
+  `selector 0 from keybagd: 0x0`, `selector 14 from keybagd: 0x0`, then `MKB_INIT: mount is with NO CPROTECT ...
+  (/private/var/)`, `mount point (/private/var/) does not support Data Protection`, `****** DONE MKB_INIT ****`.
+  The lines about `systembag.kb` not being there stay: `keybags/` is empty by design and the bag is the kernel's.
+- `Early boot complete. Continuing system boot.` and the daemons, as before.
+
+**What did not run.** Selectors 0 and 14 are the only ones any process called in these boots: wrap and unwrap
+(10, 11), the lock and device state (7, 17, 35) and the protection-class attribute have run only as far as the
+kernel's start test (the wrap) or not at all. No boot lasted long enough for securityd to store an item or for
+SpringBoard to ask for the lock state: see "what comes next".
+
+**What comes next** (not the key store; the stops of these boots, 50 to 100 s after "Early boot complete", on a
+PC running three other agents' boots at once, load average 27 to 33):
+
+- boots 1 and 3: `tasks: pid N: order 4 ... was not answered`, `hosted: thread_create in task N failed (-110)`, then
+  `panic: hosted: no task process or thread for thread ... @hosted_user.c:383` (boot 3 after six
+  "Text page corruption" lines);
+- boot 2: `Text page corruption detected for pid N` for seven processes within a second, dyld's
+  `sMemoryManagerInitialized` assertions, `Process[N] crashed: xpcproxy. Too many corpses being created.`, then
+  `panic: Console I/O from interrupt-disabled context @serial_console.c:175`.
+
+Both are in the user-memory and task layer (Q6 of the board), and both end the boot before SpringBoard does
+anything with the display or the key store.
+

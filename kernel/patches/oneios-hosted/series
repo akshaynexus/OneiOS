@@ -33,3 +33,7 @@
 # lead: the debugger cross-call waits for host threads, not cores: its acknowledge timeout is seconds, not 10 ms
 # (the first stackshot of a busy system panicked with "Debugger synch pending on cpu 0").
 0017-debugger-ack-timeout.patch
+# q5-keystore: the AppleKeyStore service in software (keystore/: UniXNU's AppleKeyStoreState, class keys, key wrap) is
+# started from the board's late start; owner-dataprotect (a file's protection class kept in an extended attribute) is
+# on by default. Not a security boundary: keystore/README.md.
+0022-keystore.patch

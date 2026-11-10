@@ -27,8 +27,10 @@ iPhone18,2 kexts), the boot gets through:
 
 Not reached: a SpringBoard that stays up, a frame on the display, `session/ready`. What is missing for that, as
 seen in the log: the guest has no IOMobileFramebuffer and no touch digitizer yet (backboardd has nothing to draw on),
-no AppleKeyStore stand-in (`keybagd`: "failed to load system bag"), and some processes die with "Text page
-corruption detected". A host with one kind of CPU (or one vCPU) used to assert in the
+and some processes die with "Text page corruption detected". The key store is in since `0022`: an AppleKeyStore
+service in software (no passcode, class keys from a constant, key wrap by AES; **not a security boundary**), with
+which launchd's keybag task ends in `DONE MKB_INIT` instead of "FATAL KEYBAG ERROR: failed to load system bag";
+no keychain item has been stored through it yet. A host with one kind of CPU (or one vCPU) used to assert in the
 scheduler at launchd's first `workq_open`; `0016` fixes that (booted with eight CPUs of one kind). Detail: [kernel/patches/oneios-hosted/README.md](kernel/patches/oneios-hosted/README.md)
 and the board, [docs/agents.md](docs/agents.md).
 
