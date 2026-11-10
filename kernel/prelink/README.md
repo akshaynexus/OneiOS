@@ -158,6 +158,11 @@ and 18 data targets are unpaired; `kernel.kc.build.json` lists them per kext.
 - Not paired on purpose: `0xfffffe000abcf114` (AMFI, IOSurface; frees through a zone *view* in x0 where this
   source's `kern_os_zfree` takes a zone: the argument differs, so it stays on the stub until a caller shows what
   it passes) and `0xfffffe000b0dbf28` (sandbox; no counterpart in this source).
+- What the import order cannot do: tell two names apart that sort between the same neighbours, such as the
+  overloads of one method. `0xfffffe000b391b04` was first recorded as `IOReportLegend::addLegendEntry` and is
+  `addReporterLegend(IOReporter *, const char *, const char *)`: IOHIDFamily's source names the call, and with the
+  wrong one `IOHIDDevice::start` failed (fable-hid, 2026-11-11). A pair chosen among several candidates by argument
+  count alone is a guess until a caller or the kext's source confirms it.
 - Pairing ahead of the boot: for an unpaired import, the names between its neighbours in every table that has it
   are the candidates (`imports.py` prints them); the code picks among them. A boot on the PC costs about ten
   minutes to the first user process, so a batch is paired this way and then confirmed with one boot.

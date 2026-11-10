@@ -207,13 +207,13 @@
   },
   {
    "original": "0xfffffe000b391b04",
-   "native_symbol": "__ZN14IOReportLegend14addLegendEntryEP12OSDictionaryPKcS3_",
+   "native_symbol": "__ZN14IOReportLegend17addReporterLegendEP10IOReporterPKcS3_",
    "check": {
     "address": "0xfffffe000b391b04",
     "size": 140,
     "sha256": "0851217d205f7ab04cc3ec8c947b3dd163209093fe89945edef8062d11e468a8"
    },
-   "evidence": "By the kexts' name-sorted import tables and the code. vm_map_page_size: returns 1 shifted by the map's page shift byte (+44), or by 14 for a NULL map; between vm_map_page_mask and vm_map_trunc_page_mask. IOReportLegend::addLegendEntry: the public one of the two IOReportLegend exports between IOPMrootDomain::copyWakeReasonString and IOReportLegend::addReporterLegend; (this, dictionary, group, subgroup) with a NULL check of the dictionary; 14 kexts."
+   "evidence": "IOReportLegend::addReporterLegend(IOReporter *, const char *, const char *): (this, reporter, group, subgroup) with a NULL check of the reporter, which it asks for its legend before adding it. IOHIDFamily's IOHIDDevice::createReporters (IOHIDDevice.cpp:707 of IOHIDFamily-2238.120.5) calls legend->addReporterLegend(_eventReporter, ...) and imports exactly one function between IOEventSource's destructor and IOReportLegend::with, this one (fable-hid). The import order alone cannot tell it from addLegendEntry(OSDictionary *, ...), which sorts between the same neighbours and which this record named first: with that pair IOHIDDevice::start failed its pointer authentication in organizeLegend, the reporter having been taken for a dictionary. 14 kexts import it."
   },
   {
    "original": "0xfffffe000aca4eb0",
