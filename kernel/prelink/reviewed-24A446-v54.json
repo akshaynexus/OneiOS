@@ -4827,7 +4827,7 @@
   },
   {
    "original": "0xfffffe000ac4bd40",
-   "native_symbol": "_get_task_pidsuspended",
+   "native_symbol": "_task_is_app_suspended",
    "ported": true,
    "optional": true,
    "check": {
@@ -4835,7 +4835,7 @@
     "size": 16,
     "sha256": "8d9d5229bb16beb4bde6c314115f5f8b3200d9140c9c9eb729fa5f5159dbd1e9"
    },
-   "evidence": "Byte-identical (16 bytes) to 0xfffffe000adbbc24 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Between get_threadtask_early and current_thread_aborted as in bsd_kern.c: returns the bool at task+0x412, the byte task_pidsuspend sets and clears in the 27 kernel (task->pidsuspended). No symbol in the original image; IOHIDFamily calls it."
+   "evidence": "Lead review, by import order: IOHIDFamily's slots run task_deallocate, this one, task_reference, thread_call_allocate_with_options, so the imported name sorts between task_deallocate and task_reference; get_task_pidsuspended does not. The body returns bit 0 of one task byte (pidsuspended): task_is_app_suspended, the same read as get_task_pidsuspended in our kernel. Was: Byte-identical (16 bytes) to 0xfffffe000adbbc24 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Between get_threadtask_early and current_thread_aborted as in bsd_kern.c: returns the bool at task+0x412, the byte task_pidsuspend sets and clears in the 27 kernel (task->pidsuspended). No symbol in the original image; IOHIDFamily calls it."
   },
   {
    "original": "0xfffffe000ac9afdc",

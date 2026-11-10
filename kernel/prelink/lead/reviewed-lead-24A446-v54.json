@@ -3039,6 +3039,76 @@
     "sha256": "6228375edf2db673a69015e93168571f67ec8a3a7f67764cde27da038b1d4fbe"
    },
    "evidence": "The sandbox's import slot between csvnode_get_blob and current_cached_proc_cred. The body takes the kernel-control list lock, walks the list for the entry whose id (at +120) equals w0, copies its name (at +24) into x1 with a limit of 96 (MAX_KCTL_NAME) and returns 0, or 2 (ENOENT) when there is none: ctl_name_by_id(id, out_name, maxsize)."
+  },
+  {
+   "original": "0xfffffe000b32fe68",
+   "native_symbol": "__ZN13IOEventSource19signalWorkAvailableEv",
+   "check": {
+    "address": "0xfffffe000b32fe68",
+    "size": 48,
+    "sha256": "f5fbbbcb875bdd46fb9bcf6055594f5a78cd110c15926b1e22905a7567aafd96"
+   },
+   "evidence": "Met when /sbin/launchd is loaded (CoreAnalyticsFamily, call at 0xfffffe0009b6dc4c). IOEventSource.cpp's run of one-line forwards to the work loop (this+48), in source order: signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate, [sleepGate with a deadline], wakeupGate; the originals tail-call the work loop's consecutive vtable slots +208, +216, +224, +232, +240, +248, IOWorkLoop's virtuals in the same order. This one uses +208 and its import slot in CoreAnalyticsFamily lies between IOCommandGate::commandGate and IOEventSource's constructor, where only a two-digit-length IOEventSource name fits."
+  },
+  {
+   "original": "0xfffffe000b32fe98",
+   "native_symbol": "__ZN13IOEventSource8openGateEv",
+   "check": {
+    "address": "0xfffffe000b32fe98",
+    "size": 48,
+    "sha256": "b6c15e222ca5e80e69c7d768df2d4d1dbaedce98c0dcd2dc5c07a9f3dfa7ec1d"
+   },
+   "evidence": "IOEventSource.cpp's run of one-line forwards to the work loop (this+48), in source order: signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate, [sleepGate with a deadline], wakeupGate; the originals tail-call the work loop's consecutive vtable slots +208, +216, +224, +232, +240, +248, IOWorkLoop's virtuals in the same order. This one uses +216."
+  },
+  {
+   "original": "0xfffffe000b32fec8",
+   "native_symbol": "__ZN13IOEventSource9closeGateEv",
+   "check": {
+    "address": "0xfffffe000b32fec8",
+    "size": 48,
+    "sha256": "a7042fe5b7282abf79f42e87c3d3288de9a06d9a40fb9210f46115b2c0a069d3"
+   },
+   "evidence": "IOEventSource.cpp's run of one-line forwards to the work loop (this+48), in source order: signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate, [sleepGate with a deadline], wakeupGate; the originals tail-call the work loop's consecutive vtable slots +208, +216, +224, +232, +240, +248, IOWorkLoop's virtuals in the same order. This one uses +224."
+  },
+  {
+   "original": "0xfffffe000b32fef8",
+   "native_symbol": "__ZN13IOEventSource12tryCloseGateEv",
+   "check": {
+    "address": "0xfffffe000b32fef8",
+    "size": 48,
+    "sha256": "1c1665135b2339de1e901d6d68c5994ba9c984198fff6d108ad3bbfb6c3cd104"
+   },
+   "evidence": "IOEventSource.cpp's run of one-line forwards to the work loop (this+48), in source order: signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate, [sleepGate with a deadline], wakeupGate; the originals tail-call the work loop's consecutive vtable slots +208, +216, +224, +232, +240, +248, IOWorkLoop's virtuals in the same order. This one uses +232."
+  },
+  {
+   "original": "0xfffffe000b32ff28",
+   "native_symbol": "__ZN13IOEventSource9sleepGateEPvj",
+   "check": {
+    "address": "0xfffffe000b32ff28",
+    "size": 48,
+    "sha256": "63a687427b58980f7eb4d726f7bee81852c72c9d08a06a8dfc72dfec1975ae77"
+   },
+   "evidence": "IOEventSource.cpp's run of one-line forwards to the work loop (this+48), in source order: signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate, [sleepGate with a deadline], wakeupGate; the originals tail-call the work loop's consecutive vtable slots +208, +216, +224, +232, +240, +248, IOWorkLoop's virtuals in the same order. This one uses +240."
+  },
+  {
+   "original": "0xfffffe000b32ff90",
+   "native_symbol": "__ZN13IOEventSource10wakeupGateEPvb",
+   "check": {
+    "address": "0xfffffe000b32ff90",
+    "size": 48,
+    "sha256": "5e9145707080690ccdb14890a8049a31621db020ee8b6e8c2903ade11dfaf03d"
+   },
+   "evidence": "IOEventSource.cpp's run of one-line forwards to the work loop (this+48), in source order: signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate, [sleepGate with a deadline], wakeupGate; the originals tail-call the work loop's consecutive vtable slots +208, +216, +224, +232, +240, +248, IOWorkLoop's virtuals in the same order. This one uses +248."
+  },
+  {
+   "original": "0xfffffe000ac1f668",
+   "native_symbol": "_task_reference",
+   "check": {
+    "address": "0xfffffe000ac1f668",
+    "size": 144,
+    "sha256": "60c66b3bc6b437ab789c78350faa2444d65885dd1e17951a0ff32425d26368b5"
+   },
+   "evidence": "Imported by CoreAnalyticsFamily and IOHIDFamily in the slot after task_deallocate's run. The body checks that x0 is a task (zone id 26 of the address) and adds one to the reference count at +16 with the overflow check: task_reference; it lies 0x90 before task_deallocate in the original."
   }
  ]
 }
