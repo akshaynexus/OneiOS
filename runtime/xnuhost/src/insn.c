@@ -1,0 +1,83 @@
+// SPDX-License-Identifier: MIT
+// AArch64 instruction decoding for the two things xnuhost emulates in kernel context: integer
+// loads and stores that hit a trapped device page, and system-register accesses that are
+// undefined at EL0. Encodings: Arm ARM (DDI 0487), C4.1 "A64 instruction set encoding".
+#include "xnuhost.h"
+
+bool xh_decode_mem(uint32_t insn, xh_mem_insn *m)
+{
+  *m = (xh_mem_insn){ 0 };
+  m->rt = insn & 31;
+  m->rn = (insn >> 5) & 31;
+  if (insn & (1u << 26)) return false;                        // SIMD&FP register
+  unsigned size = insn >> 30, opc = (insn >> 22) & 3;
+
+  if ((insn & 0x3b000000) == 0x39000000 ||                   // register, unsigned immediate
+      (insn & 0x3b200000) == 0x38000000 ||                   // register, imm9 (unscaled, pre, post)
+      (insn & 0x3b200c00) == 0x38200800) {                   // register, register offset
+    bool imm9 = (insn & 0x3b200000) == 0x38000000;
+    unsigned type = (insn >> 10) & 3;
+    if (imm9 && type == 2) return false;                     // unprivileged (ldtr/sttr)
+    if (size == 3 && opc == 2) return false;                 // prfm
+    if (size == 3 && opc == 3) return false;
+    m->size = 1u << size;
+    m->load = opc != 0;
+    m->sign_extend = opc >= 2;
+    m->to64 = opc == 2 || (opc == 1 && size == 3);
+    if (opc == 3 && size == 2) return false;
+    if (imm9 && (type == 1 || type == 3)) {
+      m->writeback = true;
+      m->offset = (int64_t)((insn >> 12) & 0x1ff);
+      if (m->offset & 0x100) m->offset -= 0x200;
+    }
+    return true;
+  }
+  if ((insn & 0x3a000000) == 0x28000000) {                   // pair: stp/ldp/ldpsw
+    unsigned popc = insn >> 30, type = (insn >> 23) & 3;
+    bool load = insn & (1u << 22);
+    if (popc == 3 || (popc == 1 && !load)) return false;
+    m->pair = true;
+    m->rt2 = (insn >> 10) & 31;
+    m->size = popc == 2 ? 8 : 4;
+    m->load = load;
+    m->sign_extend = popc == 1;
+    m->to64 = popc != 0;
+    if (type == 1 || type == 3) {
+      m->writeback = true;
+      int64_t imm7 = (insn >> 15) & 0x7f;
+      if (imm7 & 0x40) imm7 -= 0x80;
+      m->offset = imm7 * (int64_t)m->size;
+    }
+    return true;
+  }
+  return false;
+}
+
+bool xh_decode_sys(uint32_t insn, xh_sys_insn *s)
+{
+  if ((insn & 0xffd00000) != 0xd5100000) return false;      // mrs/msr with op0 = 2 or 3
+  s->read = insn & (1u << 21);
+  s->op0 = 2 + ((insn >> 19) & 1);
+  s->op1 = (insn >> 16) & 7;
+  s->crn = (insn >> 12) & 15;
+  s->crm = (insn >> 8) & 15;
+  s->op2 = (insn >> 5) & 7;
+  s->rt = insn & 31;
+  return true;
+}
+
+// iOS user code reads its thread-specific data base with `mrs xN, TPIDRRO_EL0` (0xd53bd060 | N).
+// Linux leaves that register 0 and user space cannot write it, so the host keeps the base in
+// TPIDR_EL0 (`mrs xN, TPIDR_EL0` is 0xd53bd040 | N) and rewrites the reads when the kernel maps a
+// page executable. The risk is a data word in text that happens to equal the encoding.
+uint32_t xh_text_fixup(uint32_t *text, uint64_t size)
+{
+  uint32_t count = 0;
+  for (uint64_t i = 0; i < size / 4; i++) {
+    if ((text[i] & 0xffffffe0) == 0xd53bd060) {
+      text[i] = 0xd53bd040 | (text[i] & 31);
+      count++;
+    }
+  }
+  return count;
+}

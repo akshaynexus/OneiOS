@@ -1,0 +1,293 @@
+// SPDX-License-Identifier: MIT
+// xnuhost internals.
+#ifndef XNUHOST_INTERNAL_H
+#define XNUHOST_INTERNAL_H
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <pthread.h>
+#include "xnuhost/hostcall.h"
+
+#define XH_MAX_CPUS 8
+
+// ---- log (log.c) --------------------------------------------------------------------------------
+enum { XH_LOG_ERROR, XH_LOG_INFO, XH_LOG_DEBUG };
+void xh_log_open(const char *path, int level);
+void xh_log(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void xh_log_raw(const char *text, size_t length);       // guest console bytes, line-buffered
+// Async-signal-safe: fixed text and hex numbers straight to the log descriptor.
+void xh_log_signal(const char *text, uint64_t a, uint64_t b);
+#define LOGE(...) xh_log(XH_LOG_ERROR, __VA_ARGS__)
+#define LOGI(...) xh_log(XH_LOG_INFO, __VA_ARGS__)
+#define LOGD(...) xh_log(XH_LOG_DEBUG, __VA_ARGS__)
+
+// ---- configuration (config.c) -------------------------------------------------------------------
+#define XH_MAX_DISKS 6
+typedef struct {
+  char path[512];
+  bool writable;
+  bool data_store;          // the "droidvm,data-store" window
+  char seed[512];           // read-only image under a writable store ("" = none)
+} xh_disk_config;
+
+typedef struct {
+  int   session_abi;
+  char  mode[16];           // "takeover" (the OneOS session) or "bench" (a shell, no session files)
+  char  runtime[512], image[512], data[512], session[512];
+  char  kernel[512];        // default <image>/kernel.kc
+  char  identity[512];      // decoded device tree of the device, default <image>/identity.adt if present
+  char  boot_args[1024];
+  unsigned ncpu;
+  uint64_t ram_bytes;
+  xh_disk_config disk[XH_MAX_DISKS];
+  unsigned ndisk;
+  char  display[16];        // "shm", "drm", "none"
+  unsigned width, height;   // guest framebuffer; 0 = the panel's
+  bool  input;              // read /dev/input
+  bool  tasks;              // start the task factory
+  int   task_uid;           // uid of iOS task processes, -1 = xnuhost's own
+  int   log_level;
+  bool  legacy_boot_args;
+  bool  selftest;
+} xh_config;
+
+void xh_config_defaults(xh_config *c);
+// Applies "key=value" lines of a file (missing file is fine). Returns -1 on a bad line.
+int  xh_config_file(xh_config *c, const char *path);
+int  xh_config_set(xh_config *c, const char *key, const char *value);
+// Parses argv (and the ONEIOS_* environment). Returns 0, or -1 after printing what is wrong.
+int  xh_config_args(xh_config *c, int argc, char **argv);
+// Fills what depends on other values (kernel path, the image set's disks). Returns -1 on a problem.
+int  xh_config_finish(xh_config *c);
+uint64_t xh_parse_size(const char *text, bool *ok);
+
+// ---- registers of a trapped kernel context (arch) -----------------------------------------------
+typedef struct { uint64_t x[31], sp, pc, pstate; } xh_regs;
+static inline uint64_t xh_reg_get(const xh_regs *r, unsigned n) { return n == 31 ? 0 : r->x[n]; }
+static inline void xh_reg_set(xh_regs *r, unsigned n, uint64_t v) { if (n != 31) r->x[n] = v; }
+
+// ---- instruction decoding (insn.c) --------------------------------------------------------------
+typedef struct {
+  bool     load;            // load (to rt) or store (from rt)
+  unsigned size;            // access bytes: 1, 2, 4, 8
+  unsigned rt;              // 31 = zero register
+  bool     sign_extend;     // loads
+  bool     to64;            // sign-extend to 64 bits (else 32)
+  bool     writeback;       // pre/post index: base updated by `offset`
+  unsigned rn;              // base register (31 = sp)
+  int64_t  offset;          // writeback amount
+  bool     pair;            // ldp/stp: second register rt2 at address + size
+  unsigned rt2;
+} xh_mem_insn;
+// Decodes an AArch64 integer load/store. Returns false for anything else (SIMD, exclusive, ...).
+bool xh_decode_mem(uint32_t insn, xh_mem_insn *out);
+
+typedef struct {
+  bool     read;            // mrs (to rt) or msr (from rt)
+  unsigned op0, op1, crn, crm, op2, rt;
+} xh_sys_insn;
+#define XH_SYSREG(op0, op1, crn, crm, op2) ((op0) << 14 | (op1) << 11 | (crn) << 7 | (crm) << 3 | (op2))
+static inline unsigned xh_sys_key(const xh_sys_insn *s) { return XH_SYSREG(s->op0, s->op1, s->crn, s->crm, s->op2); }
+// mrs/msr with a register operand. Returns false otherwise.
+bool xh_decode_sys(uint32_t insn, xh_sys_insn *out);
+// TPIDRRO_EL0 reads rewritten to TPIDR_EL0 reads in [text, text+size). Returns the count.
+uint32_t xh_text_fixup(uint32_t *text, uint64_t size);
+
+// ---- guest RAM and the I/O aperture (mem.c) -----------------------------------------------------
+typedef struct {
+  int      fd;              // memfd of the RAM
+  uint8_t *host;            // where the window is mapped in xnuhost (= what the kernel sees)
+  uint64_t phys, size;
+  uint8_t *io_host;         // PROT_NONE reservation for the board's devices
+  uint64_t io_phys, io_size;
+} xh_mem;
+extern xh_mem g_mem;
+// Creates the RAM memfd (before the task factory forks).
+int  xh_mem_create(uint64_t size);
+// Maps the window so that virt = base_hint + (link_base & 2 MiB-1) style constraints hold:
+// the mapping address is congruent to `low21` modulo 2 MiB.
+int  xh_mem_map(uint64_t phys, uint64_t low21);
+// Reserves the PROT_NONE aperture the board's device windows live in.
+int  xh_mem_io(uint64_t phys, uint64_t size);
+// Host pointer for guest physical [pa, pa+len), NULL if not inside RAM.
+void *xh_ram(uint64_t pa, uint64_t len);
+
+// ---- MMIO dispatch (mmio.c) ---------------------------------------------------------------------
+typedef struct xh_mmio_region {
+  uint64_t base, size;
+  const char *name;
+  void *opaque;
+  uint64_t (*read)(void *opaque, uint64_t offset, unsigned size);
+  void (*write)(void *opaque, uint64_t offset, unsigned size, uint64_t value);
+} xh_mmio_region;
+int      xh_mmio_add(const xh_mmio_region *region);
+uint64_t xh_mmio_read(uint64_t pa, unsigned size);
+void     xh_mmio_write(uint64_t pa, unsigned size, uint64_t value);
+bool     xh_mmio_covers(uint64_t pa);
+// Emulates the load/store `insn` at regs->pc against physical address pa; advances pc.
+bool     xh_mmio_emulate(xh_regs *regs, uint32_t insn, uint64_t pa);
+
+// ---- interrupt controller: a GICv3 as ArmCpu drives it (gic.c) ----------------------------------
+#define XH_GIC_SPIS 224
+void     xh_gic_init(unsigned ncpu, uint64_t dist_base, uint64_t redist_base);
+void     xh_gic_set_spi(unsigned intid, bool level);          // device line
+void     xh_gic_set_ppi(unsigned cpu, unsigned intid, bool level);
+void     xh_gic_send_sgi(unsigned cpu, unsigned sgi);
+uint32_t xh_gic_ack(unsigned cpu);
+void     xh_gic_eoi(unsigned cpu, uint32_t intid);
+void     xh_gic_enable(unsigned cpu, uint32_t intid, bool enable);
+bool     xh_gic_pending(unsigned cpu);
+// ICC_* system registers. Returns false if the register is not the GIC's.
+bool     xh_gic_sysreg(unsigned cpu, const xh_sys_insn *insn, uint64_t *value);
+// Set by the machine layer: called with the state of a CPU's interrupt line whenever it may have changed.
+extern void (*xh_gic_notify)(unsigned cpu, bool line);
+void     xh_gic_map(void);                                    // registers the MMIO frames
+
+// ---- system-register and PSCI emulation (sysreg.c) ----------------------------------------------
+typedef struct {
+  uint64_t cntv_ctl, cntv_cval;
+  uint64_t daif;
+  uint64_t shadow[64];      // other EL1 registers the kernel writes and reads back
+  unsigned shadow_key[64];
+  unsigned nshadow;
+} xh_sysreg_state;
+typedef struct xh_vcpu xh_vcpu;
+// Emulates the undefined instruction `insn` trapped in kernel context. Returns false if it is not
+// one the host emulates. Advances regs->pc itself.
+bool xh_sysreg_emulate(xh_vcpu *vcpu, xh_regs *regs, uint32_t insn);
+
+// ---- vCPUs (cpu.c, arch) ------------------------------------------------------------------------
+struct xh_vcpu {
+  struct xh_cpu cpu;        // first: the ABI block
+  pthread_t thread;
+  int       tid;
+  bool      started;
+  uint64_t  entry, arg0, arg1, arg2;
+  uint8_t  *boot_stack, *host_stack, *sig_stack;
+  void     *timer;          // timer_t
+  bool      timer_armed;
+  uint64_t  timer_deadline;
+  uint32_t  idle;           // 1 while in cpu_idle
+  xh_sysreg_state sys;
+  uint64_t  stat_irqs, stat_mmio, stat_sysreg, stat_traps;
+};
+extern xh_vcpu g_vcpu[XH_MAX_CPUS];
+extern unsigned g_ncpu;
+extern struct xh_upcalls g_upcalls;
+extern bool g_upcalls_set;
+
+int      xh_cpu_init(unsigned ncpu);
+// Starts vCPU `index` at `entry` (x0..x2 = args). entry 0: upcalls->cpu_entry(cpu, a0).
+int      xh_cpu_start(unsigned index, uint64_t entry, uint64_t a0, uint64_t a1, uint64_t a2);
+void     xh_cpu_line(unsigned index, bool line);     // the interrupt line of a CPU (the GIC's notify hook)
+void     xh_cpu_timer_set(xh_vcpu *v, uint64_t deadline);
+void     xh_cpu_idle(xh_vcpu *v);
+bool     xh_cpu_timer_due(unsigned index);            // the level of a CPU's timer line (INTID 27)
+void     xh_cpu_frame_resume(xh_vcpu *v, const struct xh_frame *frame);
+uint64_t xh_counter(void);                            // CNTVCT_EL0 (host builds: a monotonic clock)
+uint64_t xh_counter_hz(void);
+xh_vcpu *xh_cpu_self(void);                           // the calling vCPU, NULL on other threads
+
+// ---- machine stop (main.c) ----------------------------------------------------------------------
+void xh_stop(uint32_t reason, uint32_t code, const char *why);     // any thread; returns
+bool xh_stopping(void);
+void xh_guest_ready(void);
+
+// ---- host-call vector (hostcalls.c, arch thunks) ------------------------------------------------
+extern struct xh_info g_info;
+const struct xh_vector *xh_vector(void);
+
+// ---- devices ------------------------------------------------------------------------------------
+// PL011 console (uart.c)
+void xh_uart_init(uint64_t base);
+
+// Disks (blk.c)
+typedef struct xh_blk xh_blk;
+xh_blk  *xh_blk_open(const xh_disk_config *config, const char **error);
+uint64_t xh_blk_bytes(const xh_blk *b);
+bool     xh_blk_writable(const xh_blk *b);
+int      xh_blk_read(xh_blk *b, uint64_t offset, void *buffer, uint64_t length);
+int      xh_blk_write(xh_blk *b, uint64_t offset, const void *buffer, uint64_t length);
+int      xh_blk_flush(xh_blk *b);
+void     xh_blk_close(xh_blk *b);
+
+// virtio-mmio transport, version 2, split queues (virtio.c)
+#define XH_VIRTIO_QUEUES 4
+#define XH_VIRTIO_QSIZE  256
+typedef struct xh_virtio xh_virtio;
+typedef struct { uint8_t *data; uint32_t length; bool writable; } xh_viov;
+typedef struct {
+  uint32_t device_id;
+  uint64_t features;                    // device features besides VERSION_1
+  unsigned nqueues;
+  // A buffer chain arrived on `queue`: iov[0..n). Returns the bytes written into writable parts;
+  // the transport puts the chain on the used ring and raises the interrupt.
+  // Returning -1 keeps the chain (the device completes it later with xh_virtio_push).
+  int64_t (*handle)(xh_virtio *dev, unsigned queue, uint16_t head, xh_viov *iov, unsigned n);
+  uint32_t (*config_read)(xh_virtio *dev, uint32_t offset, unsigned size);
+  void (*config_write)(xh_virtio *dev, uint32_t offset, unsigned size, uint32_t value);
+  void (*reset)(xh_virtio *dev);
+  // Queues (bit per index) the transport does not pop on a kick: the device takes their buffers
+  // itself with xh_virtio_pop when it has data (device-to-driver queues). kick() says buffers came.
+  uint32_t manual;
+  void (*kick)(xh_virtio *dev, unsigned queue);
+} xh_virtio_ops;
+xh_virtio *xh_virtio_create(uint64_t base, unsigned spi, const xh_virtio_ops *ops, void *opaque, const char *name);
+void      *xh_virtio_opaque(xh_virtio *dev);
+// The device's lock (recursive): what a device's own threads take around its state, so that it
+// nests the same way in them as in the vCPU that handles a register access.
+void       xh_virtio_lock(xh_virtio *dev);
+void       xh_virtio_unlock(xh_virtio *dev);
+// Takes the next available chain of `queue` without the guest's kick (device-initiated data, as
+// input events). Returns the count of parts, 0 if the guest has posted none.
+unsigned   xh_virtio_pop(xh_virtio *dev, unsigned queue, uint16_t *head, xh_viov *iov, unsigned max);
+void       xh_virtio_push(xh_virtio *dev, unsigned queue, uint16_t head, uint32_t written);
+void       xh_virtio_config_changed(xh_virtio *dev);
+// Test hook: guest memory translation (default xh_ram).
+extern void *(*xh_virtio_translate)(uint64_t pa, uint64_t len);
+uint64_t   xh_virtio_mmio_read(xh_virtio *dev, uint64_t offset, unsigned size);
+void       xh_virtio_mmio_write(xh_virtio *dev, uint64_t offset, unsigned size, uint64_t value);
+
+xh_virtio *xh_virtio_blk_create(uint64_t base, unsigned spi, xh_blk *disk);
+xh_virtio *xh_virtio_input_create(uint64_t base, unsigned spi);
+xh_virtio *xh_virtio_gpu_create(uint64_t base, unsigned spi, unsigned width, unsigned height);
+
+// Display (display.c): the scanout the guest draws.
+typedef struct {
+  unsigned width, height, stride;       // pixels, pixels, bytes; XRGB8888 (BGRA in memory)
+  uint8_t *pixels;                      // xnuhost's shadow of the visible frame
+} xh_display;
+int   xh_display_init(const xh_config *c, unsigned *width, unsigned *height);
+xh_display *xh_display_get(void);
+// The rectangle changed (already copied into pixels).
+void  xh_display_flush(unsigned x, unsigned y, unsigned w, unsigned h);
+void  xh_display_close(void);
+
+// Input (input.c): /dev/input/event* into the virtio-input device.
+int   xh_input_start(xh_virtio *dev, unsigned width, unsigned height);
+void  xh_input_stop(void);
+// virtio-input side
+void  xh_virtio_input_event(xh_virtio *dev, uint16_t type, uint16_t code, int32_t value);
+void  xh_virtio_input_set_abs(xh_virtio *dev, unsigned axis, int32_t min, int32_t max, int32_t res);
+
+// ---- iOS tasks (task.c; aarch64 Linux only) -----------------------------------------------------
+// Forks the task factory. Must run before any other thread exists and before RAM is mapped.
+int     xh_tasks_init(const xh_config *c);
+bool    xh_tasks_available(void);
+uint64_t xh_tasks_va_limit(void);
+void    xh_tasks_shutdown(void);
+int64_t xh_task_create(uint64_t *task);
+int64_t xh_task_destroy(uint64_t task);
+int64_t xh_task_map(uint64_t task, uint64_t va, uint64_t size, uint32_t prot, uint64_t phys);
+int64_t xh_task_unmap(uint64_t task, uint64_t va, uint64_t size);
+int64_t xh_task_protect(uint64_t task, uint64_t va, uint64_t size, uint32_t prot);
+int64_t xh_task_read(uint64_t task, uint64_t va, void *buffer, uint64_t size);
+int64_t xh_task_write(uint64_t task, uint64_t va, const void *buffer, uint64_t size);
+int64_t xh_thread_create(uint64_t task, uint64_t *thread);
+int64_t xh_thread_destroy(uint64_t thread);
+int64_t xh_thread_run(xh_vcpu *v, uint64_t thread, struct xh_user_state *state, struct xh_trap *trap);
+int64_t xh_thread_set_pac(uint64_t thread, uint32_t enabled);
+
+#endif
