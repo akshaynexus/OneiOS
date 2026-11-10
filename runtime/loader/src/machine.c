@@ -194,6 +194,9 @@ xl_adt_node *xl_machine_tree(const xl_machine *m, const char **error)
     xl_adt_set(chosen, "root-matching", match, (size_t)n + 1);
   }
   xl_adt_set_u32(chosen, "amfi-only-platform-code", 1);
+  // What iBoot writes: 0 = nothing locks the kernel's text (no CTRR under a host or a hypervisor). xnu-12377 asserts
+  // that it was given before DTrace's SDT probes ask ml_unsafe_kernel_text (bsd_init -> sdt_init).
+  xl_adt_set_u32(chosen, "kernel-ctrr-to-be-enabled", 0);
   if (m->panic_size) xl_adt_set_u32(chosen, "embedded-panic-log-size", (uint32_t)m->panic_size);
   if (m->text_fixups && m->text_fixups_length) xl_adt_set(chosen, "text-fixups", m->text_fixups, m->text_fixups_length);
   {

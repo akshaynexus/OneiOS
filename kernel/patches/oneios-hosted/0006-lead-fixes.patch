@@ -11,3 +11,30 @@ diff --git a/osfmk/arm64/pcb.c b/osfmk/arm64/pcb.c
  	if (__improbable(__builtin_arm_rsr("pan") == 0)) {
  		panic("stack handoff with PAN disabled");
  	}
+diff --git a/osfmk/arm/cpu_common.c b/osfmk/arm/cpu_common.c
+--- a/osfmk/arm/cpu_common.c
++++ b/osfmk/arm/cpu_common.c
+@@ -416,12 +416,23 @@
+ bool
+ sheng_sigp_recover(cpu_data_t *target_proc)
+ {
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted: xnuhost never loses an IPI (the line is a level and frame_resume raises it again), so a set
++	 * SIGPdisabled means what it says: the core has not reached processor_cpu_reinit yet. Clearing it from another
++	 * CPU in that window (which is wide when vCPUs are host threads) made the starting core's
++	 * assert_ml_cpu_signal_is_enabled(false) fail. The signal stays pending for it, as in Apple's XNU.
++	 */
++	(void)target_proc;
++	return false;
++#else
+ 	if ((os_atomic_load(&target_proc->cpu_flags, relaxed) & (InitState | StartedState)) != (InitState | StartedState)) {
+ 		return false;
+ 	}
+ 	os_atomic_andnot(&target_proc->cpu_signal, SIGPdisabled, acq_rel);
+ 	os_atomic_inc(&sheng_sigp_recovered, relaxed);
+ 	return true;
++#endif /* XNU_HOSTED */
+ }
+ 
+ static kern_return_t
