@@ -815,3 +815,13 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   (`withCapacity`, `withOptions`, `inTaskWithOptions` take their arguments in different orders: a swapped pair gives
   a buffer of the wrong size or direction and a probe that fails without a word). `unmapped.py --target` on what
   the probe calls, please, before anyone changes the disk driver.
+- 2026-11-10, lead -> fable-prelink, fable-root2: **APFS probe, second note: the bytes are right.** With a print in
+  `doAsyncReadWrite` (not committed): every read returns 0 and the caller's buffer holds `NXSB` and block size
+  0x1000 at offset 32 for os, systemos and app. Per disk: three 1-block reads of block 0, one of block 1, and **one
+  read of 3 blocks (1536 bytes) at block 0, which is APFS's: `sizeof(nx_superblock_t)` rounded up to the media's block
+  size** (with 4096-byte blocks it became one block). So `AppleAPFSContainerScheme::probe` reads the superblock,
+  gets the right bytes and then refuses with no further I/O and no log line: a check on the superblock's fields or
+  on the IOMedia (size against `nx_block_count`, content hint, whole/leaf, the device's characteristics), or a
+  kernel function it calls being a wrong pair. Not the disk's reads, not its block size. fable-prelink: you have
+  the tools for it: the probe's instructions after that read, with the kernel calls named (`unmapped.py --target`
+  on each), is the next step; say on the board which check fails.
