@@ -26,6 +26,656 @@
  ],
  "functions": [
   {
+   "original": "0xfffffe000b0f4bf4",
+   "native_symbol": "_proc_isinitproc",
+   "check": {
+    "address": "0xfffffe000b0f4bf4",
+    "size": 56,
+    "sha256": "0aa34d29dcc3fee7d8fb709b5112bb6d9d935ce33b53189c01e052babda90524"
+   },
+   "evidence": "bsd/kern/kern_proc.c, the three functions before proc_setpidversion in source order (proc_is64bit, proc_is64bit_data, proc_isinitproc): the first tests P_LP64 (bit 2 of p_flag at +1092) after a NULL check, the second finds the task behind the proc (proc + 3616 when the proc has one) and reads its data-model bit, the third loads the signed global initproc, returns 0 when it is NULL and p == initproc otherwise. The sandbox calls proc_isinitproc from a hook once the root is mounted."
+  },
+  {
+   "original": "0xfffffe000b0f4bd0",
+   "native_symbol": "_proc_is64bit_data",
+   "check": {
+    "address": "0xfffffe000b0f4bd0",
+    "size": 36,
+    "sha256": "02fef70c95f01d4e83a0be9b68ca5b9584037d15d63d0c9ddc09f1a491c20ff8"
+   },
+   "evidence": "bsd/kern/kern_proc.c, the three functions before proc_setpidversion in source order (proc_is64bit, proc_is64bit_data, proc_isinitproc): the first tests P_LP64 (bit 2 of p_flag at +1092) after a NULL check, the second finds the task behind the proc (proc + 3616 when the proc has one) and reads its data-model bit, the third loads the signed global initproc, returns 0 when it is NULL and p == initproc otherwise. The sandbox calls proc_isinitproc from a hook once the root is mounted."
+  },
+  {
+   "original": "0xfffffe000b0f4bb0",
+   "native_symbol": "_proc_is64bit",
+   "check": {
+    "address": "0xfffffe000b0f4bb0",
+    "size": 32,
+    "sha256": "2d767a25cad584c24f27d6565f9ff59e7702746ebe2d621f27345f5824766931"
+   },
+   "evidence": "bsd/kern/kern_proc.c, the three functions before proc_setpidversion in source order (proc_is64bit, proc_is64bit_data, proc_isinitproc): the first tests P_LP64 (bit 2 of p_flag at +1092) after a NULL check, the second finds the task behind the proc (proc + 3616 when the proc has one) and reads its data-model bit, the third loads the signed global initproc, returns 0 when it is NULL and p == initproc otherwise. The sandbox calls proc_isinitproc from a hook once the root is mounted."
+  },
+  {
+   "original": "0xfffffe000ade7a40",
+   "native_symbol": "_vfs_context_kernel",
+   "check": {
+    "address": "0xfffffe000ade7a40",
+    "size": 16,
+    "sha256": "8359a43b6a4013c49fde83a1184a66102221341f691120713dd36899e3d2b701"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c: the function directly before vfs_context_rele that returns the address of a static object (adrp/add x0; ret) is vfs_context_kernel, which returns &vfs_context0 and precedes vfs_context_rele in the source. The sandbox calls it from its mount hook after the root volume is mounted."
+  },
+  {
+   "original": "0xfffffe000abdc318",
+   "native_symbol": "_lck_rw_gate_wait",
+   "check": {
+    "address": "0xfffffe000abdc318",
+    "size": 812,
+    "sha256": "dba9b12df6a6e76cc684e5dbe85d9e7b3817e3b6eb92c4008c64b24609f2afe3"
+   },
+   "evidence": "The rw gate block of osfmk/kern/locks.c, the ten functions from 0xfffffe000abdb7e8 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait), directly before the mutex gate block at 0xfffffe000abdcc04 and with the same sizes as its members (28, 56, 312, 348, 308, 284, 12, 16, 12); open, handoff and steal are the wrappers that drop the lock argument (mov x0, x1; b) in front of the shared gate_open, gate_handoff and gate_steal. The order rule had paired lck_rw_gate_close (gate in x1) with the static gate_try_close (gate in x0), and APFS's call during the root mount panicked with 'Gate used is invalid'."
+  },
+  {
+   "original": "0xfffffe000abdc13c",
+   "native_symbol": "_lck_rw_gate_steal",
+   "check": {
+    "address": "0xfffffe000abdc13c",
+    "size": 12,
+    "sha256": "69780f93a2545b12bedced7cdd59e6362bc76457186848f337b32cfafc711571"
+   },
+   "evidence": "The rw gate block of osfmk/kern/locks.c, the ten functions from 0xfffffe000abdb7e8 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait), directly before the mutex gate block at 0xfffffe000abdcc04 and with the same sizes as its members (28, 56, 312, 348, 308, 284, 12, 16, 12); open, handoff and steal are the wrappers that drop the lock argument (mov x0, x1; b) in front of the shared gate_open, gate_handoff and gate_steal. The order rule had paired lck_rw_gate_close (gate in x1) with the static gate_try_close (gate in x0), and APFS's call during the root mount panicked with 'Gate used is invalid'."
+  },
+  {
+   "original": "0xfffffe000abdbecc",
+   "native_symbol": "_lck_rw_gate_handoff",
+   "check": {
+    "address": "0xfffffe000abdbecc",
+    "size": 16,
+    "sha256": "2440c3419c607105da0ead5687e1b4570a8247f91ba1f2a5c3b1c282e2792dc9"
+   },
+   "evidence": "The rw gate block of osfmk/kern/locks.c, the ten functions from 0xfffffe000abdb7e8 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait), directly before the mutex gate block at 0xfffffe000abdcc04 and with the same sizes as its members (28, 56, 312, 348, 308, 284, 12, 16, 12); open, handoff and steal are the wrappers that drop the lock argument (mov x0, x1; b) in front of the shared gate_open, gate_handoff and gate_steal. The order rule had paired lck_rw_gate_close (gate in x1) with the static gate_try_close (gate in x0), and APFS's call during the root mount panicked with 'Gate used is invalid'."
+  },
+  {
+   "original": "0xfffffe000abdbd20",
+   "native_symbol": "_lck_rw_gate_open",
+   "check": {
+    "address": "0xfffffe000abdbd20",
+    "size": 12,
+    "sha256": "69780f93a2545b12bedced7cdd59e6362bc76457186848f337b32cfafc711571"
+   },
+   "evidence": "The rw gate block of osfmk/kern/locks.c, the ten functions from 0xfffffe000abdb7e8 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait), directly before the mutex gate block at 0xfffffe000abdcc04 and with the same sizes as its members (28, 56, 312, 348, 308, 284, 12, 16, 12); open, handoff and steal are the wrappers that drop the lock argument (mov x0, x1; b) in front of the shared gate_open, gate_handoff and gate_steal. The order rule had paired lck_rw_gate_close (gate in x1) with the static gate_try_close (gate in x0), and APFS's call during the root mount panicked with 'Gate used is invalid'."
+  },
+  {
+   "original": "0xfffffe000abdbc04",
+   "native_symbol": "_lck_rw_gate_close",
+   "check": {
+    "address": "0xfffffe000abdbc04",
+    "size": 284,
+    "sha256": "ce4cc6230d93630d9fe652a78880f84f65f6fb5fd43605017d9cf10a3e115028"
+   },
+   "evidence": "The rw gate block of osfmk/kern/locks.c, the ten functions from 0xfffffe000abdb7e8 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait), directly before the mutex gate block at 0xfffffe000abdcc04 and with the same sizes as its members (28, 56, 312, 348, 308, 284, 12, 16, 12); open, handoff and steal are the wrappers that drop the lock argument (mov x0, x1; b) in front of the shared gate_open, gate_handoff and gate_steal. The order rule had paired lck_rw_gate_close (gate in x1) with the static gate_try_close (gate in x0), and APFS's call during the root mount panicked with 'Gate used is invalid'."
+  },
+  {
+   "original": "0xfffffe000abdbad0",
+   "native_symbol": "_lck_rw_gate_try_close",
+   "check": {
+    "address": "0xfffffe000abdbad0",
+    "size": 308,
+    "sha256": "3483c2f6402a4abad38d361ab32e719befd86c4b1b3267fe36d7867b6d21e00b"
+   },
+   "evidence": "The rw gate block of osfmk/kern/locks.c, the ten functions from 0xfffffe000abdb7e8 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait), directly before the mutex gate block at 0xfffffe000abdcc04 and with the same sizes as its members (28, 56, 312, 348, 308, 284, 12, 16, 12); open, handoff and steal are the wrappers that drop the lock argument (mov x0, x1; b) in front of the shared gate_open, gate_handoff and gate_steal. The order rule had paired lck_rw_gate_close (gate in x1) with the static gate_try_close (gate in x0), and APFS's call during the root mount panicked with 'Gate used is invalid'."
+  },
+  {
+   "original": "0xfffffe000abdb974",
+   "native_symbol": "_lck_rw_gate_free",
+   "check": {
+    "address": "0xfffffe000abdb974",
+    "size": 348,
+    "sha256": "41e64673c4611e727e320ca7977d5a2475512f6f313c86096c29f51acf926f7d"
+   },
+   "evidence": "The rw gate block of osfmk/kern/locks.c, the ten functions from 0xfffffe000abdb7e8 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait), directly before the mutex gate block at 0xfffffe000abdcc04 and with the same sizes as its members (28, 56, 312, 348, 308, 284, 12, 16, 12); open, handoff and steal are the wrappers that drop the lock argument (mov x0, x1; b) in front of the shared gate_open, gate_handoff and gate_steal. The order rule had paired lck_rw_gate_close (gate in x1) with the static gate_try_close (gate in x0), and APFS's call during the root mount panicked with 'Gate used is invalid'."
+  },
+  {
+   "original": "0xfffffe000abdb83c",
+   "native_symbol": "_lck_rw_gate_destroy",
+   "check": {
+    "address": "0xfffffe000abdb83c",
+    "size": 312,
+    "sha256": "fe95b7bb5593ba6024e9db31bb46e67fb8c346ade8618d8073b455960abdf5b3"
+   },
+   "evidence": "The rw gate block of osfmk/kern/locks.c, the ten functions from 0xfffffe000abdb7e8 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait), directly before the mutex gate block at 0xfffffe000abdcc04 and with the same sizes as its members (28, 56, 312, 348, 308, 284, 12, 16, 12); open, handoff and steal are the wrappers that drop the lock argument (mov x0, x1; b) in front of the shared gate_open, gate_handoff and gate_steal. The order rule had paired lck_rw_gate_close (gate in x1) with the static gate_try_close (gate in x0), and APFS's call during the root mount panicked with 'Gate used is invalid'."
+  },
+  {
+   "original": "0xfffffe000abdb804",
+   "native_symbol": "_lck_rw_gate_alloc_init",
+   "check": {
+    "address": "0xfffffe000abdb804",
+    "size": 56,
+    "sha256": "45e706664898ee2f48ccc575c16094c223f7466cca2f868c430dbe2cb268bc9c"
+   },
+   "evidence": "The rw gate block of osfmk/kern/locks.c, the ten functions from 0xfffffe000abdb7e8 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait), directly before the mutex gate block at 0xfffffe000abdcc04 and with the same sizes as its members (28, 56, 312, 348, 308, 284, 12, 16, 12); open, handoff and steal are the wrappers that drop the lock argument (mov x0, x1; b) in front of the shared gate_open, gate_handoff and gate_steal. The order rule had paired lck_rw_gate_close (gate in x1) with the static gate_try_close (gate in x0), and APFS's call during the root mount panicked with 'Gate used is invalid'."
+  },
+  {
+   "original": "0xfffffe000abdb7e8",
+   "native_symbol": "_lck_rw_gate_init",
+   "check": {
+    "address": "0xfffffe000abdb7e8",
+    "size": 28,
+    "sha256": "1f866e13d5bb144c14941577a665234299a990b4f73bf0a99668ba3f2de676aa"
+   },
+   "evidence": "The rw gate block of osfmk/kern/locks.c, the ten functions from 0xfffffe000abdb7e8 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait), directly before the mutex gate block at 0xfffffe000abdcc04 and with the same sizes as its members (28, 56, 312, 348, 308, 284, 12, 16, 12); open, handoff and steal are the wrappers that drop the lock argument (mov x0, x1; b) in front of the shared gate_open, gate_handoff and gate_steal. The order rule had paired lck_rw_gate_close (gate in x1) with the static gate_try_close (gate in x0), and APFS's call during the root mount panicked with 'Gate used is invalid'."
+  },
+  {
+   "original": "0xfffffe000ad99448",
+   "native_symbol": "_cache_lookup_ext",
+   "check": {
+    "address": "0xfffffe000ad99448",
+    "size": 1232,
+    "sha256": "49b29634098a17a1ad4f229265675e9a4378c3b228c2560577d78266606dfdc5"
+   },
+   "evidence": "bsd/vfs/vfs_cache.c: cache_lookup is the three-instruction wrapper (mov w3, #0; b) directly before cache_enter_create, as in the source, where it returns cache_lookup_ext(dvp, vpp, cnp, 0); its branch target, the 1232-byte function before it, is cache_lookup_ext. APFS calls cache_lookup while it mounts the root volume."
+  },
+  {
+   "original": "0xfffffe000ad99918",
+   "native_symbol": "_cache_lookup",
+   "check": {
+    "address": "0xfffffe000ad99918",
+    "size": 12,
+    "sha256": "0e13a1cf4f9f3e6ab86a77382c23b0723d868488b382271128aefac3bd6840f9"
+   },
+   "evidence": "bsd/vfs/vfs_cache.c: cache_lookup is the three-instruction wrapper (mov w3, #0; b) directly before cache_enter_create, as in the source, where it returns cache_lookup_ext(dvp, vpp, cnp, 0); its branch target, the 1232-byte function before it, is cache_lookup_ext. APFS calls cache_lookup while it mounts the root volume."
+  },
+  {
+   "original": "0xfffffe000b0f865c",
+   "native_symbol": "_proc_is_rsr",
+   "check": {
+    "address": "0xfffffe000b0f865c",
+    "size": 16,
+    "sha256": "ae4788f73fe2513c097e2f13df8513f4af4d7ae0684f553be5a8917cf8dc7d57"
+   },
+   "evidence": "The p_vfs_iopolicy accessors of bsd/kern/kern_proc.c, in source order after proc_is_third_party_debuggable_driver and before csops_internal; each reads the 16-bit policy word at proc+1558 and tests one bit: 0x1 FORCE_HFS_CASE_SENSITIVITY, 0x20 IGNORE_CONTENT_PROTECTION, then (between those and skip_mtime_update, so by position; Apple's bit is 15 where this source has 0x40) ignores_node_permissions, the 124-byte one that compares current_proc with p and tests uu_flag bits 18/19 and policy bit 7 is proc_skip_mtime_update, 0x100 ALLOW_LOW_SPACE_WRITES; the last reads p_ladvflag (+1104) bit 2 P_RSR. APFS calls the first on the mounting process after the root hash check. The bit-10 accessor at 0xfffffe000b0f864c is left unpaired: 0x400 is ALTLINK here but its place is DISALLOW_RW_FOR_O_EVTONLY's."
+  },
+  {
+   "original": "0xfffffe000b0f863c",
+   "native_symbol": "_proc_allow_low_space_writes",
+   "check": {
+    "address": "0xfffffe000b0f863c",
+    "size": 16,
+    "sha256": "a2b7f414de92f7ba03c49cc6cab085b624e2135bbe123fd2d9a9c03e96293500"
+   },
+   "evidence": "The p_vfs_iopolicy accessors of bsd/kern/kern_proc.c, in source order after proc_is_third_party_debuggable_driver and before csops_internal; each reads the 16-bit policy word at proc+1558 and tests one bit: 0x1 FORCE_HFS_CASE_SENSITIVITY, 0x20 IGNORE_CONTENT_PROTECTION, then (between those and skip_mtime_update, so by position; Apple's bit is 15 where this source has 0x40) ignores_node_permissions, the 124-byte one that compares current_proc with p and tests uu_flag bits 18/19 and policy bit 7 is proc_skip_mtime_update, 0x100 ALLOW_LOW_SPACE_WRITES; the last reads p_ladvflag (+1104) bit 2 P_RSR. APFS calls the first on the mounting process after the root hash check. The bit-10 accessor at 0xfffffe000b0f864c is left unpaired: 0x400 is ALTLINK here but its place is DISALLOW_RW_FOR_O_EVTONLY's."
+  },
+  {
+   "original": "0xfffffe000b0f85c0",
+   "native_symbol": "_proc_skip_mtime_update",
+   "check": {
+    "address": "0xfffffe000b0f85c0",
+    "size": 124,
+    "sha256": "647a3a2e01094fd5538c116eb2f5a28afe7c12cbfb7c4c5a91b45135a23fa75b"
+   },
+   "evidence": "The p_vfs_iopolicy accessors of bsd/kern/kern_proc.c, in source order after proc_is_third_party_debuggable_driver and before csops_internal; each reads the 16-bit policy word at proc+1558 and tests one bit: 0x1 FORCE_HFS_CASE_SENSITIVITY, 0x20 IGNORE_CONTENT_PROTECTION, then (between those and skip_mtime_update, so by position; Apple's bit is 15 where this source has 0x40) ignores_node_permissions, the 124-byte one that compares current_proc with p and tests uu_flag bits 18/19 and policy bit 7 is proc_skip_mtime_update, 0x100 ALLOW_LOW_SPACE_WRITES; the last reads p_ladvflag (+1104) bit 2 P_RSR. APFS calls the first on the mounting process after the root hash check. The bit-10 accessor at 0xfffffe000b0f864c is left unpaired: 0x400 is ALTLINK here but its place is DISALLOW_RW_FOR_O_EVTONLY's."
+  },
+  {
+   "original": "0xfffffe000b0f85b0",
+   "native_symbol": "_proc_ignores_node_permissions",
+   "check": {
+    "address": "0xfffffe000b0f85b0",
+    "size": 16,
+    "sha256": "1a512b66fded2683de20785fe5de374688bb38a790ff0d7bc8f113a96e606184"
+   },
+   "evidence": "The p_vfs_iopolicy accessors of bsd/kern/kern_proc.c, in source order after proc_is_third_party_debuggable_driver and before csops_internal; each reads the 16-bit policy word at proc+1558 and tests one bit: 0x1 FORCE_HFS_CASE_SENSITIVITY, 0x20 IGNORE_CONTENT_PROTECTION, then (between those and skip_mtime_update, so by position; Apple's bit is 15 where this source has 0x40) ignores_node_permissions, the 124-byte one that compares current_proc with p and tests uu_flag bits 18/19 and policy bit 7 is proc_skip_mtime_update, 0x100 ALLOW_LOW_SPACE_WRITES; the last reads p_ladvflag (+1104) bit 2 P_RSR. APFS calls the first on the mounting process after the root hash check. The bit-10 accessor at 0xfffffe000b0f864c is left unpaired: 0x400 is ALTLINK here but its place is DISALLOW_RW_FOR_O_EVTONLY's."
+  },
+  {
+   "original": "0xfffffe000b0f85a0",
+   "native_symbol": "_proc_ignores_content_protection",
+   "check": {
+    "address": "0xfffffe000b0f85a0",
+    "size": 16,
+    "sha256": "cc4a453a777e8985e901e5b8dbbe79cfdb91459d5867cf203fecf28e5e512161"
+   },
+   "evidence": "The p_vfs_iopolicy accessors of bsd/kern/kern_proc.c, in source order after proc_is_third_party_debuggable_driver and before csops_internal; each reads the 16-bit policy word at proc+1558 and tests one bit: 0x1 FORCE_HFS_CASE_SENSITIVITY, 0x20 IGNORE_CONTENT_PROTECTION, then (between those and skip_mtime_update, so by position; Apple's bit is 15 where this source has 0x40) ignores_node_permissions, the 124-byte one that compares current_proc with p and tests uu_flag bits 18/19 and policy bit 7 is proc_skip_mtime_update, 0x100 ALLOW_LOW_SPACE_WRITES; the last reads p_ladvflag (+1104) bit 2 P_RSR. APFS calls the first on the mounting process after the root hash check. The bit-10 accessor at 0xfffffe000b0f864c is left unpaired: 0x400 is ALTLINK here but its place is DISALLOW_RW_FOR_O_EVTONLY's."
+  },
+  {
+   "original": "0xfffffe000b0f8590",
+   "native_symbol": "_proc_is_forcing_hfs_case_sensitivity",
+   "check": {
+    "address": "0xfffffe000b0f8590",
+    "size": 16,
+    "sha256": "0f4c5f30ff56aa1624912fc973f089c5b5ea83e13b4b2c8b668ba92368671512"
+   },
+   "evidence": "The p_vfs_iopolicy accessors of bsd/kern/kern_proc.c, in source order after proc_is_third_party_debuggable_driver and before csops_internal; each reads the 16-bit policy word at proc+1558 and tests one bit: 0x1 FORCE_HFS_CASE_SENSITIVITY, 0x20 IGNORE_CONTENT_PROTECTION, then (between those and skip_mtime_update, so by position; Apple's bit is 15 where this source has 0x40) ignores_node_permissions, the 124-byte one that compares current_proc with p and tests uu_flag bits 18/19 and policy bit 7 is proc_skip_mtime_update, 0x100 ALLOW_LOW_SPACE_WRITES; the last reads p_ladvflag (+1104) bit 2 P_RSR. APFS calls the first on the mounting process after the root hash check. The bit-10 accessor at 0xfffffe000b0f864c is left unpaired: 0x400 is ALTLINK here but its place is DISALLOW_RW_FOR_O_EVTONLY's."
+  },
+  {
+   "original": "0xfffffe000ade87c8",
+   "native_symbol": "_vnode_clearnoflush",
+   "check": {
+    "address": "0xfffffe000ade87c8",
+    "size": 160,
+    "sha256": "3694d50da4a4342ece8d6c9061bf9a6be3a6f9cb4e0cf4bbcb6598cd620d306c"
+   },
+   "evidence": "The vnode flag setters of bsd/vfs/kpi_vfs.c, each named by the bit of v_flag (+84) it sets or clears under the vnode lock, or tests: 0x400 VNOCACHE_DATA (setnocache sets, clearnocache clears), 0x800000 VOPENEVT (set_openevt, clear_openevt), 0x2000 VRAOFF (setnoreadahead, clearnoreadahead), bit 27 VFASTDEVICECANDIDATE (is, set, clear), bit 28 VAUTOCANDIDATE (is, set), 0x40000 VNOFLUSH (setnoflush, clearnoflush). The matcher's order rule had the first three shifted by one, so that clearnocache set the bit and set_openevt cleared VNOCACHE_DATA. APFS calls vnode_setnoreadahead while it mounts."
+  },
+  {
+   "original": "0xfffffe000ade8728",
+   "native_symbol": "_vnode_setnoflush",
+   "check": {
+    "address": "0xfffffe000ade8728",
+    "size": 160,
+    "sha256": "0fc634e2c382fe5fa890d6cc11c765ff1942989d73ec012fae1fa76b93552c46"
+   },
+   "evidence": "The vnode flag setters of bsd/vfs/kpi_vfs.c, each named by the bit of v_flag (+84) it sets or clears under the vnode lock, or tests: 0x400 VNOCACHE_DATA (setnocache sets, clearnocache clears), 0x800000 VOPENEVT (set_openevt, clear_openevt), 0x2000 VRAOFF (setnoreadahead, clearnoreadahead), bit 27 VFASTDEVICECANDIDATE (is, set, clear), bit 28 VAUTOCANDIDATE (is, set), 0x40000 VNOFLUSH (setnoflush, clearnoflush). The matcher's order rule had the first three shifted by one, so that clearnocache set the bit and set_openevt cleared VNOCACHE_DATA. APFS calls vnode_setnoreadahead while it mounts."
+  },
+  {
+   "original": "0xfffffe000ade8688",
+   "native_symbol": "_vnode_setautocandidate",
+   "check": {
+    "address": "0xfffffe000ade8688",
+    "size": 160,
+    "sha256": "14b98d6b568892ada92fe84f8a6f8238ba475a0c9c283f81bc65a4592603e8b9"
+   },
+   "evidence": "The vnode flag setters of bsd/vfs/kpi_vfs.c, each named by the bit of v_flag (+84) it sets or clears under the vnode lock, or tests: 0x400 VNOCACHE_DATA (setnocache sets, clearnocache clears), 0x800000 VOPENEVT (set_openevt, clear_openevt), 0x2000 VRAOFF (setnoreadahead, clearnoreadahead), bit 27 VFASTDEVICECANDIDATE (is, set, clear), bit 28 VAUTOCANDIDATE (is, set), 0x40000 VNOFLUSH (setnoflush, clearnoflush). The matcher's order rule had the first three shifted by one, so that clearnocache set the bit and set_openevt cleared VNOCACHE_DATA. APFS calls vnode_setnoreadahead while it mounts."
+  },
+  {
+   "original": "0xfffffe000ade8678",
+   "native_symbol": "_vnode_isautocandidate",
+   "check": {
+    "address": "0xfffffe000ade8678",
+    "size": 16,
+    "sha256": "0971fb3a162cd84bbff8556511c58530cf155d48384695ba2d54bfe95dba14b0"
+   },
+   "evidence": "The vnode flag setters of bsd/vfs/kpi_vfs.c, each named by the bit of v_flag (+84) it sets or clears under the vnode lock, or tests: 0x400 VNOCACHE_DATA (setnocache sets, clearnocache clears), 0x800000 VOPENEVT (set_openevt, clear_openevt), 0x2000 VRAOFF (setnoreadahead, clearnoreadahead), bit 27 VFASTDEVICECANDIDATE (is, set, clear), bit 28 VAUTOCANDIDATE (is, set), 0x40000 VNOFLUSH (setnoflush, clearnoflush). The matcher's order rule had the first three shifted by one, so that clearnocache set the bit and set_openevt cleared VNOCACHE_DATA. APFS calls vnode_setnoreadahead while it mounts."
+  },
+  {
+   "original": "0xfffffe000ade85d8",
+   "native_symbol": "_vnode_clearfastdevicecandidate",
+   "check": {
+    "address": "0xfffffe000ade85d8",
+    "size": 160,
+    "sha256": "1c9f4c33768fc0f650fc7e0599f5d08cc86996c30649477f94113df94c7ac65a"
+   },
+   "evidence": "The vnode flag setters of bsd/vfs/kpi_vfs.c, each named by the bit of v_flag (+84) it sets or clears under the vnode lock, or tests: 0x400 VNOCACHE_DATA (setnocache sets, clearnocache clears), 0x800000 VOPENEVT (set_openevt, clear_openevt), 0x2000 VRAOFF (setnoreadahead, clearnoreadahead), bit 27 VFASTDEVICECANDIDATE (is, set, clear), bit 28 VAUTOCANDIDATE (is, set), 0x40000 VNOFLUSH (setnoflush, clearnoflush). The matcher's order rule had the first three shifted by one, so that clearnocache set the bit and set_openevt cleared VNOCACHE_DATA. APFS calls vnode_setnoreadahead while it mounts."
+  },
+  {
+   "original": "0xfffffe000ade8538",
+   "native_symbol": "_vnode_setfastdevicecandidate",
+   "check": {
+    "address": "0xfffffe000ade8538",
+    "size": 160,
+    "sha256": "53f4592d595f7c48d8c0715410cf6fb56f4210d1e212a60c3807a6947777986c"
+   },
+   "evidence": "The vnode flag setters of bsd/vfs/kpi_vfs.c, each named by the bit of v_flag (+84) it sets or clears under the vnode lock, or tests: 0x400 VNOCACHE_DATA (setnocache sets, clearnocache clears), 0x800000 VOPENEVT (set_openevt, clear_openevt), 0x2000 VRAOFF (setnoreadahead, clearnoreadahead), bit 27 VFASTDEVICECANDIDATE (is, set, clear), bit 28 VAUTOCANDIDATE (is, set), 0x40000 VNOFLUSH (setnoflush, clearnoflush). The matcher's order rule had the first three shifted by one, so that clearnocache set the bit and set_openevt cleared VNOCACHE_DATA. APFS calls vnode_setnoreadahead while it mounts."
+  },
+  {
+   "original": "0xfffffe000ade8528",
+   "native_symbol": "_vnode_isfastdevicecandidate",
+   "check": {
+    "address": "0xfffffe000ade8528",
+    "size": 16,
+    "sha256": "1eb67b9308955cddabe7968d45b70a69a7e9299df9c1d4408f8731bed495e2c0"
+   },
+   "evidence": "The vnode flag setters of bsd/vfs/kpi_vfs.c, each named by the bit of v_flag (+84) it sets or clears under the vnode lock, or tests: 0x400 VNOCACHE_DATA (setnocache sets, clearnocache clears), 0x800000 VOPENEVT (set_openevt, clear_openevt), 0x2000 VRAOFF (setnoreadahead, clearnoreadahead), bit 27 VFASTDEVICECANDIDATE (is, set, clear), bit 28 VAUTOCANDIDATE (is, set), 0x40000 VNOFLUSH (setnoflush, clearnoflush). The matcher's order rule had the first three shifted by one, so that clearnocache set the bit and set_openevt cleared VNOCACHE_DATA. APFS calls vnode_setnoreadahead while it mounts."
+  },
+  {
+   "original": "0xfffffe000ade8488",
+   "native_symbol": "_vnode_clearnoreadahead",
+   "check": {
+    "address": "0xfffffe000ade8488",
+    "size": 160,
+    "sha256": "2a11a409232fc9244e8234339e4b14011c99d918ac66d83cebdbf9ec0856596d"
+   },
+   "evidence": "The vnode flag setters of bsd/vfs/kpi_vfs.c, each named by the bit of v_flag (+84) it sets or clears under the vnode lock, or tests: 0x400 VNOCACHE_DATA (setnocache sets, clearnocache clears), 0x800000 VOPENEVT (set_openevt, clear_openevt), 0x2000 VRAOFF (setnoreadahead, clearnoreadahead), bit 27 VFASTDEVICECANDIDATE (is, set, clear), bit 28 VAUTOCANDIDATE (is, set), 0x40000 VNOFLUSH (setnoflush, clearnoflush). The matcher's order rule had the first three shifted by one, so that clearnocache set the bit and set_openevt cleared VNOCACHE_DATA. APFS calls vnode_setnoreadahead while it mounts."
+  },
+  {
+   "original": "0xfffffe000ade83e8",
+   "native_symbol": "_vnode_setnoreadahead",
+   "check": {
+    "address": "0xfffffe000ade83e8",
+    "size": 160,
+    "sha256": "6d3e6e64580a0e5f85f7e8d6f10a4197d190124b8381a810f02519f79f5e5ba5"
+   },
+   "evidence": "The vnode flag setters of bsd/vfs/kpi_vfs.c, each named by the bit of v_flag (+84) it sets or clears under the vnode lock, or tests: 0x400 VNOCACHE_DATA (setnocache sets, clearnocache clears), 0x800000 VOPENEVT (set_openevt, clear_openevt), 0x2000 VRAOFF (setnoreadahead, clearnoreadahead), bit 27 VFASTDEVICECANDIDATE (is, set, clear), bit 28 VAUTOCANDIDATE (is, set), 0x40000 VNOFLUSH (setnoflush, clearnoflush). The matcher's order rule had the first three shifted by one, so that clearnocache set the bit and set_openevt cleared VNOCACHE_DATA. APFS calls vnode_setnoreadahead while it mounts."
+  },
+  {
+   "original": "0xfffffe000ade8348",
+   "native_symbol": "_vnode_clear_openevt",
+   "check": {
+    "address": "0xfffffe000ade8348",
+    "size": 160,
+    "sha256": "683993125216b6d05ecbae3267aa3c76bcd63c700d7d34f2cb957fe761c758b3"
+   },
+   "evidence": "The vnode flag setters of bsd/vfs/kpi_vfs.c, each named by the bit of v_flag (+84) it sets or clears under the vnode lock, or tests: 0x400 VNOCACHE_DATA (setnocache sets, clearnocache clears), 0x800000 VOPENEVT (set_openevt, clear_openevt), 0x2000 VRAOFF (setnoreadahead, clearnoreadahead), bit 27 VFASTDEVICECANDIDATE (is, set, clear), bit 28 VAUTOCANDIDATE (is, set), 0x40000 VNOFLUSH (setnoflush, clearnoflush). The matcher's order rule had the first three shifted by one, so that clearnocache set the bit and set_openevt cleared VNOCACHE_DATA. APFS calls vnode_setnoreadahead while it mounts."
+  },
+  {
+   "original": "0xfffffe000ade82a8",
+   "native_symbol": "_vnode_set_openevt",
+   "check": {
+    "address": "0xfffffe000ade82a8",
+    "size": 160,
+    "sha256": "900bec6330ac486ebbfc5c7b02146afc070cff3c4528130797a53cd8e5fd75ef"
+   },
+   "evidence": "The vnode flag setters of bsd/vfs/kpi_vfs.c, each named by the bit of v_flag (+84) it sets or clears under the vnode lock, or tests: 0x400 VNOCACHE_DATA (setnocache sets, clearnocache clears), 0x800000 VOPENEVT (set_openevt, clear_openevt), 0x2000 VRAOFF (setnoreadahead, clearnoreadahead), bit 27 VFASTDEVICECANDIDATE (is, set, clear), bit 28 VAUTOCANDIDATE (is, set), 0x40000 VNOFLUSH (setnoflush, clearnoflush). The matcher's order rule had the first three shifted by one, so that clearnocache set the bit and set_openevt cleared VNOCACHE_DATA. APFS calls vnode_setnoreadahead while it mounts."
+  },
+  {
+   "original": "0xfffffe000ade8208",
+   "native_symbol": "_vnode_clearnocache",
+   "check": {
+    "address": "0xfffffe000ade8208",
+    "size": 160,
+    "sha256": "4176b6c0674dc4ec4abca6c00183f20c8b9b9f03ffca4b3efe561ea331127b5b"
+   },
+   "evidence": "The vnode flag setters of bsd/vfs/kpi_vfs.c, each named by the bit of v_flag (+84) it sets or clears under the vnode lock, or tests: 0x400 VNOCACHE_DATA (setnocache sets, clearnocache clears), 0x800000 VOPENEVT (set_openevt, clear_openevt), 0x2000 VRAOFF (setnoreadahead, clearnoreadahead), bit 27 VFASTDEVICECANDIDATE (is, set, clear), bit 28 VAUTOCANDIDATE (is, set), 0x40000 VNOFLUSH (setnoflush, clearnoflush). The matcher's order rule had the first three shifted by one, so that clearnocache set the bit and set_openevt cleared VNOCACHE_DATA. APFS calls vnode_setnoreadahead while it mounts."
+  },
+  {
+   "original": "0xfffffe000ade8168",
+   "native_symbol": "_vnode_setnocache",
+   "check": {
+    "address": "0xfffffe000ade8168",
+    "size": 160,
+    "sha256": "68b377208711a53ea2b1215bcefd1075cb6d5a50da1a5fd8524477b831788f06"
+   },
+   "evidence": "The vnode flag setters of bsd/vfs/kpi_vfs.c, each named by the bit of v_flag (+84) it sets or clears under the vnode lock, or tests: 0x400 VNOCACHE_DATA (setnocache sets, clearnocache clears), 0x800000 VOPENEVT (set_openevt, clear_openevt), 0x2000 VRAOFF (setnoreadahead, clearnoreadahead), bit 27 VFASTDEVICECANDIDATE (is, set, clear), bit 28 VAUTOCANDIDATE (is, set), 0x40000 VNOFLUSH (setnoflush, clearnoflush). The matcher's order rule had the first three shifted by one, so that clearnocache set the bit and set_openevt cleared VNOCACHE_DATA. APFS calls vnode_setnoreadahead while it mounts."
+  },
+  {
+   "original": "0xfffffe000ade8b7c",
+   "native_symbol": "_vnode_parent",
+   "check": {
+    "address": "0xfffffe000ade8b7c",
+    "size": 40,
+    "sha256": "fa0b52e253aa732019c017fa070bb94cc1f78651873763bafc3ad8217911f4ac"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c around vnode_tag (paired): vnode_settag stores the 16-bit tag at +114, the field vnode_tag loads; vnode_parent, after them, loads and authenticates the parent pointer at +192 and returns it (the order alignment had named it vnode_setparent, which stores). APFS calls vnode_settag on its vnodes."
+  },
+  {
+   "original": "0xfffffe000ade8b64",
+   "native_symbol": "_vnode_settag",
+   "check": {
+    "address": "0xfffffe000ade8b64",
+    "size": 12,
+    "sha256": "3a9cbb9598b7f1f7135a60cb47ae1cf9d279f416f9caf629e34cfd9f5fe5a048"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c around vnode_tag (paired): vnode_settag stores the 16-bit tag at +114, the field vnode_tag loads; vnode_parent, after them, loads and authenticates the parent pointer at +192 and returns it (the order alignment had named it vnode_setparent, which stores). APFS calls vnode_settag on its vnodes."
+  },
+  {
+   "original": "0xfffffe000addd424",
+   "native_symbol": "_utf8_normalizeOptCaseFoldAndMatchSubstring",
+   "check": {
+    "address": "0xfffffe000addd424",
+    "size": 672,
+    "sha256": "3da0502a1b647cc8a52421c09bc603f182ab7d7fabad653dd6e58955a68829a1"
+   },
+   "evidence": "bsd/vfs/vfs_unicode.c after utf8_normalizeOptCaseFoldAndHash (paired by order alignment), in our kernel's order with the file's static helpers between them: GetUVersion writes the Unicode version constant to *x0 (16 bytes, before AndHash); AndCompare is the six-argument function (two strings with lengths, the case flag, the result pointer); OptCaseFold the five-argument one after it; ToUTF8 and ToUTF8ForPath are the two six-instruction wrappers that shift their last arguments and enter the internal function between them; AndMatchSubstring is last before vn_kqfilter. APFS calls AndCompare while it mounts the OS volume."
+  },
+  {
+   "original": "0xfffffe000addd40c",
+   "native_symbol": "_utf8_normalizeOptCaseFoldToUTF8ForPath",
+   "check": {
+    "address": "0xfffffe000addd40c",
+    "size": 24,
+    "sha256": "2ae9306b5027cf244c086ed22e496ebac4c1fee925016ed69e0a2e929ea0ba31"
+   },
+   "evidence": "bsd/vfs/vfs_unicode.c after utf8_normalizeOptCaseFoldAndHash (paired by order alignment), in our kernel's order with the file's static helpers between them: GetUVersion writes the Unicode version constant to *x0 (16 bytes, before AndHash); AndCompare is the six-argument function (two strings with lengths, the case flag, the result pointer); OptCaseFold the five-argument one after it; ToUTF8 and ToUTF8ForPath are the two six-instruction wrappers that shift their last arguments and enter the internal function between them; AndMatchSubstring is last before vn_kqfilter. APFS calls AndCompare while it mounts the OS volume."
+  },
+  {
+   "original": "0xfffffe000addd108",
+   "native_symbol": "_utf8_normalizeOptCaseFoldToUTF8",
+   "check": {
+    "address": "0xfffffe000addd108",
+    "size": 24,
+    "sha256": "106f39a760f0e117fe67f5c0a4305c50333d4bf90a1814d0da051f1ef3e095d4"
+   },
+   "evidence": "bsd/vfs/vfs_unicode.c after utf8_normalizeOptCaseFoldAndHash (paired by order alignment), in our kernel's order with the file's static helpers between them: GetUVersion writes the Unicode version constant to *x0 (16 bytes, before AndHash); AndCompare is the six-argument function (two strings with lengths, the case flag, the result pointer); OptCaseFold the five-argument one after it; ToUTF8 and ToUTF8ForPath are the two six-instruction wrappers that shift their last arguments and enter the internal function between them; AndMatchSubstring is last before vn_kqfilter. APFS calls AndCompare while it mounts the OS volume."
+  },
+  {
+   "original": "0xfffffe000addcee8",
+   "native_symbol": "_utf8_normalizeOptCaseFold",
+   "check": {
+    "address": "0xfffffe000addcee8",
+    "size": 544,
+    "sha256": "a501396dc745eefbf22d58caa3fb314cc7e61a68d19bcd48be7f448e40773fa2"
+   },
+   "evidence": "bsd/vfs/vfs_unicode.c after utf8_normalizeOptCaseFoldAndHash (paired by order alignment), in our kernel's order with the file's static helpers between them: GetUVersion writes the Unicode version constant to *x0 (16 bytes, before AndHash); AndCompare is the six-argument function (two strings with lengths, the case flag, the result pointer); OptCaseFold the five-argument one after it; ToUTF8 and ToUTF8ForPath are the two six-instruction wrappers that shift their last arguments and enter the internal function between them; AndMatchSubstring is last before vn_kqfilter. APFS calls AndCompare while it mounts the OS volume."
+  },
+  {
+   "original": "0xfffffe000addc438",
+   "native_symbol": "_utf8_normalizeOptCaseFoldAndCompare",
+   "check": {
+    "address": "0xfffffe000addc438",
+    "size": 2736,
+    "sha256": "9727dde9975b4d2c7791be0ae81be4394716dc578445eb2c58e4644d7b4705da"
+   },
+   "evidence": "bsd/vfs/vfs_unicode.c after utf8_normalizeOptCaseFoldAndHash (paired by order alignment), in our kernel's order with the file's static helpers between them: GetUVersion writes the Unicode version constant to *x0 (16 bytes, before AndHash); AndCompare is the six-argument function (two strings with lengths, the case flag, the result pointer); OptCaseFold the five-argument one after it; ToUTF8 and ToUTF8ForPath are the two six-instruction wrappers that shift their last arguments and enter the internal function between them; AndMatchSubstring is last before vn_kqfilter. APFS calls AndCompare while it mounts the OS volume."
+  },
+  {
+   "original": "0xfffffe000addb8a0",
+   "native_symbol": "_utf8_normalizeOptCaseFoldGetUVersion",
+   "check": {
+    "address": "0xfffffe000addb8a0",
+    "size": 16,
+    "sha256": "0cbea7de1918ccf662f8b56d6e8c10e77c480d24429275962ec52012316a49f5"
+   },
+   "evidence": "bsd/vfs/vfs_unicode.c after utf8_normalizeOptCaseFoldAndHash (paired by order alignment), in our kernel's order with the file's static helpers between them: GetUVersion writes the Unicode version constant to *x0 (16 bytes, before AndHash); AndCompare is the six-argument function (two strings with lengths, the case flag, the result pointer); OptCaseFold the five-argument one after it; ToUTF8 and ToUTF8ForPath are the two six-instruction wrappers that shift their last arguments and enter the internal function between them; AndMatchSubstring is last before vn_kqfilter. APFS calls AndCompare while it mounts the OS volume."
+  },
+  {
+   "original": "0xfffffe000ade6748",
+   "native_symbol": "_vfs_is_basesystem",
+   "check": {
+    "address": "0xfffffe000ade6748",
+    "size": 16,
+    "sha256": "c49f73fe4ff9f82c4d797b90420535bec4402d16947677318a3182346cb69052"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade673c",
+   "native_symbol": "_vfs_setmaxsymlen",
+   "check": {
+    "address": "0xfffffe000ade673c",
+    "size": 12,
+    "sha256": "f0d2b6041e6b17a775a53ac8dd7c76f31a26bf9259e52879864b78e63f0d9133"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade6730",
+   "native_symbol": "_vfs_maxsymlen",
+   "check": {
+    "address": "0xfffffe000ade6730",
+    "size": 12,
+    "sha256": "5d9ad0ed94bd849515370a9551376b47f0aacd7531ab3f9b9ee45507bdf508de"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade6720",
+   "native_symbol": "_vfs_extendedsecurity",
+   "check": {
+    "address": "0xfffffe000ade6720",
+    "size": 16,
+    "sha256": "17a4824b31d19439b5c19cf95b9a7dcb0714f9f8358f98ff486352f9d3599e5b"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade6688",
+   "native_symbol": "_vfs_clearnoswap",
+   "check": {
+    "address": "0xfffffe000ade6688",
+    "size": 152,
+    "sha256": "0d7130399bd9e7f189de678c2b9a7f6d6f830c7d5ae3bb06838bcb6e567163a2"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade65f0",
+   "native_symbol": "_vfs_setnoswap",
+   "check": {
+    "address": "0xfffffe000ade65f0",
+    "size": 152,
+    "sha256": "db496d10bc000f747cd519a8bf72b2af5ac996f53c32054d84860aca720f63e5"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade6558",
+   "native_symbol": "_vfs_clearextendedsecurity",
+   "check": {
+    "address": "0xfffffe000ade6558",
+    "size": 152,
+    "sha256": "0cb3f44738b71933be0bb06a91c0cc3b61146181303f6a8ca5323b5d8436d8fd"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade64bc",
+   "native_symbol": "_vfs_setmntswap",
+   "check": {
+    "address": "0xfffffe000ade64bc",
+    "size": 156,
+    "sha256": "e88503c76ee43c4957e08a87a91763f9ceabdbe2a706acb7e615cc34cf0ace33"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade6424",
+   "native_symbol": "_vfs_setmntsystemdata",
+   "check": {
+    "address": "0xfffffe000ade6424",
+    "size": 152,
+    "sha256": "fcdad664eb4b51da4dd6b7a00976121efacce3b5036a2d8efb59a4605d2b9bf5"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade638c",
+   "native_symbol": "_vfs_setmntsystem",
+   "check": {
+    "address": "0xfffffe000ade638c",
+    "size": 152,
+    "sha256": "e965b7c21ee153cb215b365b7f9fe9d2bb854833a33d7167fb76fcd83468c9e8"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade62f4",
+   "native_symbol": "_vfs_setextendedsecurity",
+   "check": {
+    "address": "0xfffffe000ade62f4",
+    "size": 152,
+    "sha256": "7c1fb0d0a92863baee8855e52cbdbc2f5ab76baf1f8ce65366a2b5543599c5de"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade625c",
+   "native_symbol": "_vfs_clearauthopaqueaccess",
+   "check": {
+    "address": "0xfffffe000ade625c",
+    "size": 152,
+    "sha256": "69c578fa472cdd77347f6e94c182f9796234025eb6d14b854a54e0fbc56ec38d"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade61c4",
+   "native_symbol": "_vfs_clearauthopaque",
+   "check": {
+    "address": "0xfffffe000ade61c4",
+    "size": 152,
+    "sha256": "85bc7d17f083263a8c54284f12d4b92af3f57096581d93505982fd8a632a7ac0"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade612c",
+   "native_symbol": "_vfs_setauthopaqueaccess",
+   "check": {
+    "address": "0xfffffe000ade612c",
+    "size": 152,
+    "sha256": "85030697a4226a83dea2efcd7285db3060095c4e36a3165ae6134d7383c89ca1"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade6094",
+   "native_symbol": "_vfs_setauthopaque",
+   "check": {
+    "address": "0xfffffe000ade6094",
+    "size": 152,
+    "sha256": "a77dbab59b5ba90cb23f4753f6114a4242842dd96c5e3f3fe14f134e31d80fe4"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade6074",
+   "native_symbol": "_vfs_authopaque",
+   "check": {
+    "address": "0xfffffe000ade6074",
+    "size": 16,
+    "sha256": "f182b0e7359ad41719eeb233fc3df119dcab6b8e43d3cced4b27dc975d7dee57"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade5fd4",
+   "native_symbol": "_vfs_clearauthcache_ttl",
+   "check": {
+    "address": "0xfffffe000ade5fd4",
+    "size": 160,
+    "sha256": "38228d776ebdf23d046fd8bc87dca6daab180e715ca6b70926daf6c7dcebabd1"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade5f30",
+   "native_symbol": "_vfs_setauthcache_ttl",
+   "check": {
+    "address": "0xfffffe000ade5f30",
+    "size": 164,
+    "sha256": "88770eb2ce28fa15b7aef0ff94ff6a1d23b5683193105de3d70d05b2338c61cd"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade5f08",
+   "native_symbol": "_vfs_authcache_ttl",
+   "check": {
+    "address": "0xfffffe000ade5f08",
+    "size": 40,
+    "sha256": "3ee5d1a217b884d7f3da61f5519c18b8456bb6cc7043d3e136d207ab21937b38"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade5eac",
+   "native_symbol": "_vfs_isrdwr",
+   "check": {
+    "address": "0xfffffe000ade5eac",
+    "size": 20,
+    "sha256": "d44290d22f9c1c012e698c5108886d553fc43d9917c01d262d7dff4be7378893"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade5e9c",
+   "native_symbol": "_vfs_issynchronous",
+   "check": {
+    "address": "0xfffffe000ade5e9c",
+    "size": 16,
+    "sha256": "8a66cf037530927d1f205532c81cd778560402b7a105b71762ef0348ad877164"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
+   "original": "0xfffffe000ade5dc8",
+   "native_symbol": "_vfs_clearflags",
+   "check": {
+    "address": "0xfffffe000ade5dc8",
+    "size": 164,
+    "sha256": "59b4a059ffea185dc50471914ee4030a0f6a74e3a0179b72e398c9b1123f4f39"
+   },
+   "evidence": "The mount flag functions of bsd/vfs/kpi_vfs.c from vfs_setflags to vfs_statfs: thirty-one functions here and thirty-one names in our kernel between the same two paired ends, in the same order, with the paired ones (iswriteupgrade, isrdonly, isupdate, isreload, isforce, isunmount, authopaqueaccess) at the same positions. Bodies agree where they say something: vfs_setextendedsecurity takes the mount lock and sets bit 31 of the kernel flags at +116 and vfs_extendedsecurity tests that bit; vfs_maxsymlen and vfs_setmaxsymlen load and store +128. APFS calls vfs_setextendedsecurity and others while mounting."
+  },
+  {
    "original": "0xfffffe000b0f44e0",
    "native_symbol": "_proc_name",
    "check": {

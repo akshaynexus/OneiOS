@@ -93,19 +93,20 @@ AMFI's AKS calls and the Data volume).
 - Launch constraints are the kernel's: `zzyc-owner-skip-launch-constraints.patch` (boot argument `sheng-no-lc=1`)
   and `/chosen/amfi-only-platform-code`. Nothing in the collection changes for them.
 
-## State (2026-11-10)
+## State (2026-11-11)
 
-Under xnuhost in `qemu-aarch64 -cpu cortex-a710` (1 vCPU, 2 GiB), with a kernel that has
-`0007-prelink-kext-start.patch`: Apple corecrypto's POST, AppleImage4, AMFI (early initializer), the sandbox and
-vnguard policies load, `trust_cache_runtime_init` passes ("no external trust caches found"), IOKit matching starts
-the kept drivers, and `bsd_init` begins ("MAC Framework successfully initialized", buffer headers). It stops two
-seconds later at the next unpaired kernel function (IOTimeSyncFamily).
+Under xnuhost in `qemu-aarch64 -cpu cortex-a710` (1 vCPU, 2 GiB), with the series `0001`-`0010` and the image set
+`out/image/24A446`: Apple corecrypto's POST, AppleImage4, AMFI (early initializer), the sandbox and vnguard
+policies, the trust caches, IOKit matching, the five hosted disks, `bsd_init`, the APFS containers, the root mount
+(`BSD root: disk6s1`, `mount-complete volume ...OS`), the swap setup, and `launchd` (pid 1), which mounts the
+system cryptex volume. It stops there in AppleImage4: `Image4: unable to initialize magazine: 7` (its start cannot
+write the magazine or the boot manifest hash: no NVRAM controller, read-only root). That is board state, not a pair.
+APFS also logs "failed to find named root snapshot: Need authenticator (81)" and goes on.
 
-Pairing: 11,461 functions by the matcher with the reference, 984 inferred (518 by order, 163 structors and
-factories, 327 by slot, less the overlaps), 143 reviewed by hand plus 4 data and one site, 50 carried over from
-XnuPrelink's iPad fixture.
-655 original functions that kexts reference are still on the panic stub (most only through vtables of classes
-whose vtable is not named yet), and 55 data targets are unpaired.
+Pairing: the matcher with the reference, the inferred pairs (order, structors and factories, slots, kernel class
+objects), 349 functions and 24 data reviewed by hand, 50 carried over from XnuPrelink's iPad fixture.
+554 original functions that kexts reference are still on the panic stub and 19 data targets are unpaired; the
+record lists them per kext.
 
 ## What is not done
 
