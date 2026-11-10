@@ -414,6 +414,8 @@ class Hook(Case):
         self.assertEqual(digest(self.root), before)
         self.assertEqual(sorted(os.listdir(os.path.join(overlay, 'userland'))),
                          ['boot-contract.json', 'owner-trust.json', 'report.json', 'report.txt', 'tweaks.manifest.json'])
+        with open(info) as f:
+            self.assertIsNone(json.load(f)['first_start_unpacker'])
         with open(owners) as f:
             rules = dict(line.rstrip('\n').split('\t', 1) for line in f)
         self.assertEqual(rules['db/com.apple.xpc.launchd/disabled.plist'], '0\t0\t0644')
@@ -424,6 +426,17 @@ class Hook(Case):
         self.assertEqual((summary['layout'], summary['disabled_jobs'], summary['build']), ('sealed', 9, fakeroot.BUILD))
         self.assertTrue(any(line.startswith('oneios-init') for line in summary['off']))
         self.assertNotIn('com.apple.momentsd', self.plist(self.data, 'db/com.apple.xpc.launchd/disabled.plist'))
+        # with built helpers: the first-start unpacker goes to the overlay, not into the seed, and is trusted
+        helpers, hashes = self.helpers(('oneios-init', 'oneios-seed'))
+        env['ONEIOS_HELPERS'] = helpers
+        done = subprocess.run([sys.executable, '-I', hook], env=env, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertTrue(os.access(os.path.join(overlay, 'userland/bin/oneios-seed'), os.X_OK))
+        self.assertFalse(os.path.exists(os.path.join(self.data, 'oneios/bin/oneios-seed')))
+        with open(os.path.join(overlay, 'userland/owner-trust.json')) as f:
+            self.assertEqual(json.load(f)['cdhashes'], sorted(hashes.values()))
+        with open(info) as f:
+            self.assertEqual(json.load(f)['first_start_unpacker'], 'overlay/userland/bin/oneios-seed')
         env['ONEIOS_HOOK_API'] = '2'
         self.assertNotEqual(subprocess.run([sys.executable, '-I', hook], env=env, capture_output=True).returncode, 0)
 

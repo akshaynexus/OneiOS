@@ -5,7 +5,8 @@ image-build's `scripts/image/build.sh` runs this once with ONEIOS_* in the envir
 images are never edited (the sealed layout), so everything here is a change to the Data seed (ONEIOS_DATA),
 a file for the image set's overlay/ (ONEIOS_OVERLAY) or a line of the boot contract.
 
-Leaves in ONEIOS_OVERLAY/userland/: boot-contract.json (for the booter and the kernel), owner-trust.json (for the
+Leaves in ONEIOS_OVERLAY/userland/: bin/oneios-seed (the first-start unpacker of the Data seed, when the helpers
+are built), boot-contract.json (for the booter and the kernel), owner-trust.json (for the
 trust cache), tweaks.manifest.json, report.txt, report.json. Owners go to ONEIOS_OWNERS, a summary to ONEIOS_INFO.
 
 Optional inputs, each used when it is there:
@@ -20,7 +21,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from roottweak import cli  # noqa: E402
+from roottweak import cli, macho  # noqa: E402
 
 
 def main():
@@ -47,6 +48,33 @@ def main():
     if status:
         return status
 
+    # The first-start unpacker runs before the Data volume exists, so it cannot be in the seed: it goes into the
+    # overlay for xnuhost to hand to the guest, and its CDHash into the owner trust list.
+    seed_tool = os.path.join(helpers, 'oneios-seed')
+    first_start = None
+    if os.path.isfile(seed_tool):
+        with open(seed_tool, 'rb') as f:
+            binary = f.read()
+        try:
+            slices = macho.describe(binary)
+        except macho.MachOError as e:
+            sys.exit(f'image-hook: {seed_tool}: {e}; the guest runs only signed code')
+        os.makedirs(os.path.join(out, 'bin'), exist_ok=True)
+        with open(os.path.join(out, 'bin', 'oneios-seed'), 'wb') as f:
+            f.write(binary)
+        os.chmod(os.path.join(out, 'bin', 'oneios-seed'), 0o755)
+        with open(os.path.join(out, 'owner-trust.json')) as f:
+            trust = json.load(f)
+        for s in slices:
+            trust['files'].append({'path': 'overlay/userland/bin/oneios-seed', 'cdhash': s['cdhash'], 'hash': s['hash'],
+                                   'identifier': s['identifier'], 'arch': s['arch'], 'page_size': s['page_size'],
+                                   'adhoc': s['adhoc'], 'warnings': []})
+        trust['cdhashes'] = sorted({t['cdhash'] for t in trust['files']})
+        with open(os.path.join(out, 'owner-trust.json'), 'w') as f:
+            json.dump(trust, f, indent=2, sort_keys=True)
+            f.write('\n')
+        first_start = 'overlay/userland/bin/oneios-seed'
+
     with open(os.path.join(out, 'tweaks.manifest.json')) as f:
         manifest = json.load(f)
     owners = env.get('ONEIOS_OWNERS')
@@ -67,6 +95,7 @@ def main():
             json.dump({
                 'tool': 'userland/roottweak', 'schema': manifest['schema'], 'layout': 'sealed', 'build': report['build'],
                 'contract': 'overlay/userland/boot-contract.json', 'owner_trust': 'overlay/userland/owner-trust.json',
+                'first_start_unpacker': first_start,
                 'disabled_jobs': len(contract['launch_policy']['disable_jobs']),
                 'owner_cdhashes': len(trust['cdhashes']),
                 'off': [f'{r["item"]}: {r["note"]}' for r in report['results'] if r['state'] == 'off'],
