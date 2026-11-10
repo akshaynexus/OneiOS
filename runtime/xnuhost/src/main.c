@@ -129,7 +129,11 @@ static bool pac_shared_by_fork(void)
   bool ok = pid > 0 && read(pipe_fd[0], &theirs, 8) == 8 && theirs == mine;
   close(pipe_fd[0]);
   if (pid > 0) waitpid(pid, NULL, 0);
-  return ok && mine != probe;
+  // Signing must also do something. One signature can be all zero bits by chance (1 in 128 with
+  // the 7 signature bits of a 47-bit address space), so several values are tried.
+  bool signs = false;
+  for (uint64_t i = 0; i < 16 && !signs; i++) signs = pac_sign(probe + (i << 12)) != probe + (i << 12);
+  return ok && signs;
 }
 
 // The same must hold for xnuhost's own threads: the kernel's code runs on the vCPU threads and signs

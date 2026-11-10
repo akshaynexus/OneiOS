@@ -1,3 +1,77 @@
+diff --git a/iokit/Kernel/IOPlatformExpert.cpp b/iokit/Kernel/IOPlatformExpert.cpp
+--- a/iokit/Kernel/IOPlatformExpert.cpp
++++ b/iokit/Kernel/IOPlatformExpert.cpp
+@@ -390,9 +390,17 @@
+ #endif
+ }
+ 
++#if XNU_HOSTED
++extern "C" uint64_t hosted_wall_time(void);
++#endif
++
+ long
+ IOPlatformExpert::getGMTTimeOfDay(void)
+ {
++#if XNU_HOSTED
++	/* OneiOS hosted: the host's clock is the board's real-time clock (the calendar started at 1970 without it). */
++	return (long)hosted_wall_time();
++#endif
+ 	return 0;
+ }
+ 
+diff --git a/iokit/Kernel/IOStartIOKit.cpp b/iokit/Kernel/IOStartIOKit.cpp
+--- a/iokit/Kernel/IOStartIOKit.cpp
++++ b/iokit/Kernel/IOStartIOKit.cpp
+@@ -77,8 +77,17 @@
+ 	t.tv_sec = 30;
+ 	t.tv_nsec = 0;
+ 
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted: no driver publishes IORTC (the clock is xnuhost's wall_time, read by
++	 * IOPlatformExpert::getGMTTimeOfDay, and is there from the start), so this wait only ever ran out: 30 s of
++	 * every boot with all CPUs idle.
++	 */
++	(void)t;
++#else
+ 	IOService::waitForService(
+ 		IOService::resourceMatching("IORTC"), &t );
++#endif
+ #if defined(__i386__) || defined(__x86_64__)
+ 	IOService::waitForService(
+ 		IOService::resourceMatching("IONVRAM"), &t );
+diff --git a/osfmk/arm64/hosted/hosted.h b/osfmk/arm64/hosted/hosted.h
+--- a/osfmk/arm64/hosted/hosted.h
++++ b/osfmk/arm64/hosted/hosted.h
+@@ -138,6 +138,7 @@
+ extern void hosted_console_flush(void);
+ extern void hosted_halt(uint32_t reason, uint32_t code) __attribute__((noreturn));
+ extern void hosted_cpu_idle(void);
++extern uint64_t hosted_wall_time(void);
+ extern void hosted_thread_exception_return(void) __attribute__((noreturn));
+ extern uint32_t hosted_text_fixup(void *kva, uint64_t size);
+ 
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+--- a/osfmk/arm64/hosted/hosted_machine.c
++++ b/osfmk/arm64/hosted/hosted_machine.c
+@@ -508,4 +508,17 @@
+ 	hosted_interrupt(state);
+ }
+ 
++/*
++ * The calendar: seconds since 1970 from the host's clock (the wall_time host call). The hosted board has no RTC
++ * device; this is what IOPlatformExpert::getGMTTimeOfDay answers.
++ */
++uint64_t
++hosted_wall_time(void)
++{
++	uint32_t old = hosted_irq_mask();
++	uint64_t seconds = (uint64_t)HC(wall_time);
++	hosted_irq_restore(old);
++	return seconds;
++}
++
+ #endif /* XNU_HOSTED */
 diff --git a/osfmk/arm64/pcb.c b/osfmk/arm64/pcb.c
 --- a/osfmk/arm64/pcb.c
 +++ b/osfmk/arm64/pcb.c
