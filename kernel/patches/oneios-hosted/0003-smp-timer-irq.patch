@@ -1,0 +1,486 @@
+diff --git a/osfmk/arm64/hosted/hostcall.h b/osfmk/arm64/hosted/hostcall.h
+index f04f95f..13a2b0a 100644
+--- a/osfmk/arm64/hosted/hostcall.h
++++ b/osfmk/arm64/hosted/hostcall.h
+@@ -15,6 +15,13 @@
+ //    (irq_ack until it returns XH_INTID_NONE). While unmasked and running kernel code, an interrupt
+ //    arrives as a call of upcalls->irq(cpu, frame) on the interrupted stack with irq_masked = 1;
+ //    returning from it resumes the interrupted code. The kernel may block or switch threads inside.
++//  - A kernel that moves a thread to another vCPU inside an upcall (preemption in an interrupt) must
++//    not return from that upcall: it ends it by calling frame_resume(the vCPU the thread is on now,
++//    frame) itself, after correcting anything in the frame that names the old vCPU. Such a kernel
++//    also makes every host call with irq_masked = 1, so that no interrupt is delivered on a host
++//    call's return path (that path stores to the vCPU the call started on).
++//  - A vCPU started by PSCI CPU_ON is entered like vCPU 0: x0 = the PSCI context id, x1 = the vector,
++//    x2 = its struct xh_cpu *.
+ //  - iOS threads run in other Linux processes. thread_run() gives the vCPU to one until it traps.
+ #ifndef XNUHOST_HOSTCALL_H
+ #define XNUHOST_HOSTCALL_H
+@@ -51,6 +58,11 @@ struct xh_frame {
+   uint32_t irq_masked;        // the mask state to return to
+   uint32_t kind;              // XH_FRAME_*
+   uint64_t far, esr;          // for XH_FRAME_EXCEPTION
++  // Appended (present when vector->size covers mmio_emulate). For XH_FRAME_EXCEPTION: the Linux signal
++  // that reported the trap and its si_code: SIGSEGV/SIGBUS (a fault: far and esr are set), SIGILL (an
++  // undefined instruction the host does not emulate), SIGTRAP (brk), SIGFPE. Linux gives no esr for
++  // the last three. 0 in an XH_FRAME_IRQ frame.
++  uint32_t signo, sigcode;
+ };
+ #define XH_FRAME_IRQ        1u
+ #define XH_FRAME_EXCEPTION  2u
+@@ -60,7 +72,9 @@ struct xh_user_state {
+   uint64_t x[31];
+   uint64_t sp, pc, pstate;    // pstate: NZCV; the host forces EL0t
+   uint64_t tsd;               // the thread's TSD base. iOS reads it from TPIDRRO_EL0; the host keeps
+-                              // it in TPIDR_EL0 and text_fixup() rewrites the reads (docs/booter.md)
++                              // it in TPIDR_EL0 and text_fixup() rewrites the reads (docs/booter.md).
++                              // iOS's own use of TPIDR_EL0 (the CPU number in its low 12 bits) is
++                              // rewritten too: reads give 0, writes do nothing.
+   uint32_t fpsr, fpcr;
+   struct xh_vreg v[32];
+ };
+@@ -111,7 +125,11 @@ struct xh_info {
+   uint64_t timebase_hz;        // CNTFRQ_EL0; CNTVCT_EL0 is readable in the kernel and in tasks
+   uint64_t features;           // XH_FEATURE_*
+   uint64_t video[6];           // boot_args video, repeated
+-  uint64_t kva_base, kva_size; // reserved (inaccessible) host addresses for the kernel's own mappings: kernel_map
++  // Appended after the first ABI 1 layout; present when vector->size covers kernel_unmap.
++  // A reservation (no access) in xnuhost's own address space for the kernel's mappings outside the
++  // RAM window (kernel_map: zones, kalloc, stacks, IOKit buffers): from the end of the RAM rounded
++  // up to 1 GiB, to 0x3c00000000. kva_size is 0 if it could not be reserved.
++  uint64_t kva_base, kva_size;
+ };
+ #define XH_FEATURE_PAC          (1ull << 0)   // paca/pacg: arm64e runs; one key set for kernel and tasks
+ #define XH_FEATURE_TASKS        (1ull << 1)   // the task trap layer works on this host (seccomp, memfd)
+@@ -149,8 +167,12 @@ struct xh_vector {
+   void     (*irq_eoi)(struct xh_cpu *, uint32_t intid);
+   void     (*irq_enable)(struct xh_cpu *, uint32_t intid, uint32_t enable);
+   void     (*ipi)(struct xh_cpu *, uint32_t target_cpu, uint32_t sgi);
+-  void     (*timer_set)(struct xh_cpu *, uint64_t deadline);   // CNTVCT_EL0 value; UINT64_MAX cancels
+-  void     (*frame_resume)(struct xh_cpu *, const struct xh_frame *);          // does not return
++  // The vCPU's deadline timer: INTID 27 (a level) is up from CNTVCT_EL0 >= deadline until the next
++  // timer_set. UINT64_MAX cancels. It is the same timer as the trapped CNTV_CVAL_EL0/CNTV_CTL_EL0.
++  void     (*timer_set)(struct xh_cpu *, uint64_t deadline);
++  // Does not return. A frame resumed unmasked while the vCPU's line is up is interrupted again at
++  // once (upcalls->irq on that frame's context), as an exception return with a pending interrupt.
++  void     (*frame_resume)(struct xh_cpu *, const struct xh_frame *);
+ 
+   // devices
+   uint64_t (*io_map)(struct xh_cpu *, uint64_t phys, uint64_t size);           // kernel VA, 0 if outside
+@@ -159,7 +181,11 @@ struct xh_vector {
+ 
+   // memory
+   int64_t  (*ram_discard)(struct xh_cpu *, uint64_t phys, uint64_t size);      // give free pages back to Linux
+-  uint32_t (*text_fixup)(struct xh_cpu *, void *text, uint64_t size);          // rewritten instruction count
++  // User text, exactly once per page of original text, before it is mapped executable: `mrs xN,
++  // TPIDRRO_EL0` becomes `mrs xN, TPIDR_EL0` (the TSD base), `mrs xN, TPIDR_EL0` becomes `mov xN, #0`
++  // (iOS's CPU number: always 0) and `msr TPIDR_EL0, xN` becomes `nop`. A second pass over a
++  // rewritten page would turn its TSD reads into zeros. Returns the rewritten instruction count.
++  uint32_t (*text_fixup)(struct xh_cpu *, void *text, uint64_t size);
+ 
+   // iOS tasks (Linux processes) and threads
+   int64_t  (*task_create)(struct xh_cpu *, uint64_t *task);
+@@ -176,10 +202,23 @@ struct xh_vector {
+   // Pointer-authentication keys enabled for the thread from its next run (plain arm64 binaries: 0).
+   int64_t  (*thread_set_pac)(struct xh_cpu *, uint64_t thread, uint32_t enabled);
+ 
+-  // The kernel's own address space outside the window: RAM pages at kernel virtual addresses inside
+-  // [info->kva_base, +kva_size). Present when size covers them.
++  // Appended (check vector->size). The kernel's own address space: RAM pages at kernel virtual
++  // addresses inside [info->kva_base, +kva_size). The host mapping plays the TLB of the kernel's
++  // page tables: kernel_map on a fault the page table allows, kernel_unmap on an invalidation.
++  // va, size and phys are host-page aligned. After kernel_unmap the range faults again
++  // (upcalls->exception). Both may be called with interrupts masked.
+   int64_t  (*kernel_map)(struct xh_cpu *, uint64_t va, uint64_t size, uint32_t prot, uint64_t phys);
+   int64_t  (*kernel_unmap)(struct xh_cpu *, uint64_t va, uint64_t size);
++
++  // Appended (check vector->size). A device page mapped at a kernel address by the kernel's own page
++  // tables (IOKit's IOMemoryMap, not io_map) has no host mapping: the access faults into
++  // upcalls->exception. When the page-table entry's physical address is inside [io_phys, +io_size),
++  // the kernel calls this instead of kernel_map: the host emulates the integer load or store at
++  // frame->pc against device address `phys` (page address plus the offset of frame->far in its
++  // page) on the frame's registers and advances frame->pc. 0 = done; -EINVAL: phys is not in the
++  // aperture or pc is not kernel text; -ENOTSUP: not a load or store the host emulates (SIMD,
++  // exclusive, atomics): the frame is unchanged. May be called with interrupts masked.
++  int64_t  (*mmio_emulate)(struct xh_cpu *, struct xh_frame *frame, uint64_t phys);
+ };
+ #define XH_PAC_ALL 0xfu          // APIA, APIB, APDA, APDB
+ 
+diff --git a/osfmk/arm64/hosted/hosted.h b/osfmk/arm64/hosted/hosted.h
+index ad2ef50..0004640 100644
+--- a/osfmk/arm64/hosted/hosted.h
++++ b/osfmk/arm64/hosted/hosted.h
+@@ -141,7 +141,18 @@ extern void hosted_cpu_idle(void);
+ extern void hosted_thread_exception_return(void) __attribute__((noreturn));
+ extern uint32_t hosted_text_fixup(void *kva, uint64_t size);
+ 
++/* hosted_smp.c: secondary vCPUs, the deadline timer */
++extern void hosted_raw_log(const char *text, uint64_t value);
++extern void hosted_timer_set(int32_t ticks);
++extern uint32_t hosted_timer_get(void);
++extern bool hosted_timer_pending(void);
++
++/* True if the host's vector has this entry (entries appended to ABI 1 after the kernel's first build). */
++#define HOSTED_HAS(name) \
++	(hosted_vector->size >= __builtin_offsetof(struct xh_vector, name) + sizeof(void *) && HOSTED_FN(name) != 0)
++
+ /* hosted_pmap.c */
++extern uint64_t hosted_kernel_device(uint64_t va, uint32_t access);
+ struct pmap;
+ extern uint64_t hosted_kva_base, hosted_kva_end;
+ extern void hosted_tlb_flush_region(struct pmap *pmap, uint64_t va, uint64_t size);
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+index 713a562..5e269d5 100644
+--- a/osfmk/arm64/hosted/hosted_machine.c
++++ b/osfmk/arm64/hosted/hosted_machine.c
+@@ -55,7 +55,7 @@ void hosted_secondary_entry(struct xh_cpu *cpu) __dead2;
+ /* Counters, for the boot log and the debugger. */
+ struct hosted_stats {
+ 	uint64_t irq_upcalls, irq_polls, irq_user;
+-	uint64_t kernel_faults, kernel_fills;
++	uint64_t kernel_faults, kernel_fills, kernel_mmio;
+ 	uint64_t user_traps, user_syscalls, user_faults, user_fills;
+ } hosted_stats;
+ 
+@@ -109,7 +109,7 @@ hosted_console_flush(void)
+ }
+ 
+ /* Before the console exists, and where printf must not be trusted: text and a number straight to the host. */
+-static void
++void
+ hosted_raw_log(const char *text, uint64_t value)
+ {
+ 	char line[160];
+@@ -412,9 +412,17 @@ hosted_kernel_esr(const struct xh_frame *frame)
+ 	if (esr != 0) {
+ 		return esr;
+ 	}
+-	/* No syndrome: a breakpoint or an undefined instruction at pc (which is readable: it was fetched). */
++	/*
++	 * No syndrome: a breakpoint or an undefined instruction at pc (which is readable: it was fetched).
++	 * A host that reports the signal says which (SIGTRAP is 5 on Linux); an older one leaves the
++	 * instruction to tell.
++	 */
+ 	uint32_t insn = *(const uint32_t *)frame->pc;
+-	if ((insn & 0xffe0001f) == 0xd4200000) {
++	bool brk = (insn & 0xffe0001f) == 0xd4200000;
++	if (HOSTED_HAS(mmio_emulate) && frame->signo != 0) {
++		brk = brk && frame->signo == 5;
++	}
++	if (brk) {
+ 		return ((uint64_t)ESR_EC_BRK_AARCH64 << ESR_EC_SHIFT) | ESR_IL | ((insn >> 5) & 0xffff);
+ 	}
+ 	return ((uint64_t)ESR_EC_UNCATEGORIZED << ESR_EC_SHIFT) | ESR_IL;
+@@ -437,6 +445,16 @@ hosted_exception_upcall(struct xh_cpu *cpu, struct xh_frame *frame)
+ 			hosted_stats.kernel_fills++;
+ 			hosted_frame_resume(frame);
+ 		}
++		/* A device page IOKit mapped at a kernel address: the host emulates the load or store. */
++		uint64_t device = ec == ESR_EC_DABORT_EL1 ? hosted_kernel_device(frame->far, access) : 0;
++		if (device != 0) {
++			if (!HOSTED_HAS(mmio_emulate) || HC(mmio_emulate, frame, device) != 0) {
++				hosted_raw_log("hosted: device address", device);
++				hosted_fatal_fault(frame, "hosted: a device access xnuhost cannot emulate, address");
++			}
++			hosted_stats.kernel_mmio++;
++			hosted_frame_resume(frame);
++		}
+ 	}
+ 	if (current_thread() == NULL) {
+ 		hosted_fatal_fault(frame, "hosted: kernel fault before the first thread, address");
+@@ -462,16 +480,6 @@ hosted_cpu_idle(void)
+ 	(void)HC(cpu_idle);
+ }
+ 
+-void
+-hosted_secondary_entry(struct xh_cpu *cpu)
+-{
+-	hosted_raw_log("hosted: secondary CPUs are not started by the hosted layer yet, cpu", cpu->index);
+-	(void)hosted_irq_mask();
+-	for (;;) {
+-		(void)HC(cpu_idle);
+-	}
+-}
+-
+ /* io_map(): where the host has a device window or memory outside the kernel's window; 0 if it has neither. */
+ vm_offset_t hosted_io_map(vm_map_offset_t phys_addr, vm_size_t size);
+ vm_offset_t
+diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
+index 80207a3..6fd42e3 100644
+--- a/osfmk/arm64/hosted/hosted_pmap.h
++++ b/osfmk/arm64/hosted/hosted_pmap.h
+@@ -192,6 +192,29 @@ hosted_kernel_fill(uint64_t va, uint32_t access)
+ 	return filled;
+ }
+ 
++/*
++ * A kernel fault at va on a device page: IOKit maps a board device (IOMemoryMap, IODeviceMemory) at an address
++ * of the kernel's own range, and the pmap's entry then names a physical address in the host's I/O aperture,
++ * which has no memory to map. Returns that physical address (page and offset) if the entry allows `access`,
++ * else 0. Such a page is never given to kernel_map: each access is emulated by the host (mmio_emulate).
++ */
++uint64_t
++hosted_kernel_device(uint64_t va, uint32_t access)
++{
++	va = VM_KERNEL_STRIP_PTR(va);
++	if (va < hosted_kva_base || va >= hosted_kva_end || kernel_pmap->tte == NULL) {
++		return 0;
++	}
++	pt_entry_t pte = hosted_walk(kernel_pmap, va & ~(uint64_t)ARM_PGMASK);
++	uint32_t prot = hosted_pte_prot(pte, false);
++	pmap_paddr_t pa = pte_to_pa(pte);
++
++	if (prot == 0 || (access & ~prot) || pa < hosted_info.io_phys || pa - hosted_info.io_phys >= hosted_info.io_size) {
++		return 0;
++	}
++	return pa + (va & ARM_PGMASK);
++}
++
+ /* The kernel pmap just made entries for [va, va + size): map them now. */
+ void
+ hosted_kernel_enter(uint64_t va, uint64_t size)
+diff --git a/osfmk/arm64/hosted/hosted_smp.c b/osfmk/arm64/hosted/hosted_smp.c
+new file mode 100644
+index 0000000..46e3308
+--- /dev/null
++++ b/osfmk/arm64/hosted/hosted_smp.c
+@@ -0,0 +1,135 @@
++/*
++ * OneiOS: the hosted machine layer, more than one CPU (arm64/hosted/hosted.h explains the model).
++ *
++ *   Secondary CPUs   ArmCpu starts a core with PSCI CPU_ON at the kernel's reset vector page. Under xnuhost
++ *                    that call makes a new host thread (a vCPU), which enters LowResetVectorBase ->
++ *                    hosted_cpu_start -> hosted_secondary_entry with its own struct xh_cpu in x18. From there
++ *                    it is arm_init_cpu() on the CPU's interrupt stack, as start_cpu/common_start do on
++ *                    hardware, minus the MMU.
++ *   Identity         A vCPU is told who it is by xnuhost (xh_cpu.index = the "reg" of its /cpus node), not by
++ *                    MPIDR_EL1: at EL0 Linux answers that register itself, the same value on every core.
++ *                    The build (kernel/hosted-fixup.py, run by build-hosted.sh before the image is sealed
++ *                    again) turns every `mrs xN, MPIDR_EL1` of the linked kernel, XNU's own and ArmCpu's,
++ *                    into `ldr wN, [x18]`: xh_cpu.index. It cannot be done at boot: the text is covered by
++ *                    corecrypto's integrity HMAC.
++ *   Timer            XNU's decrementer is xnuhost's per-vCPU deadline timer (the timer_set host call). It
++ *                    arrives as INTID 27, which ArmCpu acknowledges and hands to rtclock_intr().
++ *   IPIs             ArmCpu sends them (ICC_SGI1R_EL1, or its SPIs 1008 + core); xnuhost's GIC delivers them
++ *                    as a signal to the target vCPU's thread. Nothing here.
++ */
++#include <mach/mach_types.h>
++#include <mach/vm_param.h>
++#include <kern/thread.h>
++#include <kern/processor.h>
++#include <kern/debug.h>
++#include <arm/cpu_data_internal.h>
++#include <arm/cpu_internal.h>
++#include <arm/machine_routines.h>
++#include <arm64/proc_reg.h>
++
++#if XNU_HOSTED
++
++#include <arm64/hosted/hosted.h>
++
++extern void arm_init_cpu(cpu_data_t *cpu_data_ptr, uint64_t hib_header_phys);
++extern void hosted_switch_to_stack(void *arg, vm_offset_t stack_top, void (*fn)(void *)) __dead2;
++
++void hosted_secondary_entry(struct xh_cpu *cpu) __dead2;
++
++#define HSC(name, a1) hosted_hc(HOSTED_FN(name), hosted_cpu(), (uint64_t)(a1), 0, 0, 0, 0)
++
++struct hosted_smp_stats {
++	uint32_t cpus_entered;                  /* secondary vCPUs that reached arm_init_cpu */
++	uint64_t timer_sets;
++} hosted_smp_stats;
++
++/* ---- secondary CPUs ------------------------------------------------------------------------ */
++
++static void
++hosted_secondary_run(void *arg)
++{
++	arm_init_cpu((cpu_data_t *)arg, 0);     /* ends in secondary_cpu_main(): does not return */
++	panic("hosted: arm_init_cpu returned");
++}
++
++static void __dead2
++hosted_secondary_park(const char *why, uint64_t value)
++{
++	hosted_raw_log(why, value);
++	for (;;) {
++		(void)HSC(cpu_idle, 0);
++	}
++}
++
++/*
++ * A secondary vCPU's first C code, on xnuhost's boot stack of that vCPU, interrupts masked, no current
++ * thread. cpu_start() has put the CPU's first thread into its cpu data; the CPU is found by the vCPU's
++ * index, which is the "reg" of its device-tree node (the PSCI target ArmCpu passed).
++ */
++void
++hosted_secondary_entry(struct xh_cpu *cpu)
++{
++	int         number = ml_get_cpu_number(cpu->index);
++	cpu_data_t *cdp = (number >= 0 && number < MAX_CPUS) ? CpuDataEntries[number].cpu_data_vaddr : NULL;
++
++	(void)hosted_irq_mask();
++	if (cdp == NULL || cdp->cpu_active_thread == NULL || cdp->intstack_top == 0) {
++		hosted_secondary_park("hosted: a vCPU was started that XNU has no CPU data or first thread for, index", cpu->index);
++	}
++	cpu->kernel_data = (uint64_t)cdp;
++	os_atomic_inc(&hosted_smp_stats.cpus_entered, relaxed);
++	hosted_switch_to_stack(cdp, cdp->intstack_top, hosted_secondary_run);
++}
++
++/* ---- the deadline timer ---------------------------------------------------------------------- */
++
++/* The CNTVCT_EL0 value each vCPU's timer was last set to; UINT64_MAX before the first set. */
++static uint64_t hosted_timer_deadline[MAX_CPUS] = { [0 ... MAX_CPUS - 1] = UINT64_MAX };
++
++static inline unsigned
++hosted_timer_slot(void)
++{
++	unsigned index = hosted_cpu()->index;
++	return index < MAX_CPUS ? index : 0;
++}
++
++/* CNTV_TVAL_EL0 = ticks: the timer fires `ticks` counter ticks from now (at once if not positive). Masked. */
++void
++hosted_timer_set(int32_t ticks)
++{
++	uint64_t deadline = __builtin_arm_rsr64("CNTVCT_EL0") + (uint64_t)(int64_t)ticks;
++
++	hosted_timer_deadline[hosted_timer_slot()] = deadline;
++	hosted_smp_stats.timer_sets++;
++	(void)HSC(timer_set, deadline);
++}
++
++/* What CNTV_TVAL_EL0 would read: the ticks left, negative once the deadline has passed. Masked. */
++uint32_t
++hosted_timer_get(void)
++{
++	uint64_t deadline = hosted_timer_deadline[hosted_timer_slot()];
++	int64_t  left;
++
++	if (deadline == UINT64_MAX) {
++		return 0x7fffffff;
++	}
++	left = (int64_t)(deadline - __builtin_arm_rsr64("CNTVCT_EL0"));
++	if (left > 0x7fffffff) {
++		left = 0x7fffffff;
++	} else if (left < -0x7fffffff) {
++		left = -0x7fffffff;
++	}
++	return (uint32_t)(int32_t)left;
++}
++
++/* CNTV_CTL_EL0.ISTATUS. */
++bool
++hosted_timer_pending(void)
++{
++	uint64_t deadline = hosted_timer_deadline[hosted_timer_slot()];
++
++	return deadline != UINT64_MAX && __builtin_arm_rsr64("CNTVCT_EL0") >= deadline;
++}
++
++#endif /* XNU_HOSTED */
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+index 12d4131..a7ecbf3 100644
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -2530,11 +2530,16 @@ ml_set_decrementer(uint32_t dec_value)
+ 		}
+ 	}
+ 
++#if XNU_HOSTED
++	/* OneiOS hosted: the vCPU's deadline timer in xnuhost (timer_set), not a trapped CNTV_TVAL_EL0. */
++	hosted_timer_set((int32_t)counter_value);
++#else
+ 	if (cdp->cpu_set_decrementer_func) {
+ 		cdp->cpu_set_decrementer_func((uint32_t)counter_value);
+ 	} else {
+ 		__builtin_arm_wsr64(KERNEL_CNTV_TVAL_EL0, counter_value);
+ 	}
++#endif
+ }
+ 
+ /**
+@@ -2663,6 +2668,11 @@ ml_get_decrementer(void)
+ 
+ 	assert(ml_get_interrupts_enabled() == FALSE);
+ 
++#if XNU_HOSTED
++	/* OneiOS hosted: what CNTV_TVAL_EL0 would read, from the deadline last given to xnuhost. */
++	(void)cdp;
++	dec = hosted_timer_get();
++#else
+ 	if (cdp->cpu_get_decrementer_func) {
+ 		dec = cdp->cpu_get_decrementer_func();
+ 	} else {
+@@ -2672,6 +2682,7 @@ ml_get_decrementer(void)
+ 		dec = (uint32_t)wide_val;
+ 		assert(wide_val == (uint64_t)dec);
+ 	}
++#endif
+ 
+ 	/* Back in timebase ticks; a timer already past (TVAL negative) stays as read. */
+ 	if (timebase_scaled() && (int32_t)dec > 0) {
+@@ -2684,8 +2695,12 @@ ml_get_decrementer(void)
+ boolean_t
+ ml_get_timer_pending(void)
+ {
++#if XNU_HOSTED
++	return hosted_timer_pending() ? TRUE : FALSE;
++#else
+ 	uint64_t cntv_ctl = __builtin_arm_rsr64(KERNEL_CNTV_CTL_EL0);
+ 	return ((cntv_ctl & CNTV_CTL_EL0_ISTATUS) != 0) ? TRUE : FALSE;
++#endif
+ }
+ 
+ __attribute__((noreturn))
+@@ -2765,6 +2780,9 @@ _enable_timebase_event_stream(uint32_t bit_index)
+ static void
+ _enable_virtual_timer(void)
+ {
++#if XNU_HOSTED
++	/* OneiOS hosted: the timer is armed by timer_set (ml_set_decrementer); there is nothing to switch on. */
++#else
+ 	uint64_t cntvctl = CNTV_CTL_EL0_ENABLE; /* One wants to use 32 bits, but "mrs" prefers it this way */
+ 
+ 	__builtin_arm_wsr64(KERNEL_CNTV_CTL_EL0, cntvctl);
+@@ -2773,6 +2791,7 @@ _enable_virtual_timer(void)
+ #if HAS_APPLE_GENERIC_TIMER
+ 	__builtin_arm_wsr64("S3_1_C15_C13_4", CNTP_CTL_EL0_IMASKED);
+ #endif
++#endif /* !XNU_HOSTED */
+ }
+ 
+ void
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
+index dc7212c..d9c13a8 100644
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -112,7 +112,15 @@ LEXT(LowResetVectorBase)
+ 	 * coexist in the same space, the reset code is moved to the end
+ 	 * of the exception vector area.
+ 	 */
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted: this page is the entry address ArmCpu gives PSCI CPU_ON. xnuhost enters it on the new
++	 * vCPU's thread with x0 = the PSCI context, x1 = its vector, x2 = that vCPU's struct xh_cpu.
++	 */
++	b		EXT(hosted_cpu_start)
++#else
+ 	b		EXT(reset_vector)
++#endif
+ 
+ 	/* EL1 SP1: These vectors trap errors during early startup on non-boot CPUs. */
+ 	.align	9
+diff --git a/osfmk/conf/files.arm64 b/osfmk/conf/files.arm64
+index 6483679..b6b7805 100644
+--- a/osfmk/conf/files.arm64
++++ b/osfmk/conf/files.arm64
+@@ -65,6 +65,7 @@ osfmk/arm64/sleh.c			standard
+ osfmk/arm64/start.s	optional nos_arm_asm config_pmap_ppl
+ osfmk/arm64/hosted/hosted_asm.s	optional nos_arm_asm
+ osfmk/arm64/hosted/hosted_machine.c	optional nos_arm_asm
++osfmk/arm64/hosted/hosted_smp.c	optional nos_arm_asm
+ osfmk/arm64/pinst.s	optional nos_arm_asm
+ osfmk/arm64/cswitch.s	optional nos_arm_asm
+ osfmk/arm/machine_cpuid.c	standard

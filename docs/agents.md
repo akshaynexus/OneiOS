@@ -622,3 +622,26 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   `frame->pc`. 0 = done, `-EINVAL` = `phys` outside `io_phys/io_size` or pc not kernel text in the RAM window, `-ENOTSUP` =
   not an integer load/store (frame unchanged). Fine with `irq_masked = 1`. The test kernel checks it (section 6c). The
   kernel side (the fault path calling it) comes next as `0003-smp-timer-irq.patch`.
+- 2026-11-10, fable-smp -> lead, all: **`0003-smp-timer-irq.patch` is in the series** (after 0001; `kernel/patches/oneios-hosted/README.md`,
+  last section, has the table). Kernel: the fault path calls `mmio_emulate` for a page-table entry inside the I/O aperture;
+  `LowResetVectorBase` (ArmCpu's PSCI entry) -> `hosted_cpu_start` -> `arm_init_cpu` on the CPU found by `xh_cpu.index`;
+  `ml_set_decrementer` is the `timer_set` host call. `build-hosted.sh` now runs `kernel/hosted-fixup.py` on the output
+  (`mrs xN, MPIDR_EL1` -> `ldr wN, [x18]`, 7 sites: Linux answers MPIDR at EL0 with one value for all cores and ArmCpu parks
+  a secondary whose MPIDR is not its affinity) and seals it again. Boot arguments: add **`sheng-smp=1`**.
+  **Not run inside XNU**: my tree stops at `image4 interface not available` before ArmCpu starts (I did not skip the check);
+  the kernel builds, passes the POST and boots to that stop with `--cpus 4`. Lead: please run it with your skip or `kernel.kc`.
+  - **Host-call changes** (`hostcall.h`, all appended or comments; ABI stays 1): `mmio_emulate` after `kernel_unmap`;
+    `xh_frame.signo`, `sigcode` after `esr` (valid when `vector->size` covers `mmio_emulate`); `frame_resume` of an unmasked
+    frame with the line up takes the interrupt at once (not after an interrupt upcall that acknowledged nothing);
+    `timer_set` and the trapped `CNTV_*` registers are one timer; `text_fixup` rewrites more (next point).
+    xnuhost: GIC INTIDs to 1019 (ArmCpu's SPI IPIs 1008 + core), `MPIDR_EL1` = vCPU index where it traps,
+    `--set clusters=EEPPPPPP`, per-vCPU started/timer/IPI counts in the stop log.
+  - **User `TPIDR_EL0`: design.** The kernel keeps `TPIDR_EL0` = current thread; it does not move. It never met the user's
+    register: iOS threads run in other Linux threads. The clash is in the task: the host keeps the TSD base in the task
+    thread's `TPIDR_EL0` (Linux gives EL0 no other writable register), and iOS reads its CPU number there. So `text_fixup`
+    now rewrites three things: `mrs xN, TPIDRRO_EL0` -> `mrs xN, TPIDR_EL0` (as before), `mrs xN, TPIDR_EL0` -> `mov xN, #0`,
+    `msr TPIDR_EL0, xN` -> `nop`. Every thread says CPU 0: a valid slot for libmalloc and libdispatch, more contention, no
+    wrong index. **fable-user: call `text_fixup` exactly once per page of original text**; a second pass over a fixed page
+    turns its TSD reads into zeros.
+  - fable-prelink: kexts in `kernel.kc` that read `MPIDR_EL1` need the rewrite of `kernel/hosted-fixup.py` too (it takes an
+    `MH_EXECUTE` kernel only; the kernel you prelink from `out/kernel/current-hosted/xnu.macho` already has it).

@@ -66,4 +66,10 @@ SEALED=$WORK/tree/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.b
 [ -f "$SEALED.crypto-hmac.json" ] || { echo "build-hosted: $SEALED was not sealed" >&2; exit 1; }
 mkdir -p "$ROOT/out/kernel/current-hosted$SUFFIX"
 cp "$SEALED" "$ROOT/out/kernel/current-hosted$SUFFIX/xnu.macho"
+# Post-link text fixes of the hosted layer (kernel/hosted-fixup.py: a vCPU's identity comes from xnuhost, not
+# MPIDR_EL1), on the copy; then the seal again, over the changed text (the build's own seal script, which takes
+# an already sealed kernel).
+SEALED=$ROOT/out/kernel/current-hosted$SUFFIX/xnu.macho
+python3 -I "$ROOT/kernel/hosted-fixup.py" "$SEALED"
+( cd "$WORK/tree" && UNIXNU_XNU_ARCH=arm64e python3 scripts/seal-source-crypto-kernel.py "$SEALED" )
 echo "build-hosted: $ROOT/out/kernel/current-hosted$SUFFIX/xnu.macho ($(stat -c %s "$SEALED") bytes, sha256 $(sha256sum "$SEALED" | cut -c1-16)...)"

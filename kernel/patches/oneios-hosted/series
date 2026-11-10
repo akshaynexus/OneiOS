@@ -2,3 +2,4 @@
 # board series (kernel/device/patches/xnu-12377/series). Every change is under `#if XNU_HOSTED`
 # (CONFIG_XNU_HOSTED=y of kernel/device/configs/oneios_hosted_defconfig); kernel/build-hosted.sh applies it.
 0001-hosted-machine-layer.patch
+0003-smp-timer-irq.patch
