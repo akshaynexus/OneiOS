@@ -451,6 +451,11 @@ int main(int argc, char **argv)
     LOGI("cpu%u: %llu interrupts, %llu device accesses, %llu emulated instructions, %llu task traps", i,
          (unsigned long long)g_vcpu[i].stat_irqs, (unsigned long long)g_vcpu[i].stat_mmio, (unsigned long long)g_vcpu[i].stat_sysreg,
          (unsigned long long)g_vcpu[i].stat_traps);
+  // Debugging aid: XNUHOST_DUMP=FILE writes the first 64 MiB of the kernel's window at the stop.
+  if (getenv("XNUHOST_DUMP")) {
+    FILE *dump = fopen(getenv("XNUHOST_DUMP"), "wb");
+    if (dump) { fwrite(g_mem.host, 1, g_mem.size < (64u << 20) ? g_mem.size : (64u << 20), dump); fclose(dump); }
+  }
   xh_tasks_shutdown();
   if (haptic) br_haptic_close(haptic);      // stops the motor
   if (net_up) net_script("down");

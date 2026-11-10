@@ -18,6 +18,11 @@ args=()
 prev=
 for a in "$@"; do
   [ "$prev" = -arch ] && arch=$a
+  # UniXNU's archive builders (corecrypto, the drivers) name the slice by triple, not by -arch. Without this they
+  # were compiled with no function-pointer type discrimination, and the kernel's first authentication of one of
+  # their function pointers (corecrypto's sysctl handlers in sysctl_register_oid) failed.
+  [ "$prev" = -target ] && case "$a" in arm64e-*) arch=arm64e ;; esac
+  case "$a" in --target=arm64e-*) arch=arm64e ;; esac
   prev=$a
   case "$a" in -mno-implicit-sme) continue ;; esac
   args+=("$a")

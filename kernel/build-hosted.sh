@@ -14,7 +14,7 @@ export KERNEL_OUT=$ROOT/out/kernel-hosted KERNEL_DEFCONFIG=oneios_hosted_defconf
 JOBS=${JOBS:-$(nproc)}
 TOOLCHAIN=${XNU_LINUX_PREFIX:-$ROOT/out/toolchain}
 "$ROOT/kernel/linux/setup-toolchain.sh"
-[ -x "$TOOLCHAIN/unixnu/CommandLineTools/usr/bin/xnu-host-cc" ] || "$ROOT/kernel/linux/unixnu-layout.sh"
+[ -x "$TOOLCHAIN/unixnu/CommandLineTools/usr/bin/xnu-host-cc" ] && [ "$TOOLCHAIN/unixnu" -nt "$ROOT/kernel/linux/clang-wrapper" ] || "$ROOT/kernel/linux/unixnu-layout.sh"
 stage_sources
 
 # The device repository of this build: the committed one, the hosted defconfig, and the hosted series last.
@@ -56,6 +56,11 @@ if ! run_build bash -c "unixnu build kernel --skip-prelink -j $JOBS"; then
   grep -n -m 40 -E "error:|Undefined symbols|symbol\(s\) not found|No rule to make" "$WORK/logs/kernel.log" >&2 || true
   exit 1
 fi
+# The kernel to boot is the sealed one: the build fills corecrypto's POST HMAC field (and writes the static_if test
+# sites in their boot state) in mach.development.bcm2837.unstripped only. UniXNU's driver stages the .noctf file,
+# whose HMAC field is empty: corecrypto's integrity self-test fails on it (-2074).
+SEALED=$WORK/tree/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped
+[ -f "$SEALED.crypto-hmac.json" ] || { echo "build-hosted: $SEALED was not sealed" >&2; exit 1; }
 mkdir -p "$ROOT/out/kernel/current-hosted"
-cp "$WORK/kernel/kernel.macho" "$ROOT/out/kernel/current-hosted/xnu.macho"
-echo "build-hosted: $ROOT/out/kernel/current-hosted/xnu.macho ($(stat -c %s "$WORK/kernel/kernel.macho") bytes, sha256 $(sha256sum "$WORK/kernel/kernel.macho" | cut -c1-16)...)"
+cp "$SEALED" "$ROOT/out/kernel/current-hosted/xnu.macho"
+echo "build-hosted: $ROOT/out/kernel/current-hosted/xnu.macho ($(stat -c %s "$SEALED") bytes, sha256 $(sha256sum "$SEALED" | cut -c1-16)...)"
