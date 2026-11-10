@@ -2949,6 +2949,26 @@
     "sha256": "d494aa8df1ab4f4539e349c1ceac4cb27af68fada457840c8684505ebcf982e1"
    },
    "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported names) and the function's own code. align.py had it one name off. The body is one atomic add of 2 to a global counter and a return (cs_blob_generation_count += 2). In AMFI's table its slot follows copyoutstr's and precedes cs_entitlement_flags'. align.py had paired it with cs_text_fixup_page, a function of UniXNU's that the original kernel does not have."
+  },
+  {
+   "original": "0xfffffe000b1038c4",
+   "native_symbol": "_get_system_inshutdown",
+   "check": {
+    "address": "0xfffffe000b1038c4",
+    "size": 16,
+    "sha256": "6616d42647c600766868ce1786db5fee9244ea0a10d4c850f0a10d3191b777c4"
+   },
+   "evidence": "Met at newfs_apfs's first write of the new volume (apfs, call at 0xfffffe000aa219dc). Returns one 32-bit global; it is the first function after kern_resource.c's (thread_selfusage is 11 functions before it, reboot_kernel 9 after), as get_system_inshutdown is the first of kern_shutdown.c; in apfs's import table its slot follows generate_file_permissions_guard_exception's, and the next slot is 0xfffffe000b1038d4."
+  },
+  {
+   "original": "0xfffffe000b1038d4",
+   "native_symbol": "_get_system_inuserspacereboot",
+   "check": {
+    "address": "0xfffffe000b1038d4",
+    "size": 20,
+    "sha256": "51c0102fec2e0b5f9af14c7b8616c2cb29622552d89d049032a61a15f47861c3"
+   },
+   "evidence": "The function after get_system_inshutdown in the original and in our kernel: returns bit 0 of one global byte. In apfs's import table its slot follows get_system_inshutdown's."
   }
  ]
 }

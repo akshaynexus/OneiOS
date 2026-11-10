@@ -2897,23 +2897,23 @@
   },
   {
    "original": "0xfffffe000b34f4b8",
-   "native_symbol": "__ZN18IOMemoryDescriptor6getTagEv",
+   "native_symbol": "__ZN18IOMemoryDescriptor16getMapperOptionsEv",
    "check": {
     "address": "0xfffffe000b34f4b8",
     "size": 12,
     "sha256": "2e06bda738ff93c0b332bb8e94d761c0de490fb72f0705aaa773b3f1b9653a10"
    },
-   "evidence": "The last two functions of IOMemoryDescriptor.cpp before IOMultiMemoryDescriptor.cpp: a setter and a getter of one field, setTag and getTag in the source. Note the layout: the original keeps the tag as 16 bits at +0x40 of the object, our kernel as 32 bits at +0x58 (public header): the pair is by meaning, and each side's methods use its own layout, so an object must not be read by one side's inline code and the other's methods. IOStorageFamily calls getTag for each request."
+   "evidence": "Lead review, by the order of the kexts' import tables: in IOStorageFamily's the slots run withOptions (11...), 0x...f4b8, 0x...f4ac, withAddressRange (16...), the constructor, so both names sort between '11withOptions' and '16withAddressRange'; getTag/setTag ('6...') sort after every two-digit name and cannot be there. The two are a 16-bit getter and setter of one field (ldrh/strh at +0x40): getMapperOptions() and setMapperOptions(uint16_t), which follow setTag/getTag in the source. The layout note stands: the original keeps the field at +0x40, our kernel at its own offset; each side's methods use its own layout."
   },
   {
    "original": "0xfffffe000b34f4ac",
-   "native_symbol": "__ZN18IOMemoryDescriptor6setTagEj",
+   "native_symbol": "__ZN18IOMemoryDescriptor16setMapperOptionsEt",
    "check": {
     "address": "0xfffffe000b34f4ac",
     "size": 12,
     "sha256": "30a0e2412a771c2aa6b8d5a638bd655640028516d30a4d62e4c49d46ca32f8df"
    },
-   "evidence": "The last two functions of IOMemoryDescriptor.cpp before IOMultiMemoryDescriptor.cpp: a setter and a getter of one field, setTag and getTag in the source. Note the layout: the original keeps the tag as 16 bits at +0x40 of the object, our kernel as 32 bits at +0x58 (public header): the pair is by meaning, and each side's methods use its own layout, so an object must not be read by one side's inline code and the other's methods. IOStorageFamily calls getTag for each request."
+   "evidence": "Lead review, by the order of the kexts' import tables: in IOStorageFamily's the slots run withOptions (11...), 0x...f4b8, 0x...f4ac, withAddressRange (16...), the constructor, so both names sort between '11withOptions' and '16withAddressRange'; getTag/setTag ('6...') sort after every two-digit name and cannot be there. The two are a 16-bit getter and setter of one field (ldrh/strh at +0x40): getMapperOptions() and setMapperOptions(uint16_t), which follow setTag/getTag in the source. The layout note stands: the original keeps the field at +0x40, our kernel at its own offset; each side's methods use its own layout."
   },
   {
    "original": "0xfffffe000adec710",
