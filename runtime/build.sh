@@ -2,7 +2,8 @@
 # Build xnuhost for arm64 Android and leave it in STAGE/bin (runtime/package.sh calls this).
 #   runtime/build.sh STAGE        build and stage bin/xnuhost (static; the task stub is inside it) and the
 #                                 bridges' helpers bin/oneios-audio and bin/oneios-net.sh, and the display helper
-#                                 (runtime/display): bin/oneios-display, bin/liboneios-display.so, lib/oneios-display.dex
+#                                 (runtime/display): bin/oneios-display, bin/liboneios-display.so, lib/oneios-display.dex,
+#                                 and the phone checks: bin/gpuctl, bin/bridgectl, bin/brightctl, bin/displayctl, bin/camctl
 #   runtime/build.sh --test       host unit tests of the loader and of xnuhost, then the Android binary
 #                                 booting the test kernel under qemu-aarch64 when that is installed
 # NDK: $NDK, else $ANDROID_NDK_HOME, else $HOME/Android/Sdk/ndk/28.2.13676358.
@@ -32,6 +33,16 @@ chmod 0755 "$STAGE/bin/oneios-camera" "$STAGE/bin/camctl"
 make -s -C "$ROOT/runtime/xnuhost" NDK="$NDK" build/android/gpuctl
 "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" -o "$STAGE/bin/gpuctl" "$ROOT/runtime/xnuhost/build/android/gpuctl"
 chmod 0755 "$STAGE/bin/gpuctl"
+# The other phone checks, which the OneOS fork's Hardware checks screen runs with One UI up (as root):
+# bridgectl (cpu, haptic, haptic-pattern, bt, audio), brightctl (info, levels, als) and displayctl (test; it
+# starts bin/oneios-display beside itself). Each folder's README has the commands and what a good run prints.
+make -s -C "$ROOT/runtime/bridges" NDK="$NDK" build/android/bridgectl
+make -s -C "$ROOT/runtime/bridges/brightness" NDK="$NDK" build/android/brightctl
+make -s -C "$ROOT/runtime/display" NDK="$NDK" build/android/displayctl
+"$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" -o "$STAGE/bin/bridgectl" "$ROOT/runtime/bridges/build/android/bridgectl"
+"$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" -o "$STAGE/bin/brightctl" "$ROOT/runtime/bridges/brightness/build/android/brightctl"
+"$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" -o "$STAGE/bin/displayctl" "$ROOT/runtime/display/build/android/displayctl"
+chmod 0755 "$STAGE/bin/bridgectl" "$STAGE/bin/brightctl" "$STAGE/bin/displayctl"
 # The display helper: a launcher, the library app_process loads, and the dex with the layer (needs javac and d8).
 D=$ROOT/runtime/display/build/android
 make -s -C "$ROOT/runtime/display" NDK="$NDK" build/android/oneios-display build/android/liboneios-display.so build/android/oneios-display.dex

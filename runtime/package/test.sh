@@ -32,6 +32,9 @@ for path, f in listed.items():
     assert len(data) == f['size'] and hashlib.sha256(data).hexdigest() == f['sha256'], path
     assert f['mode'] == ('0755' if os.access(os.path.join(root, path), os.X_OK) else '0644'), path
 assert listed['bin/xnuhost']['mode'] == '0755'
+# the phone checks the OneOS fork's Hardware checks screen runs (runtime/build.sh stages them)
+for tool in ('gpuctl', 'bridgectl', 'brightctl', 'displayctl', 'camctl', 'oneios-camera', 'oneios-audio', 'oneios-display'):
+    assert listed['bin/' + tool]['mode'] == '0755', tool
 PY
 ok "package, checksum, member order, manifest"
 zstd -dc "$P" | tar -tv | awk '$1 !~ /^-/ {bad=1} END {exit bad}' || fail "a member is not a regular file"
