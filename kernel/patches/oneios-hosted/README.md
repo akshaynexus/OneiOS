@@ -194,7 +194,7 @@ is, what it answers and why it is **not a security boundary**: [keystore/README.
 Work tree `HOSTED_OUT=keystore`. `com.apple.driver.AppleSEPKeyStore` stays out of the collection's roots.
 
 **What ran** (PC, `qemu-aarch64 -cpu cortex-a710`, 8 vCPUs, 4 GiB, the real image set, a collection made from this
-kernel with the committed prelink records of `a6c13fe`; three boots, the first a new Data store):
+kernel with the committed prelink records of `a6c13fe` for boots 1 to 4, of the committed tree for boot 5; the first on a new Data store):
 
 - At the board start: `oneios-keystore: AppleKeyStore started in software: system keybag loaded, no passcode, 31
   class keys, wrap and unwrap by AES key wrap. Not a security boundary.` The start's own test of the key wrap
@@ -207,21 +207,31 @@ kernel with the committed prelink records of `a6c13fe`; three boots, the first a
   The lines about `systembag.kb` not being there stay: `keybags/` is empty by design and the bag is the kernel's.
 - `Early boot complete. Continuing system boot.` and the daemons, as before.
 
-**What did not run.** Selectors 0 and 14 are the only ones any process called in these boots: wrap and unwrap
-(10, 11), the lock and device state (7, 17, 35) and the protection-class attribute have run only as far as the
-kernel's start test (the wrap) or not at all. No boot lasted long enough for securityd to store an item or for
-SpringBoard to ask for the lock state: see "what comes next".
+- **Boot 5** (the committed tree: series through 0017 plus 0022, a new collection; 8 minutes after "Early boot
+  complete" and still running when stopped). Each selector's first call, as the service logs it:
 
-**What comes next** (not the key store; the stops of these boots, 50 to 100 s after "Early boot complete", on a
-PC running three other agents' boots at once, load average 27 to 33):
+  | Selector | From | Result |
+  |---|---|---|
+  | 0, 14 (`aks_get_system`) | keybagd | 0 |
+  | 7 (lock state) | powerd | 0 |
+  | 17 (device state) | backboardd | 0 |
+  | 35 (extended device state) | powerd | 0 |
+  | 10 (`aks_wrap_key`), 11 (`aks_unwrap_key`) | securityd | 0: the keychain's keys are wrapped and unwrapped |
+  | 107 | keybagd | `0xe00002c7`, **not answered** (what it asks is not known; keybagd keeps running) |
 
-- boots 1 and 3: `tasks: pid N: order 4 ... was not answered`, `hosted: thread_create in task N failed (-110)`, then
-  `panic: hosted: no task process or thread for thread ... @hosted_user.c:383` (boot 3 after six
-  "Text page corruption" lines);
-- boot 2: `Text page corruption detected for pid N` for seven processes within a second, dyld's
-  `sMemoryManagerInitialized` assertions, `Process[N] crashed: xpcproxy. Too many corpses being created.`, then
-  `panic: Console I/O from interrupt-disabled context @serial_console.c:175`.
+  No selector failed other than 107. Not seen: a keychain item read back after a restart, and the
+  protection-class attribute in use (PosterBoard's store): nothing was checked on the Data volume.
 
-Both are in the user-memory and task layer (Q6 of the board), and both end the boot before SpringBoard does
-anything with the display or the key store.
+**What comes next.**
+
+- `SpringBoard` still exits with status 5 each time it is started (12 times in boot 5): the display, not the key
+  store (the lead's note: it dies in FBDisplayManager; `0020` and `display/` are that work).
+- Selector 107 from keybagd, if something turns out to wait for it.
+- Boots 1 to 3 (before the lead's 0016 and 0017, PC at load average 27 to 33) ended 50 to 100 s after "Early boot
+  complete" in the task layer: twice `hosted: thread_create in task N failed (-110)` then `panic: hosted: no task
+  process or thread for thread ... @hosted_user.c:383`, once seven "Text page corruption detected" lines, "Too many
+  corpses being created", then `panic: Console I/O from interrupt-disabled context @serial_console.c:175`. A boot
+  of the same collection with `oneios-keystore=0 owner-dataprotect=0` (boot 4) showed the old failure lines again
+  and ran 7 minutes without a panic; boot 5, with the key store on, ran 8. Whether a working keybag task makes
+  those stops likelier (more daemons get further at once) is not known: one boot each way.
 

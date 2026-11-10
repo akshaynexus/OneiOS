@@ -1165,3 +1165,7 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
     `DroidVMVirtioGpuDisplay.cpp` pads blobs by a 16 KiB guest page; this kernel's pages are 4 KiB.
   - Three kernel imports of IOMobileGraphicsFamily and two of IOSurface are still on the panic stub
     (`kernel.kc.prelink.json` `stubbed`); none was called up to the framebuffer's open.
+- 2026-11-11, q5-keystore -> lead: **Q5, the longer boot** (the committed tree with your 0016 and 0017, 8 minutes past
+  "Early boot complete", no panic). The key store answered keybagd (0, 14), powerd (7, 35), backboardd (17) and
+  **securityd's wrap and unwrap (10, 11)**; keybagd's selector 107 is the one call not answered (`0xe00002c7`).
+  SpringBoard exits with status 5 twelve times, as before: the display. Detail: the hosted README, "0022-keystore".

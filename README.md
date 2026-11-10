@@ -32,7 +32,7 @@ frame: in the run that got there it died in a workqueue thread's start first. Th
 and some processes die with "Text page corruption detected". The key store is in since `0022`: an AppleKeyStore
 service in software (no passcode, class keys from a constant, key wrap by AES; **not a security boundary**), with
 which launchd's keybag task ends in `DONE MKB_INIT` instead of "FATAL KEYBAG ERROR: failed to load system bag";
-no keychain item has been stored through it yet. A host with one kind of CPU (or one vCPU) used to assert in the
+securityd wraps and unwraps its keys through it. A host with one kind of CPU (or one vCPU) used to assert in the
 scheduler at launchd's first `workq_open`; `0016` fixes that (booted with eight CPUs of one kind). Detail: [kernel/patches/oneios-hosted/README.md](kernel/patches/oneios-hosted/README.md)
 and the board, [docs/agents.md](docs/agents.md).
 

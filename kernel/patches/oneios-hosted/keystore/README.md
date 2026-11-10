@@ -81,7 +81,8 @@ On the PC only, 2026-11-11. Nothing here has run on the phone.
   `OneiOSKeyStore.cpp`, compiled against OpenSSL's AES, give the bytes of OpenSSL's `aes-256-wrap-pad` for every
   key length from 1 to 512, unwrap them, and refuse a changed byte.
 - In the guest (`qemu-aarch64 -cpu cortex-a710`, 8 vCPUs, 4 GiB, `docs/building.md` section 5): the service
-  starts, its start test passes, launchd finds it and the keybag boot task ends with `DONE MKB_INIT`. Only
-  selectors 0 and 14 (keybagd) were called before those boots ended for other reasons; wrap and unwrap from
-  securityd, the lock and device state from SpringBoard and the protection-class attribute have **not** been seen
-  running. The log lines and what stopped the boots: `kernel/patches/oneios-hosted/README.md`, "0022-keystore".
+  starts, its start test passes, launchd finds it and the keybag boot task ends with `DONE MKB_INIT`. Called and
+  answered: 0 and 14 (keybagd), 7 and 35 (powerd), 17 (backboardd), 10 and 11 (securityd wraps and unwraps).
+  Called and **not answered**: 107 (keybagd). Not checked: a keychain item read back after a restart, the
+  protection-class attribute on a file. The log lines and the boots: `kernel/patches/oneios-hosted/README.md`,
+  "0022-keystore".
