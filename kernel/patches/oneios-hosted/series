@@ -42,3 +42,6 @@
 # without boot arguments (oneios-display=0 turns it off); the boot framebuffer, memory of the host's RAM object above
 # the kernel's window, may be mapped at a kernel address the way IOKit maps device memory.
 0020-display.patch
+# lead: the three messages of the return-to-user path (task process gone, twin not made, thread_run refused) are
+# printed with interrupts on: the serial console panicked on them ("Console I/O from interrupt-disabled context").
+0023-user-return-console.patch

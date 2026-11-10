@@ -1,0 +1,50 @@
+diff --git a/osfmk/arm64/hosted/hosted_user.c b/osfmk/arm64/hosted/hosted_user.c
+--- a/osfmk/arm64/hosted/hosted_user.c
++++ b/osfmk/arm64/hosted/hosted_user.c
+@@ -96,6 +96,18 @@
+ 	}
+ }
+ 
++/*
++ * A line about a rare event on the way back to user mode. That path runs with interrupts masked, and the serial
++ * console refuses output then ("Console I/O from interrupt-disabled context" panicked the boot whenever a task's
++ * process was gone or a twin could not be made, each of which costs one task at most): the line is printed with
++ * interrupts on. Every caller re-reads the thread's state afterwards (the loop starts over, or the task is killed).
++ */
++#define hosted_user_say(...) do { \
++	boolean_t hosted_say_were = ml_set_interrupts_enabled(TRUE); \
++	printf(__VA_ARGS__); \
++	(void)ml_set_interrupts_enabled(hosted_say_were); \
++} while (0)
++
+ /* machine_thread_destroy: the thread is gone. */
+ void
+ hosted_thread_twin_destroy(thread_t thread)
+@@ -120,7 +132,7 @@
+ 	int64_t rc = HC(thread_create, task, &handle);
+ 	hosted_irq_restore(old);
+ 	if (rc != 0) {
+-		printf("hosted: thread_create in task %llu failed (%lld)\n", task, rc);
++		hosted_user_say("hosted: thread_create in task %llu failed (%lld)\n", task, rc);
+ 		pmap_destroy(pmap);
+ 		return 0;
+ 	}
+@@ -346,7 +358,7 @@
+ 	hosted_user_stats.exited++;
+ 	if (thread->machine.hosted_pmap != NULL && thread->machine.hosted_pmap->hosted_task != 0 &&
+ 	    current_proc() != NULL) {
+-		printf("hosted: the task process of pid %d is gone (wait status 0x%x): killing the task\n",
++		hosted_user_say("hosted: the task process of pid %d is gone (wait status 0x%x): killing the task\n",
+ 		    proc_selfpid(), trap->exit_status);
+ 		psignal(current_proc(), 9 /* SIGKILL */);
+ 	}
+@@ -421,8 +433,8 @@
+ #endif
+ 		if (__improbable(rc != 0)) {
+ 			/* xnuhost does not know the twin (its process was destroyed and the slot given away) */
+-			printf("hosted: thread_run of thread %p failed (%lld): a new twin\n", thread, rc);
+ 			thread->machine.hosted_thread = 0;
++			hosted_user_say("hosted: thread_run of thread %p failed (%lld): a new twin\n", thread, rc);
+ 			continue;
+ 		}
+ 
