@@ -98,7 +98,12 @@ static xl_blob sidecar(const char *suffix, size_t limit)
 }
 
 #if defined(__aarch64__) && defined(__linux__)
+#include <pthread.h>
 #include <sys/auxv.h>
+#ifdef __ANDROID__
+#include <android/api-level.h>
+void android_set_application_target_sdk_version(int target);
+#endif
 #include <sys/prctl.h>
 #ifndef HWCAP_PACA
 #define HWCAP_PACA (1 << 30)
@@ -127,6 +132,21 @@ static bool pac_shared_by_fork(void)
   return ok && mine != probe;
 }
 
+// The same must hold for xnuhost's own threads: the kernel's code runs on the vCPU threads and signs
+// pointers that every other vCPU and every task authenticates. Linux copies the keys to a new thread,
+// but bionic's pthread start resets the thread's APIA key (prctl PR_PAC_RESET_KEYS) for programs whose
+// target SDK is 31 or later, which a static binary is by default. main() lowers the target SDK first;
+// this checks that it worked.
+static void *pac_thread_probe(void *arg) { *(uint64_t *)arg = pac_sign(0x0000001234567000ull); return NULL; }
+static bool pac_shared_by_threads(void)
+{
+  uint64_t theirs = 0;
+  pthread_t thread;
+  if (pthread_create(&thread, NULL, pac_thread_probe, &theirs)) return false;
+  pthread_join(thread, NULL);
+  return theirs == pac_sign(0x0000001234567000ull);
+}
+
 static unsigned user_va_bits(void)
 {
   static const unsigned candidates[] = { 52, 48, 47, 42, 39, 36 };
@@ -144,10 +164,11 @@ static void host_facts(void)
   g_info.user_va_bits = user_va_bits();
   g_info.timebase_hz = xh_counter_hz();
   bool paca = getauxval(AT_HWCAP) & HWCAP_PACA;
-  if (paca && pac_shared_by_fork()) g_info.features |= XH_FEATURE_PAC;
+  bool by_fork = paca && pac_shared_by_fork(), by_thread = paca && pac_shared_by_threads();
+  if (by_fork && by_thread) g_info.features |= XH_FEATURE_PAC;
   if (prctl(PR_PAC_SET_ENABLED_KEYS, 0, 0, 0, 0) == 0) g_info.features |= XH_FEATURE_PAC_KEYS_OFF;   // a no-op call: only asks
   LOGI("host: page %u, user VA %u bits, counter %llu Hz, PAC %s%s", g_info.host_page_size, g_info.user_va_bits,
-       (unsigned long long)g_info.timebase_hz, paca ? ((g_info.features & XH_FEATURE_PAC) ? "yes, keys shared across fork" : "present but keys differ after fork") : "no",
+       (unsigned long long)g_info.timebase_hz, paca ? ((g_info.features & XH_FEATURE_PAC) ? "yes, keys shared across fork and threads" : !by_fork ? "present but keys differ after fork" : "present but keys differ between threads") : "no",
        (g_info.features & XH_FEATURE_PAC_KEYS_OFF) ? ", per-thread key control" : "");
 }
 #else
@@ -476,6 +497,11 @@ static int boot(void)
 
 int main(int argc, char **argv)
 {
+#if defined(__ANDROID__) && defined(__aarch64__)
+  // Before any thread exists: bionic gives each new thread of a program with target SDK >= 31 its own
+  // APIA key. The kernel's vCPUs and the tasks need one key set (pac_shared_by_threads).
+  android_set_application_target_sdk_version(30);
+#endif
   xh_config_defaults(&config);
   if (xh_config_args(&config, argc, argv) || xh_config_finish(&config)) return EXIT_SETUP;
   xh_log_open(NULL, config.log_level);
