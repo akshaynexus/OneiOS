@@ -234,7 +234,9 @@ void     xh_blk_close(xh_blk *b);
 
 // virtio-mmio transport, version 2, split queues (virtio.c)
 #define XH_VIRTIO_QUEUES 4
-#define XH_VIRTIO_QSIZE  256
+// The largest queue a driver may ask for. 1024 as crosvm offers: Droid-VM's virtio-gpu driver needs 512 for its
+// control queue (two descriptors for each of 256 slots) and refused the device at 256.
+#define XH_VIRTIO_QSIZE  1024
 typedef struct xh_virtio xh_virtio;
 typedef struct { uint8_t *data; uint32_t length; bool writable; } xh_viov;
 typedef struct {
