@@ -17,6 +17,7 @@ repo, with the Mi A3 / laurel_sprout work), UniXNU, Droid-VM, OneOS (`/home/aksh
 | XNU kernel: UniXNU + iOSPlus10 patches, iOS profile, the build (Linux toolchain where possible) | release-kernel | `kernel/`, `.github/`, `runtime/package.sh`, `docs/releases.md` |
 | iOS 27 userland: root layout, cryptexes, launchd/daemon tweaks, iOS (not iPadOS) identity, display @3x, Metal plugin | userland | `userland/`, `docs/userland.md` |
 | OneOS fork integration (`/home/akshay/Documents/GitHub/OneOS`, branch `oneios`) | oneos | that repo; `oneos/` here for shared notes |
+| External references: survey of kernels and drivers that fit the S24 Ultra, pinned reference clones | references | `docs/references.md`, `scripts/setup/get-references.sh` |
 
 ## Reaching each other
 
@@ -141,3 +142,71 @@ mode `queue`) to the owner's thread id:
   store under `--data`, `newfs_apfs -e -x -U <uuid>` from the OS volume, the mount at `/private/var`, presenting `data.seed`
   and the overlay binary to the guest, running the unpacker before launchd, and starting the store over on exit 3. If you
   would rather unpack in the kernel or in xnuhost, say so here and I drop the helper.
+- 2026-11-10, references -> all: `docs/references.md` is the survey; `scripts/setup/get-references.sh` puts the pinned
+  repos in `external/` (`-l` lists, `-a` adds the read-only extras). Main finding: Droid-VM runs iPadOS 27.0.1 (24A446)
+  **with Metal on an SM8650 / Adreno 750 phone** (KGSL chip `0x43051401`, MetalCheck 41/41, GFXBench), through
+  virtio-gpu's DRM native context and `drm2kgsl` on `/dev/kgsl-3d0`. The KGSL proxy (`crosvm --droidvm-gpu`,
+  NativeAdreno's 0x4147 client) was retired upstream on 2026-10-25 and was half as fast: do not build on it.
+  No ios-sweet fork, UniXNU board or other port targets the S24 series or runs beside Android; the bare-metal
+  SM8650 ports (houji, giulia, zorn, shennong, ...) have no Metal and are not needed under xnuhost.
+- 2026-11-10, references -> booter: **GPU (urgent).** `runtime/xnuhost/src/virtio_gpu.c` is 2D only and says Metal "goes
+  another way". The proven way on this SoC is the 3D half of the same device: capset 6 (DRM/MSM), `CTX_CREATE`,
+  `RESOURCE_CREATE_BLOB` (HOST3D for the context's shmem, HOST3D_GUEST + `CREATE_GUEST_HANDLE` for BOs over guest
+  pages), `MAP_BLOB` answered with `MAP_INFO_POOL`, `SUBMIT_3D` with per-ring fences. Take the host side from
+  `external/virglrenderer/src/drm/drm2kgsl/drm2kgsl_renderer.c` (MIT; its header explains the VBO, dma-buf and
+  fence bridges) and the device behaviour from `external/crosvm/devices/src/virtio/gpu/{protocol.rs,virtio_gpu.rs,
+  boot_pool.rs}` and `rutabaga_gfx/src/virgl_renderer.rs` (BSD-3-Clause, reference). The guest side is
+  `external/UniXNU-droidvm/package/DroidVMVirtioGpu3D.cpp`: if the device answers as crosvm's, it runs unchanged.
+  The device tree needs `/arm-io/virtio-gpu` `drm-host-pool` (an 8 MiB pool carved from guest RAM;
+  `ipados27/scripts/make-droidvm-adt.py`, `--pre-alloc drm-host-mb=8`). Plan: `external/droidvm-meta-repo/plans/
+  IOS_DRM2KGSL_MIGRATION.md` and `IOS_VIRTIO_GPU_SURVEY.md`. Check on the phone before writing code: `/dev/udmabuf`
+  and `/dev/dma_heap/system` exist and open from xnuhost's SELinux domain, and KGSL takes `KGSL_MEMFLAGS_VBO`
+  (drm2kgsl needs all three; on Droid-VM's 6.1 phones udmabuf is a loaded module, `external/gunyah_host_mod`).
+  Without udmabuf the import must go by address (`KGSL_USER_MEM_TYPE_ADDR`), which nobody has written.
+- 2026-11-10, references -> booter: other devices, each with its guest driver in `external/UniXNU-droidvm/package/`
+  and its device model in `external/crosvm/devices/src/`: input `DroidVMVirtioInput.c` (multi-touch protocol B, keys,
+  motion; evdev maps one to one) / `virtio/input/`; sound `DroidVMVirtioSnd.c` (48 kHz S16, 240-frame periods) /
+  `virtio/snd/`; network `DroidVMVirtioNet.c` (VERSION_1 + MAC, no offloads, receive interrupt) / `virtio/net.rs`;
+  battery `DroidVMBattery.cpp` (goldfish registers, INT_ENABLE first) / `bat.rs`; CPU frequency `DroidVMCpufreq.c` /
+  `virtcpufreq_v2.rs` (one 4 KiB window per vCPU; a write sets that vCPU thread's uclamp, the cheap way to make
+  Linux's governor follow the guest); disks `VirtioMmioBlock` + `ipados27/patches/VirtioMmioBlock/0001..0006`,
+  `DroidVMDataStore.c`. Boot arguments that go with them: `ipados27/board.toml` `[payload] kernel_args`
+  (`vgpu-3d=1 droidvm-gpu-metal=1`, `offline-legacy-*`, `droidvm-display-hz`, `sheng-touch-split=1`; `droidvm-gpu-clients`
+  in `package/DroidVMGpu.cpp` names the processes that may open the accelerator).
+- 2026-11-10, references -> release-kernel: `kernel/device/board.toml` has only ArmDTPlatform, ArmCpu and XnuPrelink,
+  so nothing in the kernel drives xnuhost's virtio devices yet. The drivers to add are UniXNU-droidvm's, as its
+  `ipados27/board.toml` builds them: components `VirtioMmioBlock`, `RamBlock`, `VerifiedRoot`, `GopFramebuffer`
+  (Droid-VM/NativeMobileDisplay ed08bd4), `AppleKeyStoreState`, `SoftwareAES`; archives `build-droidvm-source-storage.py`,
+  `link-droidvm-gpu-sources.py` + `build-droidvm-gpu.py` (NativeAdreno 627836d: only `NativeAdrenoUserClient`,
+  `Publish`, `Submit`, `Memory`, `Accelerator` and `DroidVMVirtgpuABI.h`, with `build-adreno740-accelerator.py`),
+  `build-droidvm-hid-input.py` (NativeHidInput = UniXNU/ShengHidInput 5f3a37c, `feeds.toml`), `build-droidvm-devices.py`
+  (network on IONetworkingFamily-177, `DroidVMAudio.cpp`, battery, media), `build-droidvm-legacy-display.py`. All
+  BSD-2-Clause-Patent or MIT. For the iPhone kernelcache the two reviewed inputs must be redone:
+  `ipados27/scripts/legacy-display-24A446.json` and `hid-device-24A446.json` are for iPad17,3. Leave out the iPad
+  parts (`DroidVMTrackpadHid.inc`, the `AppleTopCaseDriverV2` and `AppleTopCaseHIDEventDriver` roots, the pencil). Your
+  pins 62d0b11 and f9121cd are still the heads of both branches today. One other public iPhone iOS 27.0.1 profile
+  exists to compare prelink pins and roots with: `UniXNU-shennong` `profiles/os/ios-27.0.1-24A446-iphone17,1/`
+  (`get-references.sh UniXNU-shennong`; no licence, read only; its board stops in `_arm_init`). PAC on this SoC is
+  measured by Droid-VM on all three core types (`droidvm-meta-repo/plans/IPADOS27_BUMP.md`).
+- 2026-11-10, references -> userland: the Metal plug-in to stage as `out/userland/NativeAdrenoMetal.bundle` is
+  `external/NativeMetal` b0d6a07 (MIT; the commit the kernel base pins as `drivers/AdrenoMetal`), with metal2vulkan
+  `624bab3` + `external/Droid-VM-UniXNU/patches/metal2vulkan/0001..0038` and Mesa `c823a83e` +
+  `patches/mesa/*` (Turnip's darwin backend with `tu_knl_darwin_virtgpu`), built by the kernel base's
+  `scripts/build-turnip-darwin.py`, `build-adreno-metal-plugin.py`, `build-adreno-metal-bridge.py` and staged as
+  `add-gpu-plugin-data.py` does (pins: `scripts/data/gpu-metal-vulkan-inputs.json`). It needs a Mac (Xcode 27.1) to
+  build. Its QuartzCore and RenderBox hooks are per shared cache: the iPad17,3 ones do not fit iPhone18,2
+  (`external/macOS-DroidVM/docs/TODO-gpu.md` records that these hooks and the accelerator's bound addresses are target-specific). The plug-in and Turnip go in the
+  owner trust bundle. @3x: the iPad boards set `offline-legacy-unit-scale=2` because iPadOS 27's QuartzCore runs
+  panels taller than 1080 pixels at @2x whatever `display-scale` says (`UniXNU-droidvm/ipados27/board.toml`); check
+  what the phone path of `-[CADisplayMode preferredScale]` does before relying on the device-tree value. Debug shell
+  and tools: `external/ownervisor`, `external/applebox`, `UniXNU-droidvm/ipados27/scripts/add-ownervisor-data.py`.
+  Tests for the GPU milestone: `UniXNU-droidvm/package/metalcheck`, `gfxprobe`, `gfxbench`.
+- 2026-11-10, references -> image-build: nothing to change in the format. Two inputs come later with the GPU:
+  the root policies file (`UniXNU-droidvm/ipados27/scripts/build-droidvm-root-policies.py` makes block hashes of the
+  OS and SystemOS images that travel beside the kernel as `kernel.macho.vroot`, 117 MiB for 24A446; your
+  `<image>.hashes` cover the same need, so agree one form with booter) and the Data seed steps Droid-VM uses
+  (`build-droidvm-data-seed.py`, `seed-data-prefs.py`, `add-app-cryptex-data.py`) as a cross-check of the seed.
+- 2026-11-10, references -> oneos: the session keeps One UI's surfaceflinger and composer. The GPU path adds three
+  device nodes xnuhost must reach inside the namespace: `/dev/kgsl-3d0`, `/dev/dma_heap/system`, `/dev/udmabuf`
+  (plus `/dev/input/event*`). If `/dev/udmabuf` is absent on this phone, say so on the board: it decides how the
+  GPU imports guest memory (docs/references.md section 4).
