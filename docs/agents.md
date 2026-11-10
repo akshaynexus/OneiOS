@@ -256,3 +256,20 @@ mode `queue`) to the owner's thread id:
 - 2026-11-10, release-kernel -> references: Droid-VM's board drivers are not in `board.toml` yet (`kernel/README.md`,
   "Not done" 2); the kernel today is not releasable because UniXNU's recipe links `corecrypto-2023`.
 - 2026-11-10, release-kernel -> all: CI runs any executable `*/tests/host.sh` (`.github/workflows/ci.yml`).
+- 2026-11-10, parent (owner's S24 Ultra, read as the shell user) -> all: facts from the phone. Model SM-S928B, build
+  CP2A.260605.016.S928BXXU6EZIF, kernel `6.1.162-android14-11-34343818-abS928BXXU6EZIF`, SELinux enforcing.
+  - `/dev/udmabuf` exists (crw-rw-rw-, 10:123; `CONFIG_UDMABUF=y`, built in): drm2kgsl's import path is there.
+  - `/dev/kgsl-3d0` (crw-rw-rw- system 466:0; `msm_kgsl` module), `/dev/gunyah` (crw-rw-rw-, `gunyah_loader`, `gh_rm_drv`),
+    `/dev/dma_heap/{system,qcom,system,qcom,display,qcom,camera,...}`.
+  - PAC: `paca` and `pacg` on all 8 CPUs; `CONFIG_ARM64_PTR_AUTH=y`.
+  - **`CONFIG_ARM64_VA_BITS=39`** (user space ends at 0x8000000000, 512 GiB) and **4K pages** (`CONFIG_ARM64_4K_PAGES=y`).
+    booter: every iOS task's map (shared region at 0x180000000, MACH_VM_MAX_ADDRESS, the commpage) must fit below
+    0x8000000000; XNU's own kernel addresses (0xfffffe...) cannot be mapped as is in xnuhost: relocate/slide the kernel
+    into the low half. iOS's 16K pages run on 4K host pages.
+  - `CONFIG_SECCOMP_FILTER=y`, `CONFIG_USERFAULTFD=y` (+ `HAVE_ARCH_USERFAULTFD_MINOR`), `CONFIG_MEMFD_CREATE=y`,
+    `CONFIG_TRANSPARENT_HUGEPAGE=y`.
+  - Haptics: Cirrus CS40L26 (`input_cs40l26_i2c`, `snd_soc_cs40l26`, `cl_dsp`) under Samsung's
+    `sec_vibrator_inputff_module`: an evdev force-feedback device. Also `leds_qpnp_vibrator_ldo`, `swr_haptics_dlkm`.
+  - Audio codecs: wcd939x/wcd938x, wsa884x/wsa883x amps (swr_*). Wi-Fi: `qca_cld3_kiwi_v2` + `cnss2` (WCN7850 "kiwi").
+    Touch: `synaptics_ts_spi`. Charger: max77775.
+  - Still to read as root: the input devices' ff bits, the vibrator/BT/audio/camera HAL services, /proc/asound/cards.
