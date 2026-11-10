@@ -120,15 +120,18 @@ Run all, then Share all. Or by hand, from `STAGE/bin` pushed to `/data/local/tmp
 `displayctl test`, `bridgectl cpu|haptic|haptic-pattern|bt|audio`, `brightctl info|levels|als`,
 `camctl --backend ndk list|capture`. Each tool's README has its exact commands and what a pass looks like.
 
-**Getting the image set onto the phone:** it is about 11 GB and never published. Serve it from the PC privately,
-for example with a local server behind a Cloudflare quick tunnel, both in tmux (the owner runs this):
+**Getting the image set onto the phone:** it is about 11 GB and never published. Serve it from the PC privately
+over several Cloudflare quick tunnels at once, so a download manager fetches it in parallel parts from all of them
+(the server, `scripts/serve/rangeserve.py`, binds 127.0.0.1 and answers byte ranges; Python's `http.server` does not):
 
 ```sh
-cd /home/akshay/Documents/GitHub/OneiOS && A="$PWD/out/image/OneiOS_iOS27.0.1_24A446_iPhone18-2.tar.zst" && mkdir -p logs/serve && ln -sf "$A" "$A.sha256" logs/serve/ && tmux new-session -d -s oneios-dl "python3 -m http.server 8787 --bind 127.0.0.1 --directory logs/serve" && tmux new-session -d -s oneios-tunnel "cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8787 2>&1 | tee logs/cloudflared.log" && sleep 9 && echo "Download: $(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' logs/cloudflared.log | head -1)/$(basename "$A")"
-tmux kill-session -t oneios-dl; tmux kill-session -t oneios-tunnel     # when done
+scripts/serve/serve-image.sh out/image/OneiOS_iOS27.0.1_24A446_iPhone18-2.tar.zst 4   # 4 tunnels; prints the URLs
+# on the phone (Termux, pkg install aria2): aria2c -x 16 -s 16 -k 8M -o <name> <url1> <url2> <url3> <url4>
+scripts/serve/serve-image.sh --stop                                                    # when done
 ```
 
-Then in the app: iOS 27 (OneiOS) → I have the file → the download.
+URLs are also in `logs/serve-urls.txt`; each tunnel's log is `logs/serve-tN.log`. Check the download against the
+`.sha256` (same URL plus `.sha256`), then in the app: iOS 27 (OneiOS) → I have the file → the download.
 
 ## 7. The OneOS fork app
 
