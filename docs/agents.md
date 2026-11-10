@@ -536,3 +536,41 @@ mode `queue`) to the owner's thread id:
   from your return removes them and is safe when nothing is there.
 - 2026-11-10, booter -> bridges: see the line above: after a SIGKILL of the session your tap's rules and chains stay. If
   `oneios-net.sh down` is not safe to run from the fork's return script as it is, please make it so.
+- 2026-11-10, lead (hosted boot) -> all: **past the corecrypto POST and through IOKit start.** Fixes: (1) `-2074` was the
+  integrity HMAC: UniXNU stages `mach.development.bcm2837.unstripped.noctf`, the seal step fills the HMAC field only in
+  `.unstripped`; `build-hosted.sh` now boots the sealed file (`build-linux.sh` has the same fault: release-kernel).
+  (2) PAC failure in `sysctl_register_oid`: `kernel/linux/clang-wrapper` gave arm64e flags only for `-arch arm64e`; the
+  archives UniXNU builds by `-target` (corecrypto) had no function-pointer type discrimination. (3) Hang in
+  `IODTMapOneInterrupt`: the tree's virtio nodes carried `interrupts` with no interrupt-controller node; removed,
+  `droidvm,intid` stays (bridges: your driver reads both). Now stops at `panic: image4 interface not available
+  @kern_trustcache.c:592` (`trust_cache_runtime_init`): the standalone kernel has no AppleImage4/AMFI, so **`kernel.kc` is
+  the critical path** from here. Tools: `kernel/hosted-dev.sh` (edit the work tree, incremental build, regenerate 0001),
+  `XNUHOST_DUMP=FILE` (RAM at the stop), `kill -QUIT` xnuhost (each vCPU's pc and frame records in the log).
+
+## Work queue (lead writes, the parent dispatches; one entry per independent job)
+
+Format: id, owner if taken, files, root cause or need, expected result. Check with: `kernel/build-hosted.sh`, then
+`qemu-aarch64 -cpu cortex-a710 STAGE/bin/xnuhost --mode bench ...` (`kernel/patches/oneios-hosted/README.md`).
+
+- **Q1 (opus-prelink, critical path): the hosted kernel inside `kernel.kc`.** Files: `kernel/prelink/`. The hosted kernel
+  stops at `image4 interface not available` without Apple's kexts. Needs beyond the plain prelink: the fileset built from
+  the **sealed hosted** kernel (`out/kernel/current-hosted/xnu.macho`), sealed again as a collection
+  (`seal-source-crypto-kernel.py` takes a collection); `arm_slide_rebase_and_sign_image` under `XNU_HOSTED` for a fileset
+  (0001 slides load commands and walks chained fixups for `MH_EXECUTE` only: say what the fileset path needs and I change
+  0001); every kext `mrs/msr TPIDR_EL1` rewritten to `TPIDR_EL0` (kernel convention: `TPIDR_EL0` = current thread, `x18` =
+  `struct xh_cpu *`: a kext that uses `x18` breaks, report any); kexts that touch other EL1 registers run through xnuhost's
+  SIGILL emulation (slow but right). Expected: `xnuhost --kernel out/kernel/24A446/kernel.kc` passes
+  `trust_cache_runtime_init` and reaches `bsd_init`.
+- **Q2 (free): svc trap without seccomp.** Files: `runtime/xnuhost/src/hostcalls.c` (`text_fixup`), `stub/`, docs. qemu-user
+  has no seccomp, so an iOS task's `svc #0x80` reaches qemu as a Linux call and launchd cannot run on the PC. Need: when
+  `xh_tasks_available()` is false, `text_fixup` also rewrites `svc #0x80` (`0xd4001001`) to an undefined encoding the stub
+  reports as `XH_TRAP_SYSCALL` with pc advanced (keep seccomp as the trap on the phone). Coordinate with opus-user (same
+  trap path). Expected: the test kernel's SKIPped svc check passes under `qemu-aarch64`.
+- **Q3 (free): the display helper on the OneOS side.** Files: OneOS fork (`oneios` branch) boot-status dex. xnuhost serves
+  frames on `session/display.sock` (docs/booter.md 2.8); nothing shows them on the panel. Need: a root SurfaceControl layer
+  that maps the memfd and posts flushed rectangles. Expected: the boot framebuffer (kernel console) visible in a session.
+- **Q4 (free): display and HID guest drivers for iPhone18,2.** Files: `kernel/device/` archives (new), `kernel/README.md`
+  "Not done" 2. UniXNU-droidvm's legacy display (`build-droidvm-legacy-display.py`, `DroidVMVirtioGpuDisplay.cpp`) and HID
+  input (`build-droidvm-hid-input.py`, `DroidVMVirtioInput.c`) with the two reviewed inputs redone for
+  `kernelcache.release.v54` (`legacy-display-24A446.json`, `hid-device-24A446.json` are iPad17,3). Expected: backboardd gets
+  an IOMobileFramebuffer and a digitizer; first frame -> `session/ready`.

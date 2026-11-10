@@ -27,6 +27,7 @@ void (*xh_cpu_place)(int tid, unsigned vcpu);
 
 #define SIG_KICK  (SIGRTMIN + 1)      // another thread raised this CPU's interrupt line
 #define SIG_TIMER (SIGRTMIN + 2)      // this CPU's timer is due
+#define SIG_DUMP  (SIGRTMIN + 4)      // debugging: log where this CPU is (SIGQUIT to xnuhost)
 #define SIGSTACK_BLOCK 0x100000ul     // per vCPU, aligned: [cpu pointer page][signal stack]
 #define BOOT_STACK 0x40000ul
 #define HOST_STACK 0x80000ul
@@ -199,6 +200,28 @@ void xh_cpu_signal(int signo, siginfo_t *info, void *context, struct xh_cpu *cpu
   xh_vcpu *v = (xh_vcpu *)cpu;
   int saved_errno = errno;
 
+  if (signo == SIG_DUMP) {
+    if (!v) return;
+    mcontext_t *m = &uc->uc_mcontext;
+    xh_log_signal("cpu state: index, pc", v->cpu.index, m->pc);
+    xh_log_signal("  x30, sp", m->regs[30], m->sp);
+    xh_log_signal("  irq_masked, irq_pending", v->cpu.irq_masked, v->cpu.irq_pending);
+    xh_log_signal("  in_host, kernel tpidr", v->cpu.in_host, v->cpu.kernel_tpidr);
+    if (!v->cpu.in_host) {
+      // The kernel's frame records, as far as they stay inside the RAM window or the kernel's mappings.
+      uint64_t fp = m->regs[29];
+      for (int i = 0; i < 24 && fp >= g_info.ram_virt && fp < 0x3c00000000ull && !(fp & 7); i++) {
+        unsigned char vec;
+        if (mincore((void *)(uintptr_t)(fp & ~0xfffull), 0x1000, &vec)) break;
+        uint64_t *rec = (uint64_t *)(uintptr_t)fp;
+        xh_log_signal("  frame: fp, lr", fp, rec[1]);
+        if (rec[0] <= fp) break;
+        fp = rec[0];
+      }
+    }
+    errno = saved_errno;
+    return;
+  }
   if (signo == SIG_KICK || signo == SIG_TIMER) {
     if (!v) return;
     if (signo == SIG_TIMER) __atomic_store_n(&v->cpu.irq_pending, 1, __ATOMIC_RELEASE);
@@ -345,6 +368,7 @@ int xh_cpu_init(unsigned ncpu)
   for (unsigned i = 0; i < sizeof open_signals / sizeof *open_signals; i++) sigdelset(&vcpu_mask, open_signals[i]);
   sigdelset(&vcpu_mask, SIG_KICK);
   sigdelset(&vcpu_mask, SIG_TIMER);
+  sigdelset(&vcpu_mask, SIG_DUMP);
   struct sigaction sa;
   memset(&sa, 0, sizeof sa);
   sa.sa_sigaction = xh_sig_entry;
@@ -354,7 +378,13 @@ int xh_cpu_init(unsigned ncpu)
   for (unsigned i = 0; i < sizeof handled / sizeof *handled; i++) sigaction(handled[i], &sa, NULL);
   sigaction(SIG_KICK, &sa, NULL);
   sigaction(SIG_TIMER, &sa, NULL);
+  sigaction(SIG_DUMP, &sa, NULL);
   return 0;
+}
+
+void xh_cpu_dump_all(void)
+{
+  for (unsigned i = 0; i < g_ncpu; i++) if (g_vcpu[i].started) syscall(SYS_tgkill, getpid(), g_vcpu[i].tid, SIG_DUMP);
 }
 
 int xh_cpu_start(unsigned index, uint64_t entry, uint64_t a0, uint64_t a1, uint64_t a2)
@@ -386,6 +416,7 @@ void xh_cpu_line(unsigned index, bool line) { if (index < g_ncpu) g_vcpu[index].
 void xh_cpu_timer_set(xh_vcpu *v, uint64_t deadline) { v->timer_armed = deadline != UINT64_MAX; v->timer_deadline = deadline; }
 void xh_cpu_idle(xh_vcpu *v) { (void)v; }
 int xh_cpu_init(unsigned ncpu) { g_ncpu = ncpu; for (unsigned i = 0; i < ncpu; i++) g_vcpu[i].cpu.index = i; return 0; }
+void xh_cpu_dump_all(void) {}
 int xh_cpu_start(unsigned index, uint64_t entry, uint64_t a0, uint64_t a1, uint64_t a2) { (void)entry; (void)a0; (void)a1; (void)a2; if (index >= g_ncpu) return -1; if (g_vcpu[index].started) return -2; g_vcpu[index].started = true; return 0; }
 
 #endif

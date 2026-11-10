@@ -20,6 +20,7 @@ void xh_log(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)
 void xh_log_raw(const char *text, size_t length);       // guest console bytes, line-buffered
 // Async-signal-safe: fixed text and hex numbers straight to the log descriptor.
 void xh_log_signal(const char *text, uint64_t a, uint64_t b);
+void xh_cpu_dump_all(void);
 #define LOGE(...) xh_log(XH_LOG_ERROR, __VA_ARGS__)
 #define LOGI(...) xh_log(XH_LOG_INFO, __VA_ARGS__)
 #define LOGD(...) xh_log(XH_LOG_DEBUG, __VA_ARGS__)

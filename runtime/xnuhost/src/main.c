@@ -413,7 +413,7 @@ int main(int argc, char **argv)
   // inherits them blocked. vCPU threads open the ones they take themselves.
   sigset_t stops;
   sigemptyset(&stops);
-  sigaddset(&stops, SIGTERM); sigaddset(&stops, SIGINT); sigaddset(&stops, SIGHUP);
+  sigaddset(&stops, SIGTERM); sigaddset(&stops, SIGINT); sigaddset(&stops, SIGHUP); sigaddset(&stops, SIGQUIT);
   for (int s = SIGRTMIN; s <= SIGRTMIN + 3; s++) sigaddset(&stops, s);
   pthread_sigmask(SIG_BLOCK, &stops, NULL);
   signal(SIGPIPE, SIG_IGN);
@@ -428,10 +428,11 @@ int main(int argc, char **argv)
 
   sigset_t waited;
   sigemptyset(&waited);
-  sigaddset(&waited, SIGTERM); sigaddset(&waited, SIGINT); sigaddset(&waited, SIGHUP);
+  sigaddset(&waited, SIGTERM); sigaddset(&waited, SIGINT); sigaddset(&waited, SIGHUP); sigaddset(&waited, SIGQUIT);
   while (!xh_stopping()) {
     struct timespec tick = { 0, 100 * 1000 * 1000 };
     int signo = sigtimedwait(&waited, NULL, &tick);
+    if (signo == SIGQUIT) { xh_cpu_dump_all(); continue; }      // debugging: where each vCPU is
     if (signo > 0) {
       char why[48];
       snprintf(why, sizeof why, "signal %d", signo);
