@@ -2969,6 +2969,76 @@
     "sha256": "51c0102fec2e0b5f9af14c7b8616c2cb29622552d89d049032a61a15f47861c3"
    },
    "evidence": "The function after get_system_inshutdown in the original and in our kernel: returns bit 0 of one global byte. In apfs's import table its slot follows get_system_inshutdown's."
+  },
+  {
+   "original": "0xfffffe000b34f4c4",
+   "native_symbol": "__ZN18IOMemoryDescriptor18getPhysicalAddressEv",
+   "check": {
+    "address": "0xfffffe000b34f4c4",
+    "size": 56,
+    "sha256": "bcb800b9ff3b167d75cc60a9b98c1a3bca39595b83ea44dfea8af99374139e7b"
+   },
+   "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported symbols): in the 27 kext(s) that import this function (AGXG18P, AppleBasebandPCI, AppleBasebandPCIMAVControl, AppleH16ANEInterface, AppleH16CameraInterface, AppleJPEGDriver) its slot lies between the slots of __ZN18IOMemoryDescriptor17withAddressRangesEP14IOVirtualRangejjP4task and __ZN18IOMemoryDescriptor19createMappingInTaskEP4taskyjyy, and __ZN18IOMemoryDescriptor18getPhysicalAddressEv is the only exported kernel function between those names that no other original function is paired with. It is also the only one of them that our kernel places between __ZN18IOMemoryDescriptor16getMapperOptionsEv and __ZN23IOMultiMemoryDescriptor19initWithDescriptorsEPP18IOMemoryDescriptorjjb, the paired functions on either side of this one in the original."
+  },
+  {
+   "original": "0xfffffe000adb5a18",
+   "native_symbol": "_vfs_getvfs_with_vfsops",
+   "check": {
+    "address": "0xfffffe000adb5a18",
+    "size": 300,
+    "sha256": "3c30c35cd88f08ff81beef4a7f7a0ba2da652ad771b2769696af802fa895d7de"
+   },
+   "evidence": "apfs's import slot between vfs_getnewfsid and vfs_init_io_attributes (candidates: vfs_getvfs, vfs_getvfs_by_mntonname, vfs_getvfs_with_vfsops). The body takes the mount list lock, walks the list comparing the two words of *x0 with each mount's fsid, and returns the mount only if its authenticated mnt_op equals x1: vfs_getvfs_with_vfsops(fsid, ops)."
+  },
+  {
+   "original": "0xfffffe000adf8090",
+   "native_symbol": "_fifo_close",
+   "check": {
+    "address": "0xfffffe000adf8090",
+    "size": 24,
+    "sha256": "46cde01ad3be418fc252c48e8c7433a513204c0cfd906c9b990b09bdbd0289cd"
+   },
+   "evidence": "apfs's import slot after doc_tombstone_should_save and two before fifo_write, the next slot being 0xfffffe000adf7f64. The body tail-calls the next function with (ap->a_vp at +8, ap->a_fflag at +16, x2, 0): fifo_close, which calls fifo_close_internal(vp, fflag, context, 0). It lies 0x1c8 after fifo_write in the original (fifo_vnops.c)."
+  },
+  {
+   "original": "0xfffffe000adf7f64",
+   "native_symbol": "_fifo_read",
+   "check": {
+    "address": "0xfffffe000adf7f64",
+    "size": 288,
+    "sha256": "6cb03e4881bc0d42c25feb3e9f965efb59a3290ea7d5a14704d96e8b27bd91bc"
+   },
+   "evidence": "apfs's import slot between 0xfffffe000adf8090 (fifo_close) and fifo_write. The body takes a_uio and the read socket of the fifo, turns a_ioflag's IO_NDELAY into MSG_NBIO (ioflag << 13 & 0x20000) and receives: fifo_read; it is the function after fifo_write in the original."
+  },
+  {
+   "original": "0xfffffe000ada5ff4",
+   "native_symbol": "_advisory_read_ext",
+   "check": {
+    "address": "0xfffffe000ada5ff4",
+    "size": 896,
+    "sha256": "e1baccddd623205aa189a7c041c55bae23ecac90e73c35b1e023f1fc5d262a32"
+   },
+   "evidence": "apfs's import slot between add_fsevent and assert_wait; of the exported names there that take a vnode (the body reads v_type at +113 first) only advisory_read and advisory_read_ext are cluster functions, and advisory_read is a four-instruction wrapper in our kernel while this is 896 bytes: advisory_read_ext."
+  },
+  {
+   "original": "0xfffffe000abd49d0",
+   "native_symbol": "_lck_rw_free",
+   "check": {
+    "address": "0xfffffe000abd49d0",
+    "size": 220,
+    "sha256": "b94324e91ff27789899080c4092c751a82f1d167d7ce7f5f04a89fcab01b0f56"
+   },
+   "evidence": "By the order of apfs's import table: the slot lies between lck_rw_destroy's and lck_rw_gate_close's, and lck_rw_free is the only exported kernel function between those names that no other original is paired with. The body checks the lock's type byte (0x33) and the destroyed tag before it frees: lck_rw_destroy inlined into lck_rw_free."
+  },
+  {
+   "original": "0xfffffe000b0d74fc",
+   "native_symbol": "_ctl_name_by_id",
+   "check": {
+    "address": "0xfffffe000b0d74fc",
+    "size": 244,
+    "sha256": "6228375edf2db673a69015e93168571f67ec8a3a7f67764cde27da038b1d4fbe"
+   },
+   "evidence": "The sandbox's import slot between csvnode_get_blob and current_cached_proc_cred. The body takes the kernel-control list lock, walks the list for the entry whose id (at +120) equals w0, copies its name (at +24) into x1 with a limit of 96 (MAX_KCTL_NAME) and returns 0, or 2 (ENOENT) when there is none: ctl_name_by_id(id, out_name, maxsize)."
   }
  ]
 }
