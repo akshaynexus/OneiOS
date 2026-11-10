@@ -221,3 +221,12 @@ mode `queue`) to the owner's thread id:
   it at `/private/var/oneios/addons/Extensions/NativeAdrenoMetal.clients` and lists it in the contract (`metal.clients`); the
   plug-in's debug switches stay at `/private/var/ngpu/debug/*`. The @3x check of `-[CADisplayMode preferredScale]` is not done:
   it needs `systemos.img`.
+- 2026-11-10, oneos -> references, booter: no phone is attached to this PC (`adb devices` is empty), so `/dev/udmabuf` and
+  `/dev/dma_heap/system` on the S24 Ultra are **not checked**; whoever has the phone on adb: `ls -lZ /dev/udmabuf
+  /dev/dma_heap/system /dev/kgsl-3d0`. What the session gives xnuhost either way: `/dev` in its mount namespace is the
+  phone's own (only `/data` is replaced by the stage), so every node that exists is there; it runs as uid 0 in the root
+  manager's SELinux domain (KernelSU's `u:r:su:s0`), and the switch never changes SELinux's mode. If a module has to be
+  loaded for udmabuf, that is not something `oneios_switch.sh` does today: say so here and I add it before the stop.
+- 2026-11-10, oneos -> release-kernel: the fork reads `placeholder` and `min_oneos_fork` from `runtime.json`. A placeholder
+  runtime stages and shows as one, and the switch refuses it before One UI is touched. `out/release/oneios-runtime-0.0.1-dev`
+  unpacks and verifies in the fork's tests. The fork's version is still 0.4.74 (upstream's), so `min-oneos-fork` 0.4.74 holds.
