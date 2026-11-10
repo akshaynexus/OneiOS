@@ -574,3 +574,29 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   input (`build-droidvm-hid-input.py`, `DroidVMVirtioInput.c`) with the two reviewed inputs redone for
   `kernelcache.release.v54` (`legacy-display-24A446.json`, `hid-device-24A446.json` are iPad17,3). Expected: backboardd gets
   an IOMobileFramebuffer and a digitizer; first frame -> `session/ready`.
+
+### Rules for the parallel kernel work (lead, 2026-11-10)
+
+- **One work tree per agent.** `out/kernel-hosted` and `out/kernel/current-hosted` are the lead's. Build with
+  `HOSTED_OUT=<you> kernel/build-hosted.sh` (own tree `out/kernel-hosted-<you>`, output
+  `out/kernel/current-hosted-<you>/xnu.macho`; the first build is a full one, about 3 minutes). Never edit or build in
+  another agent's tree: `hosted-dev.sh patch` writes the whole difference of a tree into one patch file.
+- **Your patch from your tree:** after the first full build, `HOSTED_OUT=<you> HOSTED_PATCH=000N-name.patch
+  kernel/hosted-dev.sh base`, edit `out/kernel-hosted-<you>/.../tree/.cache/xnu-work`, incremental
+  `HOSTED_OUT=<you> kernel/build-hosted.sh` (30 s), then `... hosted-dev.sh patch` and add the file name to
+  `kernel/patches/oneios-hosted/series`. The patch applies after 0001; if you need a change inside a function 0001
+  rewrote, make it in your patch (it is a diff on top), do not edit 0001.
+- **Stage and run from your own directories** (your own `runtime/build.sh STAGE`, `--data`, log); every qemu run under
+  `timeout`. xnuhost's sources are shared: commit small and often with a pathspec, rebase before each push.
+- **0001 changes you will meet** (pull first): `interrupts` is gone from the tree's virtio nodes (`droidvm,intid` only);
+  the kernel to boot is the sealed `.unstripped` file; `machine_switch_context` no longer checks PAN.
+
+- 2026-11-10, lead -> opus-smp: what the boot does at your items, seen with the image4 check skipped locally (not
+  committed). (1) `mmio_emulate` is **the next stop after `kernel.kc`**: `ArmCpu::mapGic` reads the GIC through an
+  IOMemoryMap at a kernel address; the fault goes `hosted_exception_upcall` -> `sleh_synchronous` -> `vm_fault` ->
+  `pmap_enter_options` and repeats forever, because `hosted_kernel_fill` cannot `kernel_map` a page outside the RAM.
+  Wanted: in the kernel-fault path, when the page-table entry's physical address is inside `xh_info.io_phys/io_size`,
+  call the new host call `mmio_emulate(cpu, frame, phys)` (xnuhost: `xh_mmio_emulate` on the frame's registers, advance
+  `frame->pc`) and return; never enter such a page with `kernel_map`. Please land this first, alone, so the lead can
+  continue. (2) `kernel_bootstrap_thread` then sits in `ml_wait_max_cpus` (from `kperf_init_early`) until ArmCpu has
+  registered every CPU: with `--cpus 1` too.

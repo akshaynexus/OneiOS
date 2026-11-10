@@ -9,7 +9,10 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 [ "$(uname -s)" = Linux ] || { echo "build-hosted: Linux only" >&2; exit 1; }
-export KERNEL_OUT=$ROOT/out/kernel-hosted KERNEL_DEFCONFIG=oneios_hosted_defconfig
+# HOSTED_OUT=NAME: a second, independent work tree and output (out/kernel-hosted-NAME, out/hosted-device-NAME,
+# out/kernel/current-hosted-NAME), so that several people can build and edit at once. The default tree is the lead's.
+SUFFIX=${HOSTED_OUT:+-$HOSTED_OUT}
+export KERNEL_OUT=$ROOT/out/kernel-hosted$SUFFIX KERNEL_DEFCONFIG=oneios_hosted_defconfig
 . "$ROOT/kernel/lib/stage.sh"
 JOBS=${JOBS:-$(nproc)}
 TOOLCHAIN=${XNU_LINUX_PREFIX:-$ROOT/out/toolchain}
@@ -19,7 +22,7 @@ stage_sources
 
 # The device repository of this build: the committed one, the hosted defconfig, and the hosted series last.
 # (two levels below the repository, as kernel/device is: the board's archive script finds drivers/ from there)
-DEVICE=$ROOT/out/hosted-device
+DEVICE=$ROOT/out/hosted-device$SUFFIX
 rm -rf "$DEVICE"; mkdir -p "$DEVICE"
 git -C "$ROOT" archive HEAD kernel/device | tar -x -C "$DEVICE" --strip-components=2
 cp "$ROOT/kernel/device/configs/oneios_hosted_defconfig" "$DEVICE/configs/"
@@ -61,6 +64,6 @@ fi
 # whose HMAC field is empty: corecrypto's integrity self-test fails on it (-2074).
 SEALED=$WORK/tree/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped
 [ -f "$SEALED.crypto-hmac.json" ] || { echo "build-hosted: $SEALED was not sealed" >&2; exit 1; }
-mkdir -p "$ROOT/out/kernel/current-hosted"
-cp "$SEALED" "$ROOT/out/kernel/current-hosted/xnu.macho"
-echo "build-hosted: $ROOT/out/kernel/current-hosted/xnu.macho ($(stat -c %s "$SEALED") bytes, sha256 $(sha256sum "$SEALED" | cut -c1-16)...)"
+mkdir -p "$ROOT/out/kernel/current-hosted$SUFFIX"
+cp "$SEALED" "$ROOT/out/kernel/current-hosted$SUFFIX/xnu.macho"
+echo "build-hosted: $ROOT/out/kernel/current-hosted$SUFFIX/xnu.macho ($(stat -c %s "$SEALED") bytes, sha256 $(sha256sum "$SEALED" | cut -c1-16)...)"

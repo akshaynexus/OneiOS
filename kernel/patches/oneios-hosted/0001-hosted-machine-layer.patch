@@ -2532,6 +2532,20 @@ index 671dc50..101fc66 100644
  	msr		DAIF, x0
  	ret
  
+diff --git a/osfmk/arm64/pcb.c b/osfmk/arm64/pcb.c
+index 4538d50..0ad765c 100644
+--- a/osfmk/arm64/pcb.c
++++ b/osfmk/arm64/pcb.c
+@@ -502,7 +502,8 @@ machine_switch_context(thread_t old,
+ {
+ 	thread_t retval;
+ 
+-#if __ARM_PAN_AVAILABLE__
++#if __ARM_PAN_AVAILABLE__ && !XNU_HOSTED
++	/* OneiOS hosted: there is no PSTATE.PAN at EL0; user memory is another process, reached only by copyio. */
+ 	if (__improbable(__builtin_arm_rsr("pan") == 0)) {
+ 		panic("context switch with PAN disabled");
+ 	}
 diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 index 827236a..dc7212c 100644
 --- a/osfmk/arm64/start.s

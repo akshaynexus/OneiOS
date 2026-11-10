@@ -8,15 +8,18 @@
 # kernel/build-hosted.sh from the committed patch is the check that the patch alone reproduces the tree.
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-WORK=$ROOT/out/kernel-hosted/unixnu/oneios/ios-27.0.1-24A446/oneios_hosted
+# HOSTED_OUT=NAME selects the work tree of `HOSTED_OUT=NAME kernel/build-hosted.sh`; HOSTED_PATCH=FILE (a name in
+# kernel/patches/oneios-hosted, default 0001-hosted-machine-layer.patch) is the patch that `base` leaves out and
+# `patch` writes. A new patch: build with it absent, `base`, edit, `patch`, add its name to `series`.
+WORK=$ROOT/out/kernel-hosted${HOSTED_OUT:+-$HOSTED_OUT}/unixnu/oneios/ios-27.0.1-24A446/oneios_hosted
 TREE=$WORK/tree/.cache/xnu-work
-PATCH=$ROOT/kernel/patches/oneios-hosted/0001-hosted-machine-layer.patch
+PATCH=$ROOT/kernel/patches/oneios-hosted/${HOSTED_PATCH:-0001-hosted-machine-layer.patch}
 [ -d "$TREE/.git" ] || { echo "hosted-dev: no work tree; run kernel/build-hosted.sh first" >&2; exit 1; }
 tree_now() { ( cd "$TREE" && export GIT_INDEX_FILE=$TREE/.git/hosted-index && git read-tree HEAD && git add -A . >/dev/null 2>&1 && git write-tree ); }
 case "${1:-}" in
 base)
   now=$(tree_now)
-  ( cd "$TREE" && export GIT_INDEX_FILE=$TREE/.git/hosted-index && git read-tree "$now" && git apply --cached -R "$PATCH" &&
+  ( cd "$TREE" && export GIT_INDEX_FILE=$TREE/.git/hosted-index && git read-tree "$now" && { [ ! -e "$PATCH" ] || git apply --cached -R "$PATCH"; } &&
     git update-ref refs/hosted/base "$(git commit-tree "$(git write-tree)" -m base </dev/null)" )
   echo "hosted-dev: base recorded" ;;
 patch)
