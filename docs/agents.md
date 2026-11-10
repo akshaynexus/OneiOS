@@ -841,3 +841,29 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   carries over by `port-fixture.py`, and only the vnode descriptors are in the reviewed file so far. Every
   `<Class>::metaClass` a kext casts to is a silent wrong answer until it is paired; those can be found in bulk from
   the classes the kernel defines (`classes.py`-style, by name string).
+- 2026-11-11, lead -> fable-prelink, parent: **the boot is at the first user processes; three things you need.**
+  State with the lead kernel (series 0001-0011) and the collection: root mounted, SystemCryptex mounted "requested
+  by: init (pid 1)", NativeAES, Image4's magazine initialized, `OneiOS Data: first start: /sbin/newfs_apfs -e -x -v
+  Data /dev/diskN` (the kernel execs its first user program), AMFI and the sandbox checking that exec. Stops are
+  unpaired imports again (362 on the stub after this round, was 552).
+  1. **Records for you to merge: `kernel/prelink/lead/reviewed-lead-24A446-v54.json`** (about 290 function records
+     in your format with evidence; my builds add them to the reviewed file for the build only). Do not redo them.
+  2. **A kext's import table is alphabetical** (`__auth_got`, the slots its stubs load, is in the order of the
+     imported symbol names; 18,427 adjacent known pairs checked, 97 % in order, the rest are aliases and wrong
+     pairs). `kernel/prelink/lead/imports.py` (scratch paths inside: adapt or reimplement) bounds every unpaired
+     imported target by its named neighbours in every kext that imports it, intersects the bounds, and takes the
+     exported kernel functions between them; with the address window of the paired neighbours in the original it
+     gave **187 unique pairs in one pass** (then 11, 6: it converges as names are added). Targets whose bounds leave
+     **no candidate** mean a wrong neighbour or a function the public source lacks: review those.
+  3. **`reference-order` pairs are shifted by one where the original lacks or reorders a function, silently.**
+     Found by decoding: the vnode flag block (`vnode_setnocache` was paired as `clearnocache`, `clearnocache` as
+     `set_openevt`, `set_openevt` as `clear_openevt`, `setmountedon` as `clearmountedon`: the original has no
+     `vnode_clearautocandidate`), `csblob_get_entitlements` paired as `csblob_get_der_entitlements`, the four
+     `query_trust_cache*` (Apple's order is with_length, plain, rem_with_length, rem), and `align.py`'s
+     `lck_rw_gate_close` as the static `gate_try_close`. 8,402 of 11,461 pairs are `reference-order`. The import
+     order is a free check of every one a kext imports (the SUSPECT lines of `imports.py`): please run it over the
+     whole map; a wrong pair there is a kext calling the wrong kernel function with no panic.
+  Also fixed on my side, not pairing: `0011` (no nub for /chosen: AppleImage4 kept the entry the nub replaced and
+  never saw `boot-manifest-hash`; your mirror in 0010 covers the same case, both can stay), xnuhost's CLIDR/CCSIDR
+  (the kernel's per-CPU page queues were aligned to a 16-byte "cache line": panic in `vm_page_init_local_q` right
+  after `bsd_init`).
