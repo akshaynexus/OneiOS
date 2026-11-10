@@ -28,7 +28,7 @@ the same). A new kernel needs a new `kernel.kc`: every native address in it is t
    XnuPrelink refuses an image with imports.
 2. `roots.py`: which kexts (below).
 3. `hosted.py`: the kexts for a kernel that is a process: `mrs/msr TPIDR_EL1` -> `TPIDR_EL0` (the current thread),
-   `mrs xN, MPIDR_EL1` -> `ldr wN, [x18]` (the vCPU index), before the pairing so the emitter's HMACs cover the
+   `mrs xN, MPIDR_EL1` -> `ldr wN, [x18]` (the vCPU index), the packed-pointer `orr` of `smr_hash` (State below), before the pairing so the emitter's HMACs cover the
    rewritten code. The record lists every rewrite and every other instruction a process cannot execute.
 4. `fileset_match.py` (XnuPrelink, `external/XnuPrelink`): pairs the functions and data of Apple's kernel that kexts
    reference with ours, by strings, call graphs, vtables and, with `REFERENCE`, names of the RELEASE build.
@@ -98,15 +98,28 @@ AMFI's AKS calls and the Data volume).
 Under xnuhost in `qemu-aarch64 -cpu cortex-a710` (1 vCPU, 2 GiB), with the series `0001`-`0010` and the image set
 `out/image/24A446`: Apple corecrypto's POST, AppleImage4, AMFI (early initializer), the sandbox and vnguard
 policies, the trust caches, IOKit matching, the five hosted disks, `bsd_init`, the APFS containers, the root mount
-(`BSD root: disk6s1`, `mount-complete volume ...OS`), the swap setup, and `launchd` (pid 1), which mounts the
-system cryptex volume. It stops there in AppleImage4: `Image4: unable to initialize magazine: 7` (its start cannot
-write the magazine or the boot manifest hash: no NVRAM controller, read-only root). That is board state, not a pair.
+(`BSD root: disk6s1`, `mount-complete volume ...OS`), the swap setup, pid 1's exec path (the kernel mounts the
+system cryptex volume and publishes the boot manifest hash), Image4's magazine and nonce slots, and the first user
+process: pid 2, `/sbin/newfs_apfs` for the Data volume's first start, is exec'ed through AMFI's and the sandbox's
+hooks and runs user code (page faults through APFS's pagein and AMFI's page validation). It then makes no more
+progress for two minutes with no panic; not diagnosed yet. launchd itself has not been exec'ed.
 APFS also logs "failed to find named root snapshot: Need authenticator (81)" and goes on.
 
+Two things besides pairs were needed for this:
+- `hosted.py` rewrites APFS's eleven inline `smr_hash_array_decode` (`orr xD, xN, #0x00ff000000000000` ->
+  `and xD, xN, #0xff00ffffffffffff`): the kexts restore bits 48..55 of a packed kernel pointer to 0xff, and hosted
+  kernel addresses are low.
+- Kernel: `0010` mirrors the published boot manifest hash onto the `/chosen` entry Image4 looked up before the
+  platform expert's nub replaced it; `0007` makes `xnu_image4_monitor_trap` return ENOTSUP (Image4 sends its nonce
+  slots to a code signing monitor that is not there).
+
+Debugging: `qemu-aarch64 -g PORT` and gdb (`set architecture aarch64`, `target remote`) work on xnuhost; kernel.kc
+is at 0x2000004000, so an original address A is at A - 0xfffffe0007004000 + 0x2000004000.
+
 Pairing: the matcher with the reference, the inferred pairs (order, structors and factories, slots, kernel class
-objects), 349 functions and 24 data reviewed by hand, 50 carried over from XnuPrelink's iPad fixture.
-554 original functions that kexts reference are still on the panic stub and 19 data targets are unpaired; the
-record lists them per kext.
+objects), 430 functions and 25 data reviewed by hand, 50 carried over from XnuPrelink's iPad fixture.
+The record (`kernel.kc.build.json`) has the count of original functions still on the panic stub and of unpaired
+data targets, per kext.
 
 ## What is not done
 

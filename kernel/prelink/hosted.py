@@ -8,7 +8,10 @@ The hosted kernel (kernel/patches/oneios-hosted, hosted.h) keeps the current thr
 in the executable segments of the fileset's kext entries (never the original kernel entry: it is replaced) becomes
 the same instruction on TPIDR_EL0, one word for one word. Every `mrs xN, MPIDR_EL1` becomes `ldr wN, [x18]`, the
 vCPU index at offset 0 of the vCPU block, as kernel/hosted-fixup.py does for the kernel itself (at EL0 Linux
-answers MPIDR_EL1 with a constant). This runs on the kernelcache before the pairing and the
+answers MPIDR_EL1 with a constant). Every `orr xD, xN, #0x00ff000000000000` becomes
+`and xD, xN, #0xff00ffffffffffff`: the inline smr_hash_array_decode of <kern/smr_hash.h> keeps the array's order in
+bits 48..55 of the pointer and restores them to 0xff, which is right for a kernel address on hardware and wrong here,
+where kernel addresses are low (the hosted kernel's own copy clears them, smr_hash.h under XNU_HOSTED). This runs on the kernelcache before the pairing and the
 emission, so the emitter's component HMACs are computed over the rewritten code. OUT is written only when a word
 changed; with no rewrite the build uses KERNELCACHE as it is.
 
@@ -98,7 +101,7 @@ def main():
     source = open(args.kernelcache, 'rb').read()
     data = bytearray(source)
     closure = set(json.load(open(args.closure))['closure']) if args.closure else None
-    rewrites, mpidr, privileged, x18, scanned = [], [], defaultdict(Counter), {}, 0
+    rewrites, mpidr, pointers, privileged, x18, scanned = [], [], [], defaultdict(Counter), {}, 0
     for name, at in entries(data):
         if name == 'com.apple.kernel':
             continue
@@ -113,6 +116,14 @@ def main():
                     elif word & 0xfff80000 == 0xd5080000 and (word >> 16 & 7) != 3:   # sys (tlbi, at, dc at EL1)
                         privileged[name]['sys #%d, C%d, C%d, #%d' % (word >> 16 & 7, word >> 12 & 15, word >> 8 & 15,
                                                                       word >> 5 & 7)] += 1
+                if word & 0xfffffc00 == 0xb2501c00:                     # orr xD, xN, #0x00ff000000000000
+                    new = 0x9248dc00 | (word & 0x3ff)                   # and xD, xN, #0xff00ffffffffffff
+                    struct.pack_into('<I', data, offset, new)
+                    pointers.append({'kext': name, 'segment': segment, 'address': hex(va + offset - fileoff),
+                                     'old': f'{word:#010x}', 'new': f'{new:#010x}',
+                                     'instruction': f'orr x{word & 31}, x{word >> 5 & 31}, #0xff000000000000 -> '
+                                                    f'and x{word & 31}, x{word >> 5 & 31}, #0xff00ffffffffffff'})
+                    continue
                 if word & 0xffd00000 != 0xd5100000:
                     continue
                 key = register(word)
@@ -149,6 +160,7 @@ def main():
         'convention': 'TPIDR_EL0 = current thread (TPIDR_EL1 on hardware), x18 = struct xh_cpu * of the vCPU',
         'tpidr_el1_rewrites': rewrites,
         'mpidr_el1_rewrites': mpidr,
+        'kernel_pointer_rewrites': pointers,
         'privileged_instructions_scope': 'closure' if closure is not None else 'every kext entry',
         'privileged_instructions_total': dict(sorted(totals.items(), key=lambda item: -item[1])),
         'privileged_instructions_by_kext': {name: dict(sorted(counts.items())) for name, counts in sorted(privileged.items())},
@@ -156,7 +168,8 @@ def main():
         'x18_instructions_by_kext': x18,
     }
     json.dump(report, open(args.report, 'w'), indent=1)
-    print(f'hosted: {len(rewrites)} TPIDR_EL1 and {len(mpidr)} MPIDR_EL1 rewrite(s) in {scanned} bytes of kext code; '
+    print(f'hosted: {len(rewrites)} TPIDR_EL1, {len(mpidr)} MPIDR_EL1 and {len(pointers)} kernel pointer rewrite(s) in '
+          f'{scanned} bytes of kext code; '
           f'{sum(totals.values())} other privileged system-register instruction(s) in {len(privileged)} kext(s)'
           + (f'; x18 named in {len(x18)} kext(s)' if args.x18 else ''))
 

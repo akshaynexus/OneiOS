@@ -77,7 +77,7 @@ def main():
             'left_out_and_absent': sorted(set(select['left_out']) - set(select['closure'])),
         },
         'fileset_entries': entries,
-        'hosted': {key: hosted[key] for key in ('convention', 'tpidr_el1_rewrites', 'mpidr_el1_rewrites', 'kext_code_bytes_scanned',
+        'hosted': {key: hosted[key] for key in ('convention', 'tpidr_el1_rewrites', 'mpidr_el1_rewrites', 'kernel_pointer_rewrites', 'kext_code_bytes_scanned',
                                                 'privileged_instructions_total', 'privileged_instructions_by_kext',
                                                 'x18_checked', 'x18_instructions_by_kext')},
         'amfi': {

@@ -26,6 +26,816 @@
  ],
  "functions": [
   {
+   "original": "0xfffffe000b0b7c94",
+   "native_symbol": "_csblob_invalidate_flags",
+   "check": {
+    "address": "0xfffffe000b0b7c94",
+    "size": 152,
+    "sha256": "5e738d17293229a5e39742009111a2bd217c0cc5b0b7202a455a6a843453584c"
+   },
+   "evidence": "bsd/kern/kern_cs.c between cs_invalid_page and csblob_get_base_offset, in source order. In Apple's RELEASE kernel the enforcement switches are constants, so cs_process_enforcement, cs_process_global_enforcement and cs_system_enforcement are three 'return 1' functions before cs_valid (which reads the proc's csflags), and cs_require_lv and cs_system_require_lv are two more after it (csproc_forced_lv is not in the image). The matcher's pure-leaf rule had given the last two to unrelated functions that also return 1 (ipc_sec_policy_should_apply_weak_reply_port, kern_config_is_development); here the answers must be this kernel's switches. After csblob_get_addr: csblob_get_platform_binary (NULL check, then one flag byte) and csblob_invalidate_flags. AMFI calls csblob_get_platform_binary on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000b0b7c74",
+   "native_symbol": "_csblob_get_platform_binary",
+   "check": {
+    "address": "0xfffffe000b0b7c74",
+    "size": 32,
+    "sha256": "84a8e4fedcc463f95b6313588355f1483969b79d660d459a970674a5b6f807e5"
+   },
+   "evidence": "bsd/kern/kern_cs.c between cs_invalid_page and csblob_get_base_offset, in source order. In Apple's RELEASE kernel the enforcement switches are constants, so cs_process_enforcement, cs_process_global_enforcement and cs_system_enforcement are three 'return 1' functions before cs_valid (which reads the proc's csflags), and cs_require_lv and cs_system_require_lv are two more after it (csproc_forced_lv is not in the image). The matcher's pure-leaf rule had given the last two to unrelated functions that also return 1 (ipc_sec_policy_should_apply_weak_reply_port, kern_config_is_development); here the answers must be this kernel's switches. After csblob_get_addr: csblob_get_platform_binary (NULL check, then one flag byte) and csblob_invalidate_flags. AMFI calls csblob_get_platform_binary on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000b0b7c44",
+   "native_symbol": "_cs_system_require_lv",
+   "check": {
+    "address": "0xfffffe000b0b7c44",
+    "size": 12,
+    "sha256": "185b69410ba1e6bd9bbd267500bfbd9aaf87eb4672710113c02ff2e99c98a9da"
+   },
+   "evidence": "bsd/kern/kern_cs.c between cs_invalid_page and csblob_get_base_offset, in source order. In Apple's RELEASE kernel the enforcement switches are constants, so cs_process_enforcement, cs_process_global_enforcement and cs_system_enforcement are three 'return 1' functions before cs_valid (which reads the proc's csflags), and cs_require_lv and cs_system_require_lv are two more after it (csproc_forced_lv is not in the image). The matcher's pure-leaf rule had given the last two to unrelated functions that also return 1 (ipc_sec_policy_should_apply_weak_reply_port, kern_config_is_development); here the answers must be this kernel's switches. After csblob_get_addr: csblob_get_platform_binary (NULL check, then one flag byte) and csblob_invalidate_flags. AMFI calls csblob_get_platform_binary on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000b0b7c38",
+   "native_symbol": "_cs_require_lv",
+   "check": {
+    "address": "0xfffffe000b0b7c38",
+    "size": 12,
+    "sha256": "185b69410ba1e6bd9bbd267500bfbd9aaf87eb4672710113c02ff2e99c98a9da"
+   },
+   "evidence": "bsd/kern/kern_cs.c between cs_invalid_page and csblob_get_base_offset, in source order. In Apple's RELEASE kernel the enforcement switches are constants, so cs_process_enforcement, cs_process_global_enforcement and cs_system_enforcement are three 'return 1' functions before cs_valid (which reads the proc's csflags), and cs_require_lv and cs_system_require_lv are two more after it (csproc_forced_lv is not in the image). The matcher's pure-leaf rule had given the last two to unrelated functions that also return 1 (ipc_sec_policy_should_apply_weak_reply_port, kern_config_is_development); here the answers must be this kernel's switches. After csblob_get_addr: csblob_get_platform_binary (NULL check, then one flag byte) and csblob_invalidate_flags. AMFI calls csblob_get_platform_binary on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000b0b7bec",
+   "native_symbol": "_cs_valid",
+   "check": {
+    "address": "0xfffffe000b0b7bec",
+    "size": 76,
+    "sha256": "b6034d0c3c2b0f34aafb6cb67647c516d27b627df37aebdcff4bb05b25cfec92"
+   },
+   "evidence": "bsd/kern/kern_cs.c between cs_invalid_page and csblob_get_base_offset, in source order. In Apple's RELEASE kernel the enforcement switches are constants, so cs_process_enforcement, cs_process_global_enforcement and cs_system_enforcement are three 'return 1' functions before cs_valid (which reads the proc's csflags), and cs_require_lv and cs_system_require_lv are two more after it (csproc_forced_lv is not in the image). The matcher's pure-leaf rule had given the last two to unrelated functions that also return 1 (ipc_sec_policy_should_apply_weak_reply_port, kern_config_is_development); here the answers must be this kernel's switches. After csblob_get_addr: csblob_get_platform_binary (NULL check, then one flag byte) and csblob_invalidate_flags. AMFI calls csblob_get_platform_binary on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000b0b7be0",
+   "native_symbol": "_cs_system_enforcement",
+   "check": {
+    "address": "0xfffffe000b0b7be0",
+    "size": 12,
+    "sha256": "185b69410ba1e6bd9bbd267500bfbd9aaf87eb4672710113c02ff2e99c98a9da"
+   },
+   "evidence": "bsd/kern/kern_cs.c between cs_invalid_page and csblob_get_base_offset, in source order. In Apple's RELEASE kernel the enforcement switches are constants, so cs_process_enforcement, cs_process_global_enforcement and cs_system_enforcement are three 'return 1' functions before cs_valid (which reads the proc's csflags), and cs_require_lv and cs_system_require_lv are two more after it (csproc_forced_lv is not in the image). The matcher's pure-leaf rule had given the last two to unrelated functions that also return 1 (ipc_sec_policy_should_apply_weak_reply_port, kern_config_is_development); here the answers must be this kernel's switches. After csblob_get_addr: csblob_get_platform_binary (NULL check, then one flag byte) and csblob_invalidate_flags. AMFI calls csblob_get_platform_binary on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000b0b7bd4",
+   "native_symbol": "_cs_process_global_enforcement",
+   "check": {
+    "address": "0xfffffe000b0b7bd4",
+    "size": 12,
+    "sha256": "185b69410ba1e6bd9bbd267500bfbd9aaf87eb4672710113c02ff2e99c98a9da"
+   },
+   "evidence": "bsd/kern/kern_cs.c between cs_invalid_page and csblob_get_base_offset, in source order. In Apple's RELEASE kernel the enforcement switches are constants, so cs_process_enforcement, cs_process_global_enforcement and cs_system_enforcement are three 'return 1' functions before cs_valid (which reads the proc's csflags), and cs_require_lv and cs_system_require_lv are two more after it (csproc_forced_lv is not in the image). The matcher's pure-leaf rule had given the last two to unrelated functions that also return 1 (ipc_sec_policy_should_apply_weak_reply_port, kern_config_is_development); here the answers must be this kernel's switches. After csblob_get_addr: csblob_get_platform_binary (NULL check, then one flag byte) and csblob_invalidate_flags. AMFI calls csblob_get_platform_binary on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000b0b7bc8",
+   "native_symbol": "_cs_process_enforcement",
+   "check": {
+    "address": "0xfffffe000b0b7bc8",
+    "size": 12,
+    "sha256": "185b69410ba1e6bd9bbd267500bfbd9aaf87eb4672710113c02ff2e99c98a9da"
+   },
+   "evidence": "bsd/kern/kern_cs.c between cs_invalid_page and csblob_get_base_offset, in source order. In Apple's RELEASE kernel the enforcement switches are constants, so cs_process_enforcement, cs_process_global_enforcement and cs_system_enforcement are three 'return 1' functions before cs_valid (which reads the proc's csflags), and cs_require_lv and cs_system_require_lv are two more after it (csproc_forced_lv is not in the image). The matcher's pure-leaf rule had given the last two to unrelated functions that also return 1 (ipc_sec_policy_should_apply_weak_reply_port, kern_config_is_development); here the answers must be this kernel's switches. After csblob_get_addr: csblob_get_platform_binary (NULL check, then one flag byte) and csblob_invalidate_flags. AMFI calls csblob_get_platform_binary on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000b0b8cc4",
+   "native_symbol": "_csfg_get_csblob",
+   "check": {
+    "address": "0xfffffe000b0b8cc4",
+    "size": 84,
+    "sha256": "f1e10d856cfa23a303dbbf332a8824c3734ba3ba474ae2c9f6ccf08be3afc56e"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the fileglob block after csproc_get_validation_category, in source order (the supplement variants are not built): csfg_get_platform_binary, csfg_get_cdhash, csfg_get_signer_type, csfg_get_validation_category, csfg_get_teamid, csfg_get_csblob. Platform_binary, signer_type and teamid have one shape and size (276, 272, 272 bytes); csfg_get_csblob is the last and shortest: when the fileglob's ops type is DTYPE_VNODE it tail-calls the blob lookup with (vnode, -1, -1, offset), ubc_cs_blob_get. An AMFI method tail-calls csfg_get_csblob with (fileglob, offset) on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000b0b8bb4",
+   "native_symbol": "_csfg_get_teamid",
+   "check": {
+    "address": "0xfffffe000b0b8bb4",
+    "size": 272,
+    "sha256": "114561705c473e70a9134a2bafa99568433a1dd174026a0ab2ec9ea0bf14b94e"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the fileglob block after csproc_get_validation_category, in source order (the supplement variants are not built): csfg_get_platform_binary, csfg_get_cdhash, csfg_get_signer_type, csfg_get_validation_category, csfg_get_teamid, csfg_get_csblob. Platform_binary, signer_type and teamid have one shape and size (276, 272, 272 bytes); csfg_get_csblob is the last and shortest: when the fileglob's ops type is DTYPE_VNODE it tail-calls the blob lookup with (vnode, -1, -1, offset), ubc_cs_blob_get. An AMFI method tail-calls csfg_get_csblob with (fileglob, offset) on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000b0b8ad4",
+   "native_symbol": "_csfg_get_validation_category",
+   "check": {
+    "address": "0xfffffe000b0b8ad4",
+    "size": 224,
+    "sha256": "8a014cd7ae521b660972a8f845a1d5e8f1cdf0c8423a1d9b09212e396455a366"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the fileglob block after csproc_get_validation_category, in source order (the supplement variants are not built): csfg_get_platform_binary, csfg_get_cdhash, csfg_get_signer_type, csfg_get_validation_category, csfg_get_teamid, csfg_get_csblob. Platform_binary, signer_type and teamid have one shape and size (276, 272, 272 bytes); csfg_get_csblob is the last and shortest: when the fileglob's ops type is DTYPE_VNODE it tail-calls the blob lookup with (vnode, -1, -1, offset), ubc_cs_blob_get. An AMFI method tail-calls csfg_get_csblob with (fileglob, offset) on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000b0b89c4",
+   "native_symbol": "_csfg_get_signer_type",
+   "check": {
+    "address": "0xfffffe000b0b89c4",
+    "size": 272,
+    "sha256": "91c2419e00320cf76983848dd9943a7175dfbcb8ef557744bfc226e03a3746a2"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the fileglob block after csproc_get_validation_category, in source order (the supplement variants are not built): csfg_get_platform_binary, csfg_get_cdhash, csfg_get_signer_type, csfg_get_validation_category, csfg_get_teamid, csfg_get_csblob. Platform_binary, signer_type and teamid have one shape and size (276, 272, 272 bytes); csfg_get_csblob is the last and shortest: when the fileglob's ops type is DTYPE_VNODE it tail-calls the blob lookup with (vnode, -1, -1, offset), ubc_cs_blob_get. An AMFI method tail-calls csfg_get_csblob with (fileglob, offset) on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000b0b8940",
+   "native_symbol": "_csfg_get_cdhash",
+   "check": {
+    "address": "0xfffffe000b0b8940",
+    "size": 132,
+    "sha256": "3d1a927fdd4f316e5717e957ecc68b2e3609472d08ae02fd6a9b870a0dc569f5"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the fileglob block after csproc_get_validation_category, in source order (the supplement variants are not built): csfg_get_platform_binary, csfg_get_cdhash, csfg_get_signer_type, csfg_get_validation_category, csfg_get_teamid, csfg_get_csblob. Platform_binary, signer_type and teamid have one shape and size (276, 272, 272 bytes); csfg_get_csblob is the last and shortest: when the fileglob's ops type is DTYPE_VNODE it tail-calls the blob lookup with (vnode, -1, -1, offset), ubc_cs_blob_get. An AMFI method tail-calls csfg_get_csblob with (fileglob, offset) on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000b0b882c",
+   "native_symbol": "_csfg_get_platform_binary",
+   "check": {
+    "address": "0xfffffe000b0b882c",
+    "size": 276,
+    "sha256": "14b83daff8769da5f96581cb95b85a11d0267d756c0c585150b9487961b18779"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the fileglob block after csproc_get_validation_category, in source order (the supplement variants are not built): csfg_get_platform_binary, csfg_get_cdhash, csfg_get_signer_type, csfg_get_validation_category, csfg_get_teamid, csfg_get_csblob. Platform_binary, signer_type and teamid have one shape and size (276, 272, 272 bytes); csfg_get_csblob is the last and shortest: when the fileglob's ops type is DTYPE_VNODE it tail-calls the blob lookup with (vnode, -1, -1, offset), ubc_cs_blob_get. An AMFI method tail-calls csfg_get_csblob with (fileglob, offset) on a page fault of pid 2."
+  },
+  {
+   "original": "0xfffffe000ade9ee4",
+   "native_symbol": "_vfs_get_notify_attributes",
+   "check": {
+    "address": "0xfffffe000ade9ee4",
+    "size": 28,
+    "sha256": "f51d92a72a4da016d21dc6a4a61026dc3f02171996232cbf3f9571b31413dd4f"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c after vnode_notify and vnode_isdyldsharedcache, in source order: vnode_ismonitored (a field of the vnode is not NULL), vnode_getbackingvnode (clears *out_vpp when it is given and returns ENOENT: the build has no nullfs or bindfs), vfs_get_notify_attributes (fills a vnode_attr from a constant). The sandbox calls vnode_getbackingvnode from a vnode hook for pid 2."
+  },
+  {
+   "original": "0xfffffe000ade9ed0",
+   "native_symbol": "_vnode_getbackingvnode",
+   "check": {
+    "address": "0xfffffe000ade9ed0",
+    "size": 20,
+    "sha256": "62db0d64b9de3d7467ff79fb4b60dd323ad7fad20cce064e443c3bdddb089687"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c after vnode_notify and vnode_isdyldsharedcache, in source order: vnode_ismonitored (a field of the vnode is not NULL), vnode_getbackingvnode (clears *out_vpp when it is given and returns ENOENT: the build has no nullfs or bindfs), vfs_get_notify_attributes (fills a vnode_attr from a constant). The sandbox calls vnode_getbackingvnode from a vnode hook for pid 2."
+  },
+  {
+   "original": "0xfffffe000ade9ebc",
+   "native_symbol": "_vnode_ismonitored",
+   "check": {
+    "address": "0xfffffe000ade9ebc",
+    "size": 20,
+    "sha256": "6a48c9a30283ec4a129638d4f8d522ac3582849a89fc78fc761ee307b80b7c9b"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c after vnode_notify and vnode_isdyldsharedcache, in source order: vnode_ismonitored (a field of the vnode is not NULL), vnode_getbackingvnode (clears *out_vpp when it is given and returns ENOENT: the build has no nullfs or bindfs), vfs_get_notify_attributes (fills a vnode_attr from a constant). The sandbox calls vnode_getbackingvnode from a vnode hook for pid 2."
+  },
+  {
+   "original": "0xfffffe000b0fdc9c",
+   "native_symbol": "_proc_issetugid",
+   "check": {
+    "address": "0xfffffe000b0fdc9c",
+    "size": 16,
+    "sha256": "3c3c1d9308a6ddd19ff59acebb3c95892f52985d07c5e39722f3e29aeb26d7bf"
+   },
+   "evidence": "bsd/kern/kern_prot.c: between setpgid and setuid, where issetugid and proc_issetugid are in the source; it takes a proc and returns bit 8 (0x100, P_SUGID) of p_flag at +1092, the field proc_is64bit tests bit 2 of. AMFI calls it from a hook on a page of a user process (pid 2, newfs_apfs)."
+  },
+  {
+   "original": "0xfffffe000ac04bc4",
+   "native_symbol": "_smr_ack_ipi",
+   "check": {
+    "address": "0xfffffe000ac04bc4",
+    "size": 72,
+    "sha256": "42b48119612dc01f4dcb2ebac9301e56bf3e314cb4dbe26bed9196a74bcb0c97"
+   },
+   "evidence": "osfmk/kern/smr.c between smr_domain_free and smr_mark_active_trackers_stalled, in source order: smr_entered reads the preemption count of the current thread and the per-CPU tracker; smr_enter raises the preemption count, then stores the domain's clock into the CPU's tracker and issues a barrier; smr_leave is the reverse (clears the tracker, then lowers the count); smr_ack_ipi works on the CPU's own queue. APFS calls smr_enter and smr_leave around a hash lookup."
+  },
+  {
+   "original": "0xfffffe000ac04b74",
+   "native_symbol": "_smr_leave",
+   "check": {
+    "address": "0xfffffe000ac04b74",
+    "size": 80,
+    "sha256": "65ae181f5010879d65e445e658e53042197154e3b5ff16f70cf6a4dd6e8c5c24"
+   },
+   "evidence": "osfmk/kern/smr.c between smr_domain_free and smr_mark_active_trackers_stalled, in source order: smr_entered reads the preemption count of the current thread and the per-CPU tracker; smr_enter raises the preemption count, then stores the domain's clock into the CPU's tracker and issues a barrier; smr_leave is the reverse (clears the tracker, then lowers the count); smr_ack_ipi works on the CPU's own queue. APFS calls smr_enter and smr_leave around a hash lookup."
+  },
+  {
+   "original": "0xfffffe000ac04b44",
+   "native_symbol": "_smr_enter",
+   "check": {
+    "address": "0xfffffe000ac04b44",
+    "size": 48,
+    "sha256": "725715e3596421ab539852d7dbbb70c65e50e80f82a1f265d1ca35f485e3c9f1"
+   },
+   "evidence": "osfmk/kern/smr.c between smr_domain_free and smr_mark_active_trackers_stalled, in source order: smr_entered reads the preemption count of the current thread and the per-CPU tracker; smr_enter raises the preemption count, then stores the domain's clock into the CPU's tracker and issues a barrier; smr_leave is the reverse (clears the tracker, then lowers the count); smr_ack_ipi works on the CPU's own queue. APFS calls smr_enter and smr_leave around a hash lookup."
+  },
+  {
+   "original": "0xfffffe000ac04af0",
+   "native_symbol": "_smr_entered",
+   "check": {
+    "address": "0xfffffe000ac04af0",
+    "size": 84,
+    "sha256": "97a5330a619d6dd8e88b074978cf83d2be298bbf1d39c9fee22f7bcce28705d8"
+   },
+   "evidence": "osfmk/kern/smr.c between smr_domain_free and smr_mark_active_trackers_stalled, in source order: smr_entered reads the preemption count of the current thread and the per-CPU tracker; smr_enter raises the preemption count, then stores the domain's clock into the CPU's tracker and issues a barrier; smr_leave is the reverse (clears the tracker, then lowers the count); smr_ack_ipi works on the CPU's own queue. APFS calls smr_enter and smr_leave around a hash lookup."
+  },
+  {
+   "original": "0xfffffe000b155838",
+   "native_symbol": "_ubc_upl_range_needed",
+   "check": {
+    "address": "0xfffffe000b155838",
+    "size": 8,
+    "sha256": "95259ee037436d849f181ef297685a5b327f037f64924271dd03b61d2b7a4c64"
+   },
+   "evidence": "bsd/kern/ubc_subr.c, the two functions directly before ubc_is_mapped, in source order (UBCINFOEXISTS between them is inline): ubc_upl_pageinfo loads the UPL's page list through a NULL-checked pointer; ubc_upl_range_needed is a bare tail call (to upl_range_needed), and APFS's pagein calls it with (upl, page index, 1)."
+  },
+  {
+   "original": "0xfffffe000b15581c",
+   "native_symbol": "_ubc_upl_pageinfo",
+   "check": {
+    "address": "0xfffffe000b15581c",
+    "size": 28,
+    "sha256": "4d65c6563e7657d50775710f3e99204a8dfc42417e81b34bd2245a7c765ef433"
+   },
+   "evidence": "bsd/kern/ubc_subr.c, the two functions directly before ubc_is_mapped, in source order (UBCINFOEXISTS between them is inline): ubc_upl_pageinfo loads the UPL's page list through a NULL-checked pointer; ubc_upl_range_needed is a bare tail call (to upl_range_needed), and APFS's pagein calls it with (upl, page index, 1)."
+  },
+  {
+   "original": "0xfffffe000b0b9460",
+   "native_symbol": "_launch_constraint_data_get_launch_type",
+   "check": {
+    "address": "0xfffffe000b0b9460",
+    "size": 12,
+    "sha256": "461f0cd8c82fda303d244bd2e7d866dfa0a3a0e88e4e29eeaa32547988cb1a92"
+   },
+   "evidence": "bsd/kern/kern_cs.c: the last function of the file, directly after cs_get_cdhash as in the source; it returns the first byte of its argument, lcd->launch_type. AMFI tail-calls it with the launch constraint data it keeps at +8 of its own record."
+  },
+  {
+   "original": "0xfffffe000b0b85e8",
+   "native_symbol": "_csproc_get_platform_path",
+   "check": {
+    "address": "0xfffffe000b0b85e8",
+    "size": 164,
+    "sha256": "2557661273f558b61c9be6587dea3ebfe74e473a11b2d7fb1dc23d2a43d92345"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the four functions between csproc_get_identity and csproc_get_prod_signed, in source order: csproc_get_signer_type, csvnode_get_teamid (the short one that takes a vnode), csproc_get_platform_binary, csproc_get_platform_path. The three csproc ones have one shape: NULL check, the proc's signed text vnode at +1336, its blob, one field. AMFI calls csproc_get_platform_binary from its hooks."
+  },
+  {
+   "original": "0xfffffe000b0b8544",
+   "native_symbol": "_csproc_get_platform_binary",
+   "check": {
+    "address": "0xfffffe000b0b8544",
+    "size": 164,
+    "sha256": "4306eb92eb0b6b340d78b83a81c93a7cd516bd6e62337f54ad1fb22455f95f58"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the four functions between csproc_get_identity and csproc_get_prod_signed, in source order: csproc_get_signer_type, csvnode_get_teamid (the short one that takes a vnode), csproc_get_platform_binary, csproc_get_platform_path. The three csproc ones have one shape: NULL check, the proc's signed text vnode at +1336, its blob, one field. AMFI calls csproc_get_platform_binary from its hooks."
+  },
+  {
+   "original": "0xfffffe000b0b850c",
+   "native_symbol": "_csvnode_get_teamid",
+   "check": {
+    "address": "0xfffffe000b0b850c",
+    "size": 56,
+    "sha256": "4423f64117b389fa644be4f29da55c6ac425adcb9a96e6e5dfd0a89392202954"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the four functions between csproc_get_identity and csproc_get_prod_signed, in source order: csproc_get_signer_type, csvnode_get_teamid (the short one that takes a vnode), csproc_get_platform_binary, csproc_get_platform_path. The three csproc ones have one shape: NULL check, the proc's signed text vnode at +1336, its blob, one field. AMFI calls csproc_get_platform_binary from its hooks."
+  },
+  {
+   "original": "0xfffffe000b0b846c",
+   "native_symbol": "_csproc_get_signer_type",
+   "check": {
+    "address": "0xfffffe000b0b846c",
+    "size": 160,
+    "sha256": "a802ea22a17cd8bb5b05c774b01cde7fa8358c686e0d3aeca316f411ab255d21"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the four functions between csproc_get_identity and csproc_get_prod_signed, in source order: csproc_get_signer_type, csvnode_get_teamid (the short one that takes a vnode), csproc_get_platform_binary, csproc_get_platform_path. The three csproc ones have one shape: NULL check, the proc's signed text vnode at +1336, its blob, one field. AMFI calls csproc_get_platform_binary from its hooks."
+  },
+  {
+   "original": "0xfffffe000b0f567c",
+   "native_symbol": "_proc_gettty",
+   "check": {
+    "address": "0xfffffe000b0f567c",
+    "size": 464,
+    "sha256": "b878de33664af985f58684a85e8c2662d58249ef428052ad2c37ef035bd433ed"
+   },
+   "evidence": "bsd/kern/kern_proc.c between proc_syscall_filter_mask and proc_pgrp, in source order: proc_exitstatus (a 16-bit load), proc_is_zombie (one bit of a state word), proc_getexecutablevnode (takes the proc lock at +88, loads the signed text vnode at +1336, the field csproc_get_teamid starts from, and gets a reference), proc_getexecutablevnode_noblock (the same with a try-lock), proc_gettty. AMFI calls proc_getexecutablevnode during launchd's exec."
+  },
+  {
+   "original": "0xfffffe000b0f558c",
+   "native_symbol": "_proc_getexecutablevnode_noblock",
+   "check": {
+    "address": "0xfffffe000b0f558c",
+    "size": 240,
+    "sha256": "0cfde93c83df3e0d0fd27ff31ac9c9fe3ea741573bad2fc7fb0c95a1fb434125"
+   },
+   "evidence": "bsd/kern/kern_proc.c between proc_syscall_filter_mask and proc_pgrp, in source order: proc_exitstatus (a 16-bit load), proc_is_zombie (one bit of a state word), proc_getexecutablevnode (takes the proc lock at +88, loads the signed text vnode at +1336, the field csproc_get_teamid starts from, and gets a reference), proc_getexecutablevnode_noblock (the same with a try-lock), proc_gettty. AMFI calls proc_getexecutablevnode during launchd's exec."
+  },
+  {
+   "original": "0xfffffe000b0f546c",
+   "native_symbol": "_proc_getexecutablevnode",
+   "check": {
+    "address": "0xfffffe000b0f546c",
+    "size": 288,
+    "sha256": "fd19479130925557c8d6dd98f1a13c1e2b688973fb77f3f2718105b526b40045"
+   },
+   "evidence": "bsd/kern/kern_proc.c between proc_syscall_filter_mask and proc_pgrp, in source order: proc_exitstatus (a 16-bit load), proc_is_zombie (one bit of a state word), proc_getexecutablevnode (takes the proc lock at +88, loads the signed text vnode at +1336, the field csproc_get_teamid starts from, and gets a reference), proc_getexecutablevnode_noblock (the same with a try-lock), proc_gettty. AMFI calls proc_getexecutablevnode during launchd's exec."
+  },
+  {
+   "original": "0xfffffe000b0f545c",
+   "native_symbol": "_proc_is_zombie",
+   "check": {
+    "address": "0xfffffe000b0f545c",
+    "size": 16,
+    "sha256": "3752334e1e1a8accc9fb3053362e805f7da2cf84928637011c6ec35c8e58ab06"
+   },
+   "evidence": "bsd/kern/kern_proc.c between proc_syscall_filter_mask and proc_pgrp, in source order: proc_exitstatus (a 16-bit load), proc_is_zombie (one bit of a state word), proc_getexecutablevnode (takes the proc lock at +88, loads the signed text vnode at +1336, the field csproc_get_teamid starts from, and gets a reference), proc_getexecutablevnode_noblock (the same with a try-lock), proc_gettty. AMFI calls proc_getexecutablevnode during launchd's exec."
+  },
+  {
+   "original": "0xfffffe000b0f5450",
+   "native_symbol": "_proc_exitstatus",
+   "check": {
+    "address": "0xfffffe000b0f5450",
+    "size": 12,
+    "sha256": "4681d75be552061f8d9ad3bf3b56c21a9a9e239483a616f176f76be44a6e668d"
+   },
+   "evidence": "bsd/kern/kern_proc.c between proc_syscall_filter_mask and proc_pgrp, in source order: proc_exitstatus (a 16-bit load), proc_is_zombie (one bit of a state word), proc_getexecutablevnode (takes the proc lock at +88, loads the signed text vnode at +1336, the field csproc_get_teamid starts from, and gets a reference), proc_getexecutablevnode_noblock (the same with a try-lock), proc_gettty. AMFI calls proc_getexecutablevnode during launchd's exec."
+  },
+  {
+   "original": "0xfffffe000b0f39e8",
+   "native_symbol": "_proc_ppid",
+   "check": {
+    "address": "0xfffffe000b0f39e8",
+    "size": 124,
+    "sha256": "ca6a40be28d5450b0cc404c123c5346fd99c407123694597e60a5826e5a2d514"
+   },
+   "evidence": "bsd/kern/kern_proc.c: directly before proc_original_ppid, as proc_ppid is in the source. One argument; after the proc zone check (proc_require inlined) it returns the 32-bit field at proc+32, the field proc_selfppid returns for the current process (proc_selfpid returns +96), and -1 for NULL. AMFI calls it from a hook during launchd's exec."
+  },
+  {
+   "original": "0xfffffe000ade5d00",
+   "native_symbol": "_vfs_mount_id",
+   "check": {
+    "address": "0xfffffe000ade5d00",
+    "size": 12,
+    "sha256": "9aa0e0849a740abc8ef31889a637758f9be9618fd7076fa98c1b885d90e50156"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c in source order around the paired vfs_name, vfs_typenum and vfs_flags: vfs_throttle_mask is the 64-bit load before vfs_name, vfs_mntlabel passes the address of a field of the mount (+2504) to another function (mac_mount_label on the mount's label) between vfs_typenum and vfs_mount_id, and vfs_mount_id is the 64-bit load before vfs_flags. The sandbox calls vfs_mntlabel while it evaluates launchd's exec."
+  },
+  {
+   "original": "0xfffffe000ade5cf4",
+   "native_symbol": "_vfs_mntlabel",
+   "check": {
+    "address": "0xfffffe000ade5cf4",
+    "size": 12,
+    "sha256": "fb8e4e5c4fb19be82f06e08056dd80aa4b091add6224d9e8b66bb79b35b5fff1"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c in source order around the paired vfs_name, vfs_typenum and vfs_flags: vfs_throttle_mask is the 64-bit load before vfs_name, vfs_mntlabel passes the address of a field of the mount (+2504) to another function (mac_mount_label on the mount's label) between vfs_typenum and vfs_mount_id, and vfs_mount_id is the 64-bit load before vfs_flags. The sandbox calls vfs_mntlabel while it evaluates launchd's exec."
+  },
+  {
+   "original": "0xfffffe000ade5ca0",
+   "native_symbol": "_vfs_throttle_mask",
+   "check": {
+    "address": "0xfffffe000ade5ca0",
+    "size": 12,
+    "sha256": "a47575984b9a428090daa3ff67b0d4804969653c2024c3d343eb7f2d0c8a74a9"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c in source order around the paired vfs_name, vfs_typenum and vfs_flags: vfs_throttle_mask is the 64-bit load before vfs_name, vfs_mntlabel passes the address of a field of the mount (+2504) to another function (mac_mount_label on the mount's label) between vfs_typenum and vfs_mount_id, and vfs_mount_id is the 64-bit load before vfs_flags. The sandbox calls vfs_mntlabel while it evaluates launchd's exec."
+  },
+  {
+   "original": "0xfffffe000ac24188",
+   "native_symbol": "_thread_get_tag",
+   "check": {
+    "address": "0xfffffe000ac24188",
+    "size": 12,
+    "sha256": "2c7568f48e4eeca19c4f4e9f57f46738e112da97d51a2f37b8c513490bef59cb"
+   },
+   "evidence": "osfmk/kern/thread.c after thread_set_cpulimit, in source order: thread_tid returns the 64-bit thread id of a non-NULL thread and 0 for NULL; thread_set_tag is the atomic OR (ldseth) into the 16-bit tag and returns the old value; thread_get_tag loads the same field. The sandbox calls thread_tid from a hook during launchd's exec."
+  },
+  {
+   "original": "0xfffffe000ac24178",
+   "native_symbol": "_thread_set_tag",
+   "check": {
+    "address": "0xfffffe000ac24178",
+    "size": 16,
+    "sha256": "a68887cb2c7d0db5b8492f2b3c51dc1becd0dcda84627b1d3cf1df8e65e242c8"
+   },
+   "evidence": "osfmk/kern/thread.c after thread_set_cpulimit, in source order: thread_tid returns the 64-bit thread id of a non-NULL thread and 0 for NULL; thread_set_tag is the atomic OR (ldseth) into the 16-bit tag and returns the old value; thread_get_tag loads the same field. The sandbox calls thread_tid from a hook during launchd's exec."
+  },
+  {
+   "original": "0xfffffe000ac24168",
+   "native_symbol": "_thread_tid",
+   "check": {
+    "address": "0xfffffe000ac24168",
+    "size": 16,
+    "sha256": "486f0d0485670e933a6986389c215972ab15ae46a265bfa627f24f6f43ee3ab1"
+   },
+   "evidence": "osfmk/kern/thread.c after thread_set_cpulimit, in source order: thread_tid returns the 64-bit thread id of a non-NULL thread and 0 for NULL; thread_set_tag is the atomic OR (ldseth) into the 16-bit tag and returns the old value; thread_get_tag loads the same field. The sandbox calls thread_tid from a hook during launchd's exec."
+  },
+  {
+   "original": "0xfffffe000ae03bc4",
+   "native_symbol": "_decmpfs_validate_compressed_file",
+   "check": {
+    "address": "0xfffffe000ae03bc4",
+    "size": 344,
+    "sha256": "999acf89af8f0c9313a3368c2dbc9e21e3da68560765cee1ce16ac3a2759510a"
+   },
+   "evidence": "bsd/kern/decmpfs.c: (vnode, cnode); it calls the 736-byte function after it with (vp, cp, &header, 0, &size), the call decmpfs_validate_compressed_file makes to the static decmpfs_fetch_compressed_header, then reads the cnode's state. Of the exported functions that fetch the header with returnInvalid 0, file_is_compressed, pagein, read and decompress_file are paired elsewhere; this is the remaining one. APFS calls it for a compressed file on lookup."
+  },
+  {
+   "original": "0xfffffe000ade775c",
+   "native_symbol": "_vfs_context_iopolicy_unassigned_0x8000",
+   "check": {
+    "address": "0xfffffe000ade775c",
+    "size": 80,
+    "sha256": "68dfedd112dd6a6adc310f308af5b8b11fa0ec6913391442550351ee3e5bf761"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c, the I/O policy queries on a vfs context between vfs_context_copy_audit_token and vfs_context_set_special_port: each resolves the context's process as vfs_context_proc does and tests one bit of the 16-bit policy word at proc+1558: bit 7 with the thread's uu_flag bits 18/19 is skip_mtime_update, bit 13 (0x2000 ENTITLED_RESERVE_ACCESS, after a uu_flag bit 17 test) is allow_entitled_reserve_access, bit 5 (0x20) is ignores_content_protection, and the last one tests bit 15, which this source has no name for: UniXNU's vfs_context_iopolicy_unassigned_0x8000, in the same place in its file, answers false because nothing here sets that bit. APFS calls the last one on a lookup."
+  },
+  {
+   "original": "0xfffffe000ade770c",
+   "native_symbol": "_vfs_context_ignores_content_protection",
+   "check": {
+    "address": "0xfffffe000ade770c",
+    "size": 80,
+    "sha256": "2b02cafe83edae19afcbd943e3417d6075b0a5879a99adbb5c278d9ae9fb2a44"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c, the I/O policy queries on a vfs context between vfs_context_copy_audit_token and vfs_context_set_special_port: each resolves the context's process as vfs_context_proc does and tests one bit of the 16-bit policy word at proc+1558: bit 7 with the thread's uu_flag bits 18/19 is skip_mtime_update, bit 13 (0x2000 ENTITLED_RESERVE_ACCESS, after a uu_flag bit 17 test) is allow_entitled_reserve_access, bit 5 (0x20) is ignores_content_protection, and the last one tests bit 15, which this source has no name for: UniXNU's vfs_context_iopolicy_unassigned_0x8000, in the same place in its file, answers false because nothing here sets that bit. APFS calls the last one on a lookup."
+  },
+  {
+   "original": "0xfffffe000ade76b4",
+   "native_symbol": "_vfs_context_allow_entitled_reserve_access",
+   "check": {
+    "address": "0xfffffe000ade76b4",
+    "size": 88,
+    "sha256": "3c52a73caf6cca3a750c181325d1ce11b6e0cfa0ac8a0345ca69a588e63a3562"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c, the I/O policy queries on a vfs context between vfs_context_copy_audit_token and vfs_context_set_special_port: each resolves the context's process as vfs_context_proc does and tests one bit of the 16-bit policy word at proc+1558: bit 7 with the thread's uu_flag bits 18/19 is skip_mtime_update, bit 13 (0x2000 ENTITLED_RESERVE_ACCESS, after a uu_flag bit 17 test) is allow_entitled_reserve_access, bit 5 (0x20) is ignores_content_protection, and the last one tests bit 15, which this source has no name for: UniXNU's vfs_context_iopolicy_unassigned_0x8000, in the same place in its file, answers false because nothing here sets that bit. APFS calls the last one on a lookup."
+  },
+  {
+   "original": "0xfffffe000ade7610",
+   "native_symbol": "_vfs_context_skip_mtime_update",
+   "check": {
+    "address": "0xfffffe000ade7610",
+    "size": 148,
+    "sha256": "3153f0a3644a8c6c86005908f24e2716b3afa727a001faa2011414da7457568e"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c, the I/O policy queries on a vfs context between vfs_context_copy_audit_token and vfs_context_set_special_port: each resolves the context's process as vfs_context_proc does and tests one bit of the 16-bit policy word at proc+1558: bit 7 with the thread's uu_flag bits 18/19 is skip_mtime_update, bit 13 (0x2000 ENTITLED_RESERVE_ACCESS, after a uu_flag bit 17 test) is allow_entitled_reserve_access, bit 5 (0x20) is ignores_content_protection, and the last one tests bit 15, which this source has no name for: UniXNU's vfs_context_iopolicy_unassigned_0x8000, in the same place in its file, answers false because nothing here sets that bit. APFS calls the last one on a lookup."
+  },
+  {
+   "original": "0xfffffe000b0b7ed0",
+   "native_symbol": "_csproc_get_blob",
+   "check": {
+    "address": "0xfffffe000b0b7ed0",
+    "size": 148,
+    "sha256": "bc1b64120da9878a935f1415d853efa5f4b75b3eb0f07d9f9e75ad9cf4fe96a4"
+   },
+   "evidence": "bsd/kern/kern_cs.c in source order: csvnode_invalidate_flags (380 bytes), csblob_get_flags (paired), csblob_get_hashtype (loads the hash type pointer of the blob and returns its first byte, or 0 when it is NULL), csproc_get_blob (148 bytes), csvnode_get_blob (paired). AMFI calls csblob_get_hashtype in its exec hook."
+  },
+  {
+   "original": "0xfffffe000b0b7eb4",
+   "native_symbol": "_csblob_get_hashtype",
+   "check": {
+    "address": "0xfffffe000b0b7eb4",
+    "size": 28,
+    "sha256": "3b834370d464bf72b32f24d5c5ae4184d675c4adde0eb08d6563a0a05ec52794"
+   },
+   "evidence": "bsd/kern/kern_cs.c in source order: csvnode_invalidate_flags (380 bytes), csblob_get_flags (paired), csblob_get_hashtype (loads the hash type pointer of the blob and returns its first byte, or 0 when it is NULL), csproc_get_blob (148 bytes), csvnode_get_blob (paired). AMFI calls csblob_get_hashtype in its exec hook."
+  },
+  {
+   "original": "0xfffffe000b0b7d2c",
+   "native_symbol": "_csvnode_invalidate_flags",
+   "check": {
+    "address": "0xfffffe000b0b7d2c",
+    "size": 380,
+    "sha256": "a4b04dfa24be17d48d75f873d1f77fb4840ac27a6d20dbb247025840a38c993a"
+   },
+   "evidence": "bsd/kern/kern_cs.c in source order: csvnode_invalidate_flags (380 bytes), csblob_get_flags (paired), csblob_get_hashtype (loads the hash type pointer of the blob and returns its first byte, or 0 when it is NULL), csproc_get_blob (148 bytes), csvnode_get_blob (paired). AMFI calls csblob_get_hashtype in its exec hook."
+  },
+  {
+   "original": "0xfffffe000b26ba60",
+   "native_symbol": "__ZN9OSBoolean11withBooleanEb",
+   "check": {
+    "address": "0xfffffe000b26ba60",
+    "size": 36,
+    "sha256": "d67426481d8482bfcc311f8d3cd33fa48cefcd055b9a014806d644da6678cf7e"
+   },
+   "evidence": "libkern/c++/OSBoolean.cpp: after OSBoolean::initialize and before the first function of OSCollection.cpp; it selects one of two adjacent global pointers by whether its argument is zero and returns the object: OSBoolean::withBoolean(bool), which returns kOSBooleanTrue or kOSBooleanFalse. AMFI's entitlement conversion table calls it for a boolean value."
+  },
+  {
+   "original": "0xfffffe000b2a32f0",
+   "native_symbol": "__ZN8OSString11withCStringEPKcm",
+   "check": {
+    "address": "0xfffffe000b2a32f0",
+    "size": 148,
+    "sha256": "e7ff23df99c56667140344c1a576a2ff8d4ec0b128e2b70065ffb6a8a6bd03dd"
+   },
+   "evidence": "libkern/c++/OSString.cpp: an OSString factory (allocates through OSString's metaclass, then calls an init slot) that takes (const char *, length): AMFI calls it with a string and 0x1e. It follows OSString::withCString(const char *) in link order as withCString(const char *, size_t) does in the source."
+  },
+  {
+   "original": "0xfffffe000b130ca4",
+   "native_symbol": "_query_trust_cache_with_length",
+   "check": {
+    "address": "0xfffffe000b130ca4",
+    "size": 184,
+    "sha256": "709b3f0539a61459b8e7d8674b4fce043852d85b9524aa56dac0a9156700e68d"
+   },
+   "evidence": "bsd/kern/kern_trustcache.c: the first function after load_legacy_trust_cache. It refuses a query type above 3 and a NULL cdhash with KERN_INVALID_ARGUMENT and keeps its fourth argument; AMFI calls it with (type, cdhash, its caller's length, a 16-byte token on its stack as the fourth argument), which is query_trust_cache_with_length(query_type, cdhash, cdhash_length, query_token), not the three-argument query_trust_cache."
+  },
+  {
+   "original": "0xfffffe000ad84b70",
+   "native_symbol": "_memchr",
+   "check": {
+    "address": "0xfffffe000ad84b70",
+    "size": 72,
+    "sha256": "672d0c941eb4fa50f415f1b3c3d5a27553c031a40ab3c02037a1fb1e1a79de3c"
+   },
+   "evidence": "bsd/libkern/memchr.c: (pointer, int, length), a loop that compares each byte as a signed char with the int and returns its address or NULL, as the source does with const char; it sits directly before url_decode (bsd/libkern/url_encode.c), the next file of bsd/libkern in link order. AMFI calls it from its exec hook."
+  },
+  {
+   "original": "0xfffffe000b153b54",
+   "native_symbol": "_csblob_get_der_entitlements",
+   "check": {
+    "address": "0xfffffe000b153b54",
+    "size": 428,
+    "sha256": "46c56791048121cf91412a8b4d0cc021e00b6ef060d76cd2acd84b4cf8949e1d"
+   },
+   "evidence": "bsd/kern/ubc_subr.c: three consecutive functions in source order (csblob_get_entitlements, csblob_get_der_entitlements_unsafe, csblob_get_der_entitlements). The 28-byte one in the middle only tests a flag of the blob and returns a pointer: the _unsafe getter. The two around it have the same shape (three arguments, both outputs zeroed first); the matcher's reference rule had named the first one csblob_get_der_entitlements, one too early. AMFI calls the third from its exec hook."
+  },
+  {
+   "original": "0xfffffe000b153b38",
+   "native_symbol": "_csblob_get_der_entitlements_unsafe",
+   "check": {
+    "address": "0xfffffe000b153b38",
+    "size": 28,
+    "sha256": "fdcfd1032eff77daf69f0e588096b96d36f536311854ed790a72cb4a79279364"
+   },
+   "evidence": "bsd/kern/ubc_subr.c: three consecutive functions in source order (csblob_get_entitlements, csblob_get_der_entitlements_unsafe, csblob_get_der_entitlements). The 28-byte one in the middle only tests a flag of the blob and returns a pointer: the _unsafe getter. The two around it have the same shape (three arguments, both outputs zeroed first); the matcher's reference rule had named the first one csblob_get_der_entitlements, one too early. AMFI calls the third from its exec hook."
+  },
+  {
+   "original": "0xfffffe000b153988",
+   "native_symbol": "_csblob_get_entitlements",
+   "check": {
+    "address": "0xfffffe000b153988",
+    "size": 432,
+    "sha256": "5d555c47f79aa0e339933d9b61f0646d2e62e4d05ec794a7e1319e2a44bc8187"
+   },
+   "evidence": "bsd/kern/ubc_subr.c: three consecutive functions in source order (csblob_get_entitlements, csblob_get_der_entitlements_unsafe, csblob_get_der_entitlements). The 28-byte one in the middle only tests a flag of the blob and returns a pointer: the _unsafe getter. The two around it have the same shape (three arguments, both outputs zeroed first); the matcher's reference rule had named the first one csblob_get_der_entitlements, one too early. AMFI calls the third from its exec hook."
+  },
+  {
+   "original": "0xfffffe000b0b8150",
+   "native_symbol": "_csblob_entitlements_dictionary_copy",
+   "check": {
+    "address": "0xfffffe000b0b8150",
+    "size": 108,
+    "sha256": "67b85e82af5082bb2d3a6e075cfb7f5b569ab817c459d02da5fefeaf47831f09"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the csblob accessors in source order between csblob_get_signer_type and csblob_os_entitlements_set, filling the gaps between the ones already paired (get_auxiliary_info, get_trust_level): set_validation_category (148 bytes) and get_validation_category (a 32-bit load) before set_auxiliary_info (84 bytes); get_code_directory (a pointer load) directly after get_trust_level; entitlements_dictionary_copy (tests the same signed field +208 as os_entitlements_get) after it. AMFI calls csblob_get_code_directory in its exec hook."
+  },
+  {
+   "original": "0xfffffe000b0b8144",
+   "native_symbol": "_csblob_get_code_directory",
+   "check": {
+    "address": "0xfffffe000b0b8144",
+    "size": 12,
+    "sha256": "676f37157e620f9a9e90e08b962d2f540ca660baa3134640b3a663f04a8d99cf"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the csblob accessors in source order between csblob_get_signer_type and csblob_os_entitlements_set, filling the gaps between the ones already paired (get_auxiliary_info, get_trust_level): set_validation_category (148 bytes) and get_validation_category (a 32-bit load) before set_auxiliary_info (84 bytes); get_code_directory (a pointer load) directly after get_trust_level; entitlements_dictionary_copy (tests the same signed field +208 as os_entitlements_get) after it. AMFI calls csblob_get_code_directory in its exec hook."
+  },
+  {
+   "original": "0xfffffe000b0b80b8",
+   "native_symbol": "_csblob_set_auxiliary_info",
+   "check": {
+    "address": "0xfffffe000b0b80b8",
+    "size": 84,
+    "sha256": "699d5e4bc768063837c97008ffbe427a7b469225c7862487210b2479f15d9245"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the csblob accessors in source order between csblob_get_signer_type and csblob_os_entitlements_set, filling the gaps between the ones already paired (get_auxiliary_info, get_trust_level): set_validation_category (148 bytes) and get_validation_category (a 32-bit load) before set_auxiliary_info (84 bytes); get_code_directory (a pointer load) directly after get_trust_level; entitlements_dictionary_copy (tests the same signed field +208 as os_entitlements_get) after it. AMFI calls csblob_get_code_directory in its exec hook."
+  },
+  {
+   "original": "0xfffffe000b0b80ac",
+   "native_symbol": "_csblob_get_validation_category",
+   "check": {
+    "address": "0xfffffe000b0b80ac",
+    "size": 12,
+    "sha256": "bdf20ce4a16a62c670d7bee43ecc0de8d4e9ce1de583c699fa03ff5e8309a6d9"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the csblob accessors in source order between csblob_get_signer_type and csblob_os_entitlements_set, filling the gaps between the ones already paired (get_auxiliary_info, get_trust_level): set_validation_category (148 bytes) and get_validation_category (a 32-bit load) before set_auxiliary_info (84 bytes); get_code_directory (a pointer load) directly after get_trust_level; entitlements_dictionary_copy (tests the same signed field +208 as os_entitlements_get) after it. AMFI calls csblob_get_code_directory in its exec hook."
+  },
+  {
+   "original": "0xfffffe000b0b8018",
+   "native_symbol": "_csblob_set_validation_category",
+   "check": {
+    "address": "0xfffffe000b0b8018",
+    "size": 148,
+    "sha256": "ee510f8a1f54d40151789c6dbbaa7b146af0d7dfef1074610db27e130007b478"
+   },
+   "evidence": "bsd/kern/kern_cs.c, the csblob accessors in source order between csblob_get_signer_type and csblob_os_entitlements_set, filling the gaps between the ones already paired (get_auxiliary_info, get_trust_level): set_validation_category (148 bytes) and get_validation_category (a 32-bit load) before set_auxiliary_info (84 bytes); get_code_directory (a pointer load) directly after get_trust_level; entitlements_dictionary_copy (tests the same signed field +208 as os_entitlements_get) after it. AMFI calls csblob_get_code_directory in its exec hook."
+  },
+  {
+   "original": "0xfffffe000b408414",
+   "native_symbol": "_mac_vnop_removexattr",
+   "check": {
+    "address": "0xfffffe000b408414",
+    "size": 148,
+    "sha256": "487f0df90a11a48351877a5d51d068c4022236a01f742e368ee7925cc629e072"
+   },
+   "evidence": "security/mac_vfs_subr.c: the last three functions of the file in source order, after vnode_label (vnode_relabel is not present as a function) and before the first of mac_skywalk.c: mac_vnop_setxattr (four arguments), mac_vnop_getxattr (five: it keeps x4, the attrlen pointer), mac_vnop_removexattr (two). AMFI calls mac_vnop_getxattr with (vnode, an attribute name in its own strings) from its exec hook for launchd."
+  },
+  {
+   "original": "0xfffffe000b40830c",
+   "native_symbol": "_mac_vnop_getxattr",
+   "check": {
+    "address": "0xfffffe000b40830c",
+    "size": 264,
+    "sha256": "b7271089bd50ef0a3100e7227a6b456c876ac4177441e5b5af8df8d88ee9d4a2"
+   },
+   "evidence": "security/mac_vfs_subr.c: the last three functions of the file in source order, after vnode_label (vnode_relabel is not present as a function) and before the first of mac_skywalk.c: mac_vnop_setxattr (four arguments), mac_vnop_getxattr (five: it keeps x4, the attrlen pointer), mac_vnop_removexattr (two). AMFI calls mac_vnop_getxattr with (vnode, an attribute name in its own strings) from its exec hook for launchd."
+  },
+  {
+   "original": "0xfffffe000b4081d4",
+   "native_symbol": "_mac_vnop_setxattr",
+   "check": {
+    "address": "0xfffffe000b4081d4",
+    "size": 312,
+    "sha256": "1b254f8df2f7bae171db69a1fdd86166f9fc9d70aa260779d07becae775813ff"
+   },
+   "evidence": "security/mac_vfs_subr.c: the last three functions of the file in source order, after vnode_label (vnode_relabel is not present as a function) and before the first of mac_skywalk.c: mac_vnop_setxattr (four arguments), mac_vnop_getxattr (five: it keeps x4, the attrlen pointer), mac_vnop_removexattr (two). AMFI calls mac_vnop_getxattr with (vnode, an attribute name in its own strings) from its exec hook for launchd."
+  },
+  {
+   "original": "0xfffffe000ada2dac",
+   "native_symbol": "_cluster_read_ext",
+   "check": {
+    "address": "0xfffffe000ada2dac",
+    "size": 456,
+    "sha256": "d7b4aee348d02d0eec335ed3ceac04d463512c6117a12cc442fdb9318a2dc1ac"
+   },
+   "evidence": "bsd/vfs/vfs_cluster.c: cluster_read is the wrapper (mov x4, #0; mov x5, #0; b) between cluster_update_range and cluster_read_copy, as in the source, where it returns cluster_read_ext(vp, uio, filesize, xflags, NULL, NULL); the function it branches to, directly after it, is cluster_read_ext. APFS's read calls cluster_read for launchd's executable."
+  },
+  {
+   "original": "0xfffffe000ada2d9c",
+   "native_symbol": "_cluster_read",
+   "check": {
+    "address": "0xfffffe000ada2d9c",
+    "size": 16,
+    "sha256": "c3528ec2aed06ac5bd3430566218a9319adfc342b69d69d12548faee98f07225"
+   },
+   "evidence": "bsd/vfs/vfs_cluster.c: cluster_read is the wrapper (mov x4, #0; mov x5, #0; b) between cluster_update_range and cluster_read_copy, as in the source, where it returns cluster_read_ext(vp, uio, filesize, xflags, NULL, NULL); the function it branches to, directly after it, is cluster_read_ext. APFS's read calls cluster_read for launchd's executable."
+  },
+  {
+   "original": "0xfffffe000ae06020",
+   "native_symbol": "_decmpfs_decompress_file",
+   "check": {
+    "address": "0xfffffe000ae06020",
+    "size": 2192,
+    "sha256": "c6392e0440e18c870a9494c3f0b4683fbba6be6016325d848a04f315cb4a29cf"
+   },
+   "evidence": "bsd/kern/decmpfs.c in source order between the functions already paired (_decmp_get_func, decmpfs_update_attributes, register/unregister_decmpfs_decompressor, decmpfs_read_compressed, decmpfs_init): file_is_compressed is the 1088-byte function directly before update_attributes, which APFS tail-calls with (vnode, cnode) when the cnode's state is not yet known; hides_rsrc and hides_xattr are the two between update_attributes and register; pagein_compressed is the 2284-byte function after unregister; free_compressed_data and decompress_file are the two between read_compressed and init."
+  },
+  {
+   "original": "0xfffffe000ae05ed0",
+   "native_symbol": "_decmpfs_free_compressed_data",
+   "check": {
+    "address": "0xfffffe000ae05ed0",
+    "size": 336,
+    "sha256": "79a0ca3fb0c3f4d4cadf875acfb5c589537478018defcfecc770646aedc09d3d"
+   },
+   "evidence": "bsd/kern/decmpfs.c in source order between the functions already paired (_decmp_get_func, decmpfs_update_attributes, register/unregister_decmpfs_decompressor, decmpfs_read_compressed, decmpfs_init): file_is_compressed is the 1088-byte function directly before update_attributes, which APFS tail-calls with (vnode, cnode) when the cnode's state is not yet known; hides_rsrc and hides_xattr are the two between update_attributes and register; pagein_compressed is the 2284-byte function after unregister; free_compressed_data and decompress_file are the two between read_compressed and init."
+  },
+  {
+   "original": "0xfffffe000ae04bac",
+   "native_symbol": "_decmpfs_pagein_compressed",
+   "check": {
+    "address": "0xfffffe000ae04bac",
+    "size": 2284,
+    "sha256": "a0559f072a516f98ebd7b166e80e9b037639aedff7b1cb85a8f3bce3f01a97ea"
+   },
+   "evidence": "bsd/kern/decmpfs.c in source order between the functions already paired (_decmp_get_func, decmpfs_update_attributes, register/unregister_decmpfs_decompressor, decmpfs_read_compressed, decmpfs_init): file_is_compressed is the 1088-byte function directly before update_attributes, which APFS tail-calls with (vnode, cnode) when the cnode's state is not yet known; hides_rsrc and hides_xattr are the two between update_attributes and register; pagein_compressed is the 2284-byte function after unregister; free_compressed_data and decompress_file are the two between read_compressed and init."
+  },
+  {
+   "original": "0xfffffe000ae04840",
+   "native_symbol": "_decmpfs_hides_xattr",
+   "check": {
+    "address": "0xfffffe000ae04840",
+    "size": 168,
+    "sha256": "e941b0a9489c6d1c565ab52fc9b388dee58df29b9d0d9532326792468487cf47"
+   },
+   "evidence": "bsd/kern/decmpfs.c in source order between the functions already paired (_decmp_get_func, decmpfs_update_attributes, register/unregister_decmpfs_decompressor, decmpfs_read_compressed, decmpfs_init): file_is_compressed is the 1088-byte function directly before update_attributes, which APFS tail-calls with (vnode, cnode) when the cnode's state is not yet known; hides_rsrc and hides_xattr are the two between update_attributes and register; pagein_compressed is the 2284-byte function after unregister; free_compressed_data and decompress_file are the two between read_compressed and init."
+  },
+  {
+   "original": "0xfffffe000ae04810",
+   "native_symbol": "_decmpfs_hides_rsrc",
+   "check": {
+    "address": "0xfffffe000ae04810",
+    "size": 48,
+    "sha256": "16ef8c9acac9ffc4fe86d52318079644d7dc44d79976f2078bced8843e2d4276"
+   },
+   "evidence": "bsd/kern/decmpfs.c in source order between the functions already paired (_decmp_get_func, decmpfs_update_attributes, register/unregister_decmpfs_decompressor, decmpfs_read_compressed, decmpfs_init): file_is_compressed is the 1088-byte function directly before update_attributes, which APFS tail-calls with (vnode, cnode) when the cnode's state is not yet known; hides_rsrc and hides_xattr are the two between update_attributes and register; pagein_compressed is the 2284-byte function after unregister; free_compressed_data and decompress_file are the two between read_compressed and init."
+  },
+  {
+   "original": "0xfffffe000ae04214",
+   "native_symbol": "_decmpfs_file_is_compressed",
+   "check": {
+    "address": "0xfffffe000ae04214",
+    "size": 1088,
+    "sha256": "3a3caa5637da818d1baef4d859800a5bd8e9ff23c48b13e89946df1645b419df"
+   },
+   "evidence": "bsd/kern/decmpfs.c in source order between the functions already paired (_decmp_get_func, decmpfs_update_attributes, register/unregister_decmpfs_decompressor, decmpfs_read_compressed, decmpfs_init): file_is_compressed is the 1088-byte function directly before update_attributes, which APFS tail-calls with (vnode, cnode) when the cnode's state is not yet known; hides_rsrc and hides_xattr are the two between update_attributes and register; pagein_compressed is the 2284-byte function after unregister; free_compressed_data and decompress_file are the two between read_compressed and init."
+  },
+  {
+   "original": "0xfffffe000ae03bb8",
+   "native_symbol": "_decmpfs_cnode_cmp_type",
+   "check": {
+    "address": "0xfffffe000ae03bb8",
+    "size": 12,
+    "sha256": "c44755fdcbe46830aad8a63253d918cfdfd81711a603a777f6bc8a0bdf468552"
+   },
+   "evidence": "bsd/kern/decmpfs.c, the cnode functions in source order around the ones already paired (decmpfs_cnode_destroy, lock/unlock_compressed_data, set_vnode_state, the three cached getters): alloc takes no argument and allocates from a static type view (ldp x0, x1 of the view; mov w2, #0; b), free and init follow it before destroy, get_vnode_state is the byte load between unlock and set_vnode_state, the three 32-byte compare-and-swap setters on +24, +32 and +40 follow the getters of the same fields, and cmp_type is the 32-bit load of +4 after them. APFS calls decmpfs_cnode_alloc when it makes the vnode of launchd's executable."
+  },
+  {
+   "original": "0xfffffe000ae03b98",
+   "native_symbol": "_decmpfs_cnode_set_vnode_cached_total_size",
+   "check": {
+    "address": "0xfffffe000ae03b98",
+    "size": 32,
+    "sha256": "15871f168ac263aa3a103899cef0020c7e28912de3a8d0e1f1a5540384aba0af"
+   },
+   "evidence": "bsd/kern/decmpfs.c, the cnode functions in source order around the ones already paired (decmpfs_cnode_destroy, lock/unlock_compressed_data, set_vnode_state, the three cached getters): alloc takes no argument and allocates from a static type view (ldp x0, x1 of the view; mov w2, #0; b), free and init follow it before destroy, get_vnode_state is the byte load between unlock and set_vnode_state, the three 32-byte compare-and-swap setters on +24, +32 and +40 follow the getters of the same fields, and cmp_type is the 32-bit load of +4 after them. APFS calls decmpfs_cnode_alloc when it makes the vnode of launchd's executable."
+  },
+  {
+   "original": "0xfffffe000ae03b78",
+   "native_symbol": "_decmpfs_cnode_set_vnode_cached_nchildren",
+   "check": {
+    "address": "0xfffffe000ae03b78",
+    "size": 32,
+    "sha256": "7b96298eccca40140daeddf8868f87da4e37a6005cc68ca73d9bb344fa8553ad"
+   },
+   "evidence": "bsd/kern/decmpfs.c, the cnode functions in source order around the ones already paired (decmpfs_cnode_destroy, lock/unlock_compressed_data, set_vnode_state, the three cached getters): alloc takes no argument and allocates from a static type view (ldp x0, x1 of the view; mov w2, #0; b), free and init follow it before destroy, get_vnode_state is the byte load between unlock and set_vnode_state, the three 32-byte compare-and-swap setters on +24, +32 and +40 follow the getters of the same fields, and cmp_type is the 32-bit load of +4 after them. APFS calls decmpfs_cnode_alloc when it makes the vnode of launchd's executable."
+  },
+  {
+   "original": "0xfffffe000ae03b58",
+   "native_symbol": "_decmpfs_cnode_set_vnode_cached_size",
+   "check": {
+    "address": "0xfffffe000ae03b58",
+    "size": 32,
+    "sha256": "7d81dd6f052ea4bdb4cd0dba614ad0f24c1710efc312a03f2e38f2cc27d9ba73"
+   },
+   "evidence": "bsd/kern/decmpfs.c, the cnode functions in source order around the ones already paired (decmpfs_cnode_destroy, lock/unlock_compressed_data, set_vnode_state, the three cached getters): alloc takes no argument and allocates from a static type view (ldp x0, x1 of the view; mov w2, #0; b), free and init follow it before destroy, get_vnode_state is the byte load between unlock and set_vnode_state, the three 32-byte compare-and-swap setters on +24, +32 and +40 follow the getters of the same fields, and cmp_type is the 32-bit load of +4 after them. APFS calls decmpfs_cnode_alloc when it makes the vnode of launchd's executable."
+  },
+  {
+   "original": "0xfffffe000ae03a4c",
+   "native_symbol": "_decmpfs_cnode_get_vnode_state",
+   "check": {
+    "address": "0xfffffe000ae03a4c",
+    "size": 12,
+    "sha256": "461f0cd8c82fda303d244bd2e7d866dfa0a3a0e88e4e29eeaa32547988cb1a92"
+   },
+   "evidence": "bsd/kern/decmpfs.c, the cnode functions in source order around the ones already paired (decmpfs_cnode_destroy, lock/unlock_compressed_data, set_vnode_state, the three cached getters): alloc takes no argument and allocates from a static type view (ldp x0, x1 of the view; mov w2, #0; b), free and init follow it before destroy, get_vnode_state is the byte load between unlock and set_vnode_state, the three 32-byte compare-and-swap setters on +24, +32 and +40 follow the getters of the same fields, and cmp_type is the 32-bit load of +4 after them. APFS calls decmpfs_cnode_alloc when it makes the vnode of launchd's executable."
+  },
+  {
+   "original": "0xfffffe000ae038e8",
+   "native_symbol": "_decmpfs_cnode_init",
+   "check": {
+    "address": "0xfffffe000ae038e8",
+    "size": 164,
+    "sha256": "63188f46641b87a6d23465d771179196ce25bfd0e2fa52a5032dcd5c5eaa810e"
+   },
+   "evidence": "bsd/kern/decmpfs.c, the cnode functions in source order around the ones already paired (decmpfs_cnode_destroy, lock/unlock_compressed_data, set_vnode_state, the three cached getters): alloc takes no argument and allocates from a static type view (ldp x0, x1 of the view; mov w2, #0; b), free and init follow it before destroy, get_vnode_state is the byte load between unlock and set_vnode_state, the three 32-byte compare-and-swap setters on +24, +32 and +40 follow the getters of the same fields, and cmp_type is the 32-bit load of +4 after them. APFS calls decmpfs_cnode_alloc when it makes the vnode of launchd's executable."
+  },
+  {
+   "original": "0xfffffe000ae0388c",
+   "native_symbol": "_decmpfs_cnode_free",
+   "check": {
+    "address": "0xfffffe000ae0388c",
+    "size": 92,
+    "sha256": "7532a058d38a61253b7f2ce099da883ed588e0e2c9e2c8b76e81025d83a8cf65"
+   },
+   "evidence": "bsd/kern/decmpfs.c, the cnode functions in source order around the ones already paired (decmpfs_cnode_destroy, lock/unlock_compressed_data, set_vnode_state, the three cached getters): alloc takes no argument and allocates from a static type view (ldp x0, x1 of the view; mov w2, #0; b), free and init follow it before destroy, get_vnode_state is the byte load between unlock and set_vnode_state, the three 32-byte compare-and-swap setters on +24, +32 and +40 follow the getters of the same fields, and cmp_type is the 32-bit load of +4 after them. APFS calls decmpfs_cnode_alloc when it makes the vnode of launchd's executable."
+  },
+  {
+   "original": "0xfffffe000ae03874",
+   "native_symbol": "_decmpfs_cnode_alloc",
+   "check": {
+    "address": "0xfffffe000ae03874",
+    "size": 24,
+    "sha256": "8d877e5d7e92b4f63eab04b995f1402d5dee02975a6ea41d960f61ea4c1a0b67"
+   },
+   "evidence": "bsd/kern/decmpfs.c, the cnode functions in source order around the ones already paired (decmpfs_cnode_destroy, lock/unlock_compressed_data, set_vnode_state, the three cached getters): alloc takes no argument and allocates from a static type view (ldp x0, x1 of the view; mov w2, #0; b), free and init follow it before destroy, get_vnode_state is the byte load between unlock and set_vnode_state, the three 32-byte compare-and-swap setters on +24, +32 and +40 follow the getters of the same fields, and cmp_type is the 32-bit load of +4 after them. APFS calls decmpfs_cnode_alloc when it makes the vnode of launchd's executable."
+  },
+  {
+   "original": "0xfffffe000b1329e8",
+   "native_symbol": "_xnu_image4_monitor_trap",
+   "check": {
+    "address": "0xfffffe000b1329e8",
+    "size": 120,
+    "sha256": "69c79bbdc700d2f455f9d929843b25f8c0833633985a4f2d6ec2bccea2a5125c"
+   },
+   "evidence": "The function directly after kernel_image4_monitor_trap (0xfffffe000b132828, named by its strings): the first function of the code signing monitor's file, a TXM call with selector 52 and three arguments that returns the errno of the reply or 0xffff. Image4's start calls it once per nonce slot with (the slot's selector, a 56-byte record, its length) and does not read the result: the monitor's image4 trap, CSM_PREFIX(image4_monitor_trap). This kernel has no monitor; its xnu_image4_monitor_trap returns ENOTSUP when hosted (0007-prelink-kext-start.patch) instead of panicking."
+  },
+  {
    "original": "0xfffffe000b0f4bf4",
    "native_symbol": "_proc_isinitproc",
    "check": {
@@ -3740,6 +4550,11 @@
    "original": "0xfffffe000b7b2458",
    "native_symbol": "_gIOFirstMatchNotification",
    "evidence": "IOService.cpp's notification type symbols, six consecutive pointers in declaration order: publish, first publish, matched, first match, terminated, will terminate. The last two are paired by name at 0xfffffe000b7b2460 and 0xfffffe000b7b2468 (8 apart, as in our kernel), and kexts pass the four slots before them as the first argument of addMatchingNotification (apfs 0x...2448, the sandbox 0x...2458). By position before the two named ones."
+  },
+  {
+   "original": "0xfffffe000b718680",
+   "native_symbol": "__vfs_smr",
+   "evidence": "The SMR domain APFS passes to smr_enter and smr_leave around its lookups (through a GOT slot): config/Private.exports gives the kext symbol apfs_smr the kernel's _vfs_smr. In the original kernel the same object is used by nchinit, resize_namecache, vntblinit, vfs_mountroot, mount_common, mount_dropcrossref and dounmount, the users of VFS_SMR(). Unpaired, the slot pointed into this kernel's zone_array and smr_enter asserted old_seq == SMR_SEQ_INVALID."
   }
  ]
 }
