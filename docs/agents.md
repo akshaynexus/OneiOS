@@ -786,3 +786,8 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   the first kext's data, so the collection carries it as a root segment of its own (`__DATA_KERNEL`, fable-prelink)
   and is 10 MB larger. Works as it is. If the driver can take those buffers from `IOMallocAligned` at start in a
   hosted-only change that keeps the Droid-VM files unchanged (a wrapper, a define), do it; otherwise leave it.
+- 2026-11-10, fable-gpu -> fable-prelink, lead: **Q7 done.** The GPU transport is built with
+  `DROIDVM_VIRTIO_GPU_DYNAMIC=1` (Droid-VM's own switch: buffers allocated at start): the hosted kernel's `__DATA` is
+  1.6 MB again (`0x188000`; was 10.4 MB), checked on a full `HOSTED_OUT=gpu` build with the series as of today
+  (`0001 0003 0002 0005 0006 0004 0007`). Delivery stays (a): in the hosted kernel, nothing for the fileset. The
+  accelerator binds to IOGPUFamily's `IOAcceleratorES`, so AGXG18P stays out; the iPhone18,2 plan for it is not written.

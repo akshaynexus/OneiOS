@@ -124,6 +124,9 @@ Delivered in the hosted kernel, not as a kext:
   build's device repository and adds `liboneiosgpu.a` to the force-loaded archives). It compiles `gpu/OneiOSGpu.cpp`
   and, unchanged from `external/UniXNU-droidvm/package/`, `DroidVMVirtioGpu.cpp` (the transport) and
   `DroidVMVirtioGpu3D.cpp` (contexts, blobs over guest pages, fenced submissions, `droidvm_virtgpu_call`).
+- The transport is compiled with `DROIDVM_VIRTIO_GPU_DYNAMIC=1`: its queues and command buffers (about 9 MB) are one
+  wired allocation at start, not kernel bss. With them in bss the kernel's `__DATA` was 10.4 MB and did not fit the
+  collection's stock layout (fable-prelink); it is 1.6 MB now.
 - Boot arguments: `vgpu-3d=0` leaves the 3D half off; `vgpu-selftest=1` runs one context through the host at boot
   and logs the stage it reached (`oneios-gpu: selftest stage 8 ...` is the whole way: capset, context, response
   buffer mapped from the pool, `GET_PARAM(GPU_ID)` answered).
@@ -147,7 +150,11 @@ Checked: `HOSTED_OUT=gpu kernel/build-hosted.sh` from scratch builds and seals t
    reviewed inputs of one kernelcache (`build-adreno740-accelerator.py`, iPad17,3: class sizes, bound addresses in
    IOGPUFamily) and needs three XNU patches of its board (`OSMetaClassAdoptSuperclass`, the sandbox grant,
    `native_pmap_user_mappings`). For iPhone18,2 the inputs must be redone against the kernelcache in
-   `kernel/prelink/` and IOGPUFamily must be in `kernel.kc`. Until then no iOS process can open the GPU.
+   `kernel/prelink/`. Until then no iOS process can open the GPU. From fable-prelink (2026-11-10): IOGPUFamily is in
+   `kernel.kc`; the accelerator binds to its `IOAcceleratorES` base class, so Apple's `AGXG18P` (left out of the
+   collection) is not needed; kext entries carry no symbols, so the metaclass, constructor, destructor and class size
+   have to be read from `out/kernel-inputs/24A446/kernelcache.macho` as Droid-VM's
+   `scripts/data/ioaccelerator-base-abi-24A446.json` records them for the iPad.
 3. **The Metal plug-in.** `userland/roottweak` already places `out/userland/NativeAdrenoMetal.bundle` at
    `/System/Library/Extensions/` and records it in the contract (`metal`); the bundle itself (NativeMetal b0d6a07,
    metal2vulkan + patches, Turnip's darwin backend) needs a Mac to build and its QuartzCore hooks redone for the

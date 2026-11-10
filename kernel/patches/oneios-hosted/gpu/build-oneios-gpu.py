@@ -95,7 +95,9 @@ def main():
     objects = []
     for source in SOURCES:
         obj = out / (source.stem + '.o')
-        result = compile_one(drivers, record, source, obj, ['-I', str(PACKAGE), '-I', str(ADRENO)])
+        # DYNAMIC: the transport's queues and command buffers (about 9 MB) are allocated at start, not kernel bss: with
+        # them in __DATA the kernel no longer fits the collection's stock layout (kernel/prelink, the board's Q7).
+        result = compile_one(drivers, record, source, obj, ['-I', str(PACKAGE), '-I', str(ADRENO), '-DDROIDVM_VIRTIO_GPU_DYNAMIC=1'])
         if result.returncode:
             sys.stderr.write(result.stderr[-6000:])
             sys.exit(f'build-oneios-gpu: {source.name} did not compile')
