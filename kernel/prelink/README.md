@@ -126,8 +126,8 @@ Debugging: `qemu-aarch64 -g PORT` and gdb (`set architecture aarch64`, `target r
 is at 0x2000004000, so an original address A is at A - 0xfffffe0007004000 + 0x2000004000.
 
 Pairing: the matcher with the reference, the inferred pairs (order, structors and factories, slots, kernel class
-objects), 564 functions and 26 data reviewed by hand here, the lead's and fable-user's records (below), and
-50 carried over from XnuPrelink's iPad fixture. 268 original functions that kexts reference are on the panic stub
+objects), 615 functions and 27 data reviewed by hand here, the lead's and fable-user's records (below), and
+50 carried over from XnuPrelink's iPad fixture. 223 original functions that kexts reference are on the panic stub
 and 18 data targets are unpaired; `kernel.kc.build.json` lists them per kext.
 
 ## Records of several agents, and the import-order check
@@ -135,19 +135,29 @@ and 18 data targets are unpaired; `kernel.kc.build.json` lists them per kext.
 - `reviewed-24A446-v54.json` is fable-prelink's. The lead keeps `lead/reviewed-lead-24A446-v54.json` and fable-user
   `user/reviewed-user-24A446-v54.json` (functions only). `build.sh` merges them for each build
   (`merge-reviewed.py`, into `work/reviewed.merged.json`): the owner's record wins for an original both have, and
-  every disagreement is printed and written under `merge.disagreements`. Today three are left, and in each the
-  code decides: `0xfffffe000ae04840` is `decmpfs_hides_xattr` (the 168-byte one of the two; the 48-byte one before
-  it is `hides_rsrc`), `0xfffffe000ade775c` tests I/O policy bit 15 of the context's process (not
-  `vfs_context_iskernel`; UniXNU's `vfs_context_iopolicy_unassigned_0x8000`), `0xfffffe000abd8788` is
-  `lck_ticket_destroy` (checks the type byte and clears it; imported directly before `lck_ticket_init`).
+  every disagreement is printed and written under `merge.disagreements`. There is none today: the three of
+  2026-11-11 were settled with the lead by the code (`0xfffffe000abd8788` is `lck_ticket_destroy`,
+  `0xfffffe000ae04840` is `decmpfs_hides_xattr`, `0xfffffe000ade775c` tests I/O policy bit 15 and is bound to
+  UniXNU's `vfs_context_iopolicy_unassigned_0x8000`; the lead dropped its records in `99fbf4b`).
 - **Import order** (the lead's `lead/imports.py`): a kext's `__auth_got` is sorted by imported symbol name, in runs
   (one per library it links). A paired name that sits out of order between two neighbours that are in order with
-  each other is wrong, or an alias. On 2026-11-11 this check found 53 such names in the map; the ones on the boot
-  path are corrected by reviewed records (three of my own records, the vnode type tests, the publish notification
-  symbols, `psignal_sigkill_*`, `cs_blob_reset_cache`, `socd_client_trace`, `MD5Init`, `OSObject::metaClass`).
-  Most of the rest are the matcher's `pure-leaf` pairs: functions whose whole body is `ret` or `mov w0, #N; ret`
-  given to some other function with the same body. Those behave the same whatever their name, as long as this
-  kernel's function of the real name also only returns that constant; that is not checked.
+  each other is wrong, or an alias. On 2026-11-11 this check found 53 such names in the map. Corrected by reviewed
+  records since: three of my own records, the vnode type tests, the publish notification symbols,
+  `psignal_sigkill_*`, `cs_blob_reset_cache`, `socd_client_trace`, `MD5Init`, `OSObject::metaClass`,
+  `cluster_push`, `ifnet_hdrlen`/`ifnet_set_hdrlen`, `ifaddr_findbestforaddr`, `ml_get_max_cpu_number`,
+  `IODMAEventSource::dmaEventSource` (and its metaclass object), `ml_page_protection_type`,
+  `kern_packet_trace_event`, and the lead's (`rootdev`, `set/getMapperOptions`, `task_is_app_suspended`).
+  **Still out of order and left** (2026-11-11): `IOMemoryDescriptor::setOwnership` at `0xfffffe000b34e6a8` (two
+  tables put it among names after `IOBufferMemoryDescriptor`; probably another class's `setOwnership`, not
+  decided), `OSAction::SetAbortedHandler`/`Create_Impl` (DriverKit, not used here), the data `gIOCommandPoolSizeKey`
+  and `gIOKitDebug` (one table each), and 17 of the matcher's `pure-leaf` pairs: functions whose whole body is
+  `ret` or `mov w0, #N; ret` given to some other function with the same body. Those return what Apple's returned
+  whatever their name. One of them is deliberately left: `0xfffffe000ab827b8` returns 0 and is imported by 17
+  kexts where `kern_config_is_development` sorts; bound to this DEVELOPMENT kernel's function it would answer
+  true and switch the kexts' debug paths on.
+- Not paired on purpose: `0xfffffe000abcf114` (AMFI, IOSurface; frees through a zone *view* in x0 where this
+  source's `kern_os_zfree` takes a zone: the argument differs, so it stays on the stub until a caller shows what
+  it passes) and `0xfffffe000b0dbf28` (sandbox; no counterpart in this source).
 - Pairing ahead of the boot: for an unpaired import, the names between its neighbours in every table that has it
   are the candidates (`imports.py` prints them); the code picks among them. A boot on the PC costs about ten
   minutes to the first user process, so a batch is paired this way and then confirmed with one boot.

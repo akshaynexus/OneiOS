@@ -26,6 +26,396 @@
  ],
  "functions": [
   {
+   "original": "0xfffffe000ad58f54",
+   "native_symbol": "_ml_mcache_flush_callback_register",
+   "check": {
+    "address": "0xfffffe000ad58f54",
+    "size": 28,
+    "sha256": "11d5bfcdb97166b16e39dd49d115ab78ff68a2712a91f5d87d484c6c1dc3b017"
+   },
+   "evidence": "osfmk/arm64/machine_routines.c, the CPU topology getters in source order between the paired ml_get_cpu_count (the count at +604 of the topology) and ml_get_max_cpu_number (+608): ml_get_boot_cpu_number (the first field of the boot CPU's record, through the pointer at +648); ml_get_cpu_number(phys_id) and ml_get_cluster_number(phys_id) walk the CPU array (+632, 136-byte records) comparing the 16-bit physical id at +4 and return the record's CPU id or cluster id, -1 when there is none; ml_get_cpu_number_local and ml_get_cluster_number_local are the same two with the id taken from MPIDR_EL1. After ml_get_max_cpu_number: ml_lockdown_handler_register (calls the handler with its argument at once, the system being locked down) and ml_mcache_flush_callback_register (stores the function and the service in two globals, returns 0). AppleARMPlatform calls ml_get_cpu_number at start on a run with eight CPUs."
+  },
+  {
+   "original": "0xfffffe000ad58f18",
+   "native_symbol": "_ml_lockdown_handler_register",
+   "check": {
+    "address": "0xfffffe000ad58f18",
+    "size": 60,
+    "sha256": "7cd8b12426072bf68bd5d92af031ba5fe262174c9e65c3f7f1f053940b7f0873"
+   },
+   "evidence": "osfmk/arm64/machine_routines.c, the CPU topology getters in source order between the paired ml_get_cpu_count (the count at +604 of the topology) and ml_get_max_cpu_number (+608): ml_get_boot_cpu_number (the first field of the boot CPU's record, through the pointer at +648); ml_get_cpu_number(phys_id) and ml_get_cluster_number(phys_id) walk the CPU array (+632, 136-byte records) comparing the 16-bit physical id at +4 and return the record's CPU id or cluster id, -1 when there is none; ml_get_cpu_number_local and ml_get_cluster_number_local are the same two with the id taken from MPIDR_EL1. After ml_get_max_cpu_number: ml_lockdown_handler_register (calls the handler with its argument at once, the system being locked down) and ml_mcache_flush_callback_register (stores the function and the service in two globals, returns 0). AppleARMPlatform calls ml_get_cpu_number at start on a run with eight CPUs."
+  },
+  {
+   "original": "0xfffffe000ad58e88",
+   "native_symbol": "_ml_get_cluster_number_local",
+   "check": {
+    "address": "0xfffffe000ad58e88",
+    "size": 128,
+    "sha256": "ad2deb623b82a48f8b1c485e20d6646f61575c19c1f646d93f16b44e1e27b5f4"
+   },
+   "evidence": "osfmk/arm64/machine_routines.c, the CPU topology getters in source order between the paired ml_get_cpu_count (the count at +604 of the topology) and ml_get_max_cpu_number (+608): ml_get_boot_cpu_number (the first field of the boot CPU's record, through the pointer at +648); ml_get_cpu_number(phys_id) and ml_get_cluster_number(phys_id) walk the CPU array (+632, 136-byte records) comparing the 16-bit physical id at +4 and return the record's CPU id or cluster id, -1 when there is none; ml_get_cpu_number_local and ml_get_cluster_number_local are the same two with the id taken from MPIDR_EL1. After ml_get_max_cpu_number: ml_lockdown_handler_register (calls the handler with its argument at once, the system being locked down) and ml_mcache_flush_callback_register (stores the function and the service in two globals, returns 0). AppleARMPlatform calls ml_get_cpu_number at start on a run with eight CPUs."
+  },
+  {
+   "original": "0xfffffe000ad58e2c",
+   "native_symbol": "_ml_get_cpu_number_local",
+   "check": {
+    "address": "0xfffffe000ad58e2c",
+    "size": 92,
+    "sha256": "6bdebe889167143cb4c5dadc7f4c5401259669ebc5bf47695887e65c4027cd11"
+   },
+   "evidence": "osfmk/arm64/machine_routines.c, the CPU topology getters in source order between the paired ml_get_cpu_count (the count at +604 of the topology) and ml_get_max_cpu_number (+608): ml_get_boot_cpu_number (the first field of the boot CPU's record, through the pointer at +648); ml_get_cpu_number(phys_id) and ml_get_cluster_number(phys_id) walk the CPU array (+632, 136-byte records) comparing the 16-bit physical id at +4 and return the record's CPU id or cluster id, -1 when there is none; ml_get_cpu_number_local and ml_get_cluster_number_local are the same two with the id taken from MPIDR_EL1. After ml_get_max_cpu_number: ml_lockdown_handler_register (calls the handler with its argument at once, the system being locked down) and ml_mcache_flush_callback_register (stores the function and the service in two globals, returns 0). AppleARMPlatform calls ml_get_cpu_number at start on a run with eight CPUs."
+  },
+  {
+   "original": "0xfffffe000ad58db0",
+   "native_symbol": "_ml_get_cluster_number",
+   "check": {
+    "address": "0xfffffe000ad58db0",
+    "size": 124,
+    "sha256": "ed2a4cc35f82d891bf9c3459789bacb974d74cb30c4d132cff6cd03118b28937"
+   },
+   "evidence": "osfmk/arm64/machine_routines.c, the CPU topology getters in source order between the paired ml_get_cpu_count (the count at +604 of the topology) and ml_get_max_cpu_number (+608): ml_get_boot_cpu_number (the first field of the boot CPU's record, through the pointer at +648); ml_get_cpu_number(phys_id) and ml_get_cluster_number(phys_id) walk the CPU array (+632, 136-byte records) comparing the 16-bit physical id at +4 and return the record's CPU id or cluster id, -1 when there is none; ml_get_cpu_number_local and ml_get_cluster_number_local are the same two with the id taken from MPIDR_EL1. After ml_get_max_cpu_number: ml_lockdown_handler_register (calls the handler with its argument at once, the system being locked down) and ml_mcache_flush_callback_register (stores the function and the service in two globals, returns 0). AppleARMPlatform calls ml_get_cpu_number at start on a run with eight CPUs."
+  },
+  {
+   "original": "0xfffffe000ad58d54",
+   "native_symbol": "_ml_get_cpu_number",
+   "check": {
+    "address": "0xfffffe000ad58d54",
+    "size": 92,
+    "sha256": "6c29ebb64a26d102a035a16b2207f247e73ba7267ecef18741629facfc2464ec"
+   },
+   "evidence": "osfmk/arm64/machine_routines.c, the CPU topology getters in source order between the paired ml_get_cpu_count (the count at +604 of the topology) and ml_get_max_cpu_number (+608): ml_get_boot_cpu_number (the first field of the boot CPU's record, through the pointer at +648); ml_get_cpu_number(phys_id) and ml_get_cluster_number(phys_id) walk the CPU array (+632, 136-byte records) comparing the 16-bit physical id at +4 and return the record's CPU id or cluster id, -1 when there is none; ml_get_cpu_number_local and ml_get_cluster_number_local are the same two with the id taken from MPIDR_EL1. After ml_get_max_cpu_number: ml_lockdown_handler_register (calls the handler with its argument at once, the system being locked down) and ml_mcache_flush_callback_register (stores the function and the service in two globals, returns 0). AppleARMPlatform calls ml_get_cpu_number at start on a run with eight CPUs."
+  },
+  {
+   "original": "0xfffffe000ad58d40",
+   "native_symbol": "_ml_get_boot_cpu_number",
+   "check": {
+    "address": "0xfffffe000ad58d40",
+    "size": 20,
+    "sha256": "c6d128983c9e6ce93b496319d0dc3e43684aedd31e96595603865540ccc473c8"
+   },
+   "evidence": "osfmk/arm64/machine_routines.c, the CPU topology getters in source order between the paired ml_get_cpu_count (the count at +604 of the topology) and ml_get_max_cpu_number (+608): ml_get_boot_cpu_number (the first field of the boot CPU's record, through the pointer at +648); ml_get_cpu_number(phys_id) and ml_get_cluster_number(phys_id) walk the CPU array (+632, 136-byte records) comparing the 16-bit physical id at +4 and return the record's CPU id or cluster id, -1 when there is none; ml_get_cpu_number_local and ml_get_cluster_number_local are the same two with the id taken from MPIDR_EL1. After ml_get_max_cpu_number: ml_lockdown_handler_register (calls the handler with its argument at once, the system being locked down) and ml_mcache_flush_callback_register (stores the function and the service in two globals, returns 0). AppleARMPlatform calls ml_get_cpu_number at start on a run with eight CPUs."
+  },
+  {
+   "original": "0xfffffe000ad58d30",
+   "native_symbol": "_ml_get_cpu_count",
+   "check": {
+    "address": "0xfffffe000ad58d30",
+    "size": 16,
+    "sha256": "94fc7e1c122858ae85d24e6e01940f9ea0df227632d1f71f6d42a80e7fc2f3a2"
+   },
+   "evidence": "osfmk/arm64/machine_routines.c: returns the 32-bit field of the CPU topology at +604, the one before the field ml_get_max_cpu_number (0xfffffe000ad58f08) returns; AppleARMPlatform imports it between ml_cpu_signal and ml_get_interrupts_enabled in its name-sorted table, where ml_get_cpu_count sorts, and calls it at start on a run with more than one CPU."
+  },
+  {
+   "original": "0xfffffe000ae8cc78",
+   "native_symbol": "_ifnet_set_wake_flags",
+   "check": {
+    "address": "0xfffffe000ae8cc78",
+    "size": 272,
+    "sha256": "43da87243ceb375b54447a7995fdaf9053dedfd8be429fd33f84dedd39aa1173"
+   },
+   "evidence": "By the kexts' name-sorted import tables and the code. OSArray::replaceObject(unsigned, OSSharedPtr const &): loads the pointer inside the shared pointer and calls the virtual replaceObject at slot 256; the one function among the free names between OSArray::withCapacity and OSArray::setObject(OSSharedPtr). ifnet_set_wake_flags: the one function among the free names between ifnet_set_tso_mtu and ifnet_softc (the other is a lock group)."
+  },
+  {
+   "original": "0xfffffe000b26adf4",
+   "native_symbol": "__ZN7OSArray13replaceObjectEjRK11OSSharedPtrIK15OSMetaClassBaseE",
+   "check": {
+    "address": "0xfffffe000b26adf4",
+    "size": 56,
+    "sha256": "ee6e8086fe6def602316636eb34ff0fa4d21f8effb7fbaa86f74bd07c2b65dd0"
+   },
+   "evidence": "By the kexts' name-sorted import tables and the code. OSArray::replaceObject(unsigned, OSSharedPtr const &): loads the pointer inside the shared pointer and calls the virtual replaceObject at slot 256; the one function among the free names between OSArray::withCapacity and OSArray::setObject(OSSharedPtr). ifnet_set_wake_flags: the one function among the free names between ifnet_set_tso_mtu and ifnet_softc (the other is a lock group)."
+  },
+  {
+   "original": "0xfffffe000ae8cb7c",
+   "native_symbol": "_ifnet_set_tso_mtu",
+   "check": {
+    "address": "0xfffffe000ae8cb7c",
+    "size": 148,
+    "sha256": "dd801d42061b2f85e0b96fdca8b49b08ddb3a3bd2ee6765c6449d8d571cac589"
+   },
+   "evidence": "By the kexts' name-sorted import tables (the free exported names between each one's neighbours) and the code. Debugger: saves the return address as the fifth argument, clears the context and options, passes its message third and branches to the function after it (DebuggerWithContext); imported before IODelay. kern_channel_slot_get_packet (ring, slot: the slot's packet unless its flag bit 1 is set), kern_channel_slot_attach_packet (links packet and slot both ways) and kern_channel_slot_detach_packet (clears the links), in that order. kern_buflet_get_object_address returns the buffer object's address (+8) after checking its limit; kern_buflet_set_data_address stores an address not below the object's; kern_buflet_set_buffer_offset checks a 32-bit offset against the object's limit. ifnet_set_tso_mtu: (interface, family, 32-bit length that must fit 16 bits and not be below the interface's MTU), EINVAL otherwise. IOSkywalkFamily and IONetworkingFamily import them."
+  },
+  {
+   "original": "0xfffffe000b259a24",
+   "native_symbol": "_kern_buflet_set_buffer_offset",
+   "check": {
+    "address": "0xfffffe000b259a24",
+    "size": 52,
+    "sha256": "f987c7f5095c2d74d013258f6dcc2593c30edfbbcb32dda1dbce83371352588d"
+   },
+   "evidence": "By the kexts' name-sorted import tables (the free exported names between each one's neighbours) and the code. Debugger: saves the return address as the fifth argument, clears the context and options, passes its message third and branches to the function after it (DebuggerWithContext); imported before IODelay. kern_channel_slot_get_packet (ring, slot: the slot's packet unless its flag bit 1 is set), kern_channel_slot_attach_packet (links packet and slot both ways) and kern_channel_slot_detach_packet (clears the links), in that order. kern_buflet_get_object_address returns the buffer object's address (+8) after checking its limit; kern_buflet_set_data_address stores an address not below the object's; kern_buflet_set_buffer_offset checks a 32-bit offset against the object's limit. ifnet_set_tso_mtu: (interface, family, 32-bit length that must fit 16 bits and not be below the interface's MTU), EINVAL otherwise. IOSkywalkFamily and IONetworkingFamily import them."
+  },
+  {
+   "original": "0xfffffe000b2599f8",
+   "native_symbol": "_kern_buflet_set_data_address",
+   "check": {
+    "address": "0xfffffe000b2599f8",
+    "size": 44,
+    "sha256": "c2f14690db4b5a2fa4bba6b7f54db5a9873fdc68da56b4ce08a3e2b304234856"
+   },
+   "evidence": "By the kexts' name-sorted import tables (the free exported names between each one's neighbours) and the code. Debugger: saves the return address as the fifth argument, clears the context and options, passes its message third and branches to the function after it (DebuggerWithContext); imported before IODelay. kern_channel_slot_get_packet (ring, slot: the slot's packet unless its flag bit 1 is set), kern_channel_slot_attach_packet (links packet and slot both ways) and kern_channel_slot_detach_packet (clears the links), in that order. kern_buflet_get_object_address returns the buffer object's address (+8) after checking its limit; kern_buflet_set_data_address stores an address not below the object's; kern_buflet_set_buffer_offset checks a 32-bit offset against the object's limit. ifnet_set_tso_mtu: (interface, family, 32-bit length that must fit 16 bits and not be below the interface's MTU), EINVAL otherwise. IOSkywalkFamily and IONetworkingFamily import them."
+  },
+  {
+   "original": "0xfffffe000b2599a0",
+   "native_symbol": "_kern_buflet_get_object_address",
+   "check": {
+    "address": "0xfffffe000b2599a0",
+    "size": 32,
+    "sha256": "838b956a9f0b892e8483c1b98d29a70b1735f9c5bc7df4fecd45f082a5f0f6d5"
+   },
+   "evidence": "By the kexts' name-sorted import tables (the free exported names between each one's neighbours) and the code. Debugger: saves the return address as the fifth argument, clears the context and options, passes its message third and branches to the function after it (DebuggerWithContext); imported before IODelay. kern_channel_slot_get_packet (ring, slot: the slot's packet unless its flag bit 1 is set), kern_channel_slot_attach_packet (links packet and slot both ways) and kern_channel_slot_detach_packet (clears the links), in that order. kern_buflet_get_object_address returns the buffer object's address (+8) after checking its limit; kern_buflet_set_data_address stores an address not below the object's; kern_buflet_set_buffer_offset checks a 32-bit offset against the object's limit. ifnet_set_tso_mtu: (interface, family, 32-bit length that must fit 16 bits and not be below the interface's MTU), EINVAL otherwise. IOSkywalkFamily and IONetworkingFamily import them."
+  },
+  {
+   "original": "0xfffffe000b1c65a0",
+   "native_symbol": "_kern_channel_slot_detach_packet",
+   "check": {
+    "address": "0xfffffe000b1c65a0",
+    "size": 128,
+    "sha256": "b872fa3199bacf85c60d942693ec77d30354ac5fed8ed960636c105b979d7974"
+   },
+   "evidence": "By the kexts' name-sorted import tables (the free exported names between each one's neighbours) and the code. Debugger: saves the return address as the fifth argument, clears the context and options, passes its message third and branches to the function after it (DebuggerWithContext); imported before IODelay. kern_channel_slot_get_packet (ring, slot: the slot's packet unless its flag bit 1 is set), kern_channel_slot_attach_packet (links packet and slot both ways) and kern_channel_slot_detach_packet (clears the links), in that order. kern_buflet_get_object_address returns the buffer object's address (+8) after checking its limit; kern_buflet_set_data_address stores an address not below the object's; kern_buflet_set_buffer_offset checks a 32-bit offset against the object's limit. ifnet_set_tso_mtu: (interface, family, 32-bit length that must fit 16 bits and not be below the interface's MTU), EINVAL otherwise. IOSkywalkFamily and IONetworkingFamily import them."
+  },
+  {
+   "original": "0xfffffe000b1c6540",
+   "native_symbol": "_kern_channel_slot_attach_packet",
+   "check": {
+    "address": "0xfffffe000b1c6540",
+    "size": 96,
+    "sha256": "547f3fb910ac5f4f8fa311a610537ecaa030d666cd4834fd08eafbc58f73228e"
+   },
+   "evidence": "By the kexts' name-sorted import tables (the free exported names between each one's neighbours) and the code. Debugger: saves the return address as the fifth argument, clears the context and options, passes its message third and branches to the function after it (DebuggerWithContext); imported before IODelay. kern_channel_slot_get_packet (ring, slot: the slot's packet unless its flag bit 1 is set), kern_channel_slot_attach_packet (links packet and slot both ways) and kern_channel_slot_detach_packet (clears the links), in that order. kern_buflet_get_object_address returns the buffer object's address (+8) after checking its limit; kern_buflet_set_data_address stores an address not below the object's; kern_buflet_set_buffer_offset checks a 32-bit offset against the object's limit. ifnet_set_tso_mtu: (interface, family, 32-bit length that must fit 16 bits and not be below the interface's MTU), EINVAL otherwise. IOSkywalkFamily and IONetworkingFamily import them."
+  },
+  {
+   "original": "0xfffffe000b1c651c",
+   "native_symbol": "_kern_channel_slot_get_packet",
+   "check": {
+    "address": "0xfffffe000b1c651c",
+    "size": 36,
+    "sha256": "7b40f5619dae80fae30f2ef07f5c94447e194eb5b4825904727d26e1549e7b46"
+   },
+   "evidence": "By the kexts' name-sorted import tables (the free exported names between each one's neighbours) and the code. Debugger: saves the return address as the fifth argument, clears the context and options, passes its message third and branches to the function after it (DebuggerWithContext); imported before IODelay. kern_channel_slot_get_packet (ring, slot: the slot's packet unless its flag bit 1 is set), kern_channel_slot_attach_packet (links packet and slot both ways) and kern_channel_slot_detach_packet (clears the links), in that order. kern_buflet_get_object_address returns the buffer object's address (+8) after checking its limit; kern_buflet_set_data_address stores an address not below the object's; kern_buflet_set_buffer_offset checks a 32-bit offset against the object's limit. ifnet_set_tso_mtu: (interface, family, 32-bit length that must fit 16 bits and not be below the interface's MTU), EINVAL otherwise. IOSkywalkFamily and IONetworkingFamily import them."
+  },
+  {
+   "original": "0xfffffe000ab8c028",
+   "native_symbol": "_Debugger",
+   "check": {
+    "address": "0xfffffe000ab8c028",
+    "size": 28,
+    "sha256": "b3207424818c6af443bc79a2b1cfc4868e4ad1a7739d6d6bc721b8a3019a1b8b"
+   },
+   "evidence": "By the kexts' name-sorted import tables (the free exported names between each one's neighbours) and the code. Debugger: saves the return address as the fifth argument, clears the context and options, passes its message third and branches to the function after it (DebuggerWithContext); imported before IODelay. kern_channel_slot_get_packet (ring, slot: the slot's packet unless its flag bit 1 is set), kern_channel_slot_attach_packet (links packet and slot both ways) and kern_channel_slot_detach_packet (clears the links), in that order. kern_buflet_get_object_address returns the buffer object's address (+8) after checking its limit; kern_buflet_set_data_address stores an address not below the object's; kern_buflet_set_buffer_offset checks a 32-bit offset against the object's limit. ifnet_set_tso_mtu: (interface, family, 32-bit length that must fit 16 bits and not be below the interface's MTU), EINVAL otherwise. IOSkywalkFamily and IONetworkingFamily import them."
+  },
+  {
+   "original": "0xfffffe000b391b04",
+   "native_symbol": "__ZN14IOReportLegend14addLegendEntryEP12OSDictionaryPKcS3_",
+   "check": {
+    "address": "0xfffffe000b391b04",
+    "size": 140,
+    "sha256": "0851217d205f7ab04cc3ec8c947b3dd163209093fe89945edef8062d11e468a8"
+   },
+   "evidence": "By the kexts' name-sorted import tables and the code. vm_map_page_size: returns 1 shifted by the map's page shift byte (+44), or by 14 for a NULL map; between vm_map_page_mask and vm_map_trunc_page_mask. IOReportLegend::addLegendEntry: the public one of the two IOReportLegend exports between IOPMrootDomain::copyWakeReasonString and IOReportLegend::addReporterLegend; (this, dictionary, group, subgroup) with a NULL check of the dictionary; 14 kexts."
+  },
+  {
+   "original": "0xfffffe000aca4eb0",
+   "native_symbol": "_vm_map_page_size",
+   "check": {
+    "address": "0xfffffe000aca4eb0",
+    "size": 32,
+    "sha256": "5fb51dd740f43c93bdf2a80fe754b033423025c869862799b89c4b5b92f72325"
+   },
+   "evidence": "By the kexts' name-sorted import tables and the code. vm_map_page_size: returns 1 shifted by the map's page shift byte (+44), or by 14 for a NULL map; between vm_map_page_mask and vm_map_trunc_page_mask. IOReportLegend::addLegendEntry: the public one of the two IOReportLegend exports between IOPMrootDomain::copyWakeReasonString and IOReportLegend::addReporterLegend; (this, dictionary, group, subgroup) with a NULL check of the dictionary; 14 kexts."
+  },
+  {
+   "original": "0xfffffe000b38ec44",
+   "native_symbol": "__ZN15IOStateReporter10setStateIDEyiy",
+   "check": {
+    "address": "0xfffffe000b38ec44",
+    "size": 132,
+    "sha256": "24eb5f3497c34239c6d0e5e81589c36ac6ab97d0b431eb1cb15f494c25c99905"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py gives the bounds and the free exported names between them) and the code. ml_set_interrupts_enabled (31 kexts): a bare branch to the function before it, which already has that name by the matcher (the body); imported after ml_processor_register. The base destructors of IOMemoryDescriptor, IOMultiMemoryDescriptor and IOSubMemoryDescriptor: each stores its class's vtable and frees the reserved data at +24, and is imported directly after the class's C2EPK11OSMetaClass. semaphore_timedwait: NULL check, then the nanoseconds of a mach_timespec in the second argument against 999999999 (KERN_INVALID_VALUE otherwise); two arguments. buf_kernel_addrperm_addr: the address permutation of its argument (0 stays 0). IOStateReporter: getStateInTransitions, getStateResidencyTime and getStateLastTransitionTime pass selectors 0, 1 and 2 to the common getter; setStateByIndices takes two integers; setStateID takes three arguments and sorts before setChannelState (12 kexts)."
+  },
+  {
+   "original": "0xfffffe000b38ecc8",
+   "native_symbol": "__ZN15IOStateReporter17setStateByIndicesEii",
+   "check": {
+    "address": "0xfffffe000b38ecc8",
+    "size": 132,
+    "sha256": "e715f90896360a24df35e3c1049aa9ef997aed38cbd5b11737bb61cb0a0bd3bb"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py gives the bounds and the free exported names between them) and the code. ml_set_interrupts_enabled (31 kexts): a bare branch to the function before it, which already has that name by the matcher (the body); imported after ml_processor_register. The base destructors of IOMemoryDescriptor, IOMultiMemoryDescriptor and IOSubMemoryDescriptor: each stores its class's vtable and frees the reserved data at +24, and is imported directly after the class's C2EPK11OSMetaClass. semaphore_timedwait: NULL check, then the nanoseconds of a mach_timespec in the second argument against 999999999 (KERN_INVALID_VALUE otherwise); two arguments. buf_kernel_addrperm_addr: the address permutation of its argument (0 stays 0). IOStateReporter: getStateInTransitions, getStateResidencyTime and getStateLastTransitionTime pass selectors 0, 1 and 2 to the common getter; setStateByIndices takes two integers; setStateID takes three arguments and sorts before setChannelState (12 kexts)."
+  },
+  {
+   "original": "0xfffffe000b38ef2c",
+   "native_symbol": "__ZN15IOStateReporter26getStateLastTransitionTimeEyy",
+   "check": {
+    "address": "0xfffffe000b38ef2c",
+    "size": 12,
+    "sha256": "1a0c977ad260ce985949f2df68bd36fed1a2f599213b34bfa393cd79b1613bb8"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py gives the bounds and the free exported names between them) and the code. ml_set_interrupts_enabled (31 kexts): a bare branch to the function before it, which already has that name by the matcher (the body); imported after ml_processor_register. The base destructors of IOMemoryDescriptor, IOMultiMemoryDescriptor and IOSubMemoryDescriptor: each stores its class's vtable and frees the reserved data at +24, and is imported directly after the class's C2EPK11OSMetaClass. semaphore_timedwait: NULL check, then the nanoseconds of a mach_timespec in the second argument against 999999999 (KERN_INVALID_VALUE otherwise); two arguments. buf_kernel_addrperm_addr: the address permutation of its argument (0 stays 0). IOStateReporter: getStateInTransitions, getStateResidencyTime and getStateLastTransitionTime pass selectors 0, 1 and 2 to the common getter; setStateByIndices takes two integers; setStateID takes three arguments and sorts before setChannelState (12 kexts)."
+  },
+  {
+   "original": "0xfffffe000b38ef20",
+   "native_symbol": "__ZN15IOStateReporter21getStateResidencyTimeEyy",
+   "check": {
+    "address": "0xfffffe000b38ef20",
+    "size": 12,
+    "sha256": "911532697378933b7aaa77a55707b8aa2c0a85104cd68e14bc653ad39c6ca57c"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py gives the bounds and the free exported names between them) and the code. ml_set_interrupts_enabled (31 kexts): a bare branch to the function before it, which already has that name by the matcher (the body); imported after ml_processor_register. The base destructors of IOMemoryDescriptor, IOMultiMemoryDescriptor and IOSubMemoryDescriptor: each stores its class's vtable and frees the reserved data at +24, and is imported directly after the class's C2EPK11OSMetaClass. semaphore_timedwait: NULL check, then the nanoseconds of a mach_timespec in the second argument against 999999999 (KERN_INVALID_VALUE otherwise); two arguments. buf_kernel_addrperm_addr: the address permutation of its argument (0 stays 0). IOStateReporter: getStateInTransitions, getStateResidencyTime and getStateLastTransitionTime pass selectors 0, 1 and 2 to the common getter; setStateByIndices takes two integers; setStateID takes three arguments and sorts before setChannelState (12 kexts)."
+  },
+  {
+   "original": "0xfffffe000b38edd0",
+   "native_symbol": "__ZN15IOStateReporter21getStateInTransitionsEyy",
+   "check": {
+    "address": "0xfffffe000b38edd0",
+    "size": 12,
+    "sha256": "fc6f7c0c2557b2070883206fc4291d2d57d292153d374f211ba35b96c4fa8b16"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py gives the bounds and the free exported names between them) and the code. ml_set_interrupts_enabled (31 kexts): a bare branch to the function before it, which already has that name by the matcher (the body); imported after ml_processor_register. The base destructors of IOMemoryDescriptor, IOMultiMemoryDescriptor and IOSubMemoryDescriptor: each stores its class's vtable and frees the reserved data at +24, and is imported directly after the class's C2EPK11OSMetaClass. semaphore_timedwait: NULL check, then the nanoseconds of a mach_timespec in the second argument against 999999999 (KERN_INVALID_VALUE otherwise); two arguments. buf_kernel_addrperm_addr: the address permutation of its argument (0 stays 0). IOStateReporter: getStateInTransitions, getStateResidencyTime and getStateLastTransitionTime pass selectors 0, 1 and 2 to the common getter; setStateByIndices takes two integers; setStateID takes three arguments and sorts before setChannelState (12 kexts)."
+  },
+  {
+   "original": "0xfffffe000ad95800",
+   "native_symbol": "_buf_kernel_addrperm_addr",
+   "check": {
+    "address": "0xfffffe000ad95800",
+    "size": 32,
+    "sha256": "70a8ab95f81715e4e09f7d1862c6e0eb253c8c056193a5cd942f348d5569f03f"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py gives the bounds and the free exported names between them) and the code. ml_set_interrupts_enabled (31 kexts): a bare branch to the function before it, which already has that name by the matcher (the body); imported after ml_processor_register. The base destructors of IOMemoryDescriptor, IOMultiMemoryDescriptor and IOSubMemoryDescriptor: each stores its class's vtable and frees the reserved data at +24, and is imported directly after the class's C2EPK11OSMetaClass. semaphore_timedwait: NULL check, then the nanoseconds of a mach_timespec in the second argument against 999999999 (KERN_INVALID_VALUE otherwise); two arguments. buf_kernel_addrperm_addr: the address permutation of its argument (0 stays 0). IOStateReporter: getStateInTransitions, getStateResidencyTime and getStateLastTransitionTime pass selectors 0, 1 and 2 to the common getter; setStateByIndices takes two integers; setStateID takes three arguments and sorts before setChannelState (12 kexts)."
+  },
+  {
+   "original": "0xfffffe000ac096e8",
+   "native_symbol": "_semaphore_timedwait",
+   "check": {
+    "address": "0xfffffe000ac096e8",
+    "size": 180,
+    "sha256": "e9bba8eb18184b6c195484e916622c6885fbff5e3df8404bc7cf717162c23208"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py gives the bounds and the free exported names between them) and the code. ml_set_interrupts_enabled (31 kexts): a bare branch to the function before it, which already has that name by the matcher (the body); imported after ml_processor_register. The base destructors of IOMemoryDescriptor, IOMultiMemoryDescriptor and IOSubMemoryDescriptor: each stores its class's vtable and frees the reserved data at +24, and is imported directly after the class's C2EPK11OSMetaClass. semaphore_timedwait: NULL check, then the nanoseconds of a mach_timespec in the second argument against 999999999 (KERN_INVALID_VALUE otherwise); two arguments. buf_kernel_addrperm_addr: the address permutation of its argument (0 stays 0). IOStateReporter: getStateInTransitions, getStateResidencyTime and getStateLastTransitionTime pass selectors 0, 1 and 2 to the common getter; setStateByIndices takes two integers; setStateID takes three arguments and sorts before setChannelState (12 kexts)."
+  },
+  {
+   "original": "0xfffffe000b352c44",
+   "native_symbol": "__ZN21IOSubMemoryDescriptorD2Ev",
+   "check": {
+    "address": "0xfffffe000b352c44",
+    "size": 124,
+    "sha256": "ebeaf3f055d214df3df2fc190ab4b338107a99471dfd71b2b52c4923161c3ed8"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py gives the bounds and the free exported names between them) and the code. ml_set_interrupts_enabled (31 kexts): a bare branch to the function before it, which already has that name by the matcher (the body); imported after ml_processor_register. The base destructors of IOMemoryDescriptor, IOMultiMemoryDescriptor and IOSubMemoryDescriptor: each stores its class's vtable and frees the reserved data at +24, and is imported directly after the class's C2EPK11OSMetaClass. semaphore_timedwait: NULL check, then the nanoseconds of a mach_timespec in the second argument against 999999999 (KERN_INVALID_VALUE otherwise); two arguments. buf_kernel_addrperm_addr: the address permutation of its argument (0 stays 0). IOStateReporter: getStateInTransitions, getStateResidencyTime and getStateLastTransitionTime pass selectors 0, 1 and 2 to the common getter; setStateByIndices takes two integers; setStateID takes three arguments and sorts before setChannelState (12 kexts)."
+  },
+  {
+   "original": "0xfffffe000b350540",
+   "native_symbol": "__ZN23IOMultiMemoryDescriptorD2Ev",
+   "check": {
+    "address": "0xfffffe000b350540",
+    "size": 124,
+    "sha256": "80bf283290165a8b384e9196b4d5225eab026d1e269cb37b0bfa1a639aabc5bc"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py gives the bounds and the free exported names between them) and the code. ml_set_interrupts_enabled (31 kexts): a bare branch to the function before it, which already has that name by the matcher (the body); imported after ml_processor_register. The base destructors of IOMemoryDescriptor, IOMultiMemoryDescriptor and IOSubMemoryDescriptor: each stores its class's vtable and frees the reserved data at +24, and is imported directly after the class's C2EPK11OSMetaClass. semaphore_timedwait: NULL check, then the nanoseconds of a mach_timespec in the second argument against 999999999 (KERN_INVALID_VALUE otherwise); two arguments. buf_kernel_addrperm_addr: the address permutation of its argument (0 stays 0). IOStateReporter: getStateInTransitions, getStateResidencyTime and getStateLastTransitionTime pass selectors 0, 1 and 2 to the common getter; setStateByIndices takes two integers; setStateID takes three arguments and sorts before setChannelState (12 kexts)."
+  },
+  {
+   "original": "0xfffffe000b34d0e0",
+   "native_symbol": "__ZN18IOMemoryDescriptorD2Ev",
+   "check": {
+    "address": "0xfffffe000b34d0e0",
+    "size": 124,
+    "sha256": "4d06644a8c3523ab73e6ff0eb47d755554635b57fe2877f0c959cb3e6d4fd809"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py gives the bounds and the free exported names between them) and the code. ml_set_interrupts_enabled (31 kexts): a bare branch to the function before it, which already has that name by the matcher (the body); imported after ml_processor_register. The base destructors of IOMemoryDescriptor, IOMultiMemoryDescriptor and IOSubMemoryDescriptor: each stores its class's vtable and frees the reserved data at +24, and is imported directly after the class's C2EPK11OSMetaClass. semaphore_timedwait: NULL check, then the nanoseconds of a mach_timespec in the second argument against 999999999 (KERN_INVALID_VALUE otherwise); two arguments. buf_kernel_addrperm_addr: the address permutation of its argument (0 stays 0). IOStateReporter: getStateInTransitions, getStateResidencyTime and getStateLastTransitionTime pass selectors 0, 1 and 2 to the common getter; setStateByIndices takes two integers; setStateID takes three arguments and sorts before setChannelState (12 kexts)."
+  },
+  {
+   "original": "0xfffffe000ad56bd4",
+   "native_symbol": "_ml_set_interrupts_enabled",
+   "check": {
+    "address": "0xfffffe000ad56bd4",
+    "size": 8,
+    "sha256": "9c01496cb2ebace194de9f020b6865e662157f70002c2aa443473f1c319108f7"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py gives the bounds and the free exported names between them) and the code. ml_set_interrupts_enabled (31 kexts): a bare branch to the function before it, which already has that name by the matcher (the body); imported after ml_processor_register. The base destructors of IOMemoryDescriptor, IOMultiMemoryDescriptor and IOSubMemoryDescriptor: each stores its class's vtable and frees the reserved data at +24, and is imported directly after the class's C2EPK11OSMetaClass. semaphore_timedwait: NULL check, then the nanoseconds of a mach_timespec in the second argument against 999999999 (KERN_INVALID_VALUE otherwise); two arguments. buf_kernel_addrperm_addr: the address permutation of its argument (0 stays 0). IOStateReporter: getStateInTransitions, getStateResidencyTime and getStateLastTransitionTime pass selectors 0, 1 and 2 to the common getter; setStateByIndices takes two integers; setStateID takes three arguments and sorts before setChannelState (12 kexts)."
+  },
+  {
+   "original": "0xfffffe000b259acc",
+   "native_symbol": "_kern_packet_trace_event",
+   "check": {
+    "address": "0xfffffe000b259acc",
+    "size": 8,
+    "sha256": "d33fdb74881bcff46b1cf4fc3e20479b1882e0e683789e80e6d650554066a1aa"
+   },
+   "evidence": "Import-table order check, pure-leaf pairs given their own names. ml_page_protection_type: returns the constant 2 (the page protection monitor of this phone); imported by IODARTFamily, IONVMeFamily and AppleOnboardSerial after ml_get_interrupts_enabled and before nanoseconds_to_absolutetime; the matcher had given it another function that returns 2. Bound to this kernel's ml_page_protection_type so the answer is this kernel's. kern_packet_trace_event: an empty function, the one export between kern_packet_set_wake_flag and kern_packet_tx_completion."
+  },
+  {
+   "original": "0xfffffe000ad59b2c",
+   "native_symbol": "_ml_page_protection_type",
+   "check": {
+    "address": "0xfffffe000ad59b2c",
+    "size": 12,
+    "sha256": "9fe206bcfd54e8185061c521a120dc195787d439c0be0bb32e44f6bee7968687"
+   },
+   "evidence": "Import-table order check, pure-leaf pairs given their own names. ml_page_protection_type: returns the constant 2 (the page protection monitor of this phone); imported by IODARTFamily, IONVMeFamily and AppleOnboardSerial after ml_get_interrupts_enabled and before nanoseconds_to_absolutetime; the matcher had given it another function that returns 2. Bound to this kernel's ml_page_protection_type so the answer is this kernel's. kern_packet_trace_event: an empty function, the one export between kern_packet_set_wake_flag and kern_packet_tx_completion."
+  },
+  {
+   "original": "0xfffffe000b3351d8",
+   "native_symbol": "__ZN16IODMAEventSource14dmaEventSourceEP8OSObjectP9IOServicePFvS1_PS_P12IODMACommandiyyES8_j",
+   "check": {
+    "address": "0xfffffe000b3351d8",
+    "size": 212,
+    "sha256": "7acf8f45396386b6ec31a15fe7a16e845f071c474fc8bbcc0702484e08329160"
+   },
+   "evidence": "Import-table order check (kernel/prelink/lead/imports.py: a kext's __auth_got is sorted by symbol name), confirmed by the code. cluster_push: clears three arguments and branches to the next function; APFS imports it between cluster_pageout and cluster_push_err (the order rule had cluster_push_ext). ifnet_set_hdrlen and ifnet_hdrlen: store and load the byte at +252 of the interface; imported where 'hdrlen' sorts, not 'metric' (which is 32 bits wide). ifaddr_findbestforaddr: two arguments, dispatches on the address family (30, AF_INET6); imported between ifaddr_address_family and ifaddr_release (the matcher's call rule had ifaof_ifpforaddr_select). ml_get_max_cpu_number: returns a 32-bit field of the topology; imported after ml_get_interrupts_enabled and before ml_processor_register, where ml_get_cpu_count cannot sort. IODMAEventSource::dmaEventSource: a five-argument factory imported by the DMA, SPI and serial drivers between OSMetaClassBase::_ptmf2ptf and IORegistryIterator::iterateOver; the order rule had IOFilterInterruptEventSource's factory, which has the same shape and sorts far later."
+  },
+  {
+   "original": "0xfffffe000ad58f08",
+   "native_symbol": "_ml_get_max_cpu_number",
+   "check": {
+    "address": "0xfffffe000ad58f08",
+    "size": 16,
+    "sha256": "353c8ea056d629ade7f49db779d2124943370967ac4819c73ec5e9a353430685"
+   },
+   "evidence": "Import-table order check (kernel/prelink/lead/imports.py: a kext's __auth_got is sorted by symbol name), confirmed by the code. cluster_push: clears three arguments and branches to the next function; APFS imports it between cluster_pageout and cluster_push_err (the order rule had cluster_push_ext). ifnet_set_hdrlen and ifnet_hdrlen: store and load the byte at +252 of the interface; imported where 'hdrlen' sorts, not 'metric' (which is 32 bits wide). ifaddr_findbestforaddr: two arguments, dispatches on the address family (30, AF_INET6); imported between ifaddr_address_family and ifaddr_release (the matcher's call rule had ifaof_ifpforaddr_select). ml_get_max_cpu_number: returns a 32-bit field of the topology; imported after ml_get_interrupts_enabled and before ml_processor_register, where ml_get_cpu_count cannot sort. IODMAEventSource::dmaEventSource: a five-argument factory imported by the DMA, SPI and serial drivers between OSMetaClassBase::_ptmf2ptf and IORegistryIterator::iterateOver; the order rule had IOFilterInterruptEventSource's factory, which has the same shape and sorts far later."
+  },
+  {
+   "original": "0xfffffe000ae8f938",
+   "native_symbol": "_ifaddr_findbestforaddr",
+   "check": {
+    "address": "0xfffffe000ae8f938",
+    "size": 40,
+    "sha256": "6c44aa824bca9d30554104c81d141832c470f3abfba3d9b8860977f4aedea4c0"
+   },
+   "evidence": "Import-table order check (kernel/prelink/lead/imports.py: a kext's __auth_got is sorted by symbol name), confirmed by the code. cluster_push: clears three arguments and branches to the next function; APFS imports it between cluster_pageout and cluster_push_err (the order rule had cluster_push_ext). ifnet_set_hdrlen and ifnet_hdrlen: store and load the byte at +252 of the interface; imported where 'hdrlen' sorts, not 'metric' (which is 32 bits wide). ifaddr_findbestforaddr: two arguments, dispatches on the address family (30, AF_INET6); imported between ifaddr_address_family and ifaddr_release (the matcher's call rule had ifaof_ifpforaddr_select). ml_get_max_cpu_number: returns a 32-bit field of the topology; imported after ml_get_interrupts_enabled and before ml_processor_register, where ml_get_cpu_count cannot sort. IODMAEventSource::dmaEventSource: a five-argument factory imported by the DMA, SPI and serial drivers between OSMetaClassBase::_ptmf2ptf and IORegistryIterator::iterateOver; the order rule had IOFilterInterruptEventSource's factory, which has the same shape and sorts far later."
+  },
+  {
+   "original": "0xfffffe000ae8cfe8",
+   "native_symbol": "_ifnet_hdrlen",
+   "check": {
+    "address": "0xfffffe000ae8cfe8",
+    "size": 16,
+    "sha256": "e37d5a15dee5750ce2254bf8715a2f7bc584f847db6999142d73c5171f60be41"
+   },
+   "evidence": "Import-table order check (kernel/prelink/lead/imports.py: a kext's __auth_got is sorted by symbol name), confirmed by the code. cluster_push: clears three arguments and branches to the next function; APFS imports it between cluster_pageout and cluster_push_err (the order rule had cluster_push_ext). ifnet_set_hdrlen and ifnet_hdrlen: store and load the byte at +252 of the interface; imported where 'hdrlen' sorts, not 'metric' (which is 32 bits wide). ifaddr_findbestforaddr: two arguments, dispatches on the address family (30, AF_INET6); imported between ifaddr_address_family and ifaddr_release (the matcher's call rule had ifaof_ifpforaddr_select). ml_get_max_cpu_number: returns a 32-bit field of the topology; imported after ml_get_interrupts_enabled and before ml_processor_register, where ml_get_cpu_count cannot sort. IODMAEventSource::dmaEventSource: a five-argument factory imported by the DMA, SPI and serial drivers between OSMetaClassBase::_ptmf2ptf and IORegistryIterator::iterateOver; the order rule had IOFilterInterruptEventSource's factory, which has the same shape and sorts far later."
+  },
+  {
+   "original": "0xfffffe000ae8cfc8",
+   "native_symbol": "_ifnet_set_hdrlen",
+   "check": {
+    "address": "0xfffffe000ae8cfc8",
+    "size": 32,
+    "sha256": "27ea449f992ed634c6c6bffaf3ca1aca7fbf6973b2f3b0c2e02d4807eb73dac6"
+   },
+   "evidence": "Import-table order check (kernel/prelink/lead/imports.py: a kext's __auth_got is sorted by symbol name), confirmed by the code. cluster_push: clears three arguments and branches to the next function; APFS imports it between cluster_pageout and cluster_push_err (the order rule had cluster_push_ext). ifnet_set_hdrlen and ifnet_hdrlen: store and load the byte at +252 of the interface; imported where 'hdrlen' sorts, not 'metric' (which is 32 bits wide). ifaddr_findbestforaddr: two arguments, dispatches on the address family (30, AF_INET6); imported between ifaddr_address_family and ifaddr_release (the matcher's call rule had ifaof_ifpforaddr_select). ml_get_max_cpu_number: returns a 32-bit field of the topology; imported after ml_get_interrupts_enabled and before ml_processor_register, where ml_get_cpu_count cannot sort. IODMAEventSource::dmaEventSource: a five-argument factory imported by the DMA, SPI and serial drivers between OSMetaClassBase::_ptmf2ptf and IORegistryIterator::iterateOver; the order rule had IOFilterInterruptEventSource's factory, which has the same shape and sorts far later."
+  },
+  {
+   "original": "0xfffffe000ada65c0",
+   "native_symbol": "_cluster_push",
+   "check": {
+    "address": "0xfffffe000ada65c0",
+    "size": 20,
+    "sha256": "fd821f4081cc42a44607e486bf2ecff3b98dca716847d8960ff7dd92dcecb88c"
+   },
+   "evidence": "Import-table order check (kernel/prelink/lead/imports.py: a kext's __auth_got is sorted by symbol name), confirmed by the code. cluster_push: clears three arguments and branches to the next function; APFS imports it between cluster_pageout and cluster_push_err (the order rule had cluster_push_ext). ifnet_set_hdrlen and ifnet_hdrlen: store and load the byte at +252 of the interface; imported where 'hdrlen' sorts, not 'metric' (which is 32 bits wide). ifaddr_findbestforaddr: two arguments, dispatches on the address family (30, AF_INET6); imported between ifaddr_address_family and ifaddr_release (the matcher's call rule had ifaof_ifpforaddr_select). ml_get_max_cpu_number: returns a 32-bit field of the topology; imported after ml_get_interrupts_enabled and before ml_processor_register, where ml_get_cpu_count cannot sort. IODMAEventSource::dmaEventSource: a five-argument factory imported by the DMA, SPI and serial drivers between OSMetaClassBase::_ptmf2ptf and IORegistryIterator::iterateOver; the order rule had IOFilterInterruptEventSource's factory, which has the same shape and sorts far later."
+  },
+  {
    "original": "0xfffffe000b33c5d8",
    "native_symbol": "__ZN12IODMACommandD2Ev",
    "check": {
@@ -3846,16 +4236,6 @@
    "evidence": "Sets the third argument to 0 and tail-calls the function 93 instructions before it, which the matcher pairs as copyClientForDeviceType: IOPerfControlClient::copyClient(driver, maxWorkCapacity). IOStorageFamily's block storage driver calls it at start."
   },
   {
-   "original": "0xfffffe000ad58f08",
-   "native_symbol": "_ml_get_cpu_count",
-   "check": {
-    "address": "0xfffffe000ad58f08",
-    "size": 16,
-    "sha256": "353c8ea056d629ade7f49db779d2124943370967ac4819c73ec5e9a353430685"
-   },
-   "evidence": "Returns the 32-bit word at +4 of the CPU topology structure (num_cpus): ml_get_cpu_count, the accessor after ml_readprop/ml_io_map in machine_routines.c; Droid-VM's reviewed list names the same body in the iPad kernelcache. APFS calls it at module start."
-  },
-  {
    "original": "0xfffffe000b303778",
    "native_symbol": "__ZN9IOService15publishResourceEPKcP8OSObject",
    "check": {
@@ -6034,6 +6414,11 @@
     "__DATA,__common"
    ],
    "evidence": "Lead review. The matcher paired this 32-bit variable with __stack_chk_guard (reference-data), but apfs and the sandbox import it in a slot after kernel_task/kernproc and before rootvp, where the guard (imported by both at 0xfffffe000b738000, in its right place) cannot be. apfs's mountroot stores rootvp and then stores vnode_specrdev's 32-bit result here (0xfffffe000a9c2d74..d88): rootdev = vnode_specrdev(rootvp). With the wrong pair that store went into the kernel's stack guard."
+  },
+  {
+   "original": "0xfffffe000b7b1498",
+   "native_symbol": "__ZN16IODMAEventSource10gMetaClassE",
+   "evidence": "The metaclass object the factory at 0xfffffe000b3351d8 allocates from (adrp/add x0, then the alloc slot); that factory is IODMAEventSource::dmaEventSource by the import-table order of the DMA, SPI and serial drivers."
   }
  ]
 }
