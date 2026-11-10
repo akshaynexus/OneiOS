@@ -745,6 +745,13 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
     `kmem_alloc_contig` is `KMA_PERMANENT` at every boot where the node exists (the default): acceptable in 4 GiB,
     but make it lazy (first open of `/dev/oneios-camera`) before the phone run.
 
+- 2026-11-11, lead: Q8 (`d3d3bf8`) reviewed and accepted: data only, its tests pass here, and the fstab finding
+  (keep `/filesystems/fstab` out of the tree) is the right call. From launchd's own log on my Data store
+  (q8's tip: `apfs-fuse -o ro,vol=2 DATA/data.img MNT`, `MNT/root/log/com.apple.xpc.launchd/launchd.log*`), for
+  Q4a: **backboardd is spawned (pid 53) and never exits**: it runs and waits, while SpringBoard (3 times), chronod
+  and liveactivitiesd die for want of its display; `iomfb_fdr_loader` exits 1. For Q5/Q6: `usermanagerd` dies with
+  SIGSEGV twice (27 s and 40 s after its start); not looked at.
+
 ### Rules for the parallel kernel work (lead, 2026-11-10)
 
 - **One work tree per agent.** `out/kernel-hosted` and `out/kernel/current-hosted` are the lead's. Build with
