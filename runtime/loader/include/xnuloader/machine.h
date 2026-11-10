@@ -24,6 +24,7 @@ typedef enum {
   XL_DEV_GPU,         // "droidvm,virtio-gpu"
   XL_DEV_SND,         // "droidvm,virtio-snd"
   XL_DEV_BRIDGE,      // "oneios,bridge": the message channel of runtime/bridges (haptics, Bluetooth HCI)
+  XL_DEV_CAMERA,      // "oneios,camera": camera frames from runtime/bridges/camera (drivers/camera)
 } xl_device_kind;
 
 typedef struct { xl_device_kind kind; uint64_t base, size; } xl_device;

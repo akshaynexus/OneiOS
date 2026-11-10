@@ -326,6 +326,7 @@ xl_adt_node *xl_machine_tree(const xl_machine *m, const char **error)
     case XL_DEV_GPU:        snprintf(name, sizeof name, "virtio-gpu"); compat = "droidvm,virtio-gpu"; break;
     case XL_DEV_SND:        snprintf(name, sizeof name, "virtio-snd"); compat = "droidvm,virtio-snd"; break;
     case XL_DEV_BRIDGE:     snprintf(name, sizeof name, "bridge"); compat = "oneios,bridge"; break;
+    case XL_DEV_CAMERA:     snprintf(name, sizeof name, "camera"); compat = "oneios,camera"; break;
     default: FAIL("unknown device kind");
     }
     if (xl_adt_child(io, name)) FAIL("two devices of a kind that has one node");

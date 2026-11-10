@@ -16,6 +16,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "bridges/devices.h"
+#include "bridges/camera.h"
 #include "imageset.h"
 #include "xnuloader/boot.h"
 #include "xnuloader/machine.h"
@@ -195,6 +196,7 @@ static void gpu_log(int level, const char *line) { xh_log(level == 0 ? XH_LOG_ER
 // ---- the host bridges (runtime/bridges): CPU placement, cpufreq, haptics, Bluetooth, network, sound ---
 static br_cpu_plan cpu_plan;
 static br_haptic *haptic;
+static br_camera *camera;          // the camera helper process (runtime/bridges/camera, bin/oneios-camera)
 static br_bright *brightness;     // the panel's backlight and the light sensor (runtime/bridges/brightness)
 static bool net_up;
 
@@ -374,6 +376,15 @@ static int boot(void)
     if (*config.runtime && snprintf(helper, sizeof helper, "%s/bin/oneios-audio", config.runtime) < (int)sizeof helper) audio = br_audio_helper(helper, &audio_ctx);
     if (!audio) audio = br_audio_null(&audio_ctx);
     if (audio && br_virtio_snd_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, audio, audio_ctx)) kinds[ndev++] = XL_DEV_SND;
+
+    // The camera: a helper process (Android's camera libraries are shared libraries) that opens a camera only
+    // when the guest asks. ONEIOS_CAMERA=0 leaves it out; ONEIOS_CAMERA_BACKEND picks its back end (auto).
+    const char *camera_switch = getenv("ONEIOS_CAMERA");
+    if (ndev < XL_MAX_DEVICES && !(camera_switch && !strcmp(camera_switch, "0")) && *config.runtime &&
+        snprintf(helper, sizeof helper, "%s/bin/oneios-camera", config.runtime) < (int)sizeof helper && access(helper, X_OK) == 0) {
+      camera = br_camera_helper(helper, getenv("ONEIOS_CAMERA_BACKEND"));
+      if (camera && br_camera_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, camera)) kinds[ndev++] = XL_DEV_CAMERA;
+    }
   }
 
   // clusters=EEPPPPPP: the cluster types by hand (a bench run with no host topology to plan from).
@@ -619,6 +630,7 @@ int main(int argc, char **argv)
   }
   xh_tasks_shutdown();
   if (haptic) br_haptic_close(haptic);      // stops the motor
+  if (camera) br_camera_close(camera);      // the helper closes the camera and exits
   if (brightness) br_bright_close(brightness);      // One UI's backlight level again, the light sensor as it was
   if (net_up) net_script("down");
   xh_input_stop();

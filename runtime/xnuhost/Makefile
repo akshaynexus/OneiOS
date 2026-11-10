@@ -12,7 +12,7 @@ OBJCOPY := $(TOOLS)/llvm-objcopy
 QEMU ?= $(shell command -v qemu-aarch64 2>/dev/null)
 
 WARN := -Wall -Wextra -Werror
-INC := -Iinclude -Isrc -Istub -I../loader/include -I../bridges/include -I../../drivers/bridge
+INC := -Iinclude -Isrc -Istub -I../loader/include -I../bridges/include -I../../drivers/bridge -I../../drivers/camera
 CFLAGS ?= -O2 -g
 SRC := main log config insn mem mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input virtio_gpu gpu3d display input cpu hostcalls task
 PORTABLE := log config insn mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input virtio_gpu gpu3d cpu task
@@ -82,8 +82,12 @@ $(A)/loader_%.o: ../loader/src/%.c $(HDR)
 BRIDGES := ../bridges/build/android/libonebridges.a
 $(BRIDGES): FORCE
 	$(MAKE) -s -C ../bridges NDK=$(NDK) build/android/libonebridges.a
+# The camera's end in xnuhost (runtime/bridges/camera, fable-camera): the helper's socket and ring, the oneios,camera device.
+CAMERA := ../bridges/camera/build/android/libonecamera.a
+$(CAMERA): FORCE
+	$(MAKE) -s -C ../bridges/camera NDK=$(NDK) build/android/libonecamera.a
 FORCE:
-$(A)/xnuhost: $(SRC:%=$(A)/%.o) $(A)/kctx.o $(A)/arch.o $(patsubst ../loader/src/%.c,$(A)/loader_%.o,$(LOADER_SRC)) $(BRIDGES) $(GPU3D)
+$(A)/xnuhost: $(SRC:%=$(A)/%.o) $(A)/kctx.o $(A)/arch.o $(patsubst ../loader/src/%.c,$(A)/loader_%.o,$(LOADER_SRC)) $(CAMERA) $(BRIDGES) $(GPU3D)
 	$(ANDROID_CC) -static -o $@ $^ -lm
 
 # ---- host unit tests ----

@@ -23,6 +23,11 @@ mkdir -p "$STAGE/bin"
 make -s -C "$ROOT/runtime/bridges" NDK="$NDK" build/android/oneios-audio
 "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" -o "$STAGE/bin/oneios-audio" "$ROOT/runtime/bridges/build/android/oneios-audio"
 cp "$ROOT/runtime/bridges/net/oneios-net.sh" "$STAGE/bin/oneios-net.sh"
+# The camera helper, and camctl: the camera alone, for a check on the phone (runtime/bridges/camera/README.md)
+make -s -C "$ROOT/runtime/bridges/camera" NDK="$NDK" build/android/oneios-camera build/android/camctl
+"$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" -o "$STAGE/bin/oneios-camera" "$ROOT/runtime/bridges/camera/build/android/oneios-camera"
+"$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" -o "$STAGE/bin/camctl" "$ROOT/runtime/bridges/camera/build/android/camctl"
+chmod 0755 "$STAGE/bin/oneios-camera" "$STAGE/bin/camctl"
 # gpuctl: the GPU path alone, for a check on the phone (runtime/xnuhost/tools/gpuctl.c, docs/gpu.md)
 make -s -C "$ROOT/runtime/xnuhost" NDK="$NDK" build/android/gpuctl
 "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" -o "$STAGE/bin/gpuctl" "$ROOT/runtime/xnuhost/build/android/gpuctl"
