@@ -63,6 +63,10 @@ typedef struct {
   const xl_adt_node *identity;
   const char *model;                      // "iPhone18,2"
   const char *display_gamut;              // /product artwork-display-gamut, default "P3"
+  // The guest's display (0 = say nothing): the mode in pixels, the UI scale (pixels per point, 2 or 3: /chosen
+  // display-scale, which MobileGestalt answers main-screen-scale from, and /product artwork-scale-factor) and the
+  // panel's refresh rate. /chosen/xnuhost carries all four for the hosted kernel's display driver.
+  uint32_t    display_width, display_height, display_scale, display_hz;
   const char *text_fixups;                // NUL-separated list for /chosen text-fixups, with its length
   uint32_t    text_fixups_length;
   // xnuhost: where a hosted kernel finds the host (0 = not hosted, node omitted)

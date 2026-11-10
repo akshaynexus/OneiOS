@@ -13,7 +13,8 @@ console until `backboardd`'s first frame, then iOS. On the PC, `display-capture.
 
 ```sh
 make               # build/android: oneios-display, liboneios-display.so, oneios-display.dex, displayctl
-make test          # host tests: the socket protocol, the fit, the damage rectangles, the copy, displayctl
+make test          # host tests: the socket protocol, the fit, the damage rectangles, the copy, displayctl,
+                   # and the choice of the panel's native mode (tests/TestModes.java, on the host's JVM)
 ```
 
 Needs NDK 28.2, a JDK (`javac`) and `d8` from the Android SDK's build-tools (`ANDROID_SDK_ROOT`, `ANDROID_HOME`,
@@ -51,15 +52,25 @@ NDK's `ANativeWindow` on that `Surface`, from the mapped memfd straight into the
   maps the frame read-only. The session folder is writable by the guest, so nothing is trusted: the path must be
   a socket (not a link), the sizes are bounded, the stride must cover a row, the frame must fit in the memfd,
   flush rectangles are clipped, unknown messages are ignored.
-- **Layers.** The frame's layer has buffers of the guest's size (1320x2868 by default) and is scaled to the
-  panel by the compositor: the largest rectangle of the guest's aspect, centred (on 1440x3120: 1436x3120 at
-  x = 2). A black layer under it fills the bars. Both are at the top of the built-in display's stack.
-- **The panel.** The active mode and its highest refresh rate come from surfaceflinger (`DisplayControl`, the way
-  scrcpy reads them). With `--takeover` (a session: system_server is gone) the display's projection is set to the
-  active mode, unrotated, so the layer space is the panel's own pixels whatever resolution setting or rotation
-  One UI left; the return restarts surfaceflinger, which forgets it. Without `--takeover` nothing of the display
-  is changed and the logical size comes from the display manager. The layer votes for the mode's highest refresh
-  rate (`setFrameRate`, 120 Hz on this panel).
+- **Layers.** The frame's layer has buffers of the guest's size. The guest renders the panel's native mode
+  (1440x3120), so in a session the layer covers the panel pixel for pixel: no matrix, no bars, no background
+  layer (the log says `the frame is the panel's size: shown 1:1, not scaled`). A frame of another size (a
+  mismatch: an override on xnuhost's side, or a panel that stayed in a lower mode) is scaled by the compositor
+  to the largest rectangle of its aspect, centred, over a black layer that fills the bars (1320x2868 on
+  1440x3120: 1436x3120 at x = 2). Both layers are at the top of the built-in display's stack.
+- **The panel.** The modes come from surfaceflinger (`DisplayControl`, the way scrcpy reads them): the active
+  one, and the native one, which is the largest the panel has at its highest refresh rate. With `--takeover` (a
+  session: system_server is gone) a panel that One UI left in a lower mode (FHD+ 1080x2340 is One UI's default
+  resolution setting) is put in the native mode: the display's desired mode specs are read, their default mode
+  replaced and their refresh ranges opened to that mode's rate, and written back
+  (`SurfaceControl.setDesiredDisplayModeSpecs`); the helper waits up to a second for the mode to become active.
+  Then the display's projection is set to the active mode, unrotated, so the layer space is the panel's own
+  pixels whatever rotation One UI left. If the mode is refused the panel stays as it was and the frame is
+  scaled. The return restarts surfaceflinger, which forgets both. Without `--takeover` nothing of the display is
+  changed and the logical size comes from the display manager. The layer votes for the mode's highest refresh
+  rate (`setFrameRate`, 120 Hz on this panel), which is the rate the guest's vsync tick runs at.
+  Whether One UI's resolution setting is a panel mode or only a logical size on this phone is not known; the
+  helper's `panel modes: active ..., native ...` line of the first run says.
 - **Frames.** One copy per frame, of the damaged rectangle only: the window copies back what the last buffer had
   and hands out the rectangle to draw. `B,G,R,A` buffers take the guest's bytes as they are (`memcpy`; the layer
   is marked opaque); if the phone gives no such buffer the helper falls back to `R,G,B,X` and swaps while it
@@ -94,7 +105,7 @@ In the runtime package: `bin/oneios-display`, `bin/liboneios-display.so`, `lib/o
 ## The phone test: `displayctl`
 
 With One UI running, as root. `displayctl` makes a session folder of its own under `/data/local/tmp`, serves a
-1320x2868 frame the way xnuhost does, starts the helper on it and draws for 5 s: eight colour bars, darker at the
+1440x3120 frame the way xnuhost does, starts the helper on it and draws for 5 s: eight colour bars, darker at the
 top, inside a white frame two pixels wide, with a white square that bounces. Then it closes the socket; the
 helper removes its layer and One UI is back. Nothing of the display's state is changed (no `--takeover`).
 
@@ -109,7 +120,8 @@ adb shell su -c '/data/local/tmp/oneios-display-test/displayctl test'
 ```
 
 What to see: the pattern over everything (status bar and navigation bar included), the white frame whole on all
-four sides of the picture, thin black bars left and right of it, the square moving smoothly, colours in this
+four sides of the picture, at the very edges of the screen when One UI's resolution setting is WQHD+ (with FHD+
+or HD+ the test, which changes nothing of the display, shows the frame scaled to that size), the square moving smoothly, colours in this
 order from the left: white, yellow, cyan, green, magenta, red, blue, dark grey. Red and blue swapped means the
 buffer format is not what the copy assumed.
 
@@ -120,8 +132,8 @@ frame, the panel, the placement, the buffer it got and the number of frames.
 Variants:
 
 ```sh
-# longer, or another frame size
-adb shell su -c '/data/local/tmp/oneios-display-test/displayctl test --seconds 20 --size 1179x2556'
+# longer, or another frame size (a mismatch: scaled, with bars)
+adb shell su -c '/data/local/tmp/oneios-display-test/displayctl test --seconds 20 --size 1320x2868'
 # options after -- go to the helper: the swapping copy, a fixed refresh rate
 adb shell su -c '/data/local/tmp/oneios-display-test/displayctl test -- --format rgbx'
 adb shell su -c '/data/local/tmp/oneios-display-test/displayctl test -- --hz 60'
@@ -140,8 +152,9 @@ If the helper hangs, `displayctl` ends it 3 s after the test; if `displayctl` it
   in `java/OneiOSDisplay.java`, and each has a fallback or a logged failure.
 - The copy is not zero-copy. For that xnuhost would have to keep the guest's frame in a gralloc buffer
   (`AHardwareBuffer`) instead of a memfd and pass that; `virtio_gpu.c` and the socket's hello would change.
-- If One UI's resolution setting switches the panel's mode itself (not only the projection), the helper shows on
-  that mode; it does not ask surfaceflinger for the 1440x3120 mode.
+- The native-mode request (`setDesiredDisplayModeSpecs` by reflection) is unproven like the rest; a refusal is
+  logged and the frame is scaled. At 1440x3120 a full-frame copy is 18 MB, 2.2 GB/s at 120 Hz when every frame
+  is all damage.
 - A guest that truncates the memfd kills the helper (SIGBUS) and the screen goes dark; the session and the way
   back are not affected.
 - The guest can write the frame while a row is copied: tearing is possible, as there is no frame handshake in

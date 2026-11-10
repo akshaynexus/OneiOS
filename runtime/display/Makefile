@@ -1,7 +1,7 @@
 # The display helper (README.md): iOS's frames from xnuhost's session/display.sock on the phone's panel.
 #   make            build/android/oneios-display (the launcher), liboneios-display.so (socket, frame, copy),
 #                   oneios-display.dex (the SurfaceControl layer, run by app_process) and displayctl (the phone test)
-#   make test       unit tests on the build host (protocol, fit, copy), with ASan and UBSan
+#   make test       unit tests on the build host (protocol, fit, copy), with ASan and UBSan; the choice of the panel's mode on the JVM
 # Needs the NDK, a JDK (javac) and d8 from the Android SDK's build-tools.
 NDK ?= $(HOME)/Android/Sdk/ndk/28.2.13676358
 SDK ?= $(or $(ANDROID_SDK_ROOT),$(ANDROID_HOME),$(abspath $(NDK)/../..))
@@ -41,8 +41,14 @@ $(H)/displayctl: src/displayctl.c src/xhd.c src/xhd.h
 	@mkdir -p $(H)
 	$(CC) -std=gnu11 -O1 -g $(WARN) src/displayctl.c src/xhd.c -o $@
 
-test: $(H)/test_display $(H)/displayctl
+# The choice among the panel's modes is plain Java: it runs on the host's JVM.
+$(H)/modes/TestModes.class: tests/TestModes.java java/OneiOSDisplay.java
+	@mkdir -p $(H)/modes
+	$(JAVAC) --release 11 -Xlint:all -Werror -d $(H)/modes java/OneiOSDisplay.java tests/TestModes.java
+
+test: $(H)/test_display $(H)/displayctl $(H)/modes/TestModes.class
 	$(H)/test_display $(H)/displayctl
+	java -cp $(H)/modes TestModes
 
 clean:
 	rm -rf build

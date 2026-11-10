@@ -25,6 +25,7 @@ void xh_config_defaults(xh_config *c)
   c->task_uid = -1;
   c->log_level = XH_LOG_INFO;
   c->bridges = -1;
+  c->scale_fixup = -1;
   strcpy(c->bluetooth, "virtual");
 }
 
@@ -75,6 +76,18 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
   else if (!strcmp(key, "ram")) c->ram_bytes = xh_parse_size(value, &ok);
   else if (!strcmp(key, "width")) c->width = (unsigned)atoi(value);
   else if (!strcmp(key, "height")) c->height = (unsigned)atoi(value);
+  else if (!strcmp(key, "hz")) { c->hz = (unsigned)atoi(value); ok = c->hz == 0 || (c->hz >= 24 && c->hz <= 240); }
+  else if (!strcmp(key, "scale")) { c->scale = (unsigned)atoi(value); ok = c->scale == 2 || c->scale == 3; }
+  else if (!strcmp(key, "scale-fixup")) { bool on; if (flag(value, &on)) return -1; c->scale_fixup = on; }
+  else if (!strcmp(key, "text-fixup")) {
+    // FILE,OFFSET,ORIGINAL,REPLACEMENT in hex, as UniXNU's [payload] text_fixups (the kernel checks them again)
+    size_t n = strlen(value);
+    unsigned commas = 0;
+    for (size_t i = 0; i < n; i++) commas += value[i] == ',';
+    if (commas != 3 || n >= 160 || c->text_fixups_length + n + 1 > sizeof c->text_fixups) return -1;
+    memcpy(c->text_fixups + c->text_fixups_length, value, n + 1);
+    c->text_fixups_length += (unsigned)n + 1;
+  }
   else if (!strcmp(key, "input")) return flag(value, &c->input);
   else if (!strcmp(key, "tasks")) return flag(value, &c->tasks);
   else if (!strcmp(key, "task-uid")) c->task_uid = atoi(value);
@@ -128,6 +141,7 @@ static void usage(void)
   fputs("usage: xnuhost --image DIR [--kernel FILE] [--data DIR] [--session DIR] [--runtime DIR]\n"
         "               [--session-abi 1] [--mode takeover|bench] [--cpus N] [--ram SIZE]\n"
         "               [--boot-args TEXT] [--display shm|drm|none] [--gpu auto|3d|2d] [--width W --height H]\n"
+        "               [--hz N] [--scale 2|3]\n"
         "               [--no-input] [--no-tasks] [--config FILE] [--set KEY=VALUE] [-v]\n"
         "       xnuhost --selftest      checks of this host (trap layer, PAC, memory), no kernel\n"
         "docs/booter.md describes the image set's files, the session files and the exit codes.\n", stderr);
@@ -191,7 +205,12 @@ int xh_config_finish(xh_config *c)
   xh_config from_image;
   xh_config_defaults(&from_image);
   if (snprintf(path, sizeof path, "%s/xnuhost.conf", c->image) < (int)sizeof path && xh_config_file(&from_image, path)) return -1;
+  // The userland hook's settings of this image (the UI scale its Data seed was made for), under the same rule.
+  if (snprintf(path, sizeof path, "%s/overlay/userland/xnuhost.conf", c->image) < (int)sizeof path && xh_config_file(&from_image, path)) return -1;
   if (!*c->boot_args) strcpy(c->boot_args, from_image.boot_args);
+  if (!c->scale) c->scale = from_image.scale ? from_image.scale : 3;
+  if (c->scale_fixup < 0) c->scale_fixup = from_image.scale_fixup < 0 ? 1 : from_image.scale_fixup;
+  if (!c->text_fixups_length) { memcpy(c->text_fixups, from_image.text_fixups, sizeof c->text_fixups); c->text_fixups_length = from_image.text_fixups_length; }
   // Neither the command line nor the image set gave any: what the hosted kernel needs to start on this
   // machine (the session's command line has no boot arguments). From Droid-VM's ipados27/board.toml
   // kernel_args, the ones about the machine: SMP and ArmCpu's IPIs, no contiguous-hint mappings (the
@@ -235,4 +254,72 @@ int xh_config_finish(xh_config *c)
   }
   if (c->ram_bytes & 0x1fffff || c->ram_bytes < (256ull << 20)) { fprintf(stderr, "xnuhost: --ram must be a multiple of 2 MiB, at least 256 MiB\n"); return -1; }
   return 0;
+}
+
+// ---- the display's mode ---------------------------------------------------------------------------
+bool xh_panel_native(const xh_panel_mode *modes, unsigned count, xh_panel_mode *native)
+{
+  bool found = false;
+  for (unsigned i = 0; i < count; i++) {
+    const xh_panel_mode *m = &modes[i];
+    if (!m->width || !m->height || m->width > 16384 || m->height > 16384) continue;
+    uint64_t area = (uint64_t)m->width * m->height, best = found ? (uint64_t)native->width * native->height : 0;
+    if (!found || area > best || (area == best && m->width == native->width && m->hz > native->hz)) { *native = *m; found = true; }
+  }
+  return found;
+}
+
+xh_panel_mode xh_display_mode(const xh_config *c, const xh_panel_mode *panel)
+{
+  xh_panel_mode mode = { XH_PANEL_WIDTH, XH_PANEL_HEIGHT, XH_PANEL_HZ };
+  if (panel && panel->width && panel->height) { mode = *panel; if (mode.hz < 24 || mode.hz > 240) mode.hz = XH_PANEL_HZ; }
+  if (c->width) mode.width = c->width;
+  if (c->height) mode.height = c->height;
+  if (c->hz) mode.hz = c->hz;
+  return mode;
+}
+
+static bool has_switch(const char *args, const char *name)
+{
+  size_t n = strlen(name);
+  for (const char *p = args; (p = strstr(p, name)); p += n)
+    if ((p == args || p[-1] == ' ') && p[n] == '=') return true;
+  return false;
+}
+
+int xh_display_boot_args(char *args, size_t size, unsigned scale, unsigned hz)
+{
+  char add[80];
+  if (!has_switch(args, "offline-legacy-unit-scale")) {
+    snprintf(add, sizeof add, "%soffline-legacy-unit-scale=%u", *args ? " " : "", scale);
+    if (strlen(args) + strlen(add) >= size) return -1;
+    strcat(args, add);
+  }
+  if (!has_switch(args, "sheng-vsync")) {
+    snprintf(add, sizeof add, "%ssheng-vsync=%u", *args ? " " : "", hz);
+    if (strlen(args) + strlen(add) >= size) return -1;
+    strcat(args, add);
+  }
+  return 0;
+}
+
+// -[CADisplayMode preferredScale] of QuartzCore, read in 24A446's cache (docs/userland.md, "The UI scale"): a
+// mode with no preferred scale of its own is @2x in a virtual device (or what the mode's own field says, when
+// more), else @2x when taller than 1080 pixels and @1x otherwise. Nothing there answers 3, so for a scale of 3
+// both answers are changed: the virtual device's floor, and the height test's result. A scale of 2 is what the
+// code gives unchanged. The kernel applies a fixup only where the original bytes match.
+unsigned xh_scale_fixups(const char *build, unsigned scale, char *list, unsigned length, unsigned size)
+{
+  static const char *const fixups_24A446_3x[] = {
+    "dyld_shared_cache_arm64e.01,40b17a8,49008052,69008052",                    // mov w9, #2 -> mov w9, #3
+    "dyld_shared_cache_arm64e.01,40b17bc,280080520895889a,680080521f2003d5",    // mov w8, #1; cinc x8, x8, hi -> mov w8, #3; nop
+  };
+  if (scale != 3 || !build || strcmp(build, "24A446")) return length;
+  for (unsigned i = 0; i < sizeof fixups_24A446_3x / sizeof *fixups_24A446_3x; i++) {
+    unsigned n = (unsigned)strlen(fixups_24A446_3x[i]) + 1;
+    if (length + n > size) break;
+    memcpy(list + length, fixups_24A446_3x[i], n);
+    length += n;
+  }
+  return length;
 }

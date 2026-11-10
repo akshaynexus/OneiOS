@@ -24,7 +24,8 @@ Command line (the first line is what the OneOS fork runs, `oneos/interface.md` s
 ```sh
 xnuhost --session-abi 1 --mode takeover --runtime DIR --image DIR --data DIR --session DIR
         [--kernel FILE] [--cpus N] [--ram SIZE] [--boot-args TEXT] [--display shm|drm|none]
-        [--width W --height H] [--no-input] [--no-tasks] [--config FILE] [--set KEY=VALUE] [-v]
+        [--width W --height H] [--hz N] [--scale 2|3] [--no-input] [--no-tasks] [--config FILE]
+        [--set KEY=VALUE] [-v]
 xnuhost --selftest            # on the phone: page size, address bits, PAC keys across fork, memfd, seccomp
 ```
 
@@ -34,7 +35,10 @@ xnuhost --selftest            # on the phone: page size, address bits, PAC keys 
 | `--kernel FILE` | `DIR/kernel.kc`, else `DIR/kernel.macho` | the kernel collection: `MH_FILESET`, or an `MH_EXECUTE` kernel |
 | `FILE.trustcache`, `.vroot`, `.gpuaddon`, `.ramdisk`, `.adt` | optional | DarwinBoot's sidecars beside the kernel, same formats and checks |
 | `DIR/identity.adt` | optional | the device's own decoded device tree: model, target-type, board name and `/product` are taken from it |
-| `DIR/xnuhost.conf` | optional | `key=value` lines: `boot-args`, `disk`, `disk-rw`, `data-store`; the command line wins |
+| `DIR/xnuhost.conf` | optional | `key=value` lines: `boot-args`, `disk`, `disk-rw`, `data-store`, `scale`, `scale-fixup`, `text-fixup`; the command line wins |
+| `DIR/overlay/userland/xnuhost.conf` | optional | the same, written by the userland hook: `scale=3` or `scale=2`, the UI scale the image's Data seed was made for (`docs/userland.md` "The screen") |
+| `--width W --height H`, `--hz N` | the panel's native mode | the guest's display mode (section 2.8); for a PC run or another panel |
+| `--scale 2\|3` (`--set scale=2`) | the image set's, else 3 | the UI scale: pixels per point |
 | `DIR/os.img`, `systemos.img`, `app.img` | as present | read-only disks, in this order |
 | `--data DIR` | none | `data.img`: the Data store, sparse, created on the first start; `unique-chip-id` |
 | `DIR/data.seed` | as present | a tar seed is served as the last read-only disk (the guest makes the Data volume and unpacks it); an APFS seed image is copied into a new store |
@@ -83,7 +87,7 @@ A port of DarwinBoot to plain C with no firmware under it:
 - `machine.c`: the tree of xnuhost's board, a port of UniXNU-droidvm's `make-droidvm-adt.py`: `/chosen` (256
   seed bytes, CHRP NVRAM proxy, dram, security properties, root matching, MAC addresses), `/cpus`, `/psci`,
   `/defaults`, `/options`, `/product` (copied from the identity tree, minus exclaves and the AGX-only feature
-  sets), `/buttons`, `/bluetooth`, `/arm-io` with the GICv3, `wlan`, `uart0` and one node per virtio window
+  sets; `artwork-scale-factor` is the UI scale), `/buttons`, `/bluetooth`, `/arm-io` with the GICv3, `wlan`, `uart0` and one node per virtio window
   under the names and `compatible` strings UniXNU's drivers match; `/chosen/xnuhost` for a hosted kernel.
 - `boot.c`: `boot_args` (1024-byte command line of Darwin 23+, or the 608-byte one), the sidecar checks
   (trust caches, packed RAM disk `DBRDISK1`, GPU addon, root policies) and the placement in DarwinBoot's
@@ -250,6 +254,30 @@ Linux's page cache and a sparse file: the store is a raw image.
   with the memfd as `SCM_RIGHTS`, then `flush {"XHDF", x, y, w, h}` per changed rectangle. The helper that
   owns the layer and copies from the memfd is `runtime/display` (`bin/oneios-display`, started by the fork's
   switch on One UI's side; its README has the phone test). Not run on a phone yet.
+- **The mode is the panel's native one.** The guest's frame (the boot framebuffer, the virtio-gpu scanout,
+  `display.sock`'s hello, the touch range) is the size of the panel's largest mode, at that mode's highest
+  refresh rate: 1440x3120 at 120 Hz on the Galaxy S24 Ultra. In a session (`--mode takeover`) xnuhost reads the
+  connected connector's mode list from `/dev/dri/card0` (`GETRESOURCES`, `GETCONNECTOR`; no DRM master, nothing
+  set) and takes the largest, not the current one: One UI's resolution setting may run the panel at 1080x2340,
+  and the display helper's `--takeover` puts it in the native mode. Where the list cannot be read, and in a bench
+  run (whose host display is a monitor), it is 1440x3120 at 120 Hz. `--width W --height H` and `--hz N` override.
+  The log says which: `display: the panel's native mode is ...` or `... were not read (...): 1440x3120 at 120 Hz
+  assumed`, then `display: shm, guest frame 1440x3120 at 120 Hz, @3x (480x1040 points)`. The read from
+  `/dev/dri/card0` has not run on the phone.
+- **The UI scale** is `scale`: 3 (default, 480x1040 points) or 2 (720x1560 points), from `--scale`/`--set
+  scale=`, else `xnuhost.conf` of the image set, else its `overlay/userland/xnuhost.conf` (the userland hook's),
+  else 3. The pixels are the same either way. One value goes to every place that states it:
+
+  | Place | What reads it |
+  |---|---|
+  | `/chosen display-scale` (and `display-rotation` 0) | MobileGestalt's `main-screen-scale`; the display driver checks it |
+  | `/product artwork-scale-factor` | the artwork scale (the identity tree's 3 is replaced) |
+  | `/chosen/xnuhost display-width`, `display-height`, `display-scale`, `display-hz` | the mode as xnuhost has it, for the hosted kernel |
+  | boot arguments `offline-legacy-unit-scale=N`, `sheng-vsync=HZ` | the display driver: its scale policy; the vsync tick and the refresh properties. Added unless the command line has them |
+  | `/chosen text-fixups` | for 3 only, and only for build 24A446: two fixups of QuartzCore's `-[CADisplayMode preferredScale]`, which answers 2 on its own (`kernel/patches/oneios-hosted/display/README.md` "Scale"). `--set scale-fixup=0` leaves them out; `--text-fixup FILE,OFFSET,ORIGINAL,REPLACEMENT` (repeatable) adds others |
+
+  `/product artwork-device-subtype` stays the identity's (2868). The Data seed's `identity.expect` holds the
+  scale the image was built with; a `--set scale=` that differs from the image's makes `oneios-mg` report it.
 - **`drm`.** Direct KMS: DRM master on `/dev/dri/card0`, a dumb buffer, `SETCRTC`, `DIRTYFB` per flush. For a
   session in which surfaceflinger and the composer are stopped. Written against the kernel's UAPI, never run.
 - **`none`.** Frame in memory only.

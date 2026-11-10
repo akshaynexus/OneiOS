@@ -93,6 +93,33 @@ static uint32_t drm_fb;
 static uint8_t *drm_map;
 static unsigned drm_w, drm_h, drm_stride;
 
+// The panel's native mode, without taking the display: the connected connector's modes are read (no DRM master
+// is needed for that, and nothing is set). Which connector: the first connected one, the built-in panel on a phone.
+static bool panel_native(xh_panel_mode *native)
+{
+  int fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
+  if (fd < 0) return false;
+  bool found = false;
+  uint32_t connectors[16];
+  struct drm_mode_card_res res = { .connector_id_ptr = (uintptr_t)connectors, .count_connectors = 16 };
+  if (!ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, &res))
+    for (uint32_t i = 0; !found && i < res.count_connectors && i < 16; i++) {
+      static struct drm_mode_modeinfo modes[64];
+      struct drm_mode_get_connector conn = { .connector_id = connectors[i], .modes_ptr = (uintptr_t)modes, .count_modes = 64 };
+      if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) || conn.connection != 1) continue;
+      xh_panel_mode list[64];
+      unsigned n = 0;
+      for (uint32_t m = 0; m < conn.count_modes && m < 64; m++) {
+        unsigned hz = modes[m].vrefresh;
+        if (!hz && modes[m].htotal && modes[m].vtotal) hz = (unsigned)(((uint64_t)modes[m].clock * 1000 + (uint64_t)modes[m].htotal * modes[m].vtotal / 2) / ((uint64_t)modes[m].htotal * modes[m].vtotal));
+        list[n++] = (xh_panel_mode){ modes[m].hdisplay, modes[m].vdisplay, hz };
+      }
+      found = xh_panel_native(list, n, native);
+    }
+  close(fd);
+  return found;
+}
+
 static int drm_init(void)
 {
   drm_fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
@@ -150,16 +177,24 @@ static void drm_flush(unsigned x, unsigned y, unsigned w, unsigned h)
 static int drm_init(void) { LOGE("display: built without KMS support"); return -1; }
 static void drm_flush(unsigned x, unsigned y, unsigned w, unsigned h) { (void)x; (void)y; (void)w; (void)h; }
 static unsigned drm_w, drm_h;
+static bool panel_native(xh_panel_mode *native) { (void)native; return false; }
 #endif
 
-int xh_display_init(const xh_config *c, unsigned *width, unsigned *height)
+int xh_display_init(const xh_config *c, unsigned *width, unsigned *height, unsigned *hz)
 {
   backend = !strcmp(c->display, "drm") ? BACK_DRM : !strcmp(c->display, "shm") ? BACK_SHM : BACK_NONE;
   if (backend == BACK_DRM && drm_init()) return -1;
-  // The guest's frame: what was asked for, else the panel's mode, else the iPhone18,2 frame the
-  // userland's boot contract names (1320x2868, @3x portrait).
-  display.width = c->width ? c->width : backend == BACK_DRM ? drm_w : 1320;
-  display.height = c->height ? c->height : backend == BACK_DRM ? drm_h : 2868;
+  // The guest's frame: what was asked for, else the panel's native mode (the largest it has, whatever
+  // resolution One UI runs it at: the display helper's --takeover puts the panel in that mode), else
+  // 1440x3120 at 120 Hz, the Galaxy S24 Ultra's. With the KMS back end, the mode that was set.
+  xh_panel_mode panel = { 0, 0, 0 };
+  // Only a session reads the host's panel: a bench run's host display is somebody's monitor.
+  bool known = backend != BACK_DRM && !strcmp(c->mode, "takeover") && panel_native(&panel);
+  if (backend == BACK_DRM) { panel = (xh_panel_mode){ drm_w, drm_h, 0 }; known = true; }
+  xh_panel_mode mode = xh_display_mode(c, known ? &panel : NULL);
+  display.width = mode.width;
+  display.height = mode.height;
+  *hz = mode.hz;
   display.stride = display.width * 4;
   if (backend == BACK_SHM) {
     if (shm_init(c)) { LOGE("display: shared frame: %s", strerror(errno)); return -1; }
@@ -169,7 +204,10 @@ int xh_display_init(const xh_config *c, unsigned *width, unsigned *height)
   }
   *width = display.width;
   *height = display.height;
-  LOGI("display: %s, guest frame %ux%u", c->display, display.width, display.height);
+  if (known) LOGI("display: the panel's native mode is %ux%u at %u Hz", panel.width, panel.height, panel.hz);
+  else LOGI("display: the panel's modes were not read (%s): %ux%u at %u Hz assumed", strcmp(c->mode, "takeover") ? "a bench run" : "no /dev/dri/card0 or no connected connector", XH_PANEL_WIDTH, XH_PANEL_HEIGHT, XH_PANEL_HZ);
+  LOGI("display: %s, guest frame %ux%u at %u Hz, @%ux (%ux%u points)", c->display, display.width, display.height, mode.hz, c->scale,
+       c->scale ? display.width / c->scale : 0, c->scale ? display.height / c->scale : 0);
   return 0;
 }
 

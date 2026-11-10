@@ -90,14 +90,14 @@ kexts) is made there.
 
 | | iPadOS board [F] | iOS |
 |---|---|---|
-| Canvas | 2048x2732 pixels, 1024x1366 points | iPhone18,2's own: 1320x2868 pixels, 440x956 points at @3x [I: the published panel; confirm from the IPSW's device tree] |
-| Scale | `offline-legacy-unit-scale=2`; QuartzCore runs any panel taller than 1080 pixels, and every panel of a virtual device, at @2x whatever `display-scale` says | @3x. [U] whether the same QuartzCore rule forces @2x for a phone idiom; the iPad fix-ups (`ffeb241`) are for @1x/@2x and do not carry over |
+| Canvas | 2048x2732 pixels, 1024x1366 points | the S24 Ultra panel's native mode, 1440x3120 pixels: 480x1040 points at @3x (default) or 720x1560 at @2x. (iPhone18,2's own is 1320x2868, 440x956 points.) `docs/userland.md` 5.1 |
+| Scale | `offline-legacy-unit-scale=2`; QuartzCore runs any panel taller than 1080 pixels, and every panel of a virtual device, at @2x whatever `display-scale` says | 3 or 2 (xnuhost's `scale`). The same QuartzCore rule holds for the phone (one cache): @2x unchanged, @3x by two text fixups xnuhost adds; not verified running |
 | Refresh | `droidvm-display-hz=120`, `ca-triple-buffer=1` | the S24 Ultra's panel is 1440x3120 at 1 to 120 Hz: 120 [I] |
 | Orientation | landscape and portrait, pointer rendering fixes | portrait only at first; the iPad pointer work (`0c3fa5d`, `b7396ee`, `8d8f023`) is dropped |
 | Backend | `GopFramebuffer` under the original `IOMobileFramebufferLegacy` | `HostDisplay` (booter) under the same original class; the boot arguments `offline-mobile-graphics-load=1`, `offline-mobile-graphics-client=1`, `offline-legacy-register=1`, `offline-legacy-phase=4`, `offline-legacy-pm=1`, `offline-legacy-validate=1`, `offline-legacy-transfer=1`, `offline-key-events=1` carry over; `offline-legacy-gop=1` and `offline-legacy-cpu-present=1` are the GOP backend's |
 
-- The 1320x2868 canvas does not have the S24 Ultra's aspect (1440x3120 is 0.4615, the iPhone's 0.4603): scaled by
-  1.0879 it is 1436x3120, two black columns each side. Scaling is the display helper's (booter, oneos).
+- The canvas is the panel's own mode, so nothing is scaled and there are no bars; the display helper keeps its
+  scaling path for a frame of another size.
 - [U] Dynamic Island, always-on and the corner radius follow the identity's `/product` values; none is a kernel input.
 
 ## 5. Which iPadOS fixes carry over

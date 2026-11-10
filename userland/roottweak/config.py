@@ -15,13 +15,30 @@ def _load(name, directory):
         return tomllib.load(f)
 
 
-def device(directory=None, name='device-iphone18,2.toml'):
+SCALES = (2, 3)
+
+
+def device(directory=None, name='device-iphone18,2.toml', scale=None):
+    """The device profile. `scale` (2 or 3) replaces the profile's UI scale in every place that states it."""
     d = _load(name, directory)
     for table in ('device', 'display', 'adt', 'mobilegestalt'):
         if table not in d:
             raise ConfigError(f'{name}: no [{table}]')
     if d['device'].get('device_class') != 'iPhone':
         raise ConfigError(f'{name}: OneiOS targets iOS on an iPhone, not {d["device"].get("device_class")}')
+    display = d['display']
+    if scale is not None:
+        if scale not in SCALES:
+            raise ConfigError(f'the UI scale is 2 or 3, not {scale}')
+        display['scale'] = scale
+    scale = display['scale']
+    # One value everywhere: the points, /chosen display-scale (MobileGestalt's main-screen-scale), the artwork scale.
+    display['points'] = [display['width'] // scale, display['height'] // scale]
+    d['adt']['chosen']['display-scale'] = scale
+    d['adt'].setdefault('product', {})['artwork-scale-factor'] = scale
+    expect = d['mobilegestalt'].setdefault('expect', {})
+    expect['main-screen-scale'] = str(scale)
+    expect['main-screen-width'], expect['main-screen-height'] = str(display['width']), str(display['height'])
     return d
 
 

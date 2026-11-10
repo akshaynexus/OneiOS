@@ -54,7 +54,7 @@ def _apply(a):
         'no_prefs': [g for g in ('setup', 'migration', 'watchdogs', 'awake', 'coreanimation') if getattr(a, f'no_{g}')],
         'lighter_visuals': a.lighter_visuals, 'plain_keybag': a.plain_keybag,
     }
-    cx = tweaks.Context(root, data, layout, config.device(a.config), config.daemons(a.config), config.prefs(a.config), options)
+    cx = tweaks.Context(root, data, layout, config.device(a.config, scale=a.scale), config.daemons(a.config), config.prefs(a.config), options)
     for tweak in tweaks.ALL:
         cx.run(tweak)
 
@@ -79,6 +79,10 @@ def _apply(a):
         with open(os.path.join(a.out, name), 'w') as f:
             json.dump(value, f, indent=2, sort_keys=True)
             f.write('\n')
+    # xnuhost's part of the display: it reads this file from the image set's overlay/userland (docs/booter.md),
+    # so the scale of the device tree and of the framebuffer is the one the Data seed's identity.expect names.
+    with open(os.path.join(a.out, 'xnuhost.conf'), 'w') as f:
+        f.write(f'# written by roottweak: the UI scale this image was made for (2 or 3)\nscale={cx.device["display"]["scale"]}\n')
     with open(os.path.join(a.out, 'report.txt'), 'w') as f:
         f.write(report)
     sys.stdout.write(report)
@@ -150,6 +154,8 @@ def main(argv=None):
                    help='sealed: the OS volume is Apple\'s image, nothing is written to it (default). rw: a root we write')
     policy(s)
     s.add_argument('--disable', action='append', default=[], metavar='LABEL', help='disable this job, even one the policy keeps')
+    s.add_argument('--scale', type=int, choices=config.SCALES, help='the UI scale: 3 (default, 480x1040 points) or 2 (720x1560 points), '
+                   'at the panel\'s full resolution either way')
     s.add_argument('--build', help='the build number, where SystemVersion.plist has none')
     s.add_argument('--any-version', action='store_true', help='apply to a root that is not the profile\'s iOS version')
     s.add_argument('--helpers', metavar='DIR', help='signed guest binaries: the output of userland/helpers/build.sh')

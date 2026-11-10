@@ -20,7 +20,7 @@
 #include <time.h>
 #include <unistd.h>
 
-static uint32_t W = 1320, H = 2868;
+static uint32_t W = 1440, H = 3120;     // the guest's frame: the panel's native mode
 static uint8_t *pixels;
 static volatile int interrupted;
 static void on_signal(int n) { (void)n; interrupted = 1; }

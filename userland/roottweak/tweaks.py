@@ -512,9 +512,11 @@ def kernel_features(cx):
     ]
     cx.contract['kernel_features'] = [{'name': n, 'unixnu': u, 'what': w} for n, u, w in features]
     cx.contract['display']['scale_note'] = (
-        'iPadOS 27 QuartzCore gives a display mode of a virtual device @2x whatever display-scale says; UniXNU patches two '
-        'instructions of the iPad cache. For @3x on the iPhone the same method must be found again in the iPhone\'s '
-        'dyld_shared_cache_arm64e, or the display mode must carry a preferred scale of 3. Not done: no iPhone cache was read.')
+        '-[CADisplayMode preferredScale] (QuartzCore, read in 24A446\'s dyld_shared_cache_arm64e.01 at 0x40b1758; the cache is the '
+        'one the iPad has) returns the mode\'s own preferred scale when it has one; else, in a virtual device, 2 or the mode\'s '
+        'native scale field if that is more; else 2 for a mode taller than 1080 pixels and 1 otherwise. /chosen display-scale is '
+        'not read there. So @2x is what it answers unchanged, and for @3x xnuhost adds two text fixups (config.c xh_scale_fixups) '
+        'that make both answers 3. Not verified in a running guest: no frame of SpringBoard\'s has been rendered yet.')
     cx.say('contract', 'kernel features', f'{len(features)} things the kernel does for a sealed root (kernel_features)')
 
 
@@ -636,7 +638,8 @@ def identity(cx):
     cx.say('contract', 'identity', f'{d["device"]["product"]} ({d["device"]["board"]}), device class {d["device"]["device_class"]}: '
            'from the device tree the booter builds (adt); nothing in the root holds it')
     cx.say('contract', 'display', f'{d["display"]["width"]}x{d["display"]["height"]} @{d["display"]["scale"]}x '
-           f'{d["display"]["orientation"]}: the framebuffer the booter presents (display)')
+           f'({d["display"]["points"][0]}x{d["display"]["points"][1]} points) {d["display"]["orientation"]}, '
+           f'{d["display"]["refresh_hz"]} Hz: the framebuffer the booter presents (display)')
     target = d['device']['target_type']
     jetsam = f'{launchd.DAEMONS_DIR}/com.apple.jetsamproperties.{target}.plist'
     if cx.root.exists(jetsam):

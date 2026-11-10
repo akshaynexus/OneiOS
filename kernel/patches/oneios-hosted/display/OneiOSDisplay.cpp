@@ -14,9 +14,10 @@
 //   - the display's switches as defaults. Droid-VM passes them as boot arguments (offline-legacy-*, sheng-vsync);
 //     here an absent one has the value the display needs, and boot argument oneios-display=0 turns all of it off.
 //     NativeLegacyDisplay.cpp and the probe are compiled with PE_parse_boot_argn = oneios_display_boot_arg.
-//   - the panel: iPhone18,2 is 1320x2868 at three pixels per point. The mode is the boot video's (xnuhost's
-//     --width/--height, 1320x2868 by default); offline-legacy-unit-scale=3 makes the probe publish /chosen
-//     display-scale = 3.
+//   - the panel: the mode is the boot video's, which xnuhost makes the phone panel's native mode (1440x3120 on
+//     the Galaxy S24 Ultra; --width/--height). xnuhost passes offline-legacy-unit-scale=N (its scale, 3 or 2: the
+//     probe publishes or checks /chosen display-scale) and sheng-vsync=HZ (the panel's rate, 120: the vsync tick
+//     and the refresh properties); the defaults below are for a kernel started without them.
 //   - what Droid-VM's generated support file gives the display (the default surface, the surface's allocation
 //     size) and the hooks of boards this guest is not (boot progress, the DPU window, Adreno's fences).
 //
@@ -85,7 +86,7 @@ boolean_t oneios_display_boot_arg(const char *name, void *value, int size)
         {"offline-legacy-validate", 1},     // swaps are validated (one full-frame BGRA or half-float surface)
         {"offline-legacy-transfer", 1},     // and shown
         {"offline-legacy-cpu-present", 1},  // a frame the virtio scanout did not take is copied and still retires
-        {"offline-legacy-unit-scale", 3},   // /chosen display-scale: iPhone18,2 is @3x
+        {"offline-legacy-unit-scale", 3},   // /chosen display-scale: @3x unless xnuhost says 2
         {"sheng-vsync", 60},                // the refresh tick (work-loop timer) while a client asks for vsync
     };
     if (size != (int)sizeof(uint32_t) || !displayEnabled()) return FALSE;

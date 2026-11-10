@@ -47,7 +47,12 @@ typedef struct {
   unsigned ndisk;
   char  display[16];        // "shm", "drm", "none"
   char  gpu[8];             // "auto" (3D when the host has KGSL, udmabuf and a dma heap), "3d" (or do not start), "2d"
-  unsigned width, height;   // guest framebuffer; 0 = the panel's
+  unsigned width, height;   // guest framebuffer; 0 = the panel's native (largest) mode, 1440x3120 where it cannot be read
+  unsigned hz;              // the guest display's refresh rate; 0 = the panel's highest at that mode, 120 where unknown
+  unsigned scale;           // UI scale, pixels per point: 3 (480x1040 points, the default) or 2 (720x1560); 0 = the image set's
+  int   scale_fixup;        // the QuartzCore text fixups a scale of 3 needs (xh_scale_fixups): 1, 0, -1 = unset (on)
+  char  text_fixups[1024];  // text-fixup=FILE,OFFSET,ORIGINAL,REPLACEMENT entries for /chosen text-fixups, NUL-separated
+  unsigned text_fixups_length;
   bool  input;              // read /dev/input
   bool  tasks;              // start the task factory
   int   task_uid;           // uid of iOS task processes, -1 = xnuhost's own
@@ -68,6 +73,25 @@ int  xh_config_args(xh_config *c, int argc, char **argv);
 // Fills what depends on other values (kernel path, the image set's disks). Returns -1 on a problem.
 int  xh_config_finish(xh_config *c);
 uint64_t xh_parse_size(const char *text, bool *ok);
+
+// The display's mode plumbing (config.c; docs/booter.md 2.8).
+#define XH_PANEL_WIDTH  1440u          // the Galaxy S24 Ultra's panel, where the host's cannot be read
+#define XH_PANEL_HEIGHT 3120u
+#define XH_PANEL_HZ     120u
+typedef struct { unsigned width, height, hz; } xh_panel_mode;
+// The panel's native mode among the modes of its connector: the largest, at its highest refresh rate. Not the
+// current one: One UI's resolution setting may run the panel at 1080x2340.
+bool xh_panel_native(const xh_panel_mode *modes, unsigned count, xh_panel_mode *native);
+// The guest's mode: --width/--height and hz where given, else the panel's native mode (NULL: not readable), else
+// 1440x3120 at 120 Hz.
+xh_panel_mode xh_display_mode(const xh_config *c, const xh_panel_mode *panel);
+// Adds the display driver's two switches to the kernel's command line unless it already has them:
+// offline-legacy-unit-scale=SCALE (/chosen display-scale) and sheng-vsync=HZ (the vsync tick and, above 60 Hz,
+// the refresh properties). -1: no room.
+int  xh_display_boot_args(char *args, size_t size, unsigned scale, unsigned hz);
+// Appends the text fixups a UI scale needs on this build's dyld shared cache to a NUL-separated list
+// (/chosen text-fixups). Returns the list's new length; unknown builds and a scale of 2 add nothing.
+unsigned xh_scale_fixups(const char *build, unsigned scale, char *list, unsigned length, unsigned size);
 
 // ---- registers of a trapped kernel context (arch) -----------------------------------------------
 typedef struct { uint64_t x[31], sp, pc, pstate; } xh_regs;
@@ -280,7 +304,7 @@ typedef struct {
   unsigned width, height, stride;       // pixels, pixels, bytes; XRGB8888 (BGRA in memory)
   uint8_t *pixels;                      // xnuhost's shadow of the visible frame
 } xh_display;
-int   xh_display_init(const xh_config *c, unsigned *width, unsigned *height);
+int   xh_display_init(const xh_config *c, unsigned *width, unsigned *height, unsigned *hz);
 xh_display *xh_display_get(void);
 // The rectangle changed (already copied into pixels).
 void  xh_display_flush(unsigned x, unsigned y, unsigned w, unsigned h);

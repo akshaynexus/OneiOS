@@ -5,7 +5,8 @@ opens as the main display, and how its frames reach `session/display.sock`.
 
 **State, plainly.** It builds into the hosted kernel and starts at boot under `qemu-aarch64`: the class registers
 under the collection's `IOMobileFramebufferLegacy`, the service starts on the boot video, IOSurface makes its
-default surface, `/chosen display-scale` is 3, and the virtio-gpu scanout presents. What `backboardd` then does
+default surface (at the panel's native size, 1440x3120), `/chosen display-scale` is 3 (or 2), and the virtio-gpu
+scanout presents. What `backboardd` then does
 with it is in "What ran" below. Nothing here has run on the phone.
 
 ## What it is made of
@@ -83,17 +84,32 @@ so those archives keep their own names.
 
 ## The mode, the scale, vsync, swaps
 
-- **Mode.** The boot video: `boot_args.Video`, which xnuhost sets from `--width/--height` (1320x2868 by default,
-  the iPhone18,2 panel), 32 bit B,G,R,X. One layer (`IOMFBNumLayers` `MaxNumLayers` 1).
-- **Scale.** `/chosen display-scale` = 3 and `display-rotation` = 0, published by the probe
-  (`offline-legacy-unit-scale`, default 3 here). 1320x2868 at @3x is 440x956 points. Whether iOS 27's QuartzCore
-  honours 3 on this device is not known: iPadOS 27's runs any panel taller than 1080 pixels at @2x whatever the
-  property says (`external/UniXNU-droidvm/ipados27/board.toml`), and the phone path of
-  `-[CADisplayMode preferredScale]` has not been read.
-- **Vsync.** The family sends the compositor's vsync message; nothing in it produces the tick (Apple's panel
-  subclass does, from the vblank). The backend's work-loop timer stands in while a client has vsync enabled:
-  60 Hz by default (`sheng-vsync=N`, 0 for none; above 60 the refresh properties report that rate too). On the
-  phone the helper's layer runs at the panel's 120 Hz: pass `sheng-vsync=120` there.
+- **Mode.** The boot video: `boot_args.Video`, which xnuhost makes the size of the phone panel's native mode
+  (1440x3120 on the Galaxy S24 Ultra; `--width/--height` for another, `docs/booter.md` 2.8), 32 bit B,G,R,X. The
+  guest renders every pixel of the panel; nothing is scaled between its frame and the glass. One layer
+  (`IOMFBNumLayers` `MaxNumLayers` 1). A surface of scattered 4 KiB pages has 4388 backing entries at this size.
+- **Scale.** `/chosen display-scale` = 3 or 2 and `display-rotation` = 0. xnuhost writes both into the device
+  tree and passes `offline-legacy-unit-scale=N`; the probe finds the words there and checks they are that value
+  (`scale status 0` in the log). 3 (the default) is 480x1040 points, 2 is 720x1560; the pixels are the same.
+  The value is xnuhost's `scale` (`--set scale=2`, or the image set's `overlay/userland/xnuhost.conf`).
+  **QuartzCore does not read `display-scale`.** `-[CADisplayMode preferredScale]`, read in this build's
+  `dyld_shared_cache_arm64e.01` at 0x40b1758 (the same code at the same offset as in Droid-VM's iPad cache):
+  the mode's own preferred scale when it has one; else, in a virtual device, 2 (or the mode's native-scale field
+  when that is more); else 2 for a mode taller than 1080 pixels, 1 otherwise. This framebuffer's modes carry no
+  preferred scale, so the unchanged answer is 2. For 3 xnuhost adds two text fixups to `/chosen text-fixups`
+  (`config.c` `xh_scale_fixups`: the virtual device's floor 2 -> 3 at 0x40b17a8, the height test's result -> 3 at
+  0x40b17bc), which the kernel applies to those pages when they are paged in, only where the original bytes
+  match. **Not verified in a running guest** (no frame of the compositor's yet): whether the fixups are applied
+  to shared-cache pages under xnuhost, and what UIKit then lays out, are open.
+- **Vsync and the refresh rate.** The family sends the compositor's vsync message; nothing in it produces the
+  tick (Apple's panel subclass does, from the vblank). The backend's work-loop timer stands in while a client has
+  vsync enabled, at `sheng-vsync=N` Hz: xnuhost passes the panel's rate (120 on this phone; `--hz N`). Above
+  60 Hz the backend also reports the rate the way a ProMotion panel does: `getRefreshAttributes` answers a
+  minimum refresh interval of 1/120 s and keeps the family's maximum of 1/24 s (a range of 24 to 120 Hz for
+  the render server), and `setDisplayRefreshProperties` publishes that as `IOMFBDisplayRefresh` before any
+  client can find the display. `sheng-vsync-fixed=1` reports one fixed rate instead. With no boot argument at
+  all (a kernel started without xnuhost's) the tick is 60 Hz and the family's 1/60 s stays. The tick with a
+  client, and what backboardd makes of the properties, have not run.
 - **Swaps.** A swap is accepted when it is one full-panel, untransformed surface in B,G,R,A (or Apple's `&BGA`
   spelling, or half-float `RGhA`), or a blank frame. An accepted B,G,R,A frame is offered to the virtio scanout,
   which presents the surface's own pages (no copy in the guest) and completes the swap; a half-float frame, or one
@@ -101,7 +117,8 @@ so those archives keep their own names.
   retires the swap and wakes the client either way.
 
 Switches (boot arguments; an absent one has the value shown while the display is on):
-`oneios-display=1` (0: no display at all, the console only), `offline-legacy-unit-scale=3`, `sheng-vsync=60`, and
+`oneios-display=1` (0: no display at all, the console only), `offline-legacy-unit-scale=3`, `sheng-vsync=60` (xnuhost
+always passes these two, from its `scale` and the panel's rate, unless the command line already has them), and
 Droid-VM's stages, which there is no reason to change: `offline-mobile-graphics-load`, `offline-legacy-register`,
 `offline-legacy-gop`, `offline-legacy-phase=4`, `offline-legacy-pm`, `offline-legacy-validate`,
 `offline-legacy-transfer`, `offline-legacy-cpu-present`.
@@ -127,8 +144,8 @@ and a frame is `SET_SCANOUT_BLOB` and a flush (`docs/gpu.md`).
 
 Two changes in xnuhost's device (`runtime/xnuhost/src/virtio_gpu.c`) came with this:
 
-- A surface of scattered 4 KiB pages needs up to 3765 backing entries at 1320x2868; the limit for a 2D resource
-  was 4096 and is now 16384, as for blobs.
+- A surface of scattered 4 KiB pages needs up to 4388 backing entries at 1440x3120 (3765 at 1320x2868); the limit
+  for a 2D resource was 4096 and is now 16384, as for blobs.
 - The scanout client also presents the boot video (the console, until the compositor's first frame). That picture
   is shown, but **`session/ready` is created at the first frame of a surface that is not the boot framebuffer**.
 
@@ -158,6 +175,7 @@ boots; the last with a kernel built from scratch from the series 0001-0017 + 002
   the family's own `IOMobileFramebufferLegacy::start` logs; `default surface status 0 valid 1 1320x2868 stride 5376`;
   `late probe: stage 10, IOSurface load 0 root 1, tree node 1, probe 1, start 1, scale status 0 (/chosen
   display-scale 3), power stage 2 status 0`; `panel 1320x2868 ...; virtio scanout state 2, 2D resources`.
+  (These three boots ran at the size xnuhost used then, 1320x2868.)
 - The boot video reaches `display.sock` through the guest's driver: `display-capture.py` counted about 1.1 flushes
   a second (1020 in the 15 minutes of the last boot) of the console's picture. `session/ready` was not created
   (the console is not the first frame).
@@ -171,6 +189,15 @@ boots; the last with a kernel built from scratch from the series 0001-0017 + 002
   Both are the hosted user-thread layer's (the board's Q6), not the display's. chronod still aborted once in
   QuartzCore's `query_displays`, 42 s after backboardd opened the framebuffer: the render server had no display to
   offer yet.
+
+**The native mode (2026-11-11, native-display).** One boot with q4a's kernel (a collection that has the display,
+no kernel change) and the new xnuhost, `--display shm`, no size given: xnuhost logged `guest frame 1440x3120 at
+120 Hz, @3x (480x1040 points)` and `text fixups: 2 for /chosen text-fixups`; the guest `default surface status 0
+valid 1 1440x3120 stride 5760 bytes 17973248`, `late probe: stage 10, ... scale status 0 (/chosen display-scale
+3)`, `panel 1440x3120 at ... (17971200 bytes); virtio scanout state 2, 2D resources`; `display-capture.py` took
+`hello 1440x3120 stride 5760` and wrote a 1440x3120 PNG. What that boot did after the display started is in
+`docs/agents.md` (native-display's note). The image set it ran was built before this change (its Data seed's
+`identity.expect` still names 1320x2868).
 
 Not run, anywhere: a swap (validation, the offer to the virtio scanout, the CPU copy into the boot video, the
 half-float conversion, retirement), the vsync tick with a client, a blank frame, the kernel mapping of the boot

@@ -18,15 +18,18 @@ version = "27.0.1"
 # [F] vphone-cli Research/Guest/service_trimming.md "iOS 27 and DisableAllowed".
 
 [display]
-# The iPhone 17 Pro Max's own panel, portrait. [F] DT /product: artwork-device-subtype 2868, artwork-scale-factor 3,
-# artwork-device-idiom phone; width and ppi are the model's public figures [I].
-# SpringBoard picks its layout by the point size and the artwork subtype, so the guest keeps the iPhone's
-# metrics and the host scales the picture to its panel (1440x3120: the same shape within 0.3 %).
-width = 1320
-height = 2868
+# The Galaxy S24 Ultra's panel at its native mode, portrait: the guest renders every pixel of it, nothing is
+# scaled on the way to the glass. [F] xnuhost takes the mode from the panel (docs/booter.md 2.8); these are the
+# values it gets there. The iPhone 17 Pro Max's own panel is 1320x2868 @3x (440x956 points, 460 ppi).
+# scale is the UI scale, 3 (the default: 480x1040 points, 9 % wider and taller than the Pro Max's) or 2
+# (720x1560 points): `roottweak apply --scale 2` (ONEIOS_SCALE=2 for the image hook) changes it here, in
+# [adt.chosen] display-scale, [adt.product] artwork-scale-factor and main-screen-scale below, and writes it to
+# overlay/userland/xnuhost.conf for xnuhost. docs/userland.md "The screen" has the layout risks of both.
+width = 1440
+height = 3120
 scale = 3
-points = [440, 956]
-ppi = 460
+points = [480, 1040]
+ppi = 505
 orientation = "portrait"
 refresh_hz = 120
 
@@ -56,7 +59,7 @@ osenvironment = "main"
 # without APPLE2 and MTL2,2 (with them SplashBoard writes snapshots only Apple's GPU decodes: blank switcher cards).
 "artwork-device-idiom" = "phone"
 "artwork-scale-factor" = 3
-"artwork-device-subtype" = 2868
+"artwork-device-subtype" = 2868        # the Pro Max's set of artwork: no set exists for a 3120-pixel panel [I]
 "artwork-display-gamut" = "sRGB"      # DT has P3; UniXNU-droidvm gives its display sRGB (--display-gamut), as the host layer does
 
 [adt.buttons]
@@ -89,11 +92,13 @@ baseband = "DT has it (compatible baseband,n41). No modem: with the node CommCen
 "filesystems/fstab" = "DT has it (os_env_type 1, seven volumes by APFS role). With it, fsck runs fsck_apfs on the OS container and `mount -P 2` looks for a Data-role volume in the root's container, finds none, exits 66 and the kernel panics (launchd's boot task mount-phase-2 must succeed). Without it both take their 'not the main OS' path, the APFS kext logs one line (DT_get_fstab_entries: failed to get filesystem entry at: /filesystems/fstab) per mount phase, and nothing is left to mount"
 
 [mobilegestalt.expect]
-# What oneios-mg checks in the running guest (helpers/oneios-mg.c). All come from the device tree.
+# What oneios-mg checks in the running guest (helpers/oneios-mg.c). The identity comes from the device tree; the
+# width and height are the framebuffer's mode [I] (MobileGestaltHelper opens the framebuffer), the scale is /chosen
+# display-scale [F] UniXNU docs/guide/mobilegestalt.md.
 ProductType = "iPhone18,2"
 DeviceClass = "iPhone"
 DeviceClassNumber = "1"
-"main-screen-width" = "1320"
-"main-screen-height" = "2868"
+"main-screen-width" = "1440"
+"main-screen-height" = "3120"
 "main-screen-scale" = "3"
 ArtworkDeviceSubType = "2868"

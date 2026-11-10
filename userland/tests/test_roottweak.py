@@ -131,6 +131,22 @@ class Policy(unittest.TestCase):
         self.assertEqual((d['device']['product'], d['device']['device_class']), ('iPhone18,2', 'iPhone'))
         self.assertEqual((d['display']['scale'], d['display']['orientation']), (3, 'portrait'))
         self.assertEqual([d['display']['width'] // 3, d['display']['height'] // 3], d['display']['points'])
+        # the S24 Ultra's panel at its native mode and rate, every pixel rendered by the guest
+        self.assertEqual((d['display']['width'], d['display']['height'], d['display']['refresh_hz']), (1440, 3120, 120))
+        self.assertEqual(d['display']['points'], [480, 1040])
+        self.assertEqual((d['adt']['chosen']['display-scale'], d['adt']['product']['artwork-scale-factor']), (3, 3))
+        self.assertEqual(d['adt']['product']['artwork-device-subtype'], 2868)
+
+    def test_the_ui_scale_is_one_value_everywhere(self):
+        d = config.device(scale=2)
+        self.assertEqual((d['display']['width'], d['display']['height'], d['display']['scale']), (1440, 3120, 2))
+        self.assertEqual(d['display']['points'], [720, 1560])
+        self.assertEqual((d['adt']['chosen']['display-scale'], d['adt']['product']['artwork-scale-factor']), (2, 2))
+        expect = d['mobilegestalt']['expect']
+        self.assertEqual((expect['main-screen-width'], expect['main-screen-height'], expect['main-screen-scale']), ('1440', '3120', '2'))
+        self.assertEqual(config.device(scale=3)['mobilegestalt']['expect']['main-screen-scale'], '3')
+        with self.assertRaises(config.ConfigError):
+            config.device(scale=4)
         self.assertEqual(d['adt']['product']['artwork-device-idiom'], 'phone')
         self.assertIn('baseband', d['adt']['absent'])
         self.assertEqual(d['mobilegestalt']['expect']['DeviceClass'], 'iPhone')
@@ -388,7 +404,24 @@ class Sealed(Case):
         self.assertEqual(c['app_cryptex']['image'], 'app.img')
         self.assertEqual(c['adt']['chosen']['display-scale'], 3)
         self.assertEqual(c['adt']['product']['artwork-device-idiom'], 'phone')
-        self.assertEqual((c['display']['width'], c['display']['height'], c['display']['scale']), (1320, 2868, 3))
+        self.assertEqual((c['display']['width'], c['display']['height'], c['display']['scale']), (1440, 3120, 3))
+        self.assertEqual(c['display']['points'], [480, 1040])
+        with open(os.path.join(self.out, 'xnuhost.conf')) as f:
+            self.assertIn('scale=3\n', f.read())
+
+    def test_scale_2_reaches_the_contract_the_seed_and_xnuhost(self):
+        self.apply('--scale', '2')
+        c = self.read('boot-contract.json')
+        self.assertEqual((c['display']['width'], c['display']['height'], c['display']['scale'], c['display']['points']),
+                         (1440, 3120, 2, [720, 1560]))
+        self.assertEqual((c['adt']['chosen']['display-scale'], c['adt']['product']['artwork-scale-factor']), (2, 2))
+        with open(os.path.join(self.data, 'oneios/identity.expect')) as f:
+            expect = f.read()
+        self.assertIn('main-screen-scale=2\n', expect)
+        self.assertIn('main-screen-width=1440\n', expect)
+        self.assertIn('main-screen-height=3120\n', expect)
+        with open(os.path.join(self.out, 'xnuhost.conf')) as f:
+            self.assertEqual([line for line in f.read().splitlines() if not line.startswith('#')], ['scale=2'])
         self.assertIn('scale_note', c['display'])
         self.assertIn('chosen/unique-chip-id', c['adt']['required'])
         # the two nodes of Apple's tree that must stay out: the modem, and the fstab that names volumes this layout has not
@@ -425,14 +458,16 @@ class Hook(Case):
         env = {'PATH': os.environ['PATH'], 'ONEIOS_HOOK_API': '1', 'ONEIOS_OS_ROOT': self.root, 'ONEIOS_DATA': self.data,
                'ONEIOS_OVERLAY': overlay, 'ONEIOS_OWNERS': owners, 'ONEIOS_INFO': info, 'ONEIOS_BUILD': fakeroot.BUILD,
                'ONEIOS_HELPERS': os.path.join(self.top, 'none'), 'ONEIOS_METAL_PLUGIN': os.path.join(self.top, 'none'),
-               'ONEIOS_ROOTTWEAK_ARGS': '--keep com.apple.momentsd'}
+               'ONEIOS_ROOTTWEAK_ARGS': '--keep com.apple.momentsd', 'ONEIOS_SCALE': '2'}
         hook = os.path.join(os.path.dirname(HERE), 'image-hook')
         before = digest(self.root)
         done = subprocess.run([sys.executable, '-I', hook], env=env, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(digest(self.root), before)
         self.assertEqual(sorted(os.listdir(os.path.join(overlay, 'userland'))),
-                         ['boot-contract.json', 'owner-trust.json', 'report.json', 'report.txt', 'tweaks.manifest.json'])
+                         ['boot-contract.json', 'owner-trust.json', 'report.json', 'report.txt', 'tweaks.manifest.json', 'xnuhost.conf'])
+        with open(os.path.join(overlay, 'userland', 'xnuhost.conf')) as f:
+            self.assertIn('scale=2\n', f.read())
         with open(info) as f:
             self.assertIsNone(json.load(f)['first_start_unpacker'])
         with open(owners) as f:

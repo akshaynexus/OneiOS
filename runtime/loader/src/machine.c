@@ -214,6 +214,12 @@ xl_adt_node *xl_machine_tree(const xl_machine *m, const char **error)
   if (m->gpu_addon) xl_adt_set(map, "GpuAddon", empty, 16);
   if (m->root_policies) xl_adt_set(map, "RootPolicies", empty, 16);
   xl_adt_add(chosen, "manifest-properties");
+  if (m->display_scale) {
+    // The UI scale: MobileGestalt's main-screen-scale. The display driver publishes the same two words and
+    // refuses to start its scale policy on a value that differs (LegacyDisplayProbe.cpp publishOrMatchWord).
+    xl_adt_set_u32(chosen, "display-scale", m->display_scale);
+    xl_adt_set_u32(chosen, "display-rotation", 0);
+  }
   if (m->host_vector) {
     xl_adt_node *host = xl_adt_add(chosen, "xnuhost");
     xl_adt_set_u32(host, "abi", 1);
@@ -222,6 +228,12 @@ xl_adt_node *xl_machine_tree(const xl_machine *m, const char **error)
     xl_adt_set(host, "io-aperture", io, sizeof io);
     xl_adt_set_u64(host, "user-va-limit", m->user_va_limit);
     xl_adt_set_u32(host, "host-page-size", m->host_page_size);
+    if (m->display_width && m->display_height) {
+      xl_adt_set_u32(host, "display-width", m->display_width);
+      xl_adt_set_u32(host, "display-height", m->display_height);
+      xl_adt_set_u32(host, "display-scale", m->display_scale);
+      xl_adt_set_u32(host, "display-hz", m->display_hz);
+    }
   }
 
   xl_adt_node *cpus = xl_adt_add(root, "cpus");
@@ -297,6 +309,9 @@ xl_adt_node *xl_machine_tree(const xl_machine *m, const char **error)
   } else {
     xl_adt_set_str(product, "product-name", "OneiOS guest");
   }
+  // The artwork scale follows the UI scale (the identity tree's is the iPhone panel's 3). The artwork subtype
+  // stays the identity's (2868 for iPhone18,2): it names a set of assets, and no set exists for another height.
+  if (m->display_scale) xl_adt_set_u32(product, "artwork-scale-factor", m->display_scale);
   xl_adt_set_str(product, "model", "oneios,xnuhost");
 
   xl_adt_node *io = xl_adt_add(root, "arm-io");

@@ -34,7 +34,7 @@ enum { FLAG_FENCE = 1, FLAG_RING_IDX = 2, MAP_INFO_POOL = 1u << 31 };
 enum { F_VIRGL = 1u << 0, F_RESOURCE_BLOB = 1u << 3, F_CONTEXT_INIT = 1u << 4, F_CREATE_GUEST_HANDLE = 1u << 6 };
 
 #define MAX_RES 64
-#define MAX_BACKING 16384              // as MAX_BLOB_ENTRIES: a 2D surface of scattered 4 KiB pages (1320x2868 has 3765)
+#define MAX_BACKING 16384              // as MAX_BLOB_ENTRIES: a 2D surface of scattered 4 KiB pages (1440x3120 has 4388)
 typedef struct {
   uint32_t id, format, width, height;
   uint8_t *pixels;                 // host copy, always B,G,R,X byte order

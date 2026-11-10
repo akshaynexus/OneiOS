@@ -23,7 +23,11 @@ static int as_helper(const char *session);
 static void test_fit(void)
 {
   struct xhd_fit f;
-  xhd_fit(1320, 2868, 1440, 3120, &f);                 // the iPhone frame on the S24 Ultra's panel
+  xhd_fit(1440, 3120, 1440, 3120, &f);                 // the guest at the panel's native mode: 1:1, no bars
+  CHECK(f.w == 1440 && f.h == 3120 && f.x == 0 && f.y == 0);
+  xhd_fit(1440, 3120, 1080, 2340, &f);                 // the panel left at FHD+ (the native mode was refused): scaled, same shape
+  CHECK(f.w == 1080 && f.h == 2340 && f.x == 0 && f.y == 0);
+  xhd_fit(1320, 2868, 1440, 3120, &f);                 // a mismatch: the iPhone's own frame on the S24 Ultra's panel
   CHECK(f.w == 1436 && f.h == 3120 && f.x == 2 && f.y == 0);
   xhd_fit(1320, 2868, 1080, 2340, &f);                 // One UI at FHD+
   CHECK(f.w == 1077 && f.h == 2340 && f.x == 1 && f.y == 0);

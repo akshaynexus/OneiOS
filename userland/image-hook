@@ -7,12 +7,13 @@ a file for the image set's overlay/ (ONEIOS_OVERLAY) or a line of the boot contr
 
 Leaves in ONEIOS_OVERLAY/userland/: bin/oneios-seed (the first-start unpacker of the Data seed, when the helpers
 are built), boot-contract.json (for the booter and the kernel), owner-trust.json (for the
-trust cache), tweaks.manifest.json, report.txt, report.json. Owners go to ONEIOS_OWNERS, a summary to ONEIOS_INFO.
+trust cache), xnuhost.conf (the UI scale, for xnuhost), tweaks.manifest.json, report.txt, report.json. Owners go to ONEIOS_OWNERS, a summary to ONEIOS_INFO.
 
 Optional inputs, each used when it is there:
   ONEIOS_HELPERS        signed guest helpers (default out/userland/helpers, from userland/helpers/build.sh)
   ONEIOS_METAL_PLUGIN   a built Metal plugin bundle (default out/userland/NativeAdrenoMetal.bundle, from
                         userland/metal/build.sh); its build record NativeAdrenoMetal.build.json beside it is checked
+  ONEIOS_SCALE          the UI scale, 3 (default) or 2: the device tree's, MobileGestalt's and xnuhost's (xnuhost.conf)
   ONEIOS_ROOTTWEAK_ARGS more `roottweak apply` arguments, split like a shell line (--group fewest, --disable LABEL)
 """
 import json
@@ -44,6 +45,8 @@ def main():
     plugin = env.get('ONEIOS_METAL_PLUGIN') or os.path.join(repo, 'out/userland/NativeAdrenoMetal.bundle')
     if os.path.isdir(plugin):
         args += ['--metal-plugin', plugin]
+    if env.get('ONEIOS_SCALE'):
+        args += ['--scale', env['ONEIOS_SCALE']]
     args += shlex.split(env.get('ONEIOS_ROOTTWEAK_ARGS', ''))
     status = cli.main(args)
     if status:

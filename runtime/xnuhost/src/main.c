@@ -32,7 +32,7 @@ static struct { uint32_t requested, reason, code; char why[96]; } stop_state;
 static pthread_mutex_t stop_lock = PTHREAD_MUTEX_INITIALIZER;
 static bool guest_ready;
 static uint64_t boot_fb_pa;
-static unsigned fb_width, fb_height;
+static unsigned fb_width, fb_height, fb_hz;
 
 bool xh_stopping(void) { return __atomic_load_n(&stop_state.requested, __ATOMIC_ACQUIRE) != 0; }
 
@@ -396,6 +396,21 @@ static int boot(void)
   machine.dram_base = phys;
   machine.dram_size = window;
   machine.model = "iPhone18,2";
+  machine.display_width = fb_width;
+  machine.display_height = fb_height;
+  machine.display_scale = config.scale;
+  machine.display_hz = fb_hz;
+  // Signed text the kernel changes at page-in (/chosen text-fixups): the configured ones, and what the UI scale needs.
+  if (config.scale_fixup)
+    config.text_fixups_length = xh_scale_fixups(have_image_set ? image_set.build : NULL, config.scale, config.text_fixups,
+                                                config.text_fixups_length, sizeof config.text_fixups);
+  if (config.text_fixups_length) {
+    machine.text_fixups = config.text_fixups;
+    machine.text_fixups_length = config.text_fixups_length;
+    unsigned count = 0;
+    for (unsigned i = 0; i < config.text_fixups_length; i++) count += !config.text_fixups[i];
+    LOGI("text fixups: %u for /chosen text-fixups (UI scale @%ux)", count, config.scale);
+  }
   machine.host_vector = (uint64_t)(uintptr_t)xh_vector();
   machine.user_va_limit = xh_tasks_va_limit();
   machine.host_page_size = g_info.host_page_size;
@@ -592,7 +607,9 @@ int main(int argc, char **argv)
     snprintf(pid, sizeof pid, "%d\n", getpid());
     session_file("xnuhost.pid", pid);
   }
-  if (xh_display_init(&config, &fb_width, &fb_height)) return EXIT_SETUP;
+  if (xh_display_init(&config, &fb_width, &fb_height, &fb_hz)) return EXIT_SETUP;
+  // The display driver's scale and refresh rate go on the kernel's command line (a value given there stays).
+  if (xh_display_boot_args(config.boot_args, sizeof config.boot_args, config.scale, fb_hz)) { LOGE("no room in the boot arguments for the display's switches"); return EXIT_SETUP; }
   if (boot()) { xh_tasks_shutdown(); return EXIT_SETUP; }
 
   sigset_t waited;

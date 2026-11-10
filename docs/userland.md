@@ -21,7 +21,7 @@ The image build runs it (`scripts/image/build.sh` calls `userland/image-hook`, h
 `docs/image-format.md` section 6). By hand:
 
 ```sh
-python3 -I userland/tweak apply --root OS_TREE --data DATA_TREE --out OUT   # --layout sealed
+python3 -I userland/tweak apply --root OS_TREE --data DATA_TREE --out OUT   # --layout sealed; --scale 2 for the 2x UI
 python3 -I userland/tweak daemons                                           # the daemon policy as text
 python3 -I userland/tweak cdhash FILE...                                    # CDHash of signed Mach-O files
 python3 -I userland/tweak boot-check --data DATA_VOLUME [--root OS_TREE]    # after a boot: section 10
@@ -37,6 +37,7 @@ Python 3.11 or later, standard library only. Output in `OUT` (the hook puts it i
 | File | For | Content |
 |---|---|---|
 | `boot-contract.json` | booter, kernel | device tree identity, display, launch policy, mounts, kernel features (section 6) |
+| `xnuhost.conf` | xnuhost | `scale=3` or `scale=2`: the UI scale this image was made for (section 5.1) |
 | `owner-trust.json` | kernel build | CDHashes of our own binaries for the owner trust cache |
 | `tweaks.manifest.json` | image build | every path changed, with the owner and mode the guest needs |
 | `report.txt`, `report.json` | people | one line per item: `applied`, `kept`, `not-found`, `off`, `contract` |
@@ -133,9 +134,9 @@ owner's IPSW (`out/kernel-inputs/24A446/devicetree.bin`, read locally, never com
 |---|---|---|
 | model, target-type, compatible | iPad17,3, J820, J820AP | iPhone18,2, V54, `V54AP iPhone18,2 AppleARM` [F] |
 | chip-id, board-id | 0x8142, 12 | 0x8150, 0x0E [F] |
-| `/product` idiom, subtype, scale | pad, 2732, 2 | phone, 2868, 3 [F] |
-| Display | 2048x2732 @2x landscape handling | 1320x2868 @3x portrait, 440x956 points. The host's 1440x3120 panel has the same shape within 0.3 %, so the host scales |
-| Scale fixup | two instructions of the iPad cache so a virtual display is not forced to an iPad mini layout | **not done**: QuartzCore gives a virtual device's mode @2x; @3x needs the same method re-found in the iPhone cache, or a display mode that carries a preferred scale of 3 |
+| `/product` idiom, subtype, scale | pad, 2732, 2 | phone, 2868, and the UI scale (3, or 2) [F] |
+| Display | 2048x2732 @2x landscape handling | the host panel's native mode, 1440x3120 portrait at 120 Hz, every pixel rendered by the guest; @3x (480x1040 points) or @2x (720x1560 points). Section 5.1 |
+| Scale fixup | two instructions of the iPad cache so a virtual display is not forced to an iPad mini layout | QuartzCore's rule read in this build's cache (it is the iPad's code at the same offset): @2x is its own answer, @3x takes two text fixups xnuhost adds. Not verified in a running guest. Section 5.1 |
 | Buttons | hold, voldown, volup, home-button-type 2 | the same three; the tree also has `ringeren` (Action button), no host key for it |
 | Baseband | none (Wi-Fi iPad) | the tree has `/baseband` (`baseband,n41`): the booter must leave it out |
 | `/filesystems/fstab` | not in their trees either (UniXNU's boots log the same APFS line) | the tree has it; the booter must leave it out (section 10) |
@@ -147,6 +148,101 @@ owner's IPSW (`out/kernel-inputs/24A446/devicetree.bin`, read locally, never com
 | Metal clients | `*` on 27 | the named list (`WidgetRenderer_Default`, `*Poster*`, `iconservicesagent`, `SBRendererService`); backboardd always has it |
 | Addon visible-check | `AGXMetalG17G.bundle` | the iPhone's AGX bundle name [U] |
 | Dynamic Island, always-on | - | follow the identity (`island-notch-location`, `oled-display` are in `/product`) [U] |
+
+### 5.1 The screen: native resolution, 120 Hz, UI scale 3 or 2
+
+The guest does not present the iPhone 17 Pro Max's own 1320x2868 frame. It renders the Galaxy S24 Ultra's panel at
+its native mode, **1440x3120 at 120 Hz**, and the display helper shows that frame 1:1 (`runtime/display/README.md`).
+The UI scale is a setting, at full resolution either way:
+
+| Scale | Points | Against the Pro Max's 440x956 | Physical size of a point (505 ppi) |
+|---|---|---|---|
+| 3 (default) | 480x1040 | 9 % more points each way | 1/168 inch (the iPhone's: 1/153): everything 9 % smaller; a 44-point target is 6.6 mm (7.3 mm on the iPhone) |
+| 2 | 720x1560 | 64 % more points each way | 1/253 inch: everything 61 % of the iPhone's size; a 44-point target is 4.4 mm |
+
+**Setting it.** One value, in every place that states it:
+
+```sh
+ONEIOS_SCALE=2 scripts/image/build.sh PROFILE          # the image: roottweak apply --scale 2
+xnuhost ... --set scale=2                              # one run, over the image's value (bench)
+```
+
+| Place | Written by | Read by |
+|---|---|---|
+| `boot-contract.json` `display.scale`, `display.points`, `adt.chosen.display-scale`, `adt.product.artwork-scale-factor` | roottweak (`config.device(scale=)`) | people, the booter |
+| `identity.expect` on the Data seed: `main-screen-scale`, `main-screen-width`, `main-screen-height` | roottweak | `oneios-mg` in the guest |
+| `overlay/userland/xnuhost.conf` `scale=N` | roottweak | xnuhost |
+| `/chosen display-scale`, `/product artwork-scale-factor`, `/chosen/xnuhost display-*`, boot argument `offline-legacy-unit-scale=N` | xnuhost (`docs/booter.md` 2.8) | MobileGestalt, the framebuffer driver |
+| `/chosen text-fixups` (scale 3, build 24A446) | xnuhost | the kernel, for QuartzCore |
+
+Width and height are not a setting: xnuhost takes them from the panel, and the profile's `[display]` (1440x3120,
+120 Hz) is what it finds on this phone. An image built before this change has `main-screen-width=1320` in its
+seed's `identity.expect`: rebuild the image set, or `oneios-mg` reports the difference. `out/image/24A446` has
+not been rebuilt.
+
+**What iOS 27 reads** (24A446; [F] read in the cache or a reference, [I] inferred, [U] unknown):
+
+- `main-screen-scale`: MobileGestalt answers it from `/chosen display-scale` [F: UniXNU
+  `docs/guide/mobilegestalt.md`]. `main-screen-width`/`height`: [I] from the framebuffer's mode
+  (MobileGestaltHelper opens the framebuffer in every boot), not from the device tree, which has no such
+  property; not confirmed in the cache.
+- The render server's scale: `-[CADisplayMode preferredScale]`, QuartzCore, `dyld_shared_cache_arm64e.01` at
+  file offset 0x40b1758 [F: disassembled here; the instruction Droid-VM patches for the iPad, `cmp x8, #1080`,
+  is at the same offset 0x40b17b8, so the phone and the iPad have one QuartzCore]. In order: the mode's own
+  preferred scale if it has one (a real iPhone's panel driver supplies 3); else, in a virtual device, 2, or the
+  mode's native-scale field when that is more; else 2 for a mode taller than 1080 pixels and 1 otherwise.
+  `display-scale` is not read. This framebuffer's modes carry no preferred scale, so **the unchanged answer is
+  2**. For 3, xnuhost adds two fixups (`mov w9, #2` -> `#3` at 0x40b17a8; `mov w8, #1; cinc` -> `mov w8, #3;
+  nop` at 0x40b17bc). Which of the two paths this guest takes ([U]: the byte tested is a global set once, taken
+  to be "virtual device") does not matter, both are changed.
+- The refresh rate: the framebuffer's refresh attributes and `IOMFBDisplayRefresh` (minimum interval 1/120 s,
+  maximum 1/24 s), as a ProMotion panel reports them (`kernel/patches/oneios-hosted/display/README.md`). No
+  MobileGestalt answer is written for it; [U] whether anything consults one.
+- `ArtworkDeviceSubType` stays 2868 and `artwork-device-idiom` phone: the subtype names the Pro Max's set of
+  artwork and its layout metrics, and nothing in an iPhone's OS image is made for a 3120 subtype [I].
+
+**Layout risks. None of this has been seen: no frame of SpringBoard's has been rendered at any size.**
+
+Both scales:
+
+- 480x1040 and 720x1560 are not the point size of any iPhone. Apps and SpringBoard that lay out from the
+  screen's bounds fill it; code that looks the device up in a table of known sizes (keyboard metrics, the
+  status bar and Dynamic Island geometry, SpringBoard's icon grid, wallpaper and Lock Screen layouts keyed by
+  the artwork subtype) gets the Pro Max's 2868 entry for a screen that is 40 points wider and 84 taller (at 3),
+  or misses.
+- Apps built against old SDKs, or without a launch storyboard, run in a compatibility size iOS picks from the
+  device classes it knows: letterboxed, at a size [U] for this screen.
+- The safe-area insets, corner radius and the island's place are the Pro Max's (from the subtype). The S24
+  Ultra has a centred punch-hole camera near the top edge and nearly square corners: the island is drawn around
+  where the hole is, roughly; rounded-corner masks cut a little picture off. [I]
+- If MobileGestalt's scale and QuartzCore's differ (the fixups not applied at 3, or `--set scale-fixup=0`),
+  UIKit lays out for one and the render server draws for the other: a UI that fills a quarter more or less of
+  the screen than it should. The first SpringBoard frame at each scale shows which.
+- 19 % more pixels than the iPhone frame per frame, and twice the frames: the helper's copy, the CPU-copy
+  path of the framebuffer and the GPU's fill rate all scale with it.
+
+Only at 3:
+
+- It depends on the two text fixups, which exist for build 24A446 only and have not been seen applied. Without
+  them QuartzCore runs the display at 2.
+- The least risk to layouts: iPhone assets, fonts and metrics are all made for 3; only the point size is new.
+
+Only at 2:
+
+- It is QuartzCore's own answer (no fixup), and the path Droid-VM runs on the iPad.
+- No current iPhone is @2x. The OS image of an iPhone18,2 carries @3x phone artwork; @2x lookups fall back to
+  other variants or scale them [I]: softer or wrongly sized glyphs and icons are possible, and
+  `artwork-scale-factor` 2 with subtype 2868 names a set that does not exist.
+- 720 points is wider than any iPhone and nearly an iPad mini's 744. UIKit takes size classes from the idiom
+  and the window, so a phone stays compact in portrait [I], but apps that switch layout on width (two columns
+  past some width) will; SpringBoard's grid has room for more columns than its phone layouts define ([U] what
+  it does with it).
+- Touch targets are 4.4 mm; text is 61 % of its size on an iPhone. Dynamic Type or Display Zoom in Settings
+  are the guest's own remedies.
+
+Whether 3 is "more correct" than another value: 3 is the only scale an iPhone identity is built for, and
+480x1040 is the closest a whole-number scale gets to the Pro Max's 440x956 at this panel's size; a fractional
+scale (3.27 would give 440 points) is not something UIKit has. So 3 stays the default.
 
 ## 6. Boot contract: what the booter and kernel must provide
 
@@ -162,7 +258,8 @@ owner's IPSW (`out/kernel-inputs/24A446/devicetree.bin`, read locally, never com
   node, `/bluetooth` transport-encoding 10, `/defaults/vmm-present`.
 - `adt.absent`: `baseband`, and `filesystems/fstab` (section 10: with Apple's node the boot stops in
   mount-phase-2).
-- `display`: the framebuffer to present, and `scale_note` (the open @3x question).
+- `display`: the framebuffer to present (the panel's native mode, the scale and the points it gives), and
+  `scale_note` (what QuartzCore does with the scale; section 5.1).
 - `launch_policy.disable_jobs`: the labels. `launch_policy.override`: where they are in force from. The seed
   carries `db/com.apple.xpc.launchd/disabled.plist` and the kernel's unpack of the seed sets its owner (root)
   and mode; the kernel's launch policy writes nothing itself (`kernel/patches/oneios-hosted/0004-README.md`,
@@ -184,7 +281,7 @@ owner's IPSW (`out/kernel-inputs/24A446/devicetree.bin`, read locally, never com
 |---|---|
 | `oneios-init` | Our service manager outside launchd. Reads `services.d/NAME.conf` (`arg=`, `env=`, `uid=`, `keepalive=`, `throttle=`, `bootstrap=`), starts what `enabled/` names, restarts with a throttle, logs to `log/`, writes `state/status`. Ignores a service file that others can write |
 | `oneios-bootstat` | `ONEIOS-GUEST stage=backboardd-up|springboard-process|springboard-up ...` on the console and in `state/boot` |
-| `oneios-mg` | Asks MobileGestalt and compares with `identity.expect` (ProductType iPhone18,2, DeviceClass iPhone, main-screen 1320x2868 @3x, subtype 2868) |
+| `oneios-mg` | Asks MobileGestalt and compares with `identity.expect` (ProductType iPhone18,2, DeviceClass iPhone, main-screen 1440x3120 at the image's scale, subtype 2868) |
 | `oneios-seed` | First start: unpacks `data.seed` (pax tar) into the new Data volume as root, with owners, modes, links and extended attributes; marks it with the seed's SHA-256; refuses `..`, absolute paths, links out of the volume, devices and hard links |
 
 Built by `helpers/build.sh` for `arm64e-apple-ios27.0`, signed ad hoc with 4 KiB signature pages: Xcode on
@@ -237,7 +334,7 @@ GPU tests once it runs: droidvm `package/metalcheck`, `gfxprobe`, `gfxbench`.
 1. Done: the run on the real root (all 142 labels of the default policy are in the iPhone's cache) and a PC boot with it (section 10).
 2. iOS builds of the helpers (`helpers/build.sh` moved to the toolchain of `docs/building.md` section 9), and their CDHashes in the kernel's owner trust module. Until then the kernel's line `no /private/var/oneios/bin/oneios-init in this seed: no service manager` stays. It is about our own helpers (boot stages on the console, the MobileGestalt check, a debug shell), not about the daemon policy.
 3. Done by the kernel: the first-start Data path (`0004`), with the seed unpacked in the kernel.
-4. The @3x scale: no fixup for the iPhone's QuartzCore yet, and the phone path of `-[CADisplayMode preferredScale]` has not been read (it needs `systemos.img`, not fetched here). Without it the guest may come up @2x (660x1434 points) and lay out wrongly.
+4. The scale: read and wired (section 5.1), not yet seen. @2x is QuartzCore's own answer; @3x relies on two text fixups. The first SpringBoard frame decides both, and the layout risks of a 480x1040 or 720x1560 point screen.
 5. Kernel features of section 6 for this profile (release-kernel, booter).
 6. CommCenter without a baseband: in the PC boot launchd refused `com.apple.CommCenter.plist` (`_LimitLoadToDeviceTree baseband`: "cannot be loaded on this hardware"), loaded `com.apple.CommCenter-noncellular.plist` under the same label and CommCenter ran with no exit in the 5 minutes the log covers. Longer runs and SpringBoard's use of it: [U].
 7. The Metal plug-in is built for the iPhone's cache and placed (section 7.1), but no boot has loaded it (`docs/gpu.md` sections 5.1 and 7: the kernel side is linked; a boot needs an image set with the bundle and a kernel that trusts its two CDHashes). Until then CPU rendering.

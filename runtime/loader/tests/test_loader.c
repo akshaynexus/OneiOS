@@ -242,10 +242,32 @@ static void test_machine(void)
   xl_adt_set_u32(product, "has-exclaves", 1);
   xl_adt_set_str(product, "graphics-featureset-fallbacks", "MTL1,2:APPLE2:MTL2,2:GLES2,0");
   xl_adt_set_u32(xl_adt_add(product, "audio"), "acoustic-id", 77);
+  xl_adt_set_u32(product, "artwork-scale-factor", 3);
+  xl_adt_set_u32(product, "artwork-device-subtype", 2868);
   m.identity = donor;
+  // the display: the mode, the UI scale and the refresh rate (the scale in /chosen and in /product too)
+  m.display_width = 1440; m.display_height = 3120; m.display_scale = 2; m.display_hz = 120;
   t = xl_machine_tree(&m, &err);
   CHECK(t != NULL);
   if (t) {
+    const xl_adt_node *ch = xl_adt_find(t, "chosen"), *host = xl_adt_find(t, "chosen/xnuhost");
+    uint32_t word = 0;
+    p = xl_adt_get(ch, "display-scale");
+    CHECK(p && p->length == 4 && (memcpy(&word, p->value, 4), word) == 2);
+    p = xl_adt_get(ch, "display-rotation");
+    CHECK(p && p->length == 4 && (memcpy(&word, p->value, 4), word) == 0);
+    p = xl_adt_get(host, "display-width");
+    CHECK(p && (memcpy(&word, p->value, 4), word) == 1440);
+    p = xl_adt_get(host, "display-height");
+    CHECK(p && (memcpy(&word, p->value, 4), word) == 3120);
+    p = xl_adt_get(host, "display-hz");
+    CHECK(p && (memcpy(&word, p->value, 4), word) == 120);
+    p = xl_adt_get(host, "display-scale");
+    CHECK(p && (memcpy(&word, p->value, 4), word) == 2);
+    p = xl_adt_get(xl_adt_find(t, "product"), "artwork-scale-factor");
+    CHECK(p && p->length == 4 && (memcpy(&word, p->value, 4), word) == 2);
+    p = xl_adt_get(xl_adt_find(t, "product"), "artwork-device-subtype");
+    CHECK(p && (memcpy(&word, p->value, 4), word) == 2868);                        // the identity's set of artwork stays
     CHECK(!strcmp((const char *)xl_adt_get(t, "model")->value, "Fixture1,1"));
     p = xl_adt_get(t, "compatible");
     CHECK(p && !memcmp(p->value, "F1AP\0oneios,xnuhost", sizeof "F1AP\0oneios,xnuhost"));

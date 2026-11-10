@@ -86,14 +86,18 @@ public final class OneiOSDisplay {
                 canvas.getClass().getMethod("drawColor", int.class).invoke(canvas, 0xff000000);
                 backSurface.getClass().getMethod("unlockCanvasAndPost", Class.forName("android.graphics.Canvas")).invoke(backSurface, canvas);
             }
-            // The frame's layer: buffers of the guest's size, scaled to the fit by the compositor
-            // (one sampling on the GPU or in an overlay; this process only copies rows).
+            // The frame's layer: buffers of the guest's size. The guest renders the panel's native mode,
+            // so in a session the layer covers the panel pixel for pixel, with no matrix and no bars;
+            // a frame of another size (a mismatch) is scaled to the fit by the compositor (one sampling
+            // on the GPU or in an overlay; this process only copies rows).
             layer = layer("OneiOS display");
             queue = queue("OneiOS display", layer, guest[0], guest[1], format);
             surface = queue.getClass().getMethod("createSurface").invoke(queue);
+            boolean exact = fit[2] == guest[0] && fit[3] == guest[1];
             float sx = fit[2] / (float) guest[0], sy = fit[3] / (float) guest[1];
             Class<?>[] f4 = {SC, float.class, float.class, float.class, float.class};
-            if (!tx(transaction, "setMatrix", f4, layer, sx, 0f, 0f, sy)
+            if (exact) log("the frame is the panel's size: shown 1:1, not scaled");
+            else if (!tx(transaction, "setMatrix", f4, layer, sx, 0f, 0f, sy)
                 && !tx(transaction, "setScale", new Class<?>[]{SC, float.class, float.class}, layer, sx, sy))
                 log("the layer could not be scaled: the frame shows at its own size");
             if (!tx(transaction, "setPosition", new Class<?>[]{SC, float.class, float.class}, layer, (float) fit[0], (float) fit[1]))
@@ -161,18 +165,33 @@ public final class OneiOSDisplay {
 
     /**
      * Width and height of the space layers are placed in, and the refresh rate to ask for.
-     * In a takeover session (system_server gone, surfaceflinger restarted at the return) the display's
-     * projection is set to the active mode, unrotated: the layer space is then the panel's own pixels,
-     * whatever resolution setting or rotation One UI left behind. Otherwise nothing of the display is
-     * changed: the logical size comes from the display manager (One UI running), --logical, or the mode.
+     * In a takeover session (system_server gone, surfaceflinger restarted at the return) the panel is put in
+     * its native mode, the largest it has, at that mode's highest refresh rate (One UI's resolution setting may
+     * have left it at 1080x2340), and the display's projection is set to the mode, unrotated: the layer space
+     * is then the panel's own pixels. Otherwise nothing of the display is changed: the logical size comes
+     * from the display manager (One UI running), --logical, or the active mode.
      */
     private static int[] panel(Object transaction, boolean project, boolean takeover, int[] logical) {
         Object token = null;
-        int[] mode = null;                 // width, height, hz
+        int[] mode = null;                 // active width, height, hz; native width, height, hz, mode id
         try {
             Object[] display = display();
             token = display[1];
             mode = mode((Long) display[0], token);
+            log("panel modes: active " + mode[0] + "x" + mode[1] + " (up to " + mode[2] + " Hz), native " + mode[3] + "x" + mode[4]
+                + " at " + mode[5] + " Hz");
+            if (takeover && (mode[0] != mode[3] || mode[1] != mode[4])) {
+                if (nativeMode(token, mode[6], mode[5])) {
+                    // the switch happens at a vsync of surfaceflinger's: wait for it to be the active mode
+                    for (int tries = 0; tries < 20; tries++) {
+                        Thread.sleep(50);
+                        mode = mode((Long) display[0], token);
+                        if (mode[0] == mode[3] && mode[1] == mode[4]) break;
+                    }
+                }
+                if (mode[0] == mode[3] && mode[1] == mode[4]) log("the panel is in its native mode " + mode[0] + "x" + mode[1]);
+                else log("the panel stays at " + mode[0] + "x" + mode[1] + ": the guest's frame is scaled to it");
+            }
         } catch (Throwable unavailable) {
             log("the display's modes are not readable (" + unavailable + ")");
         }
@@ -204,6 +223,45 @@ public final class OneiOSDisplay {
         return new int[]{1440, 3120, hz};
     }
 
+    /**
+     * Asks surfaceflinger for the panel's native mode: the display's desired mode specs as they are, with the
+     * default mode replaced and the refresh ranges opened up to that mode's rate (the object's shape changed
+     * between Android releases, so it is read and written back rather than built). system_server, which
+     * otherwise owns these specs, is gone in a session; the return restarts surfaceflinger, which starts from
+     * its own boot mode again and gets One UI's specs when the framework is back.
+     */
+    private static boolean nativeMode(Object token, int id, int hz) {
+        try {
+            Class<?> binder = Class.forName("android.os.IBinder");
+            Object specs = SC.getMethod("getDesiredDisplayModeSpecs", binder).invoke(null, token);
+            if (specs == null) throw new IllegalStateException("no desired mode specs");
+            specs.getClass().getField("defaultMode").setInt(specs, id);
+            try { specs.getClass().getField("allowGroupSwitching").setBoolean(specs, true); } catch (NoSuchFieldException older) { /* Android 11 */ }
+            for (String name : new String[]{"primaryRanges", "appRequestRanges"}) {
+                try {
+                    Object ranges = specs.getClass().getField(name).get(specs);
+                    for (String part : new String[]{"physical", "render"}) {
+                        Object range = ranges.getClass().getField(part).get(ranges);
+                        range.getClass().getField("min").setFloat(range, 0f);
+                        range.getClass().getField("max").setFloat(range, (float) hz);
+                    }
+                } catch (NoSuchFieldException older) {
+                    // Android 13 and earlier: four floats on the specs themselves
+                    String prefix = name.equals("primaryRanges") ? "primaryRefreshRate" : "appRequestRefreshRate";
+                    specs.getClass().getField(prefix + "Min").setFloat(specs, 0f);
+                    specs.getClass().getField(prefix + "Max").setFloat(specs, (float) hz);
+                }
+            }
+            Object set = SC.getMethod("setDesiredDisplayModeSpecs", binder, specs.getClass()).invoke(null, token, specs);
+            if (set instanceof Boolean && !((Boolean) set)) throw new IllegalStateException("surfaceflinger refused the mode specs");
+            log("asked surfaceflinger for the native mode (id " + id + ", up to " + hz + " Hz)");
+            return true;
+        } catch (Throwable refused) {
+            log("the native mode could not be asked for (" + refused + ")");
+            return false;
+        }
+    }
+
     /** The built-in display: {Long id, IBinder token}. */
     private static Object[] display() throws Exception {
         try {
@@ -224,27 +282,46 @@ public final class OneiOSDisplay {
         }
     }
 
-    /** The active mode's width and height, and the highest refresh rate among the modes of that size. */
+    /**
+     * {active width, height, the highest refresh rate among the modes of that size;
+     *  native width, height, its highest refresh rate, the id of the native mode at that rate}.
+     * The native mode is the largest the panel has, not the one it is in.
+     */
     private static int[] mode(long id, Object token) throws Exception {
         Object info;
         try { info = SC.getMethod("getDynamicDisplayInfo", long.class).invoke(null, id); }
         catch (NoSuchMethodException older) { info = SC.getMethod("getDynamicDisplayInfo", Class.forName("android.os.IBinder")).invoke(null, token); }
         int active = info.getClass().getField("activeDisplayModeId").getInt(info);
         Object[] modes = (Object[]) info.getClass().getField("supportedDisplayModes").get(info);
-        int width = 0, height = 0;
-        for (Object m : modes) if (m.getClass().getField("id").getInt(m) == active) {
-            width = m.getClass().getField("width").getInt(m);
-            height = m.getClass().getField("height").getInt(m);
-        }
-        if (width <= 0 || height <= 0) throw new IllegalStateException("no active mode");
-        float best = 0;
-        for (Object m : modes) {
-            if (m.getClass().getField("width").getInt(m) != width || m.getClass().getField("height").getInt(m) != height) continue;
+        int count = modes.length;
+        int[] ids = new int[count], widths = new int[count], heights = new int[count], rates = new int[count];
+        for (int i = 0; i < count; i++) {
+            Object m = modes[i];
+            ids[i] = m.getClass().getField("id").getInt(m);
+            widths[i] = m.getClass().getField("width").getInt(m);
+            heights[i] = m.getClass().getField("height").getInt(m);
             float rate;
             try { rate = m.getClass().getField("peakRefreshRate").getFloat(m); }
             catch (NoSuchFieldException older) { rate = m.getClass().getField("refreshRate").getFloat(m); }
-            if (rate > best) best = rate;
+            rates[i] = Math.round(rate);
         }
-        return new int[]{width, height, Math.round(best)};
+        int[] picked = pick(ids, widths, heights, rates, active);
+        if (picked == null) throw new IllegalStateException("no active mode");
+        return picked;
+    }
+
+    /** The choice among the modes, apart from the framework (see mode()); null without the active mode. */
+    static int[] pick(int[] ids, int[] widths, int[] heights, int[] rates, int active) {
+        int width = 0, height = 0;
+        for (int i = 0; i < ids.length; i++) if (ids[i] == active) { width = widths[i]; height = heights[i]; }
+        if (width <= 0 || height <= 0) return null;
+        int best = 0, nativeAt = -1;
+        for (int i = 0; i < ids.length; i++) {
+            if (widths[i] == width && heights[i] == height && rates[i] > best) best = rates[i];
+            if (widths[i] <= 0 || heights[i] <= 0) continue;
+            long area = (long) widths[i] * heights[i], most = nativeAt < 0 ? 0 : (long) widths[nativeAt] * heights[nativeAt];
+            if (nativeAt < 0 || area > most || (area == most && widths[i] == widths[nativeAt] && rates[i] > rates[nativeAt])) nativeAt = i;
+        }
+        return new int[]{width, height, best, widths[nativeAt], heights[nativeAt], rates[nativeAt], ids[nativeAt]};
     }
 }

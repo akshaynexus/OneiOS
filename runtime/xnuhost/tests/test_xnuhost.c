@@ -848,6 +848,67 @@ static void test_config(const char *dir)
   char *bad2[] = { "xnuhost", "--image", image, "--cpus", "9" };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 5, bad2) == -1);
+  // The display's mode: the panel's native (largest) mode, not the one One UI runs; overrides; the defaults.
+  static const xh_panel_mode modes[] = { { 1080, 2340, 120 }, { 1440, 3120, 60 }, { 1440, 3120, 120 }, { 720, 1560, 120 }, { 1440, 3120, 24 }, { 0, 0, 120 } };
+  xh_panel_mode native = { 0, 0, 0 }, mode;
+  CHECK(xh_panel_native(modes, 6, &native) && native.width == 1440 && native.height == 3120 && native.hz == 120);
+  CHECK(xh_panel_native(modes, 1, &native) && native.width == 1080 && native.height == 2340);       // an FHD+ panel is its own native
+  CHECK(!xh_panel_native(modes + 5, 1, &native) && !xh_panel_native(modes, 0, &native));
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 7, argv3) == 0 && xh_config_finish(&c) == 0 && c.scale == 3 && c.hz == 0 && c.scale_fixup == 1);
+  mode = xh_display_mode(&c, NULL);
+  CHECK(mode.width == 1440 && mode.height == 3120 && mode.hz == 120);                                // nothing readable: the S24 Ultra's
+  native = (xh_panel_mode){ 1260, 2800, 144 };
+  mode = xh_display_mode(&c, &native);
+  CHECK(mode.width == 1260 && mode.height == 2800 && mode.hz == 144);                                // another panel: its own
+  native.hz = 0;
+  CHECK(xh_display_mode(&c, &native).hz == 120);                                                     // a mode without a rate
+  char *mode1[] = { "xnuhost", "--image", image, "--width", "1320", "--height", "2868", "--hz", "60", "--scale", "2", "--set", "scale-fixup=0" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 13, mode1) == 0 && xh_config_finish(&c) == 0 && c.scale == 2 && c.hz == 60 && c.scale_fixup == 0);
+  native = (xh_panel_mode){ 1440, 3120, 120 };
+  mode = xh_display_mode(&c, &native);
+  CHECK(mode.width == 1320 && mode.height == 2868 && mode.hz == 60);
+  // the display driver's switches on the kernel's command line: added once, a given value stays
+  char args[128] = "-v debug=0x8";
+  CHECK(xh_display_boot_args(args, sizeof args, 3, 120) == 0 && !strcmp(args, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120"));
+  CHECK(xh_display_boot_args(args, sizeof args, 2, 60) == 0 && !strcmp(args, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120"));
+  strcpy(args, "sheng-vsync=90 not-sheng-vsync=1");
+  CHECK(xh_display_boot_args(args, sizeof args, 2, 120) == 0 && !strcmp(args, "sheng-vsync=90 not-sheng-vsync=1 offline-legacy-unit-scale=2"));
+  args[0] = 0;
+  CHECK(xh_display_boot_args(args, sizeof args, 2, 120) == 0 && !strcmp(args, "offline-legacy-unit-scale=2 sheng-vsync=120"));
+  CHECK(xh_display_boot_args(args, 44, 2, 120) == 0);
+  args[0] = 0;
+  CHECK(xh_display_boot_args(args, 40, 2, 120) == -1);                                               // no room
+  // the scale in the image set (the userland hook's file), under the command line's
+  char overlay[400];
+  snprintf(overlay, sizeof overlay, "%s/overlay", image); mkdir(overlay, 0700);
+  snprintf(overlay, sizeof overlay, "%s/overlay/userland", image); mkdir(overlay, 0700);
+  snprintf(overlay, sizeof overlay, "%s/overlay/userland/xnuhost.conf", image);
+  f = fopen(overlay, "w");
+  fputs("scale=2\n", f);
+  fclose(f);
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 7, argv3) == 0 && xh_config_finish(&c) == 0 && c.scale == 2);
+  char *scale3[] = { "xnuhost", "--image", image, "--set", "scale=3", "--text-fixup", "file.01,10,aa,bb" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 7, scale3) == 0 && xh_config_finish(&c) == 0 && c.scale == 3 && c.text_fixups_length == 17);
+  // the fixups of QuartzCore's preferred scale: for @3x on the build they were read in, after the configured ones
+  unsigned length = xh_scale_fixups("24A446", 3, c.text_fixups, c.text_fixups_length, sizeof c.text_fixups);
+  CHECK(length == 17 + 54 + 70 && !strcmp(c.text_fixups, "file.01,10,aa,bb") && !strcmp(c.text_fixups + 17, "dyld_shared_cache_arm64e.01,40b17a8,49008052,69008052"));
+  CHECK(strstr(c.text_fixups + 17 + 54, ",40b17bc,280080520895889a,680080521f2003d5") && c.text_fixups[length - 1] == 0);
+  CHECK(xh_scale_fixups("24A446", 2, c.text_fixups, 17, sizeof c.text_fixups) == 17);                // @2x is QuartzCore's own answer
+  CHECK(xh_scale_fixups("24A447", 3, c.text_fixups, 17, sizeof c.text_fixups) == 17 && xh_scale_fixups(NULL, 3, c.text_fixups, 17, sizeof c.text_fixups) == 17);
+  char *badscale[] = { "xnuhost", "--image", image, "--scale", "4" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 5, badscale) == -1);
+  char *badhz[] = { "xnuhost", "--image", image, "--hz", "500" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 5, badhz) == -1);
+  char *badfix[] = { "xnuhost", "--image", image, "--text-fixup", "file,10,aa" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 5, badfix) == -1);
+  remove(overlay);
   char *bad3[] = { "xnuhost", "--image", (char *)dir };                         // no kernel there
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 3, bad3) == 0 && xh_config_finish(&c) == -1);
