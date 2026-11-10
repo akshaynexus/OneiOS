@@ -26,6 +26,946 @@
  ],
  "functions": [
   {
+   "original": "0xfffffe000b2640d8",
+   "native_symbol": "_bdevsw_remove",
+   "check": {
+    "address": "0xfffffe000b2640d8",
+    "size": 300,
+    "sha256": "4eef3d09cf34b44e02401d1ca99d9ba0160f7a64ff0b1d11cc13c8a528f09204"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/libkern/crc32.c: crc32 (inverts the seed, then a table lookup per byte) before memchr. bsd/vfs/doc_tombstone.c: doc_tombstone_get before doc_tombstone_clear (the current thread's tombstone) and doc_tombstone_save after doc_tombstone_should_save. bsd/miscfs/specfs/spec_vnops.c after throttle_lowpri_io: throttle_set_thread_io_policy (the current thread, policy category 0, flavor 34, its argument as the value), throttle_get_thread_effective_io_policy and throttle_thread_io_tier_above_metadata (both read the two-bit effective tier of the current thread). bsd/kern/kdebug_triage.c: ktriage_unregister_subsystem_strings after ktriage_register_subsystem_strings (the same range check on the subsystem). bsd/kern/bsd_stubs.c: bdevsw_remove between bdevsw_add and cdevsw_isfree/cdevsw_add (index up to 23)."
+  },
+  {
+   "original": "0xfffffe000b0a7ee8",
+   "native_symbol": "_ktriage_unregister_subsystem_strings",
+   "check": {
+    "address": "0xfffffe000b0a7ee8",
+    "size": 216,
+    "sha256": "19e0122be2d0b11836ef0f88b4ad994414c3049e7d569fb67cd0f9dabc8270e7"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/libkern/crc32.c: crc32 (inverts the seed, then a table lookup per byte) before memchr. bsd/vfs/doc_tombstone.c: doc_tombstone_get before doc_tombstone_clear (the current thread's tombstone) and doc_tombstone_save after doc_tombstone_should_save. bsd/miscfs/specfs/spec_vnops.c after throttle_lowpri_io: throttle_set_thread_io_policy (the current thread, policy category 0, flavor 34, its argument as the value), throttle_get_thread_effective_io_policy and throttle_thread_io_tier_above_metadata (both read the two-bit effective tier of the current thread). bsd/kern/kdebug_triage.c: ktriage_unregister_subsystem_strings after ktriage_register_subsystem_strings (the same range check on the subsystem). bsd/kern/bsd_stubs.c: bdevsw_remove between bdevsw_add and cdevsw_isfree/cdevsw_add (index up to 23)."
+  },
+  {
+   "original": "0xfffffe000adfddc8",
+   "native_symbol": "_throttle_thread_io_tier_above_metadata",
+   "check": {
+    "address": "0xfffffe000adfddc8",
+    "size": 44,
+    "sha256": "3a1376369c2090d69c6a5b6be65dbe2bd70ebff4c26f7e6426211ca7e4ba7d15"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/libkern/crc32.c: crc32 (inverts the seed, then a table lookup per byte) before memchr. bsd/vfs/doc_tombstone.c: doc_tombstone_get before doc_tombstone_clear (the current thread's tombstone) and doc_tombstone_save after doc_tombstone_should_save. bsd/miscfs/specfs/spec_vnops.c after throttle_lowpri_io: throttle_set_thread_io_policy (the current thread, policy category 0, flavor 34, its argument as the value), throttle_get_thread_effective_io_policy and throttle_thread_io_tier_above_metadata (both read the two-bit effective tier of the current thread). bsd/kern/kdebug_triage.c: ktriage_unregister_subsystem_strings after ktriage_register_subsystem_strings (the same range check on the subsystem). bsd/kern/bsd_stubs.c: bdevsw_remove between bdevsw_add and cdevsw_isfree/cdevsw_add (index up to 23)."
+  },
+  {
+   "original": "0xfffffe000adfdda4",
+   "native_symbol": "_throttle_get_thread_effective_io_policy",
+   "check": {
+    "address": "0xfffffe000adfdda4",
+    "size": 36,
+    "sha256": "fb6005d924d1be45eeac99d5fda852c514f646a41af3364af2a60baefc7d7c49"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/libkern/crc32.c: crc32 (inverts the seed, then a table lookup per byte) before memchr. bsd/vfs/doc_tombstone.c: doc_tombstone_get before doc_tombstone_clear (the current thread's tombstone) and doc_tombstone_save after doc_tombstone_should_save. bsd/miscfs/specfs/spec_vnops.c after throttle_lowpri_io: throttle_set_thread_io_policy (the current thread, policy category 0, flavor 34, its argument as the value), throttle_get_thread_effective_io_policy and throttle_thread_io_tier_above_metadata (both read the two-bit effective tier of the current thread). bsd/kern/kdebug_triage.c: ktriage_unregister_subsystem_strings after ktriage_register_subsystem_strings (the same range check on the subsystem). bsd/kern/bsd_stubs.c: bdevsw_remove between bdevsw_add and cdevsw_isfree/cdevsw_add (index up to 23)."
+  },
+  {
+   "original": "0xfffffe000adfdd8c",
+   "native_symbol": "_throttle_set_thread_io_policy",
+   "check": {
+    "address": "0xfffffe000adfdd8c",
+    "size": 24,
+    "sha256": "fa29e0b89e9a98cab995618ff681c3b1ff138c23aa05a7a1845ace4a839ff521"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/libkern/crc32.c: crc32 (inverts the seed, then a table lookup per byte) before memchr. bsd/vfs/doc_tombstone.c: doc_tombstone_get before doc_tombstone_clear (the current thread's tombstone) and doc_tombstone_save after doc_tombstone_should_save. bsd/miscfs/specfs/spec_vnops.c after throttle_lowpri_io: throttle_set_thread_io_policy (the current thread, policy category 0, flavor 34, its argument as the value), throttle_get_thread_effective_io_policy and throttle_thread_io_tier_above_metadata (both read the two-bit effective tier of the current thread). bsd/kern/kdebug_triage.c: ktriage_unregister_subsystem_strings after ktriage_register_subsystem_strings (the same range check on the subsystem). bsd/kern/bsd_stubs.c: bdevsw_remove between bdevsw_add and cdevsw_isfree/cdevsw_add (index up to 23)."
+  },
+  {
+   "original": "0xfffffe000adf28f0",
+   "native_symbol": "_doc_tombstone_save",
+   "check": {
+    "address": "0xfffffe000adf28f0",
+    "size": 272,
+    "sha256": "91283edd603e6542eb52c15395cdcdf89582bc206d0f76b970b16bb1a24f5218"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/libkern/crc32.c: crc32 (inverts the seed, then a table lookup per byte) before memchr. bsd/vfs/doc_tombstone.c: doc_tombstone_get before doc_tombstone_clear (the current thread's tombstone) and doc_tombstone_save after doc_tombstone_should_save. bsd/miscfs/specfs/spec_vnops.c after throttle_lowpri_io: throttle_set_thread_io_policy (the current thread, policy category 0, flavor 34, its argument as the value), throttle_get_thread_effective_io_policy and throttle_thread_io_tier_above_metadata (both read the two-bit effective tier of the current thread). bsd/kern/kdebug_triage.c: ktriage_unregister_subsystem_strings after ktriage_register_subsystem_strings (the same range check on the subsystem). bsd/kern/bsd_stubs.c: bdevsw_remove between bdevsw_add and cdevsw_isfree/cdevsw_add (index up to 23)."
+  },
+  {
+   "original": "0xfffffe000adf26a0",
+   "native_symbol": "_doc_tombstone_get",
+   "check": {
+    "address": "0xfffffe000adf26a0",
+    "size": 60,
+    "sha256": "d4b1f65cd64679bcd84578a272fb6a12da836827c3b4942cae96173985006def"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/libkern/crc32.c: crc32 (inverts the seed, then a table lookup per byte) before memchr. bsd/vfs/doc_tombstone.c: doc_tombstone_get before doc_tombstone_clear (the current thread's tombstone) and doc_tombstone_save after doc_tombstone_should_save. bsd/miscfs/specfs/spec_vnops.c after throttle_lowpri_io: throttle_set_thread_io_policy (the current thread, policy category 0, flavor 34, its argument as the value), throttle_get_thread_effective_io_policy and throttle_thread_io_tier_above_metadata (both read the two-bit effective tier of the current thread). bsd/kern/kdebug_triage.c: ktriage_unregister_subsystem_strings after ktriage_register_subsystem_strings (the same range check on the subsystem). bsd/kern/bsd_stubs.c: bdevsw_remove between bdevsw_add and cdevsw_isfree/cdevsw_add (index up to 23)."
+  },
+  {
+   "original": "0xfffffe000ad84a74",
+   "native_symbol": "_crc32",
+   "check": {
+    "address": "0xfffffe000ad84a74",
+    "size": 56,
+    "sha256": "3bdd1e632b792db1f759035be3c711e74da9e77825cbe31d6174c3fe2a011ad7"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/libkern/crc32.c: crc32 (inverts the seed, then a table lookup per byte) before memchr. bsd/vfs/doc_tombstone.c: doc_tombstone_get before doc_tombstone_clear (the current thread's tombstone) and doc_tombstone_save after doc_tombstone_should_save. bsd/miscfs/specfs/spec_vnops.c after throttle_lowpri_io: throttle_set_thread_io_policy (the current thread, policy category 0, flavor 34, its argument as the value), throttle_get_thread_effective_io_policy and throttle_thread_io_tier_above_metadata (both read the two-bit effective tier of the current thread). bsd/kern/kdebug_triage.c: ktriage_unregister_subsystem_strings after ktriage_register_subsystem_strings (the same range check on the subsystem). bsd/kern/bsd_stubs.c: bdevsw_remove between bdevsw_add and cdevsw_isfree/cdevsw_add (index up to 23)."
+  },
+  {
+   "original": "0xfffffe000abdb564",
+   "native_symbol": "_wakeup_all_with_inheritor",
+   "check": {
+    "address": "0xfffffe000abdb564",
+    "size": 20,
+    "sha256": "d7c7704e34e9826cdf4419ff0729c1bf0096732a03e5bbb978ebbd1984d9e79d"
+   },
+   "evidence": "osfmk/kern/lock_rw.c: lck_rw_try_lock dispatches on its type argument (1 shared, 2 exclusive) and branches to the function directly before it, the paired __lck_rw_try_lock_type_panic, for anything else. osfmk/kern/locks.c: lck_mtx_sleep_with_inheritor is the six-argument function directly before its own block (___lck_mtx_sleep_with_inheritor_block_invoke_2); wakeup_one_with_inheritor and wakeup_all_with_inheritor are the two wrappers before the rw gate block that shift their arguments and pass a wake type (the second passes 2, LCK_WAKE_ALL, and no thread pointer) to the common function."
+  },
+  {
+   "original": "0xfffffe000abdb550",
+   "native_symbol": "_wakeup_one_with_inheritor",
+   "check": {
+    "address": "0xfffffe000abdb550",
+    "size": 20,
+    "sha256": "8dac4525272141c41e8a0e112331cf823f7c83e001782c2e6e1bbacc6f798df0"
+   },
+   "evidence": "osfmk/kern/lock_rw.c: lck_rw_try_lock dispatches on its type argument (1 shared, 2 exclusive) and branches to the function directly before it, the paired __lck_rw_try_lock_type_panic, for anything else. osfmk/kern/locks.c: lck_mtx_sleep_with_inheritor is the six-argument function directly before its own block (___lck_mtx_sleep_with_inheritor_block_invoke_2); wakeup_one_with_inheritor and wakeup_all_with_inheritor are the two wrappers before the rw gate block that shift their arguments and pass a wake type (the second passes 2, LCK_WAKE_ALL, and no thread pointer) to the common function."
+  },
+  {
+   "original": "0xfffffe000abda5f8",
+   "native_symbol": "_lck_mtx_sleep_with_inheritor",
+   "check": {
+    "address": "0xfffffe000abda5f8",
+    "size": 716,
+    "sha256": "767fddbbace832bc36dc1096091f90b0d217cc3dedcf6d66b0202eef7275bdd7"
+   },
+   "evidence": "osfmk/kern/lock_rw.c: lck_rw_try_lock dispatches on its type argument (1 shared, 2 exclusive) and branches to the function directly before it, the paired __lck_rw_try_lock_type_panic, for anything else. osfmk/kern/locks.c: lck_mtx_sleep_with_inheritor is the six-argument function directly before its own block (___lck_mtx_sleep_with_inheritor_block_invoke_2); wakeup_one_with_inheritor and wakeup_all_with_inheritor are the two wrappers before the rw gate block that shift their arguments and pass a wake type (the second passes 2, LCK_WAKE_ALL, and no thread pointer) to the common function."
+  },
+  {
+   "original": "0xfffffe000abd5e10",
+   "native_symbol": "_lck_rw_try_lock",
+   "check": {
+    "address": "0xfffffe000abd5e10",
+    "size": 32,
+    "sha256": "405af6165ac0a4151edb34f6203464a993d4b0d9c73c6efc5aa8977ecca20317"
+   },
+   "evidence": "osfmk/kern/lock_rw.c: lck_rw_try_lock dispatches on its type argument (1 shared, 2 exclusive) and branches to the function directly before it, the paired __lck_rw_try_lock_type_panic, for anything else. osfmk/kern/locks.c: lck_mtx_sleep_with_inheritor is the six-argument function directly before its own block (___lck_mtx_sleep_with_inheritor_block_invoke_2); wakeup_one_with_inheritor and wakeup_all_with_inheritor are the two wrappers before the rw gate block that shift their arguments and pass a wake type (the second passes 2, LCK_WAKE_ALL, and no thread pointer) to the common function."
+  },
+  {
+   "original": "0xfffffe000b2b44f4",
+   "native_symbol": "_os_pcpu_ref_wait_for_death",
+   "check": {
+    "address": "0xfffffe000b2b44f4",
+    "size": 152,
+    "sha256": "2d53c310bb6bdd5c19a85243219b0582ed5418d2ff7aa1f9059fbefa37223835"
+   },
+   "evidence": "libkern/os/refcnt.c, the per-CPU reference count block after os_ref_release_locked_external, in this kernel's own link order around the paired os_pcpu_ref_kill (init, destroy, kill, count, retain, its slow path, retain_try, release_live, its slow path, release, its slow path, wait_for_death): each fast path indexes the per-CPU slot with the CPU number; retain_try is the one that returns the low bit of the old value as a bool, release the one that returns a count of 0xfffffff while the count is live."
+  },
+  {
+   "original": "0xfffffe000b2b443c",
+   "native_symbol": "_os_pcpu_ref_release",
+   "check": {
+    "address": "0xfffffe000b2b443c",
+    "size": 60,
+    "sha256": "8eaefead36eb7854da39f0bd64907c5aef3e34bd77617a6031ef1ab1e46ebd79"
+   },
+   "evidence": "libkern/os/refcnt.c, the per-CPU reference count block after os_ref_release_locked_external, in this kernel's own link order around the paired os_pcpu_ref_kill (init, destroy, kill, count, retain, its slow path, retain_try, release_live, its slow path, release, its slow path, wait_for_death): each fast path indexes the per-CPU slot with the CPU number; retain_try is the one that returns the low bit of the old value as a bool, release the one that returns a count of 0xfffffff while the count is live."
+  },
+  {
+   "original": "0xfffffe000b2b43b8",
+   "native_symbol": "_os_pcpu_ref_release_live",
+   "check": {
+    "address": "0xfffffe000b2b43b8",
+    "size": 56,
+    "sha256": "fabdcd9e0973364ec3d9c7e3c5d64d3f6231723aab2f7fcfc9c31fc9ac9a74cb"
+   },
+   "evidence": "libkern/os/refcnt.c, the per-CPU reference count block after os_ref_release_locked_external, in this kernel's own link order around the paired os_pcpu_ref_kill (init, destroy, kill, count, retain, its slow path, retain_try, release_live, its slow path, release, its slow path, wait_for_death): each fast path indexes the per-CPU slot with the CPU number; retain_try is the one that returns the low bit of the old value as a bool, release the one that returns a count of 0xfffffff while the count is live."
+  },
+  {
+   "original": "0xfffffe000b2b437c",
+   "native_symbol": "_os_pcpu_ref_retain_try",
+   "check": {
+    "address": "0xfffffe000b2b437c",
+    "size": 60,
+    "sha256": "a725128acec1f22047dcca69753db45bc0624d72afa917f0557f61a780cb22f4"
+   },
+   "evidence": "libkern/os/refcnt.c, the per-CPU reference count block after os_ref_release_locked_external, in this kernel's own link order around the paired os_pcpu_ref_kill (init, destroy, kill, count, retain, its slow path, retain_try, release_live, its slow path, release, its slow path, wait_for_death): each fast path indexes the per-CPU slot with the CPU number; retain_try is the one that returns the low bit of the old value as a bool, release the one that returns a count of 0xfffffff while the count is live."
+  },
+  {
+   "original": "0xfffffe000b2b42e8",
+   "native_symbol": "_os_pcpu_ref_retain",
+   "check": {
+    "address": "0xfffffe000b2b42e8",
+    "size": 56,
+    "sha256": "7711afb911dfeb35d10a46f701a2fce865d4945df59b35df1a55c8b2bc4ae22c"
+   },
+   "evidence": "libkern/os/refcnt.c, the per-CPU reference count block after os_ref_release_locked_external, in this kernel's own link order around the paired os_pcpu_ref_kill (init, destroy, kill, count, retain, its slow path, retain_try, release_live, its slow path, release, its slow path, wait_for_death): each fast path indexes the per-CPU slot with the CPU number; retain_try is the one that returns the low bit of the old value as a bool, release the one that returns a count of 0xfffffff while the count is live."
+  },
+  {
+   "original": "0xfffffe000b2b42cc",
+   "native_symbol": "_os_pcpu_ref_count",
+   "check": {
+    "address": "0xfffffe000b2b42cc",
+    "size": 28,
+    "sha256": "6d7a8a0dfea20a795b0c04e942b31c73541c1831db94fcf2362cb803ee0013e4"
+   },
+   "evidence": "libkern/os/refcnt.c, the per-CPU reference count block after os_ref_release_locked_external, in this kernel's own link order around the paired os_pcpu_ref_kill (init, destroy, kill, count, retain, its slow path, retain_try, release_live, its slow path, release, its slow path, wait_for_death): each fast path indexes the per-CPU slot with the CPU number; retain_try is the one that returns the low bit of the old value as a bool, release the one that returns a count of 0xfffffff while the count is live."
+  },
+  {
+   "original": "0xfffffe000b2b4168",
+   "native_symbol": "_os_pcpu_ref_destroy",
+   "check": {
+    "address": "0xfffffe000b2b4168",
+    "size": 224,
+    "sha256": "6c7c238765eb0e89b523d9881e93c43cb1fc37928436a4fdec6a551b982045e9"
+   },
+   "evidence": "libkern/os/refcnt.c, the per-CPU reference count block after os_ref_release_locked_external, in this kernel's own link order around the paired os_pcpu_ref_kill (init, destroy, kill, count, retain, its slow path, retain_try, release_live, its slow path, release, its slow path, wait_for_death): each fast path indexes the per-CPU slot with the CPU number; retain_try is the one that returns the low bit of the old value as a bool, release the one that returns a count of 0xfffffff while the count is live."
+  },
+  {
+   "original": "0xfffffe000b2b40a0",
+   "native_symbol": "_os_pcpu_ref_init",
+   "check": {
+    "address": "0xfffffe000b2b40a0",
+    "size": 200,
+    "sha256": "436ad1c2ea8c6676108991b6e44e21d0eef8f0716df984cf95c7cd09be1ecb6f"
+   },
+   "evidence": "libkern/os/refcnt.c, the per-CPU reference count block after os_ref_release_locked_external, in this kernel's own link order around the paired os_pcpu_ref_kill (init, destroy, kill, count, retain, its slow path, retain_try, release_live, its slow path, release, its slow path, wait_for_death): each fast path indexes the per-CPU slot with the CPU number; retain_try is the one that returns the low bit of the old value as a bool, release the one that returns a count of 0xfffffff while the count is live."
+  },
+  {
+   "original": "0xfffffe000b37ad20",
+   "native_symbol": "__ZN12IOUserClient23releaseNotificationPortEP8ipc_port",
+   "check": {
+    "address": "0xfffffe000b37ad20",
+    "size": 40,
+    "sha256": "8b419f412737e15eb3575f104568713d0feac4a83ceeb81448bc60239bf36451"
+   },
+   "evidence": "iokit/Kernel/IOUserClient.cpp in source order next to paired overloads: setAsyncReference64 with the task argument directly after the four-argument one (it keeps the low two bits of asyncRef[0] and ORs the port in); copyObjectForPortNameInTask(task, name, OSObject **) between copyPortNameForObjectInTask and the OSSharedPtr overload; releaseAsyncReference64 (masks the low bits off asyncRef[0] and releases that port) and releaseNotificationPort (NULL check, release) directly before sendAsyncResult."
+  },
+  {
+   "original": "0xfffffe000b37acf0",
+   "native_symbol": "__ZN12IOUserClient23releaseAsyncReference64EPy",
+   "check": {
+    "address": "0xfffffe000b37acf0",
+    "size": 48,
+    "sha256": "ac7042ac25b3a9d8f37fb8279a1b6f103803c2093e14f41ba17146ea95132e7d"
+   },
+   "evidence": "iokit/Kernel/IOUserClient.cpp in source order next to paired overloads: setAsyncReference64 with the task argument directly after the four-argument one (it keeps the low two bits of asyncRef[0] and ORs the port in); copyObjectForPortNameInTask(task, name, OSObject **) between copyPortNameForObjectInTask and the OSSharedPtr overload; releaseAsyncReference64 (masks the low bits off asyncRef[0] and releases that port) and releaseNotificationPort (NULL check, release) directly before sendAsyncResult."
+  },
+  {
+   "original": "0xfffffe000b37ab20",
+   "native_symbol": "__ZN12IOUserClient27copyObjectForPortNameInTaskEP4taskjPP8OSObject",
+   "check": {
+    "address": "0xfffffe000b37ab20",
+    "size": 96,
+    "sha256": "eb35d8c6cab80e92cce2ad4fdb8072eed9c1adeeb73c5b009662c6176f54551c"
+   },
+   "evidence": "iokit/Kernel/IOUserClient.cpp in source order next to paired overloads: setAsyncReference64 with the task argument directly after the four-argument one (it keeps the low two bits of asyncRef[0] and ORs the port in); copyObjectForPortNameInTask(task, name, OSObject **) between copyPortNameForObjectInTask and the OSSharedPtr overload; releaseAsyncReference64 (masks the low bits off asyncRef[0] and releases that port) and releaseNotificationPort (NULL check, release) directly before sendAsyncResult."
+  },
+  {
+   "original": "0xfffffe000b379320",
+   "native_symbol": "__ZN12IOUserClient19setAsyncReference64EPyP8ipc_portyyP4task",
+   "check": {
+    "address": "0xfffffe000b379320",
+    "size": 68,
+    "sha256": "406433c4e7e240a19c77a6f5b3ac6d9ea45a9f2bba00ab66caee6b7781f0e3c4"
+   },
+   "evidence": "iokit/Kernel/IOUserClient.cpp in source order next to paired overloads: setAsyncReference64 with the task argument directly after the four-argument one (it keeps the low two bits of asyncRef[0] and ORs the port in); copyObjectForPortNameInTask(task, name, OSObject **) between copyPortNameForObjectInTask and the OSSharedPtr overload; releaseAsyncReference64 (masks the low bits off asyncRef[0] and releases that port) and releaseNotificationPort (NULL check, release) directly before sendAsyncResult."
+  },
+  {
+   "original": "0xfffffe000ab8457c",
+   "native_symbol": "_absolutetime_to_continuoustime",
+   "check": {
+    "address": "0xfffffe000ab8457c",
+    "size": 20,
+    "sha256": "e77b490491cd40658cea65e66275994cec41ce6121050a2f3588b4721c8b4168"
+   },
+   "evidence": "osfmk/kern/clock.c in source order around the paired clock_interval_to_deadline, mach_continuous_time and clock_get_uptime: delay (mov w1, #1000, then the interval delay); nanoseconds_to_deadline (the shape of clock_interval_to_deadline, directly after it); clock_absolutetime_interval_to_deadline (reads the absolute time as clock_get_uptime does, with the CPU's base, adds its first argument and stores through the second); clock_continuoustime_interval_to_deadline (the same from the continuous counter that mach_continuous_time returns); after mach_continuous_time: continuoustime_to_absolutetime subtracts a global offset and absolutetime_to_continuoustime adds the same global."
+  },
+  {
+   "original": "0xfffffe000ab84564",
+   "native_symbol": "_continuoustime_to_absolutetime",
+   "check": {
+    "address": "0xfffffe000ab84564",
+    "size": 24,
+    "sha256": "8cdd2b8f385ae633cb496c42836ff7e6669a326a21b84b6059347053d270abe3"
+   },
+   "evidence": "osfmk/kern/clock.c in source order around the paired clock_interval_to_deadline, mach_continuous_time and clock_get_uptime: delay (mov w1, #1000, then the interval delay); nanoseconds_to_deadline (the shape of clock_interval_to_deadline, directly after it); clock_absolutetime_interval_to_deadline (reads the absolute time as clock_get_uptime does, with the CPU's base, adds its first argument and stores through the second); clock_continuoustime_interval_to_deadline (the same from the continuous counter that mach_continuous_time returns); after mach_continuous_time: continuoustime_to_absolutetime subtracts a global offset and absolutetime_to_continuoustime adds the same global."
+  },
+  {
+   "original": "0xfffffe000ab844fc",
+   "native_symbol": "_clock_continuoustime_interval_to_deadline",
+   "check": {
+    "address": "0xfffffe000ab844fc",
+    "size": 28,
+    "sha256": "0530e2c8ed12daae73d2f6d915e5212fa984e2ce36685cd8f4627fec38251bf1"
+   },
+   "evidence": "osfmk/kern/clock.c in source order around the paired clock_interval_to_deadline, mach_continuous_time and clock_get_uptime: delay (mov w1, #1000, then the interval delay); nanoseconds_to_deadline (the shape of clock_interval_to_deadline, directly after it); clock_absolutetime_interval_to_deadline (reads the absolute time as clock_get_uptime does, with the CPU's base, adds its first argument and stores through the second); clock_continuoustime_interval_to_deadline (the same from the continuous counter that mach_continuous_time returns); after mach_continuous_time: continuoustime_to_absolutetime subtracts a global offset and absolutetime_to_continuoustime adds the same global."
+  },
+  {
+   "original": "0xfffffe000ab844bc",
+   "native_symbol": "_clock_absolutetime_interval_to_deadline",
+   "check": {
+    "address": "0xfffffe000ab844bc",
+    "size": 64,
+    "sha256": "179111308c135ac458a081ce0d86e8e9946341c5282023656ba379ba7906cc06"
+   },
+   "evidence": "osfmk/kern/clock.c in source order around the paired clock_interval_to_deadline, mach_continuous_time and clock_get_uptime: delay (mov w1, #1000, then the interval delay); nanoseconds_to_deadline (the shape of clock_interval_to_deadline, directly after it); clock_absolutetime_interval_to_deadline (reads the absolute time as clock_get_uptime does, with the CPU's base, adds its first argument and stores through the second); clock_continuoustime_interval_to_deadline (the same from the continuous counter that mach_continuous_time returns); after mach_continuous_time: continuoustime_to_absolutetime subtracts a global offset and absolutetime_to_continuoustime adds the same global."
+  },
+  {
+   "original": "0xfffffe000ab84434",
+   "native_symbol": "_nanoseconds_to_deadline",
+   "check": {
+    "address": "0xfffffe000ab84434",
+    "size": 136,
+    "sha256": "459c206984e0bdfc0e774b2cd4d41eda0183ec47b3123abbbbb6bf8548b26945"
+   },
+   "evidence": "osfmk/kern/clock.c in source order around the paired clock_interval_to_deadline, mach_continuous_time and clock_get_uptime: delay (mov w1, #1000, then the interval delay); nanoseconds_to_deadline (the shape of clock_interval_to_deadline, directly after it); clock_absolutetime_interval_to_deadline (reads the absolute time as clock_get_uptime does, with the CPU's base, adds its first argument and stores through the second); clock_continuoustime_interval_to_deadline (the same from the continuous counter that mach_continuous_time returns); after mach_continuous_time: continuoustime_to_absolutetime subtracts a global offset and absolutetime_to_continuoustime adds the same global."
+  },
+  {
+   "original": "0xfffffe000ab84394",
+   "native_symbol": "_delay",
+   "check": {
+    "address": "0xfffffe000ab84394",
+    "size": 16,
+    "sha256": "212f0ff4f974eec2d02c867bafd7fe343f6409182504de222efde09c222930c4"
+   },
+   "evidence": "osfmk/kern/clock.c in source order around the paired clock_interval_to_deadline, mach_continuous_time and clock_get_uptime: delay (mov w1, #1000, then the interval delay); nanoseconds_to_deadline (the shape of clock_interval_to_deadline, directly after it); clock_absolutetime_interval_to_deadline (reads the absolute time as clock_get_uptime does, with the CPU's base, adds its first argument and stores through the second); clock_continuoustime_interval_to_deadline (the same from the continuous counter that mach_continuous_time returns); after mach_continuous_time: continuoustime_to_absolutetime subtracts a global offset and absolutetime_to_continuoustime adds the same global."
+  },
+  {
+   "original": "0xfffffe000b10cee0",
+   "native_symbol": "_tsleep",
+   "check": {
+    "address": "0xfffffe000b10cee0",
+    "size": 192,
+    "sha256": "812884256025dfbd250cc0fea498accc894ba477560bbba5203a51b6046f28d3"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/kern/ubc_subr.c: ubc_upl_unmap after ubc_upl_map and ubc_upl_map_range (kernel_map and the UPL to the VM unmap); ubc_upl_commit before the paired ubc_upl_commit_range (takes the UPL's internal page list, commits 4096 pages, then deallocates the UPL); ubc_upl_abort between ubc_upl_commit_range and ubc_upl_pageinfo (aborts with its second argument as the type, then deallocates). bsd/kern/kern_descrip.c: file_vnode_withvid is the wrapper (mov w3, #0; b) after file_vnode and file_vnode_ext the 788-byte function it branches to. bsd/kern/kern_synch.c: tsleep after msleep and msleep1, before tsleep0; it tests its fourth argument, the timeout, for zero first."
+  },
+  {
+   "original": "0xfffffe000b0bcbf4",
+   "native_symbol": "_file_vnode_ext",
+   "check": {
+    "address": "0xfffffe000b0bcbf4",
+    "size": 788,
+    "sha256": "e9320eabaa5f8014f5edf2f22fc033b3b6d0ed9be26a43f16c4b67f729d1bbec"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/kern/ubc_subr.c: ubc_upl_unmap after ubc_upl_map and ubc_upl_map_range (kernel_map and the UPL to the VM unmap); ubc_upl_commit before the paired ubc_upl_commit_range (takes the UPL's internal page list, commits 4096 pages, then deallocates the UPL); ubc_upl_abort between ubc_upl_commit_range and ubc_upl_pageinfo (aborts with its second argument as the type, then deallocates). bsd/kern/kern_descrip.c: file_vnode_withvid is the wrapper (mov w3, #0; b) after file_vnode and file_vnode_ext the 788-byte function it branches to. bsd/kern/kern_synch.c: tsleep after msleep and msleep1, before tsleep0; it tests its fourth argument, the timeout, for zero first."
+  },
+  {
+   "original": "0xfffffe000b0bcbe8",
+   "native_symbol": "_file_vnode_withvid",
+   "check": {
+    "address": "0xfffffe000b0bcbe8",
+    "size": 12,
+    "sha256": "fc6f7c0c2557b2070883206fc4291d2d57d292153d374f211ba35b96c4fa8b16"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/kern/ubc_subr.c: ubc_upl_unmap after ubc_upl_map and ubc_upl_map_range (kernel_map and the UPL to the VM unmap); ubc_upl_commit before the paired ubc_upl_commit_range (takes the UPL's internal page list, commits 4096 pages, then deallocates the UPL); ubc_upl_abort between ubc_upl_commit_range and ubc_upl_pageinfo (aborts with its second argument as the type, then deallocates). bsd/kern/kern_descrip.c: file_vnode_withvid is the wrapper (mov w3, #0; b) after file_vnode and file_vnode_ext the 788-byte function it branches to. bsd/kern/kern_synch.c: tsleep after msleep and msleep1, before tsleep0; it tests its fourth argument, the timeout, for zero first."
+  },
+  {
+   "original": "0xfffffe000b1557c4",
+   "native_symbol": "_ubc_upl_abort",
+   "check": {
+    "address": "0xfffffe000b1557c4",
+    "size": 88,
+    "sha256": "054143f3298786f7de7e4f1a4951f2669706c22985a7330f24c59d76033a4cd7"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/kern/ubc_subr.c: ubc_upl_unmap after ubc_upl_map and ubc_upl_map_range (kernel_map and the UPL to the VM unmap); ubc_upl_commit before the paired ubc_upl_commit_range (takes the UPL's internal page list, commits 4096 pages, then deallocates the UPL); ubc_upl_abort between ubc_upl_commit_range and ubc_upl_pageinfo (aborts with its second argument as the type, then deallocates). bsd/kern/kern_descrip.c: file_vnode_withvid is the wrapper (mov w3, #0; b) after file_vnode and file_vnode_ext the 788-byte function it branches to. bsd/kern/kern_synch.c: tsleep after msleep and msleep1, before tsleep0; it tests its fourth argument, the timeout, for zero first."
+  },
+  {
+   "original": "0xfffffe000b1556d0",
+   "native_symbol": "_ubc_upl_commit",
+   "check": {
+    "address": "0xfffffe000b1556d0",
+    "size": 104,
+    "sha256": "081be2ff04dd0ee23ba8e4da02008d316a504a174c805b32fcfe42ac35ecfe7a"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/kern/ubc_subr.c: ubc_upl_unmap after ubc_upl_map and ubc_upl_map_range (kernel_map and the UPL to the VM unmap); ubc_upl_commit before the paired ubc_upl_commit_range (takes the UPL's internal page list, commits 4096 pages, then deallocates the UPL); ubc_upl_abort between ubc_upl_commit_range and ubc_upl_pageinfo (aborts with its second argument as the type, then deallocates). bsd/kern/kern_descrip.c: file_vnode_withvid is the wrapper (mov w3, #0; b) after file_vnode and file_vnode_ext the 788-byte function it branches to. bsd/kern/kern_synch.c: tsleep after msleep and msleep1, before tsleep0; it tests its fourth argument, the timeout, for zero first."
+  },
+  {
+   "original": "0xfffffe000b155690",
+   "native_symbol": "_ubc_upl_unmap",
+   "check": {
+    "address": "0xfffffe000b155690",
+    "size": 32,
+    "sha256": "3b374c22933c0f209dcf65e6f8fcc896ac1d68ba9ca3ff72a9d7b6b23452ac27"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/kern/ubc_subr.c: ubc_upl_unmap after ubc_upl_map and ubc_upl_map_range (kernel_map and the UPL to the VM unmap); ubc_upl_commit before the paired ubc_upl_commit_range (takes the UPL's internal page list, commits 4096 pages, then deallocates the UPL); ubc_upl_abort between ubc_upl_commit_range and ubc_upl_pageinfo (aborts with its second argument as the type, then deallocates). bsd/kern/kern_descrip.c: file_vnode_withvid is the wrapper (mov w3, #0; b) after file_vnode and file_vnode_ext the 788-byte function it branches to. bsd/kern/kern_synch.c: tsleep after msleep and msleep1, before tsleep0; it tests its fourth argument, the timeout, for zero first."
+  },
+  {
+   "original": "0xfffffe000add5938",
+   "native_symbol": "_vfs_context_orig_dataless_materialization_is_prevented",
+   "check": {
+    "address": "0xfffffe000add5938",
+    "size": 224,
+    "sha256": "a482a8aad8d8b5bd7ecbea32f7b2e1a94be57b55478101af8367b344603c1673"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/vfs/vfs_subr.c: vnode_getwithref between vnode_getwithvid_drainok and vnode_getalways. bsd/vfs/kpi_vfs.c: vfs_fsremove between vfs_fsadd and vfs_setowner; after vfs_context_copy_audit_token: vfs_context_suser (the context's credential, its uid at +24, returns 1 = EPERM when it is not 0), vfs_context_issignal (two arguments), vfs_context_can_resolve_triggers (true when policy bit 0x10 TRIGGER_RESOLVE_DISABLE is clear); vfs_set_thread_fs_private and vfs_get_thread_fs_private accept only tag 1 and store or load one 64-bit field of the current thread; vfs_ctx_skipatime directly after vnode_israge. bsd/vfs/vfs_fsevents.c: need_fsevent (a table lookup for a type up to 15) before add_fsevent. bsd/vfs/vfs_syscalls.c: vfs_context_orig_dataless_materialization_is_prevented between vfs_context_dataless_materialization_is_prevented and vfs_context_is_dataless_manipulator."
+  },
+  {
+   "original": "0xfffffe000adecbb0",
+   "native_symbol": "_need_fsevent",
+   "check": {
+    "address": "0xfffffe000adecbb0",
+    "size": 76,
+    "sha256": "3f74b7977968530d6f521bd094739c3389f66c856b6a64538e6cf1677c05cab1"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/vfs/vfs_subr.c: vnode_getwithref between vnode_getwithvid_drainok and vnode_getalways. bsd/vfs/kpi_vfs.c: vfs_fsremove between vfs_fsadd and vfs_setowner; after vfs_context_copy_audit_token: vfs_context_suser (the context's credential, its uid at +24, returns 1 = EPERM when it is not 0), vfs_context_issignal (two arguments), vfs_context_can_resolve_triggers (true when policy bit 0x10 TRIGGER_RESOLVE_DISABLE is clear); vfs_set_thread_fs_private and vfs_get_thread_fs_private accept only tag 1 and store or load one 64-bit field of the current thread; vfs_ctx_skipatime directly after vnode_israge. bsd/vfs/vfs_fsevents.c: need_fsevent (a table lookup for a type up to 15) before add_fsevent. bsd/vfs/vfs_syscalls.c: vfs_context_orig_dataless_materialization_is_prevented between vfs_context_dataless_materialization_is_prevented and vfs_context_is_dataless_manipulator."
+  },
+  {
+   "original": "0xfffffe000ade7f6c",
+   "native_symbol": "_vfs_ctx_skipatime",
+   "check": {
+    "address": "0xfffffe000ade7f6c",
+    "size": 152,
+    "sha256": "7770b66df054dd7987fc0ccb1bdac331c5b01e22d528e17c1f3c84ba97a7b86d"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/vfs/vfs_subr.c: vnode_getwithref between vnode_getwithvid_drainok and vnode_getalways. bsd/vfs/kpi_vfs.c: vfs_fsremove between vfs_fsadd and vfs_setowner; after vfs_context_copy_audit_token: vfs_context_suser (the context's credential, its uid at +24, returns 1 = EPERM when it is not 0), vfs_context_issignal (two arguments), vfs_context_can_resolve_triggers (true when policy bit 0x10 TRIGGER_RESOLVE_DISABLE is clear); vfs_set_thread_fs_private and vfs_get_thread_fs_private accept only tag 1 and store or load one 64-bit field of the current thread; vfs_ctx_skipatime directly after vnode_israge. bsd/vfs/vfs_fsevents.c: need_fsevent (a table lookup for a type up to 15) before add_fsevent. bsd/vfs/vfs_syscalls.c: vfs_context_orig_dataless_materialization_is_prevented between vfs_context_dataless_materialization_is_prevented and vfs_context_is_dataless_manipulator."
+  },
+  {
+   "original": "0xfffffe000ade7b74",
+   "native_symbol": "_vfs_get_thread_fs_private",
+   "check": {
+    "address": "0xfffffe000ade7b74",
+    "size": 40,
+    "sha256": "d3eb5604c70d1ad3b8ec03958b1fa5f136ac3af984a2fa1400864ba437db0dd9"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/vfs/vfs_subr.c: vnode_getwithref between vnode_getwithvid_drainok and vnode_getalways. bsd/vfs/kpi_vfs.c: vfs_fsremove between vfs_fsadd and vfs_setowner; after vfs_context_copy_audit_token: vfs_context_suser (the context's credential, its uid at +24, returns 1 = EPERM when it is not 0), vfs_context_issignal (two arguments), vfs_context_can_resolve_triggers (true when policy bit 0x10 TRIGGER_RESOLVE_DISABLE is clear); vfs_set_thread_fs_private and vfs_get_thread_fs_private accept only tag 1 and store or load one 64-bit field of the current thread; vfs_ctx_skipatime directly after vnode_israge. bsd/vfs/vfs_fsevents.c: need_fsevent (a table lookup for a type up to 15) before add_fsevent. bsd/vfs/vfs_syscalls.c: vfs_context_orig_dataless_materialization_is_prevented between vfs_context_dataless_materialization_is_prevented and vfs_context_is_dataless_manipulator."
+  },
+  {
+   "original": "0xfffffe000ade7b50",
+   "native_symbol": "_vfs_set_thread_fs_private",
+   "check": {
+    "address": "0xfffffe000ade7b50",
+    "size": 36,
+    "sha256": "42758294e0a5815fda9386b466e722c16d12559fc39d2d3d8357400850f4bbdc"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/vfs/vfs_subr.c: vnode_getwithref between vnode_getwithvid_drainok and vnode_getalways. bsd/vfs/kpi_vfs.c: vfs_fsremove between vfs_fsadd and vfs_setowner; after vfs_context_copy_audit_token: vfs_context_suser (the context's credential, its uid at +24, returns 1 = EPERM when it is not 0), vfs_context_issignal (two arguments), vfs_context_can_resolve_triggers (true when policy bit 0x10 TRIGGER_RESOLVE_DISABLE is clear); vfs_set_thread_fs_private and vfs_get_thread_fs_private accept only tag 1 and store or load one 64-bit field of the current thread; vfs_ctx_skipatime directly after vnode_israge. bsd/vfs/vfs_fsevents.c: need_fsevent (a table lookup for a type up to 15) before add_fsevent. bsd/vfs/vfs_syscalls.c: vfs_context_orig_dataless_materialization_is_prevented between vfs_context_dataless_materialization_is_prevented and vfs_context_is_dataless_manipulator."
+  },
+  {
+   "original": "0xfffffe000ade75bc",
+   "native_symbol": "_vfs_context_can_resolve_triggers",
+   "check": {
+    "address": "0xfffffe000ade75bc",
+    "size": 84,
+    "sha256": "3ba9c8c1d9b8f7c40c1e5350a47f0cd13bbfc0b3888b536fbc85f8591bb8bc9a"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/vfs/vfs_subr.c: vnode_getwithref between vnode_getwithvid_drainok and vnode_getalways. bsd/vfs/kpi_vfs.c: vfs_fsremove between vfs_fsadd and vfs_setowner; after vfs_context_copy_audit_token: vfs_context_suser (the context's credential, its uid at +24, returns 1 = EPERM when it is not 0), vfs_context_issignal (two arguments), vfs_context_can_resolve_triggers (true when policy bit 0x10 TRIGGER_RESOLVE_DISABLE is clear); vfs_set_thread_fs_private and vfs_get_thread_fs_private accept only tag 1 and store or load one 64-bit field of the current thread; vfs_ctx_skipatime directly after vnode_israge. bsd/vfs/vfs_fsevents.c: need_fsevent (a table lookup for a type up to 15) before add_fsevent. bsd/vfs/vfs_syscalls.c: vfs_context_orig_dataless_materialization_is_prevented between vfs_context_dataless_materialization_is_prevented and vfs_context_is_dataless_manipulator."
+  },
+  {
+   "original": "0xfffffe000ade7558",
+   "native_symbol": "_vfs_context_issignal",
+   "check": {
+    "address": "0xfffffe000ade7558",
+    "size": 100,
+    "sha256": "29606646744a8418824a908c3936cd24cd3380cb7fcdeec3faf1585629845a91"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/vfs/vfs_subr.c: vnode_getwithref between vnode_getwithvid_drainok and vnode_getalways. bsd/vfs/kpi_vfs.c: vfs_fsremove between vfs_fsadd and vfs_setowner; after vfs_context_copy_audit_token: vfs_context_suser (the context's credential, its uid at +24, returns 1 = EPERM when it is not 0), vfs_context_issignal (two arguments), vfs_context_can_resolve_triggers (true when policy bit 0x10 TRIGGER_RESOLVE_DISABLE is clear); vfs_set_thread_fs_private and vfs_get_thread_fs_private accept only tag 1 and store or load one 64-bit field of the current thread; vfs_ctx_skipatime directly after vnode_israge. bsd/vfs/vfs_fsevents.c: need_fsevent (a table lookup for a type up to 15) before add_fsevent. bsd/vfs/vfs_syscalls.c: vfs_context_orig_dataless_materialization_is_prevented between vfs_context_dataless_materialization_is_prevented and vfs_context_is_dataless_manipulator."
+  },
+  {
+   "original": "0xfffffe000ade7540",
+   "native_symbol": "_vfs_context_suser",
+   "check": {
+    "address": "0xfffffe000ade7540",
+    "size": 24,
+    "sha256": "17874be35847537af9e18fc1e4b35d82c5268bc8d9fce19b4b9075d690db17e7"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/vfs/vfs_subr.c: vnode_getwithref between vnode_getwithvid_drainok and vnode_getalways. bsd/vfs/kpi_vfs.c: vfs_fsremove between vfs_fsadd and vfs_setowner; after vfs_context_copy_audit_token: vfs_context_suser (the context's credential, its uid at +24, returns 1 = EPERM when it is not 0), vfs_context_issignal (two arguments), vfs_context_can_resolve_triggers (true when policy bit 0x10 TRIGGER_RESOLVE_DISABLE is clear); vfs_set_thread_fs_private and vfs_get_thread_fs_private accept only tag 1 and store or load one 64-bit field of the current thread; vfs_ctx_skipatime directly after vnode_israge. bsd/vfs/vfs_fsevents.c: need_fsevent (a table lookup for a type up to 15) before add_fsevent. bsd/vfs/vfs_syscalls.c: vfs_context_orig_dataless_materialization_is_prevented between vfs_context_dataless_materialization_is_prevented and vfs_context_is_dataless_manipulator."
+  },
+  {
+   "original": "0xfffffe000ade71a4",
+   "native_symbol": "_vfs_fsremove",
+   "check": {
+    "address": "0xfffffe000ade71a4",
+    "size": 488,
+    "sha256": "618a22537951dee5c9ad3f35f55a4c1eb14d04a95927eb2925fb049902da6bbf"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/vfs/vfs_subr.c: vnode_getwithref between vnode_getwithvid_drainok and vnode_getalways. bsd/vfs/kpi_vfs.c: vfs_fsremove between vfs_fsadd and vfs_setowner; after vfs_context_copy_audit_token: vfs_context_suser (the context's credential, its uid at +24, returns 1 = EPERM when it is not 0), vfs_context_issignal (two arguments), vfs_context_can_resolve_triggers (true when policy bit 0x10 TRIGGER_RESOLVE_DISABLE is clear); vfs_set_thread_fs_private and vfs_get_thread_fs_private accept only tag 1 and store or load one 64-bit field of the current thread; vfs_ctx_skipatime directly after vnode_israge. bsd/vfs/vfs_fsevents.c: need_fsevent (a table lookup for a type up to 15) before add_fsevent. bsd/vfs/vfs_syscalls.c: vfs_context_orig_dataless_materialization_is_prevented between vfs_context_dataless_materialization_is_prevented and vfs_context_is_dataless_manipulator."
+  },
+  {
+   "original": "0xfffffe000adb98b4",
+   "native_symbol": "_vnode_getwithref",
+   "check": {
+    "address": "0xfffffe000adb98b4",
+    "size": 228,
+    "sha256": "f0946c5cf7edbc617896e223ab204554e2efded1342631062f8fc26e31348ae5"
+   },
+   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/vfs/vfs_subr.c: vnode_getwithref between vnode_getwithvid_drainok and vnode_getalways. bsd/vfs/kpi_vfs.c: vfs_fsremove between vfs_fsadd and vfs_setowner; after vfs_context_copy_audit_token: vfs_context_suser (the context's credential, its uid at +24, returns 1 = EPERM when it is not 0), vfs_context_issignal (two arguments), vfs_context_can_resolve_triggers (true when policy bit 0x10 TRIGGER_RESOLVE_DISABLE is clear); vfs_set_thread_fs_private and vfs_get_thread_fs_private accept only tag 1 and store or load one 64-bit field of the current thread; vfs_ctx_skipatime directly after vnode_israge. bsd/vfs/vfs_fsevents.c: need_fsevent (a table lookup for a type up to 15) before add_fsevent. bsd/vfs/vfs_syscalls.c: vfs_context_orig_dataless_materialization_is_prevented between vfs_context_dataless_materialization_is_prevented and vfs_context_is_dataless_manipulator."
+  },
+  {
+   "original": "0xfffffe000ad9de20",
+   "native_symbol": "_cluster_write_ext",
+   "check": {
+    "address": "0xfffffe000ad9de20",
+    "size": 752,
+    "sha256": "c4182f463e0277c76db05153d3f2bd17db53d529260e3b48a808d6667078025f"
+   },
+   "evidence": "bsd/vfs/vfs_cluster.c: the three seven-argument wrappers that add two NULL arguments (x7 and one on the stack) and call the function directly after them: cluster_pageout with cluster_pageout_ext (432 bytes), cluster_pagein in front of the paired cluster_pagein_ext, and cluster_write with cluster_write_ext (752 bytes), which sits after cluster_bp/cluster_bp_ext and before cluster_write_copy as in the source."
+  },
+  {
+   "original": "0xfffffe000ad9ddf8",
+   "native_symbol": "_cluster_write",
+   "check": {
+    "address": "0xfffffe000ad9ddf8",
+    "size": 40,
+    "sha256": "728f8c9471191c87a80bed2e726c8bc0c9ae13aff92f4a039fdbf4c4f0df8bc7"
+   },
+   "evidence": "bsd/vfs/vfs_cluster.c: the three seven-argument wrappers that add two NULL arguments (x7 and one on the stack) and call the function directly after them: cluster_pageout with cluster_pageout_ext (432 bytes), cluster_pagein in front of the paired cluster_pagein_ext, and cluster_write with cluster_write_ext (752 bytes), which sits after cluster_bp/cluster_bp_ext and before cluster_write_copy as in the source."
+  },
+  {
+   "original": "0xfffffe000ad9d794",
+   "native_symbol": "_cluster_pagein",
+   "check": {
+    "address": "0xfffffe000ad9d794",
+    "size": 40,
+    "sha256": "728f8c9471191c87a80bed2e726c8bc0c9ae13aff92f4a039fdbf4c4f0df8bc7"
+   },
+   "evidence": "bsd/vfs/vfs_cluster.c: the three seven-argument wrappers that add two NULL arguments (x7 and one on the stack) and call the function directly after them: cluster_pageout with cluster_pageout_ext (432 bytes), cluster_pagein in front of the paired cluster_pagein_ext, and cluster_write with cluster_write_ext (752 bytes), which sits after cluster_bp/cluster_bp_ext and before cluster_write_copy as in the source."
+  },
+  {
+   "original": "0xfffffe000ad9ab34",
+   "native_symbol": "_cluster_pageout_ext",
+   "check": {
+    "address": "0xfffffe000ad9ab34",
+    "size": 432,
+    "sha256": "a079623decacec033f5d524ea1c5c9b741b4adc694afa324d178a772ab117693"
+   },
+   "evidence": "bsd/vfs/vfs_cluster.c: the three seven-argument wrappers that add two NULL arguments (x7 and one on the stack) and call the function directly after them: cluster_pageout with cluster_pageout_ext (432 bytes), cluster_pagein in front of the paired cluster_pagein_ext, and cluster_write with cluster_write_ext (752 bytes), which sits after cluster_bp/cluster_bp_ext and before cluster_write_copy as in the source."
+  },
+  {
+   "original": "0xfffffe000ad9ab0c",
+   "native_symbol": "_cluster_pageout",
+   "check": {
+    "address": "0xfffffe000ad9ab0c",
+    "size": 40,
+    "sha256": "728f8c9471191c87a80bed2e726c8bc0c9ae13aff92f4a039fdbf4c4f0df8bc7"
+   },
+   "evidence": "bsd/vfs/vfs_cluster.c: the three seven-argument wrappers that add two NULL arguments (x7 and one on the stack) and call the function directly after them: cluster_pageout with cluster_pageout_ext (432 bytes), cluster_pagein in front of the paired cluster_pagein_ext, and cluster_write with cluster_write_ext (752 bytes), which sits after cluster_bp/cluster_bp_ext and before cluster_write_copy as in the source."
+  },
+  {
+   "original": "0xfffffe000adf25e0",
+   "native_symbol": "_cp_os_version",
+   "check": {
+    "address": "0xfffffe000adf25e0",
+    "size": 192,
+    "sha256": "490e3c85202eed3bce3f6c9bb508150503424d53cbead386601e0c845b99aef4"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf25b8",
+   "native_symbol": "_cp_is_valid_class",
+   "check": {
+    "address": "0xfffffe000adf25b8",
+    "size": 40,
+    "sha256": "b8e2c0497f2512696f954293dca658792fb4b3e78fd754c97050f3a5f8d99a53"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf21ec",
+   "native_symbol": "_cpx_can_copy",
+   "check": {
+    "address": "0xfffffe000adf21ec",
+    "size": 24,
+    "sha256": "c49da89ef67efd60c70865ffd1595d38ee5a3c17b64c30f519b2c072edcf0be1"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf20b4",
+   "native_symbol": "_cpx_iv_aes_ctx",
+   "check": {
+    "address": "0xfffffe000adf20b4",
+    "size": 212,
+    "sha256": "40fe6f43a31cceb7ea4e1a3dd2d32b9b33afea37ec4e2133a4b47601558ead69"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf205c",
+   "native_symbol": "_cpx_key",
+   "check": {
+    "address": "0xfffffe000adf205c",
+    "size": 12,
+    "sha256": "a821e0dabc6c9ac7f40040bd3c3bcbc404109e2060039b635e89422953ceae16"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf2048",
+   "native_symbol": "_cpx_has_key",
+   "check": {
+    "address": "0xfffffe000adf2048",
+    "size": 20,
+    "sha256": "19a70b57e4335847ee1be606a0165ca9de43ce923e2b58631deb60142baf0d93"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf2028",
+   "native_symbol": "_cpx_set_key_len",
+   "check": {
+    "address": "0xfffffe000adf2028",
+    "size": 32,
+    "sha256": "ac72132eaf37197d5cbf16dbb2038fba5d81b8d1b99923135037b5c0999d1db2"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf201c",
+   "native_symbol": "_cpx_key_len",
+   "check": {
+    "address": "0xfffffe000adf201c",
+    "size": 12,
+    "sha256": "599490615a0e09be01f8507b22122a1509b6e410dfdf7ee6b0daa4940bc4ad46"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf2010",
+   "native_symbol": "_cpx_max_key_len",
+   "check": {
+    "address": "0xfffffe000adf2010",
+    "size": 12,
+    "sha256": "d38b8d76b0854a096953c4d1dbcf070d10d6bebbb08ee33202c72957fb1ea7d7"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1fec",
+   "native_symbol": "_cpx_set_synthetic_offset_for_iv",
+   "check": {
+    "address": "0xfffffe000adf1fec",
+    "size": 36,
+    "sha256": "e853d5bc9a2cb5fb909151ccb218d878dac7cc1ec65d0c45b5e5164195cfaabf"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1fdc",
+   "native_symbol": "_cpx_synthetic_offset_for_iv",
+   "check": {
+    "address": "0xfffffe000adf1fdc",
+    "size": 16,
+    "sha256": "fc1f370e47984dbe7bc2a7ece0378e9953c74be6f0c7499a297a3bed7b553884"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1fb8",
+   "native_symbol": "_cpx_set_use_offset_for_iv",
+   "check": {
+    "address": "0xfffffe000adf1fb8",
+    "size": 36,
+    "sha256": "df2b28f6785360ad5442f6c419d468adfb2f9913fe5fae82ec37a888e5871e97"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1fa8",
+   "native_symbol": "_cpx_use_offset_for_iv",
+   "check": {
+    "address": "0xfffffe000adf1fa8",
+    "size": 16,
+    "sha256": "84b280b9b1c872516e3ec4d4bbe0b9bf7251e1e1d8dd7ba38b84e14ef9be65c6"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1f84",
+   "native_symbol": "_cpx_set_is_composite_key",
+   "check": {
+    "address": "0xfffffe000adf1f84",
+    "size": 36,
+    "sha256": "6b8871e4547656ebcca969f78673754bd832446bfde6af1a8f2e753b5889229d"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1f74",
+   "native_symbol": "_cpx_is_composite_key",
+   "check": {
+    "address": "0xfffffe000adf1f74",
+    "size": 16,
+    "sha256": "6b92407ee29c4c8a35c93c333ba3f154c3edbadc0ee4c675fd228049ff10e943"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1f5c",
+   "native_symbol": "_cpx_set_is_sep_wrapped_key",
+   "check": {
+    "address": "0xfffffe000adf1f5c",
+    "size": 24,
+    "sha256": "7f238ab87e7dafd07556d07a9c29e9a51652c98380787566c31ad99e3be95771"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1f4c",
+   "native_symbol": "_cpx_is_sep_wrapped_key",
+   "check": {
+    "address": "0xfffffe000adf1f4c",
+    "size": 16,
+    "sha256": "fbe543bbef2e8eca74d37a4666b1cdb8a87f9edb1091b31a880261b87c53138c"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1ea0",
+   "native_symbol": "_cpx_free",
+   "check": {
+    "address": "0xfffffe000adf1ea0",
+    "size": 172,
+    "sha256": "97ff3fbe814d344acbfe5de3ea4e297521ee9969a0c38b9cccbe7ae1bdc82b68"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1e98",
+   "native_symbol": "_cpx_writeprotect",
+   "check": {
+    "address": "0xfffffe000adf1e98",
+    "size": 8,
+    "sha256": "d33fdb74881bcff46b1cf4fc3e20479b1882e0e683789e80e6d650554066a1aa"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1e20",
+   "native_symbol": "_cpx_free_ctx",
+   "check": {
+    "address": "0xfffffe000adf1e20",
+    "size": 120,
+    "sha256": "967267ef58ae1eff922526203a0862bbc4e5f2bb4fa6dfddb9f6c433b171527a"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1e0c",
+   "native_symbol": "_cpx_init",
+   "check": {
+    "address": "0xfffffe000adf1e0c",
+    "size": 20,
+    "sha256": "321329101d1747c9b4474aed0fc39cbf41bece4e77baec57a9446668c55cb768"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1db8",
+   "native_symbol": "_cpx_alloc_ctx",
+   "check": {
+    "address": "0xfffffe000adf1db8",
+    "size": 84,
+    "sha256": "81d2bdea5c1c33cd2c35487d1c362a7f9660adf0d86403689dad08eec47248b6"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1d28",
+   "native_symbol": "_cpx_alloc",
+   "check": {
+    "address": "0xfffffe000adf1d28",
+    "size": 144,
+    "sha256": "f886452dc6ee88332d9fa4ba5d293bdd57b20f23b95e55098ba3090b0cf915cc"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1d18",
+   "native_symbol": "_cpx_sizex",
+   "check": {
+    "address": "0xfffffe000adf1d18",
+    "size": 16,
+    "sha256": "72e7ce6e8cda252c793eec1ebff85845d71e9d2e521a51f221742a507e91483f"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000adf1d0c",
+   "native_symbol": "_cpx_size",
+   "check": {
+    "address": "0xfffffe000adf1d0c",
+    "size": 12,
+    "sha256": "a821e0dabc6c9ac7f40040bd3c3bcbc404109e2060039b635e89422953ceae16"
+   },
+   "evidence": "bsd/vfs/vfs_cprotect.c, the cpx accessors, each by what it does to the cpx (flags word at +8, maximum key length at +12, key length at +14, key bytes at +16) and in source order: cpx_size (length + 16), cpx_sizex (max key length + 16), cpx_alloc (refuses a key over 64 bytes), cpx_alloc_ctx (does nothing when the context pointer at +0 is set), cpx_init (clears the flags and key length, stores the max key length), cpx_free_ctx, cpx_writeprotect (empty in this build: a bare ret, which the matcher's pure-leaf rule had given to a block), cpx_free; then the flag getters and setters in pairs: is/set_is_sep_wrapped_key (bit 0), is/set_is_composite_key (bit 5), use/set_use_offset_for_iv (bit 2), synthetic/set_synthetic_offset_for_iv (bit 4); cpx_max_key_len, cpx_key_len, cpx_set_key_len, cpx_has_key (key length not zero), cpx_key (the address +16; the matcher had named this one cpx_size, which has the same code but not the same meaning if the struct differs), cpx_iv_aes_ctx after the paired cpx_set_aes_iv_key, cpx_can_copy (compares src key length with dst max) before cpx_copy; and after cp_key_store_action_for_volume: cp_is_valid_class (class - 1 below 7) and cp_os_version (returns a cached global when set). APFS references all of them."
+  },
+  {
+   "original": "0xfffffe000b268b74",
+   "native_symbol": "__ZN8OSObjectnwEm",
+   "check": {
+    "address": "0xfffffe000b268b74",
+    "size": 72,
+    "sha256": "c3f5e48e88afb81ffaabe8f5508872569e1e6db751f8d7669a78010b9abe2a59"
+   },
+   "evidence": "libkern/c++/OSObject.cpp, after OSObject::~OSObject: operator delete(void *, size_t) returns at once for a NULL pointer and frees otherwise; operator new(size_t) takes one argument and allocates from the default heap. AMFI's own classes use both."
+  },
+  {
+   "original": "0xfffffe000b268ae0",
+   "native_symbol": "__ZN8OSObjectdlEPvm",
+   "check": {
+    "address": "0xfffffe000b268ae0",
+    "size": 80,
+    "sha256": "b1a4aed6908f309bf05cd9fed0828418beae5ef7da53af89ba9f25bfeb73f4ca"
+   },
+   "evidence": "libkern/c++/OSObject.cpp, after OSObject::~OSObject: operator delete(void *, size_t) returns at once for a NULL pointer and frees otherwise; operator new(size_t) takes one argument and allocates from the default heap. AMFI's own classes use both."
+  },
+  {
+   "original": "0xfffffe000b0faecc",
+   "native_symbol": "_proc_selfpgrpid",
+   "check": {
+    "address": "0xfffffe000b0faecc",
+    "size": 48,
+    "sha256": "1443c68322ea27f9325a53897e3c3db33ca7c3cc13163df3c7064c2dfd1f36ca"
+   },
+   "evidence": "bsd/kern/kern_cs.c: csproc_get_platform_identifier directly before cs_entitlement_flags (the csproc shape: the proc's signed text vnode at +1336, then its blob). bsd/kern/kern_persona.c: persona_get_id directly after persona_put_and_unlock (returns the 32-bit id at +8, or -1 for NULL); persona_get_type between persona_proc_drop and persona_get_uid. bsd/kern/kern_proc.c: proc_csflags after proc_getcsflags (EINVAL unless both the proc and the output pointer are given); proc_best_name after proc_name (returns the long name at +1389 unless it is empty, then the short one at +1372); proc_is_driver before proc_is_third_party_debuggable_driver (NULL check, bit 17 of p_flag); proc_selfpgrpid after proc_pgrpid and proc_sessionid (starts from the current process)."
+  },
+  {
+   "original": "0xfffffe000b0f8414",
+   "native_symbol": "_proc_is_driver",
+   "check": {
+    "address": "0xfffffe000b0f8414",
+    "size": 20,
+    "sha256": "cd5df1ddbf7d62221f6bdaabcd1830c0b12a713b3e86ab975f89e0c5b3e7815f"
+   },
+   "evidence": "bsd/kern/kern_cs.c: csproc_get_platform_identifier directly before cs_entitlement_flags (the csproc shape: the proc's signed text vnode at +1336, then its blob). bsd/kern/kern_persona.c: persona_get_id directly after persona_put_and_unlock (returns the 32-bit id at +8, or -1 for NULL); persona_get_type between persona_proc_drop and persona_get_uid. bsd/kern/kern_proc.c: proc_csflags after proc_getcsflags (EINVAL unless both the proc and the output pointer are given); proc_best_name after proc_name (returns the long name at +1389 unless it is empty, then the short one at +1372); proc_is_driver before proc_is_third_party_debuggable_driver (NULL check, bit 17 of p_flag); proc_selfpgrpid after proc_pgrpid and proc_sessionid (starts from the current process)."
+  },
+  {
+   "original": "0xfffffe000b0f455c",
+   "native_symbol": "_proc_best_name",
+   "check": {
+    "address": "0xfffffe000b0f455c",
+    "size": 28,
+    "sha256": "0985a276dd3d175ca7f44e704160ad3c76824a445657006e513ebfadab51ea08"
+   },
+   "evidence": "bsd/kern/kern_cs.c: csproc_get_platform_identifier directly before cs_entitlement_flags (the csproc shape: the proc's signed text vnode at +1336, then its blob). bsd/kern/kern_persona.c: persona_get_id directly after persona_put_and_unlock (returns the 32-bit id at +8, or -1 for NULL); persona_get_type between persona_proc_drop and persona_get_uid. bsd/kern/kern_proc.c: proc_csflags after proc_getcsflags (EINVAL unless both the proc and the output pointer are given); proc_best_name after proc_name (returns the long name at +1389 unless it is empty, then the short one at +1372); proc_is_driver before proc_is_third_party_debuggable_driver (NULL check, bit 17 of p_flag); proc_selfpgrpid after proc_pgrpid and proc_sessionid (starts from the current process)."
+  },
+  {
+   "original": "0xfffffe000b0f3ecc",
+   "native_symbol": "_proc_csflags",
+   "check": {
+    "address": "0xfffffe000b0f3ecc",
+    "size": 268,
+    "sha256": "962c47dc087855638efcb17daf02ff4ca181a848185ddd9152c75cd15df8a3ba"
+   },
+   "evidence": "bsd/kern/kern_cs.c: csproc_get_platform_identifier directly before cs_entitlement_flags (the csproc shape: the proc's signed text vnode at +1336, then its blob). bsd/kern/kern_persona.c: persona_get_id directly after persona_put_and_unlock (returns the 32-bit id at +8, or -1 for NULL); persona_get_type between persona_proc_drop and persona_get_uid. bsd/kern/kern_proc.c: proc_csflags after proc_getcsflags (EINVAL unless both the proc and the output pointer are given); proc_best_name after proc_name (returns the long name at +1389 unless it is empty, then the short one at +1372); proc_is_driver before proc_is_third_party_debuggable_driver (NULL check, bit 17 of p_flag); proc_selfpgrpid after proc_pgrpid and proc_sessionid (starts from the current process)."
+  },
+  {
+   "original": "0xfffffe000b0f0af0",
+   "native_symbol": "_persona_get_type",
+   "check": {
+    "address": "0xfffffe000b0f0af0",
+    "size": 172,
+    "sha256": "cd002f2abcbe103a0df770958694b13072cd7aab51e8ab54f7270105bb28d821"
+   },
+   "evidence": "bsd/kern/kern_cs.c: csproc_get_platform_identifier directly before cs_entitlement_flags (the csproc shape: the proc's signed text vnode at +1336, then its blob). bsd/kern/kern_persona.c: persona_get_id directly after persona_put_and_unlock (returns the 32-bit id at +8, or -1 for NULL); persona_get_type between persona_proc_drop and persona_get_uid. bsd/kern/kern_proc.c: proc_csflags after proc_getcsflags (EINVAL unless both the proc and the output pointer are given); proc_best_name after proc_name (returns the long name at +1389 unless it is empty, then the short one at +1372); proc_is_driver before proc_is_third_party_debuggable_driver (NULL check, bit 17 of p_flag); proc_selfpgrpid after proc_pgrpid and proc_sessionid (starts from the current process)."
+  },
+  {
+   "original": "0xfffffe000b0ef870",
+   "native_symbol": "_persona_get_id",
+   "check": {
+    "address": "0xfffffe000b0ef870",
+    "size": 24,
+    "sha256": "959bfa6fefb059f1d59fff5dd0d9459ad97d4bb95b932bb1e717a15804b8153c"
+   },
+   "evidence": "bsd/kern/kern_cs.c: csproc_get_platform_identifier directly before cs_entitlement_flags (the csproc shape: the proc's signed text vnode at +1336, then its blob). bsd/kern/kern_persona.c: persona_get_id directly after persona_put_and_unlock (returns the 32-bit id at +8, or -1 for NULL); persona_get_type between persona_proc_drop and persona_get_uid. bsd/kern/kern_proc.c: proc_csflags after proc_getcsflags (EINVAL unless both the proc and the output pointer are given); proc_best_name after proc_name (returns the long name at +1389 unless it is empty, then the short one at +1372); proc_is_driver before proc_is_third_party_debuggable_driver (NULL check, bit 17 of p_flag); proc_selfpgrpid after proc_pgrpid and proc_sessionid (starts from the current process)."
+  },
+  {
+   "original": "0xfffffe000b0b8fac",
+   "native_symbol": "_csproc_get_platform_identifier",
+   "check": {
+    "address": "0xfffffe000b0b8fac",
+    "size": 120,
+    "sha256": "cb6155dff41c46bceb27dec0da829d6e53d619e10afdc92e4530719e2011ded5"
+   },
+   "evidence": "bsd/kern/kern_cs.c: csproc_get_platform_identifier directly before cs_entitlement_flags (the csproc shape: the proc's signed text vnode at +1336, then its blob). bsd/kern/kern_persona.c: persona_get_id directly after persona_put_and_unlock (returns the 32-bit id at +8, or -1 for NULL); persona_get_type between persona_proc_drop and persona_get_uid. bsd/kern/kern_proc.c: proc_csflags after proc_getcsflags (EINVAL unless both the proc and the output pointer are given); proc_best_name after proc_name (returns the long name at +1389 unless it is empty, then the short one at +1372); proc_is_driver before proc_is_third_party_debuggable_driver (NULL check, bit 17 of p_flag); proc_selfpgrpid after proc_pgrpid and proc_sessionid (starts from the current process)."
+  },
+  {
+   "original": "0xfffffe000b13076c",
+   "native_symbol": "_load_trust_cache",
+   "check": {
+    "address": "0xfffffe000b13076c",
+    "size": 124,
+    "sha256": "313a990746305fafb22c83c1e964ac3ea1cfcef191f403036dc60930aad05ee3"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c: vfs_context_ucred is the load of the context's second field directly after vfs_context_rele; vfs_rootvnode is the function between vfs_setsnapshotmntflags and vnode_vid that takes a global rw lock shared, gets a reference on a global vnode and unlocks. bsd/kern/subr_sbuf.c: sbuf_data (returns the first field) between sbuf_finish and sbuf_len. bsd/kern/sys_reason.c: os_reason_set_flags between os_reason_free and os_reason_set_description_data: locks the reason at +8, stores its second argument at +32, unlocks. iokit/bsddev/IOKitBSDInit.cpp: IOCurrentTaskHasEntitlement between IOTaskHasStringEntitlement and IOTaskHasEntitlement; it starts from the current thread. bsd/kern/kern_trustcache.c: load_trust_cache between unload_trust_cache and load_trust_cache_with_type."
+  },
+  {
+   "original": "0xfffffe000b3b1f64",
+   "native_symbol": "_IOCurrentTaskHasEntitlement",
+   "check": {
+    "address": "0xfffffe000b3b1f64",
+    "size": 112,
+    "sha256": "7f418e7f8dd07636bc1fb57869a3055321552b8b4c22c3fe06f8030abcfafc9c"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c: vfs_context_ucred is the load of the context's second field directly after vfs_context_rele; vfs_rootvnode is the function between vfs_setsnapshotmntflags and vnode_vid that takes a global rw lock shared, gets a reference on a global vnode and unlocks. bsd/kern/subr_sbuf.c: sbuf_data (returns the first field) between sbuf_finish and sbuf_len. bsd/kern/sys_reason.c: os_reason_set_flags between os_reason_free and os_reason_set_description_data: locks the reason at +8, stores its second argument at +32, unlocks. iokit/bsddev/IOKitBSDInit.cpp: IOCurrentTaskHasEntitlement between IOTaskHasStringEntitlement and IOTaskHasEntitlement; it starts from the current thread. bsd/kern/kern_trustcache.c: load_trust_cache between unload_trust_cache and load_trust_cache_with_type."
+  },
+  {
+   "original": "0xfffffe000b19fe8c",
+   "native_symbol": "_os_reason_set_flags",
+   "check": {
+    "address": "0xfffffe000b19fe8c",
+    "size": 148,
+    "sha256": "0fe85834a7abdb9e728d5dc9fcd2d72d53238eed12f38cc9d4efdfdfd736b064"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c: vfs_context_ucred is the load of the context's second field directly after vfs_context_rele; vfs_rootvnode is the function between vfs_setsnapshotmntflags and vnode_vid that takes a global rw lock shared, gets a reference on a global vnode and unlocks. bsd/kern/subr_sbuf.c: sbuf_data (returns the first field) between sbuf_finish and sbuf_len. bsd/kern/sys_reason.c: os_reason_set_flags between os_reason_free and os_reason_set_description_data: locks the reason at +8, stores its second argument at +32, unlocks. iokit/bsddev/IOKitBSDInit.cpp: IOCurrentTaskHasEntitlement between IOTaskHasStringEntitlement and IOTaskHasEntitlement; it starts from the current thread. bsd/kern/kern_trustcache.c: load_trust_cache between unload_trust_cache and load_trust_cache_with_type."
+  },
+  {
+   "original": "0xfffffe000b13b9fc",
+   "native_symbol": "_sbuf_data",
+   "check": {
+    "address": "0xfffffe000b13b9fc",
+    "size": 12,
+    "sha256": "b6097f63592b59ee64929c6a3d22c4fec17e20813d81e216b075edf8eb0280d1"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c: vfs_context_ucred is the load of the context's second field directly after vfs_context_rele; vfs_rootvnode is the function between vfs_setsnapshotmntflags and vnode_vid that takes a global rw lock shared, gets a reference on a global vnode and unlocks. bsd/kern/subr_sbuf.c: sbuf_data (returns the first field) between sbuf_finish and sbuf_len. bsd/kern/sys_reason.c: os_reason_set_flags between os_reason_free and os_reason_set_description_data: locks the reason at +8, stores its second argument at +32, unlocks. iokit/bsddev/IOKitBSDInit.cpp: IOCurrentTaskHasEntitlement between IOTaskHasStringEntitlement and IOTaskHasEntitlement; it starts from the current thread. bsd/kern/kern_trustcache.c: load_trust_cache between unload_trust_cache and load_trust_cache_with_type."
+  },
+  {
+   "original": "0xfffffe000ade7c70",
+   "native_symbol": "_vfs_rootvnode",
+   "check": {
+    "address": "0xfffffe000ade7c70",
+    "size": 160,
+    "sha256": "7a09561c38839a99eddd811a6f08a1c544909fdfc6556b13e1134aeab4b1f1a6"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c: vfs_context_ucred is the load of the context's second field directly after vfs_context_rele; vfs_rootvnode is the function between vfs_setsnapshotmntflags and vnode_vid that takes a global rw lock shared, gets a reference on a global vnode and unlocks. bsd/kern/subr_sbuf.c: sbuf_data (returns the first field) between sbuf_finish and sbuf_len. bsd/kern/sys_reason.c: os_reason_set_flags between os_reason_free and os_reason_set_description_data: locks the reason at +8, stores its second argument at +32, unlocks. iokit/bsddev/IOKitBSDInit.cpp: IOCurrentTaskHasEntitlement between IOTaskHasStringEntitlement and IOTaskHasEntitlement; it starts from the current thread. bsd/kern/kern_trustcache.c: load_trust_cache between unload_trust_cache and load_trust_cache_with_type."
+  },
+  {
+   "original": "0xfffffe000ade7b00",
+   "native_symbol": "_vfs_context_ucred",
+   "check": {
+    "address": "0xfffffe000ade7b00",
+    "size": 12,
+    "sha256": "91fe54c083eb0b9168494a7cca1b46d068b795c7ba94ea2e14d0c8f9d165b9d5"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c: vfs_context_ucred is the load of the context's second field directly after vfs_context_rele; vfs_rootvnode is the function between vfs_setsnapshotmntflags and vnode_vid that takes a global rw lock shared, gets a reference on a global vnode and unlocks. bsd/kern/subr_sbuf.c: sbuf_data (returns the first field) between sbuf_finish and sbuf_len. bsd/kern/sys_reason.c: os_reason_set_flags between os_reason_free and os_reason_set_description_data: locks the reason at +8, stores its second argument at +32, unlocks. iokit/bsddev/IOKitBSDInit.cpp: IOCurrentTaskHasEntitlement between IOTaskHasStringEntitlement and IOTaskHasEntitlement; it starts from the current thread. bsd/kern/kern_trustcache.c: load_trust_cache between unload_trust_cache and load_trust_cache_with_type."
+  },
+  {
+   "original": "0xfffffe000aca0354",
+   "native_symbol": "_vm_map_copyout",
+   "check": {
+    "address": "0xfffffe000aca0354",
+    "size": 32,
+    "sha256": "8ea2e0d5ae2a10134fe7817e04ddbdddcae9bc422458e1da26c760ed9a0b279d"
+   },
+   "evidence": "Each is the one unpaired function between two paired neighbours and takes the place the named function has in the source between them. osfmk/kern/host.c: between host_get_io_main and host_set_atm_diagnostic_flag a single function returns the address of a static object (the host); the source has host_self and host_priv_self there, both returning &realhost. osfmk/kern/ipc_mig.c: mach_msg_send_from_kernel_proper between kernel_mach_msg_send and kernel_mach_msg_send_kmsg. osfmk/vm/vm_map.c: vm_map_copyout directly before vm_map_copyin: a NULL copy clears *dst_addr, otherwise it passes copy->size (+32) and TRUE to the internal function."
+  },
+  {
+   "original": "0xfffffe000abc5a44",
+   "native_symbol": "_mach_msg_send_from_kernel_proper",
+   "check": {
+    "address": "0xfffffe000abc5a44",
+    "size": 156,
+    "sha256": "2abda17e798d0ca3da6ac8fd8ca15ea513f305599ba48aee8fb24b28c9d2c9ad"
+   },
+   "evidence": "Each is the one unpaired function between two paired neighbours and takes the place the named function has in the source between them. osfmk/kern/host.c: between host_get_io_main and host_set_atm_diagnostic_flag a single function returns the address of a static object (the host); the source has host_self and host_priv_self there, both returning &realhost. osfmk/kern/ipc_mig.c: mach_msg_send_from_kernel_proper between kernel_mach_msg_send and kernel_mach_msg_send_kmsg. osfmk/vm/vm_map.c: vm_map_copyout directly before vm_map_copyin: a NULL copy clears *dst_addr, otherwise it passes copy->size (+32) and TRUE to the internal function."
+  },
+  {
+   "original": "0xfffffe000abc2c2c",
+   "native_symbol": "_host_priv_self",
+   "check": {
+    "address": "0xfffffe000abc2c2c",
+    "size": 16,
+    "sha256": "ba2a1759a53f9416f1e0142b83f8e0f526956d97d79b4444b18702807a306d4a"
+   },
+   "evidence": "Each is the one unpaired function between two paired neighbours and takes the place the named function has in the source between them. osfmk/kern/host.c: between host_get_io_main and host_set_atm_diagnostic_flag a single function returns the address of a static object (the host); the source has host_self and host_priv_self there, both returning &realhost. osfmk/kern/ipc_mig.c: mach_msg_send_from_kernel_proper between kernel_mach_msg_send and kernel_mach_msg_send_kmsg. osfmk/vm/vm_map.c: vm_map_copyout directly before vm_map_copyin: a NULL copy clears *dst_addr, otherwise it passes copy->size (+32) and TRUE to the internal function."
+  },
+  {
    "original": "0xfffffe000b0b7c94",
    "native_symbol": "_csblob_invalidate_flags",
    "check": {
