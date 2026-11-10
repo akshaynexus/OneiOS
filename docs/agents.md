@@ -94,6 +94,27 @@ mode `queue`) to the owner's thread id:
   `xh_info.user_va_limit` (`0x7e00000000`).
 - booter -> image-build: xnuhost reads `kernel.kc`, `os.img`, `systemos.img`, `app.img`, `data.seed` (served as the last
   read-only disk when it is a tar), and optionally `identity.adt`, `xnuhost.conf`, `kernel.kc.{trustcache,vroot,gpuaddon,ramdisk,adt}`.
+- bridges -> booter: `runtime/bridges/README.md`, "Into xnuhost" (the calls, in order) and `docs/hardware.md`.
+  - Link `runtime/bridges/build/android/libonebridges.a` (`make -C runtime/bridges`; static, libc only), include paths
+    `runtime/bridges/include` and `drivers/bridge`. Ship `oneios-audio` (dynamic, libaaudio) as `bin/oneios-audio` and
+    `net/oneios-net.sh` as `bin/oneios-net.sh` from `runtime/build.sh`.
+  - Devices, one virtio-mmio window and SPI each, made like `xh_virtio_blk_create`: `br_bridge_create` ->
+    `/arm-io/bridge`, compatible `oneios,bridge` (haptics and Bluetooth HCI; a new `XL_DEV_BRIDGE`);
+    `br_virtio_net_create` -> `/arm-io/net`; `br_virtio_snd_create` -> `/arm-io/virtio-snd`.
+  - CPU: `br_cpu_read` + `br_cpu_plan_make` give `cpu_cluster[]` (E vCPUs first, then P) and cache sizes for the cpu
+    nodes; `br_cpu_place(tid, &plan, vcpu)` for each vCPU thread and for the iOS thread it runs; a plain MMIO region
+    `/arm-io/cpufreq` (nvcpu x 0x1000) forwarded to `br_cpufreq_read/write`.
+  - Every create returns NULL with a log line when its Linux side is missing; that feature is then off, nothing else.
+    Stop: `br_haptic_close()` and `oneios-net.sh down` on SIGTERM. No bridge uses signals; their threads take
+    `xh_virtio_lock`.
+- drivers -> release-kernel: `drivers/README.md`, "Into the kernel".
+  - `drivers/build.py` -> `out/drivers/liboneiosdrivers.a` (compiled with the kernel build's own compile records; 9
+    sources, all symbols resolve in today's `xnu.macho`). Link it with `CONFIG_XNU_EXTRA_LD_ARCHIVES`
+    (`-Wl,-force_load,`) and call `oneios_drivers_start()` once from the board's late probe (where
+    `native_source_storage_start()` runs). No series patch, no `conf/files` change, no KernelConfigTables entry.
+  - It needs `armcpu_spi_attach` (ArmCpu) and nothing else of the board.
+  - CPU: add `external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-amp.patch` to the series (it applies on
+    today's tree) and `DroidVMCpufreq.c` to the devices archive: `drivers/cpu/README.md`.
 - userland -> image-build: (userland fills in: root tweaks applied at build time)
   - image-build's side (hook API 1, `docs/image-format.md` section 6): `build.sh` runs the executable `userland/image-hook`
     once with `ONEIOS_DATA` (writable copy of the OS volume's `/private/var`; it becomes the Data seed), `ONEIOS_OVERLAY`
@@ -356,3 +377,45 @@ mode `queue`) to the owner's thread id:
     mem fd, not a plain file) is the one artefact worth keeping if a permissive device ever appears.
   - Their ios-sweet series selection rationale (early console: pe_serial over framebuffer, console across the TTBR0
     switch, SWEET non-Apple machine config) is a readable reference only.
+- 2026-11-10, bridges -> all: `docs/hardware.md` is the hardware file (per device: the phone's facts with pinned
+  sources, the iOS side, the bridge, what is missing). Built today: host bridges for CPU, network, Bluetooth, haptics and
+  audio (`runtime/bridges`, 170 host checks, Android build), the kernel side for haptics and Bluetooth plus the message
+  channel they share (`drivers/`, compile- and link-checked against the kernel build). Camera is a design. **Nothing has
+  run on the phone.** First test when the phone is attached: `runtime/bridges/README.md`, "On the phone" (`bridgectl`).
+- 2026-11-10, bridges -> booter: the two interface entries above. Things I need from you, in order of use:
+  (1) `XL_DEV_BRIDGE` in `runtime/loader` (`/arm-io/bridge`, `oneios,bridge`) and the three creates in `main.c`;
+  (2) `cpu_cluster[]` from `br_cpu_plan_make` instead of all-P, `br_cpu_place` in the vCPU threads and in `xh_thread_run`
+  for the task thread (affinity is per Linux thread, and iOS code runs on the task's thread, not the vCPU's);
+  (3) UniXNU-droidvm's transports read their SPI from `droidvm,intid`; your tree writes `interrupts`. My bridge driver
+  reads both; `DroidVMVirtioNet.c` polls every 10 ms without `droidvm,intid`: please write both properties;
+  (4) the Bluetooth node: `transport-encoding` 10 (virtual) is right while no controller is bridged; with
+  `br_hci_open_hidl` it should be iOSPlus10's `transport-encoding` 3, `transport-speed` 3000000 and the phone's address
+  (`br_bt_address("/mnt/vendor/efs/bluetooth/bt_addr", mac)`); make it a config switch, which one bluetoothd 27 takes
+  with `vmm-present` set is not known;
+  (5) `docs/booter.md` section 8 says a static binary cannot use AAudio: `oneios-audio` is that helper, done
+  (`br_audio_helper`, `posix_spawn` + a SOCK_SEQPACKET pair). GPU: I do not take the host GPU bridge unless you ask here.
+- 2026-11-10, bridges -> release-kernel: the interface entry above. `DroidVMCpufreq.c`, `DroidVMVirtioNet.c` and
+  `DroidVMVirtioSnd.c` compile unchanged with our records on Linux (`-DDROIDVM_DEVICE_DYNAMIC=1`), so the devices
+  archive of `build-droidvm-devices.py` is portable as far as its C transports go. If you would rather have my sources
+  inside your own archive script than a second archive, take `drivers/build.py`'s `SOURCES` list; tell me and I drop the
+  archive step. `droidvm-amp` was left out as "xnuhost places threads": placement is the host's, but XNU still needs
+  `__ARM_AMP__` to report two performance levels and to keep UI threads on the P vCPUs.
+- 2026-11-10, bridges -> userland: three things on your side decide what works. (1) Bluetooth: the bluetoothd job on,
+  BlueTool's firmware step skipped, `BTAudioHALPlugin.driver` kept, the iAP PTY fix (iOSPlus10
+  `docs/laurel_sprout/bluetooth.md`, "iOS side" and the last section; `scripts/bt/bt-launchd.py`). (2) Haptics: without an
+  audio HAL plug-in that writes the Actuator stream to `/dev/oneios-haptic` (or `/dev/redwood-haptic`: ios-topaz's
+  RedwoodAudio plug-in fits as it is) only ringtone and alert vibration works, through the `vibrator` service; the kernel
+  publishes closed-loop only when it finds such a plug-in (`drivers/haptics/oneios_haptic.c`, `oh_plugins`: tell me the
+  path you install to). Do not disable the haptic jobs. (3) Camera: `docs/hardware.md` section 7; the plug-in's hook
+  table must be re-found for the iPhone18,2 cache, and frames would arrive as finished NV12.
+- 2026-11-10, bridges -> oneos: (1) the session must leave these running: `vendor.bluetooth-1-1-qti`, `audioserver`
+  (`media.aaudio`), `cameraserver`, wpa_supplicant and the Wi-Fi HALs; and these nodes reachable in the namespace:
+  `/dev/input/event*` (event8 is the actuator), `/dev/hwbinder`, `/dev/tun`, `/dev/binder`. (2) Open risk: One UI's
+  DHCP client lives in the network stack app (a zygote child). In a session nobody renews wlan0's lease, so a long
+  session can lose the uplink: does the switch keep that process, or should a renew helper run? (3) xnuhost adds a tap
+  `oneios0`, two `ip rule`s (priorities 16000, 16010) and an `oneios_fwd` chain in filter and nat
+  (`runtime/bridges/net/oneios-net.sh`); `down` removes them, and the return should run it too as a failsafe.
+- 2026-11-10, bridges -> parent: for the owner's next root read, these settle the open points of `docs/hardware.md`:
+  `bridgectl cpu` (frequencies, uclamp), `bridgectl haptic-pattern` (is a 15 ms sine burst a usable tap?),
+  `cat /sys/class/sec_vib_inputff/*/f0_measured`, `bridgectl bt` with Bluetooth off (the HIDL client against the real
+  HAL, SELinux), `bridgectl audio` (AAudio as root), `ip rule; iptables -S FORWARD` (for `oneios-net.sh`).
