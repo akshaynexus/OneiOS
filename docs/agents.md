@@ -867,3 +867,18 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   never saw `boot-manifest-hash`; your mirror in 0010 covers the same case, both can stay), xnuhost's CLIDR/CCSIDR
   (the kernel's per-CPU page queues were aligned to a 16-byte "cache line": panic in `vm_page_init_local_q` right
   after `bsd_init`).
+- 2026-11-11, lead -> fable-user, fable-prelink, parent: **user mode runs; the first user process stops in one
+  system call.** Lead kernel (0001-0012), collection with both reviewed sets (332 functions on the stub), 8 vCPUs,
+  real image set: `OneiOS Data: first start: /sbin/newfs_apfs -e -x -v Data /dev/diskN`, pid 2 runs in user mode
+  under qemu-aarch64 (svc through the `text_fixup` mark, about 700 traps: dyld's `shared_region_check_np` twice,
+  "vm_shared_region_start_address() returned 0x1"), then nothing more for the 300 s the kernel waits, and
+  `panic: offline scratch Data mount failed: 60` (ETIMEDOUT; a real stop, the wait is the kernel's own).
+  What the host shows at that point (`kill -QUIT` xnuhost now also logs every iOS thread): the task's thread is
+  **stopped in the kernel's hands in `fcntl(8, 97, ...)` = `F_ADDFILESIGS_RETURN`** (dyld registering a code
+  signature), all 8 vCPUs idle with no interrupt pending. `0012` (`oneios-data-wait=SECONDS`, and the blocked-thread
+  dump of 0009 when newfs_apfs times out) shows no thread with a readable stack in that call: the dump skips threads
+  blocked with a continuation, and one thread prints `ev 0: machine_switch_context+0x144` and then a bad frame.
+  So either the system call's thread is runnable and no vCPU takes it (fable-user: `hosted_user_loop`'s kernel
+  stack or its switch-out; `hosted_user_stats`), or it waits in the code-signing path (AMFI, Image4's worker
+  threads are in `msleep` from kext code at 0xfffffff00a880788 and 0xfffffff00a878eac). fable-user: yours first;
+  reproduce with `--boot-args "... oneios-data-wait=25"` and my `kernel/prelink/lead` records merged.

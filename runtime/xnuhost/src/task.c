@@ -525,6 +525,22 @@ int64_t xh_thread_set_pac(uint64_t handle, uint32_t enabled)
   return 0;
 }
 
+// Debugging (SIGQUIT to xnuhost): every iOS thread, where it last trapped or was released, and whether it is
+// in user code now (released and not yet back). A running thread is not disturbed.
+void xh_tasks_dump(void)
+{
+  for (unsigned s = 0; s < MAX_SLOTS; s++) {
+    if (!T.threads[s].used) continue;
+    task *t = &T.tasks[T.threads[s].task];
+    struct xs_trap_page *tp = slot_page(s);
+    bool running = __atomic_load_n(&tp->to_task, __ATOMIC_ACQUIRE) || !__atomic_load_n(&tp->to_host, __ATOMIC_ACQUIRE);
+    LOGI("thread %u of task pid %d (tid %u): %s; last trap kind %u far 0x%llx insn 0x%x; pc 0x%llx lr 0x%llx sp 0x%llx x16 0x%llx x0 0x%llx x1 0x%llx x2 0x%llx", s, t->pid,
+         tp->tid, t->dead ? "task gone" : running ? "in user code since the state shown" : "stopped in the kernel's hands", tp->trap.kind,
+         (unsigned long long)tp->trap.far, tp->trap.insn, (unsigned long long)tp->state.pc, (unsigned long long)tp->state.x[30],
+         (unsigned long long)tp->state.sp, (unsigned long long)tp->state.x[16], (unsigned long long)tp->state.x[0], (unsigned long long)tp->state.x[1], (unsigned long long)tp->state.x[2]);
+  }
+}
+
 int64_t xh_thread_run(xh_vcpu *v, uint64_t handle, struct xh_user_state *state, struct xh_trap *trap)
 {
   thread *th = thread_of(handle);
@@ -575,6 +591,7 @@ int64_t xh_thread_run(xh_vcpu *v, uint64_t handle, struct xh_user_state *state, 
 int xh_tasks_init(const xh_config *c) { (void)c; return 0; }
 bool xh_tasks_available(void) { return false; }
 bool xh_tasks_seccomp(void) { return false; }
+void xh_tasks_dump(void) {}
 uint64_t xh_tasks_va_limit(void) { return 0; }
 void xh_tasks_shutdown(void) {}
 

@@ -588,7 +588,7 @@ int main(int argc, char **argv)
   while (!xh_stopping()) {
     struct timespec tick = { 0, 100 * 1000 * 1000 };
     int signo = sigtimedwait(&waited, NULL, &tick);
-    if (signo == SIGQUIT) { xh_cpu_dump_all(); continue; }      // debugging: where each vCPU is
+    if (signo == SIGQUIT) { xh_cpu_dump_all(); xh_tasks_dump(); continue; }      // debugging: where each vCPU is
     if (signo > 0) {
       char why[48];
       snprintf(why, sizeof why, "signal %d", signo);

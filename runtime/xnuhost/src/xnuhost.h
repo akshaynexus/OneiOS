@@ -297,6 +297,7 @@ void  xh_virtio_input_set_abs(xh_virtio *dev, unsigned axis, int32_t min, int32_
 // Forks the task factory. Must run before any other thread exists and before RAM is mapped.
 int     xh_tasks_init(const xh_config *c);
 bool    xh_tasks_available(void);      // tasks can run and their system calls reach the kernel
+void    xh_tasks_dump(void);           // debugging: log every iOS thread
 bool    xh_tasks_seccomp(void);        // ... trapped by a seccomp filter (the phone); else by text_fixup (qemu-user)
 #define XH_SVC_MARK 0x00005c80u        // udf #0x5c80: what text_fixup leaves in place of `svc #0x80` without seccomp
 extern bool xh_text_fixup_svc;

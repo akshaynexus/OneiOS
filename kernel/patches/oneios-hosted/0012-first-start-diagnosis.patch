@@ -1,0 +1,21 @@
+diff --git a/bsd/kern/oneios_hosted_root.c b/bsd/kern/oneios_hosted_root.c
+--- a/bsd/kern/oneios_hosted_root.c	2026-11-11 01:23:17.776291958 +0530
++++ b/bsd/kern/oneios_hosted_root.c	2026-11-11 01:23:17.794679591 +0530
+@@ -274,8 +274,16 @@
+ 		 * No -U: the volume is found by its disk, whatever UUID it gets. */
+ 		const char *const argv[] = {tool, "-e", "-x", "-v", volume_name, whole_path, NULL};
+ 		printf("OneiOS Data: first start: %s -e -x -v %s %s\n", tool, volume_name, whole_path);
+-		if ((error = oneios_spawn(p, scratch, argv, &pid)) || (error = oneios_wait(p, scratch, pid, 300, &status))) {
++		/* oneios-data-wait=SECONDS: how long newfs_apfs may take (bring-up: a short wait shows a stuck tool sooner). */
++		uint32_t wait_seconds = 300;
++		(void)PE_parse_boot_argn("oneios-data-wait", &wait_seconds, sizeof(wait_seconds));
++		if ((error = oneios_spawn(p, scratch, argv, &pid)) || (error = oneios_wait(p, scratch, pid, (int)wait_seconds, &status))) {
+ 			printf("OneiOS Data: newfs_apfs did not run: %d\n", error);
++			if (error == ETIMEDOUT) {
++				/* Where it is stuck: every blocked thread's kernel stack (0009), the tool's among them. */
++				extern void hosted_dump_blocked_threads(void);
++				hosted_dump_blocked_threads();
++			}
+ 			oneios_data_format_status = error;
+ 			return error;
+ 		}

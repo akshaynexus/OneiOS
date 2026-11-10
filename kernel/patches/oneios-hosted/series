@@ -21,3 +21,4 @@
 # kern_exec.c), not at the board start: the collection's Image4 starts with AppleImage4 and panics without that hash.
 0010-aes-after-boot-manifest.patch
 0011-chosen-is-not-a-nub.patch
+0012-first-start-diagnosis.patch
