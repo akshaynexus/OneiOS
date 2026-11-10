@@ -1,0 +1,177 @@
+diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
+index 42f3c7b..9d0b645 100644
+--- a/bsd/kern/ubc_subr.c
++++ b/bsd/kern/ubc_subr.c
+@@ -5990,6 +5990,152 @@ extern uint64_t mach_absolute_time(void);
+ #define CS_NATIVE4K_UNCACHED    (32 * 1024 * 1024)
+ 
+ __attribute__((noinline))
++#if XNU_HOSTED
++/*
++ * OneiOS hosted: the preparation on every CPU. dyld registers the signature of each file of the shared cache
++ * (dozens of files of about 125 MiB) before the first user process runs a line of its own, and each one is
++ * read and hashed whole here. One thread did 11 MiB/s under qemu-user while the other vCPUs sat idle; the
++ * work is independent per megabyte, so the caller and one kernel thread per other CPU take megabytes from a
++ * shared counter. Same checks, same result as the loop below.
++ */
++struct cs_native4k_job {
++	vnode_t                 vp;
++	struct cs_blob         *blob;
++	vm_offset_t             storage;        /* the native hashes, one per 4 KiB page */
++	uint64_t                limit;
++	int                     ioflags;
++	kauth_cred_t            cred;
++	_Atomic uint64_t        next;           /* the next megabyte nobody has taken */
++	_Atomic int             error;          /* the first failure; ends everybody */
++	_Atomic int             workers;        /* kernel threads still at work */
++};
++#define CS_NATIVE4K_PARALLEL_MIN  (8 * 1024 * 1024)
++extern unsigned int processor_avail_count;
++extern kern_return_t thread_terminate(thread_t thread);
++#define CS_NATIVE4K_WORKERS_MAX   7
++
++/* Takes megabytes until there are none, or somebody failed. Returns this thread's error. */
++static int
++cs_native4k_job_run(struct cs_native4k_job *job)
++{
++	const CS_CodeDirectory *cd = job->blob->csb_cd;
++	const struct cs_hash *md = job->blob->csb_hashtype;
++	const char *lower = job->blob->csb_mem_kaddr;
++	const char *upper = lower + job->blob->csb_mem_size;
++	uint8_t *buffer = kalloc_data(CS_NATIVE4K_CHUNK, Z_WAITOK);
++	int error = 0;
++
++	if (buffer == NULL) {
++		return ENOMEM;
++	}
++	while (error == 0 && os_atomic_load(&job->error, relaxed) == 0) {
++		uint64_t chunk = os_atomic_add_orig(&job->next, (uint64_t)CS_NATIVE4K_CHUNK, relaxed);
++		if (chunk >= job->limit) {
++			break;
++		}
++		size_t chunk_length = MIN((uint64_t)CS_NATIVE4K_CHUNK, job->limit - chunk);
++		int resid = 0;
++		off_t position;
++		if (os_add_overflow(job->blob->csb_base_offset, (off_t)chunk, &position)) {
++			error = EOVERFLOW;
++			break;
++		}
++		const uint64_t read_start = mach_absolute_time();
++		error = vn_rdwr(UIO_READ, job->vp, (caddr_t)buffer, (int)chunk_length, position,
++		    UIO_SYSSPACE, job->ioflags, job->cred, &resid, current_proc());
++		const uint64_t hash_start = mach_absolute_time();
++		os_atomic_add(&cs_native4k_read_ticks, hash_start - read_start, relaxed);
++		os_atomic_add(&cs_native4k_bytes, (uint64_t)chunk_length, relaxed);
++		if (error || resid) {
++			error = error ? error : EIO;
++			break;
++		}
++		for (size_t block = 0; block < chunk_length && error == 0; block += 16384) {
++			union cs_hash_union ctx;
++			uint8_t digest[CS_HASH_MAX_SIZE];
++			const uint8_t *data = buffer + block;
++			size_t length = MIN((size_t)16384, chunk_length - block);
++			uint64_t offset = chunk + block;
++			const uint8_t *expected = hashes(cd, (uint32_t)(offset >> 14), md->cs_size, lower, upper);
++			if (expected == NULL) {
++				error = EBADEXEC;
++				break;
++			}
++			md->cs_init(&ctx);
++			md->cs_update(&ctx, data, length);
++			md->cs_final(digest, &ctx);
++			if (bcmp(expected, digest, md->cs_size)) {
++				os_atomic_inc(&cs_validate_page_bad_hash, relaxed);
++				error = EBADEXEC;
++				break;
++			}
++			os_atomic_inc(&cs_native4k_full_blocks, relaxed);
++			for (size_t sub = 0; sub < length; sub += PAGE_SIZE) {
++				size_t bytes = MIN((size_t)PAGE_SIZE, length - sub);
++				vm_size_t index = (offset + sub) >> PAGE_SHIFT;
++				md->cs_init(&ctx);
++				md->cs_update(&ctx, data + sub, bytes);
++				md->cs_final(digest, &ctx);
++				memcpy((void *)(job->storage + index * md->cs_size), digest, md->cs_size);
++			}
++		}
++		os_atomic_add(&cs_native4k_hash_ticks, mach_absolute_time() - hash_start, relaxed);
++	}
++	kfree_data(buffer, CS_NATIVE4K_CHUNK);
++	if (error != 0) {
++		int none = 0;
++		(void)os_atomic_cmpxchgv(&job->error, 0, error, &none, relaxed);
++	}
++	return error;
++}
++
++static void
++cs_native4k_job_thread(void *arg, __unused wait_result_t wait)
++{
++	struct cs_native4k_job *job = arg;
++
++	(void)cs_native4k_job_run(job);
++	/* the job is on its owner's stack: nothing of it is touched after this */
++	if (os_atomic_dec(&job->workers, relaxed) == 0) {
++		wakeup((caddr_t)&job->workers);
++	}
++	thread_terminate(current_thread());
++}
++
++/* The whole signed range into job->storage. Returns 0, or the first error. */
++static int
++cs_native4k_job_all(struct cs_native4k_job *job, const char *name)
++{
++	const uint64_t started = mach_absolute_time();
++	uint64_t second = 0;
++	int wanted = 0;
++
++	clock_interval_to_absolutetime_interval(1, NSEC_PER_SEC, &second);
++	if (job->limit >= CS_NATIVE4K_PARALLEL_MIN) {
++		wanted = MIN((int)processor_avail_count - 1, CS_NATIVE4K_WORKERS_MAX);
++	}
++	for (int i = 0; i < wanted; i++) {
++		thread_t thread = THREAD_NULL;
++		os_atomic_inc(&job->workers, relaxed);
++		if (kernel_thread_start(cs_native4k_job_thread, job, &thread) != KERN_SUCCESS) {
++			os_atomic_dec(&job->workers, relaxed);
++			break;
++		}
++		thread_deallocate(thread);
++	}
++	(void)cs_native4k_job_run(job);
++	while (os_atomic_load(&job->workers, relaxed) != 0) {
++		(void)tsleep((caddr_t)&job->workers, PVFS, "native4k", 1);     /* a tick, or the last worker's wakeup */
++	}
++	const uint64_t seconds = (mach_absolute_time() - started) / second;
++	if (seconds >= 2) {
++		printf("cs_native4k: %s: %llu MiB read and hashed in %llu s on %d threads (all files so far: %llu MiB)\n",
++		    name ? name : "?", job->limit >> 20, seconds, wanted + 1, cs_native4k_bytes >> 20);
++	}
++	return os_atomic_load(&job->error, relaxed);
++}
++#endif /* XNU_HOSTED */
++
+ static int
+ cs_native4k_prepare(vnode_t vp, struct cs_blob *blob)
+ {
+@@ -6035,7 +6181,19 @@ cs_native4k_prepare(vnode_t vp, struct cs_blob *blob)
+ 	}
+ 	/* Executables are faulted in right after their signature is added and stay cached. */
+ 	ioflags = limit > CS_NATIVE4K_UNCACHED ? IO_NOCACHE : 0;
++#if XNU_HOSTED
++	struct cs_native4k_job job = {
++		.vp = vp, .blob = blob, .storage = storage, .limit = limit, .ioflags = ioflags,
++		.cred = vfs_context_ucred(vfs_context_current()),
++	};
++	error = cs_native4k_job_all(&job, vp->v_name);
++	if (error != 0) {
++		goto out;
++	}
++	for (chunk = limit; chunk < limit; chunk += CS_NATIVE4K_CHUNK) {        /* the single-thread loop: not taken */
++#else
+ 	for (chunk = 0; chunk < limit; chunk += CS_NATIVE4K_CHUNK) {
++#endif
+ 		size_t chunk_length = MIN((uint64_t)CS_NATIVE4K_CHUNK, limit - chunk);
+ 		int resid = 0;
+ 		off_t position;

@@ -968,3 +968,33 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   `drivers/bridge/OneiOSBridge.c` and `oneios_bridge.h` (the start call), `runtime/xnuhost/src/main.c` and `Makefile`,
   `runtime/loader` (`XL_DEV_CAMERA`), `runtime/build.sh`. First thing when the phone is attached:
   `runtime/bridges/camera/README.md`, "On the phone", then "In a session" (`su -c stop` is a quick stand-in).
+- 2026-11-11, fable-user -> lead, fable-prelink, all: **the 9 minutes of hashing before pid 2's first line are 3.5 with
+  `0014-parallel-code-hash.patch`; what the F_ADDFILESIGS_RETURN stop was.**
+  - The stop was never a blocked thread: pid 2 ran on one vCPU inside UniXNU's `cs_native4k_prepare`
+    (`bsd/kern/ubc_subr.c`), which reads and hashes the whole signed range of every file whose signature has 16K pages
+    (16K blocks against the signature, then the 4K pages). dyld registers all 80 `dyld_shared_cache_arm64e.NN` files
+    (5,791 MiB) because the first process of a boot finds nothing in the shared region:
+    `vm_shared_region_start_address() returned 0x1` is the normal answer then, not a fault. One thread did 11 MiB/s
+    under qemu (per 125 MiB file: 5.5 s in the read path, 4.5 s in SHA-256): 520 s in all.
+  - `0014` (under `XNU_HOSTED`, last in `series`): the caller and one kernel thread per other CPU (at most 7) take
+    megabytes of the file from a shared counter; the checks and the result are those of the single loop. Measured on
+    series 0001-0012 with 8 vCPUs: a 125 MiB file in 3-4 s, the whole cache in **210 s**, every hash accepted, the
+    cache then mapped and slid. One line per file that takes 2 s or more: `cs_native4k: NAME: N MiB read and hashed
+    in S s on 8 threads`. On today's series (with the lead's `0013`) it is built, not booted again.
+  - **What is left of the 210 s is xnuhost**: `xh_verify_range` (`runtime/xnuhost/src/imageset.c`) hashes each 1 MiB
+    chunk at its first read in plain C under one mutex per image, so the 8 readers queue there. Hashing outside the
+    lock (the `done` bit under it, a buffer per caller) would let them scale; on the phone the same lock serializes
+    the first read of 5.8 GiB. Owner of `imageset.c`: yours, I did not touch it.
+  - Several threads reading one file make APFS call an import that was on the stub:
+    `clock_absolutetime_interval_to_deadline` (0xfffffe000ab844bc). That record and three wrappers I met or could
+    tell by shape (`cluster_pagein` 0xfffffe000ad9d794, met at APFS's first pagein; `cluster_pageout`
+    0xfffffe000ad9ab0c and `cluster_write` 0xfffffe000ad9ddf8, by shape only) are in
+    `kernel/prelink/user/reviewed-user-24A446-v54.json` (the lead's format). **A collection for a `0014` kernel needs
+    the first one**, or the second subcache panics on the stub. fable-prelink: merge them.
+  - Not looked at: the `machine_switch_context+0x144` line with a bad frame in the `0009` dump. Nothing in my runs
+    behaved like a thread that is runnable and not taken. After a code-signing failure in pid 2 (seen once, behind the
+    6 GiB region failure) the kernel's "Text page corruption detected" telemetry calls CoreAnalyticsFamily, which
+    calls an unpaired IOEventSource method (0xfffffe000b32fe68: loads the work loop at +48 and tail-calls its
+    vtable slot at +208): a panic on the stub instead of the process's exit.
+  - Scripts of mine a run can reuse: `out/rtu-kc.sh` (a collection from `HOSTED_OUT=rtu` in a worktree of its own,
+    extra reviewed files merged for the build only), `out/rtu-runq2.sh` (boot, SIGQUIT at N seconds).
