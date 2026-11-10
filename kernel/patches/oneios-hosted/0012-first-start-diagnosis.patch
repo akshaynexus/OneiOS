@@ -19,3 +19,33 @@ diff --git a/bsd/kern/oneios_hosted_root.c b/bsd/kern/oneios_hosted_root.c
  			oneios_data_format_status = error;
  			return error;
  		}
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+--- a/osfmk/arm64/hosted/hosted_machine.c	2026-11-11 01:49:53.447006184 +0530
++++ b/osfmk/arm64/hosted/hosted_machine.c	2026-11-11 01:58:01.567004767 +0530
+@@ -537,7 +537,26 @@
+ 	thread_t t;
+ 	extern vm_offset_t vm_kernel_slide;
+ 
++	/* Each processor: its state (processor.h: 2 idle, 3 dispatching, 5 running), the thread it runs and its idle thread. */
++	for (unsigned int i = 0; i < processor_count; i++) {
++		processor_t pr = processor_array[i];
++		if (pr != PROCESSOR_NULL) {
++			printf("PROC %d state %d active %p idle %p\n", pr->cpu_id, pr->state, pr->active_thread, pr->idle_thread);
++		}
++	}
+ 	queue_iterate(&threads, t, thread_t, threads) {
++		/*
++		 * Every thread of a user task first, whatever it is doing (0012): its process, scheduler state, what it
++		 * waits on and its continuation, so that a system call that never returns can be told from a thread
++		 * nobody runs. State bits: 1 wait, 2 suspended, 4 runnable, 8 uninterruptible, 0x10 halted, 0x20 idle.
++		 */
++		void *bsd = t->t_tro != NULL ? get_bsdtask_info(get_threadtask(t)) : NULL;
++		if (bsd != NULL && proc_pid((struct proc *)bsd) > 0) {
++			printf("UTHR %p pid %d state 0x%x ev %p cont %llx stack %d runq %d\n", t, proc_pid((struct proc *)bsd), t->state,
++			    (void *)(uintptr_t)t->wait_event,
++			    t->continuation ? (unsigned long long)((uintptr_t)ptrauth_strip((void *)t->continuation, ptrauth_key_function_pointer) - vm_kernel_slide) : 0ULL,
++			    t->kernel_stack != 0, t->__runq.runq != PROCESSOR_NULL);
++		}
+ 		if (t == current_thread() || t->kernel_stack == 0 || t->continuation != NULL) {
+ 			continue;
+ 		}

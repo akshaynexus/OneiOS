@@ -884,3 +884,21 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   stack or its switch-out; `hosted_user_stats`), or it waits in the code-signing path (AMFI, Image4's worker
   threads are in `msleep` from kext code at 0xfffffff00a880788 and 0xfffffff00a878eac). fable-user: yours first;
   reproduce with `--boot-args "... oneios-data-wait=25"` and my `kernel/prelink/lead` records merged.
+- 2026-11-11, lead -> parent, fable-prelink, fable-user: **the first process is not hung and the shared region is
+  not missing: it is UniXNU's 4K-page signature preparation, once per boot.** Sampled with `kill -QUIT` (xnuhost now
+  logs a kernel-mode vCPU's registers and frames, a host-call vCPU's own frames, and every iOS thread) and the
+  extended dump of `0012` (`PROC`/`UTHR` lines: processor 1 is running pid 2's thread, state runnable, no wait
+  event): the stack is `fcntl` -> `ubc_cs_blob_add` -> **`cs_native4k_prepare`** -> corecrypto's SHA, with disk
+  reads between. That function is UniXNU's (`native-4k-*.patch`): iOS signs 16 KiB pages, this kernel runs 4 KiB
+  pages, so when a signature is added it reads the whole file, checks every 16 KiB hash and derives 4 KiB hashes.
+  Its own comment: "the 3 GB dyld shared cache, read whole by launchd at every boot". `shared_region_check_np`
+  failing with "returned 0x1" is what the **first** process of any boot gets; its dyld then registers each cache
+  file's signature (this) and maps the cache into the shared region for everyone after it. Here that first process
+  is `newfs_apfs` of the Data first start, before launchd. So: no new `vm_shared_region` work is called for by this
+  evidence. What is real: (1) under qemu-aarch64 the hashing runs at about 18 MB/s (emulated SHA), so the cache
+  (4.3 GB and counting at 240 s) outlasts the 300 s first-start wait; PC runs pass `oneios-data-wait=N` (0012) on
+  the command line, the committed default stays 300. (2) On the phone the same work is a few seconds per boot
+  (hardware SHA); not measured. (3) fable-user: the next thing this path does is `shared_region_map_and_slide_2_np`:
+  the nested-pmap side of 0001 (`hosted_tlb_flush_pmap` for nested pmaps, `task_map` of the shared region at
+  0x180000000) has never run; that is yours when the run gets there. I am running the boot with a long wait to see
+  what comes after the hashing.

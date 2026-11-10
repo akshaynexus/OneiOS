@@ -335,7 +335,14 @@ static int64_t order(task *t, const struct xs_op *ops, unsigned count)
   __atomic_store_n(&sp->done, 0, __ATOMIC_RELEASE);
   __atomic_store_n(&sp->request, 1, __ATOMIC_RELEASE);
   futex(&sp->request, FUTEX_WAKE, 1, NULL);
+  struct timespec began, ended;
+  clock_gettime(CLOCK_MONOTONIC, &began);
   int rc = wait_word(t, &sp->done, 10);
+  clock_gettime(CLOCK_MONOTONIC, &ended);
+  // An order the task's service thread takes long over, or never answers, stalls the vCPU that gave it: say which.
+  if (rc || ended.tv_sec - began.tv_sec >= 1)
+    LOGE("tasks: pid %d: order %u (va 0x%llx, size 0x%llx, prot %u) %s after %ld s", t->pid, ops[0].op, (unsigned long long)ops[0].va,
+         (unsigned long long)ops[0].size, ops[0].prot, rc ? "was not answered" : "took long: answered", (long)(ended.tv_sec - began.tv_sec));
   if (rc) result = rc;
   else for (unsigned i = 0; i < count; i++) if (sp->ops[i].result < 0) { result = sp->ops[i].result; break; }
   pthread_mutex_unlock(&t->lock);

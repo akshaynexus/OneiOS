@@ -210,6 +210,23 @@ void xh_cpu_signal(int signo, siginfo_t *info, void *context, struct xh_cpu *cpu
     xh_log_signal("  x30, sp", m->regs[30], m->sp);
     xh_log_signal("  irq_masked, irq_pending", v->cpu.irq_masked, v->cpu.irq_pending);
     xh_log_signal("  in_host, kernel tpidr", v->cpu.in_host, v->cpu.kernel_tpidr);
+    if (v->cpu.in_host) {
+      // Inside a host call: xnuhost's own frame records (symbolize against build/android/xnuhost), which say
+      // which call the vCPU is in (idle, thread_run, a task order, a device).
+      uint64_t fp = m->regs[29];
+      for (int i = 0; i < 12 && fp && !(fp & 7); i++) {
+        unsigned char vec;
+        if (mincore((void *)(uintptr_t)(fp & ~0xfffull), 0x1000, &vec)) break;
+        uint64_t *rec = (uint64_t *)(uintptr_t)fp;
+        xh_log_signal("  host frame: fp, lr", fp, rec[1]);
+        if (rec[0] <= fp) break;
+        fp = rec[0];
+      }
+    }
+    if (!v->cpu.in_host) {
+      // Kernel code: the argument and callee-saved registers too (a loop's counters and objects are in them).
+      for (int i = 0; i < 30; i += 2) xh_log_signal(i < 10 ? "  x(even), x(odd) from x0" : "  x(even), x(odd)", m->regs[i], m->regs[i + 1]);
+    }
     if (!v->cpu.in_host) {
       // The kernel's frame records, as far as they stay inside the RAM window or the kernel's mappings.
       uint64_t fp = m->regs[29];
