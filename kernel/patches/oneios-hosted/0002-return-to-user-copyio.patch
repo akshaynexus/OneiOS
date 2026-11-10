@@ -1,0 +1,1448 @@
+diff --git a/osfmk/arm/thread.h b/osfmk/arm/thread.h
+index 29ea6d8..784ff95 100644
+--- a/osfmk/arm/thread.h
++++ b/osfmk/arm/thread.h
+@@ -128,7 +128,11 @@ struct machine_thread {
+ 	};
+ #endif /* HAVE_MACHINE_THREAD_MATRIX_STATE */
+ 
++#if XNU_HOSTED
++	uint64_t                  hosted_thread;              /* OneiOS hosted: the Linux twin (thread handle + 1), 0 = none */
++#else
+ 	uint64_t                  reserved4;
++#endif
+ 	uint64_t                  recover_far;
+ 
+ 	arm_debug_state_t        *DebugData;
+@@ -157,7 +161,11 @@ struct machine_thread {
+ 	volatile uintptr_t                 expected_fault_pc;    /* PC at which an exception is expected to be thrown (ELR_ELx) */
+ #endif
+ 
++#if XNU_HOSTED
++	uint64_t                  hosted_refill;              /* OneiOS hosted: page | XH_PROT_* of the user fault being resolved */
++#else
+ 	uint64_t                  reserved6;
++#endif
+ 	union {
+ 		long              pcpu_data_base_and_cpu_number;
+ 		const uint16_t    cpu_number;
+@@ -180,7 +188,11 @@ struct machine_thread {
+ 	uint64_t                  reserved11;
+ #endif
+ 
++#if XNU_HOSTED
++	struct pmap *             hosted_pmap;                /* OneiOS hosted: the pmap the twin runs in (a reference) */
++#else
+ 	uint64_t                  reserved12;
++#endif
+ 
+ #if HAS_ARM_FEAT_SME
+ 	uint64_t                  tpidr2_el0;
+@@ -188,7 +200,11 @@ struct machine_thread {
+ 	uint64_t                  reserved13;
+ #endif
+ 
++#if XNU_HOSTED
++	uint64_t                  hosted_pac;                 /* OneiOS hosted: the twin's PAC keys as last set, + 1 */
++#else
+ 	uint64_t                  reserved14;
++#endif
+ 
+ #if HAS_MTE
+ 	bool                      in_unprivileged_access;
+diff --git a/osfmk/arm64/copyio.c b/osfmk/arm64/copyio.c
+index 506754c..88bf9b7 100644
+--- a/osfmk/arm64/copyio.c
++++ b/osfmk/arm64/copyio.c
+@@ -41,6 +41,23 @@
+ #undef copyin
+ #undef copyout
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted: user memory is another Linux process, never part of the kernel's address space. The
++ * primitives below walk the task's page table and copy through the RAM window (arm64/hosted/
++ * hosted_copyio.c); a fault they cannot resolve is EFAULT. WRAP_COPYIO selects them.
++ */
++#include <arm64/hosted/hosted.h>
++extern int hosted_bcopyin(const user_addr_t src, char *dst, vm_size_t len);
++extern int hosted_bcopyinstr(const user_addr_t src, char *dst, vm_size_t max, vm_size_t *actual);
++extern int hosted_bcopyout(const char *src, user_addr_t dst, vm_size_t len);
++extern int hosted_copyin_atomic32(const user_addr_t src, uint32_t *dst);
++extern int hosted_copyin_atomic32_wait_if_equals(const user_addr_t src, uint32_t value);
++extern int hosted_copyin_atomic64(const user_addr_t src, uint64_t *dst);
++extern int hosted_copyout_atomic32(uint32_t u32, user_addr_t dst);
++extern int hosted_copyout_atomic64(uint64_t u64, user_addr_t dst);
++#endif /* XNU_HOSTED */
++
+ extern int _bcopyin(const user_addr_t src, char *dst, vm_size_t len);
+ extern int _bcopyinstr(const user_addr_t src, char *dst, vm_size_t max, vm_size_t *actual);
+ extern int _bcopyout(const char *src, user_addr_t dst, vm_size_t len);
+@@ -201,6 +218,9 @@ userspace_access_is_tagged(vm_map_t map)
+ 	        _ret2;                                                                              \
+ 	})
+ /* END IGNORE CODESTYLE */
++#elif XNU_HOSTED
++/* OneiOS hosted: _bcopyin(...) becomes hosted_bcopyin(...), and so on; no PAN at EL0, nothing to open. */
++#define WRAP_COPYIO(_dir, _map, _op) (hosted ## _op)
+ #else
+ #define WRAP_COPYIO(_dir, _map, _op) WRAP_COPYIO_PAN(_dir, _map, _op)
+ #endif
+@@ -235,6 +255,23 @@ is_kernel_to_kernel_copy(pmap_t pmap)
+ static user_addr_t
+ copy_ensure_address_space_spec(vm_map_t map, const user_addr_t addr)
+ {
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted: bit 55 does not tell the address spaces apart. The kernel's range is low
++	 * (0x2000000000 - 0x3bffffffff) and there is one translation regime; a user address is never
++	 * dereferenced by the kernel at all (hosted_copyio.c walks the task's page table), so there is no
++	 * speculative access to steer. What is kept is the check: a kernel-to-kernel copy must name the
++	 * kernel's range, and any other copy must not (copy_validate_user_addr has refused it already).
++	 */
++	bool in_kernel_range = addr >= VM_MIN_KERNEL_ADDRESS && addr <= VM_MAX_KERNEL_ADDRESS;
++
++	if (__improbable(is_kernel_to_kernel_copy(map->pmap) != in_kernel_range)) {
++		panic("copy_ensure_address_space_spec: 0x%llx is %s the kernel's range in a %s copy",
++		    addr, in_kernel_range ? "inside" : "outside",
++		    is_kernel_to_kernel_copy(map->pmap) ? "kernel-to-kernel" : "user");
++	}
++	return addr;
++#else /* XNU_HOSTED */
+ 	user_addr_t new_addr = 0;
+ 	user_addr_t kaddr = addr | BIT(55);
+ 	user_addr_t uaddr = addr & (~BIT(55));
+@@ -267,6 +304,7 @@ copy_ensure_address_space_spec(vm_map_t map, const user_addr_t addr)
+ 	}
+ 
+ 	return new_addr;
++#endif /* XNU_HOSTED */
+ }
+ 
+ static int
+@@ -301,6 +339,17 @@ copy_validate_user_addr(vm_map_t map, const user_addr_t user_addr, vm_size_t nby
+ 		return EFAULT;
+ 	}
+ 
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted: a user address is below the kernel's range and below what the host gives tasks
++	 * (xh_info.user_va_limit), whatever the map's own bounds say: a kernel address passed as a user
++	 * pointer is refused here.
++	 */
++	if (!is_kernel_to_kernel && __improbable(user_addr_last > VM_MIN_KERNEL_ADDRESS ||
++	    user_addr_last > hosted_info.user_va_limit)) {
++		return EFAULT;
++	}
++#endif /* XNU_HOSTED */
+ 
+ 	if (!is_kernel_to_kernel) {
+ 		if (__improbable(canonicalized_user_addr & ARM_TBI_USER_MASK)) {
+diff --git a/osfmk/arm64/hosted/hosted.h b/osfmk/arm64/hosted/hosted.h
+index 0004640..36992ef 100644
+--- a/osfmk/arm64/hosted/hosted.h
++++ b/osfmk/arm64/hosted/hosted.h
+@@ -163,6 +163,17 @@ extern bool hosted_user_fill(struct pmap *pmap, uint64_t va, uint32_t access);
+ extern void hosted_pmap_destroy(struct pmap *pmap);
+ extern uint64_t hosted_pmap_task(struct pmap *pmap);
+ extern int hosted_copy_user(struct pmap *pmap, uint64_t uaddr, void *kaddr, uint64_t size, bool to_user);
++extern uint64_t hosted_copy_user_pages(struct pmap *pmap, uint64_t uaddr, void *kaddr, uint64_t size, bool to_user, uint64_t *fault_va);
++#define HOSTED_UA_LOAD  0u
++#define HOSTED_UA_STORE 1u
++extern bool hosted_user_atomic(struct pmap *pmap, uint64_t uaddr, uint32_t size, uint32_t op, uint64_t *value);
++
++/* hosted_user.c: user mode (hosted_thread_exception_return is in hosted_asm.s) */
++struct thread;
++struct arm_saved_state;
++extern void hosted_user_loop(void) __attribute__((noreturn));
++extern void hosted_thread_twin_destroy(struct thread *thread);
++extern void hosted_user_interrupt(struct arm_saved_state *state);
+ 
+ #endif /* !__ASSEMBLER__ */
+ 
+diff --git a/osfmk/arm64/hosted/hosted_asm.s b/osfmk/arm64/hosted/hosted_asm.s
+index 37a4aca..4815045 100644
+--- a/osfmk/arm64/hosted/hosted_asm.s
++++ b/osfmk/arm64/hosted/hosted_asm.s
+@@ -88,6 +88,24 @@ LEXT(hosted_switch_to_stack)
+ 	bl		EXT(hosted_stack_call)
+ 	brk		#0x1
+ 
++/*
++ * void hosted_thread_exception_return(void) __dead2
++ * arm64_thread_exception_return (locore.s): the thread goes back to user mode. An exception return leaves
++ * the kernel stack empty, and the next exception from user mode starts at its top; here user mode is a
++ * call (hosted_user_loop, hosted_user.c), so the stack is emptied first.
++ */
++	.text
++	.align 2
++	.globl EXT(hosted_thread_exception_return)
++LEXT(hosted_thread_exception_return)
++	mrs		x0, TPIDR_EL1
++	LOAD_KERN_STACK_TOP	dst=x1, src=x0, tmp=x2
++	mov		sp, x1
++	mov		fp, #0
++	mov		lr, #0
++	bl		EXT(hosted_user_loop)
++	brk		#0x1
++
+ /*
+  * int64_t hosted_hc(uintptr_t fn, struct xh_cpu *cpu, uint64_t a1, ..., uint64_t a5)
+  * Calls a host function (the vector's raw, unsigned address) with (cpu, a1 .. a5).
+diff --git a/osfmk/arm64/hosted/hosted_copyio.c b/osfmk/arm64/hosted/hosted_copyio.c
+new file mode 100644
+index 0000000..acbaf3a
+--- /dev/null
++++ b/osfmk/arm64/hosted/hosted_copyio.c
+@@ -0,0 +1,262 @@
++/*
++ * OneiOS: copyin / copyout of the hosted kernel (arm64/hosted/hosted.h explains the model).
++ *
++ * On hardware the copyio primitives (_bcopyin and friends, machine_routines_asm.s) load and store through
++ * the user half of the address space, and a fault in them is recovered through the copyio recovery table.
++ * Here an iOS task's memory is not in the kernel's address space at all: it is another Linux process. But
++ * every user page is a page of the RAM window, so a copy is a walk of the task's page table and a memcpy
++ * on the window (hosted_copy_user_pages, hosted_pmap.h). Where the table does not allow the access, the
++ * fault is resolved the way handle_kernel_abort would (arm_fast_fault, then vm_fault) and the copy goes
++ * on; a fault that cannot be resolved is EFAULT. Kernel code never dereferences a user address, so no
++ * kernel fault and no recovery entry is involved.
++ *
++ * osfmk/arm64/copyio.c keeps all of its validation and reaches these through WRAP_COPYIO.
++ */
++#include <mach/mach_types.h>
++#include <mach/vm_param.h>
++#include <kern/thread.h>
++#include <kern/task.h>
++#include <kern/debug.h>
++#include <kern/startup.h>
++#include <kern/misc_protos.h>
++#include <arm/cpu_data_internal.h>
++#include <arm/machine_routines.h>
++#include <arm/misc_protos.h>
++#include <arm/pmap.h>
++#include <sys/errno.h>
++#include <vm/pmap.h>
++#include <vm/vm_fault.h>
++#include <vm/vm_map_xnu.h>
++#include <string.h>
++
++#if XNU_HOSTED
++
++#include <arm64/hosted/hosted.h>
++
++extern kern_return_t arm_fast_fault(pmap_t, vm_map_address_t, vm_prot_t, bool, bool);
++
++int hosted_bcopyin(const user_addr_t src, char *dst, vm_size_t len);
++int hosted_bcopyinstr(const user_addr_t src, char *dst, vm_size_t max, vm_size_t *actual);
++int hosted_bcopyout(const char *src, user_addr_t dst, vm_size_t len);
++int hosted_copyin_atomic32(const user_addr_t src, uint32_t *dst);
++int hosted_copyin_atomic32_wait_if_equals(const user_addr_t src, uint32_t value);
++int hosted_copyin_atomic64(const user_addr_t src, uint64_t *dst);
++int hosted_copyout_atomic32(uint32_t u32, user_addr_t dst);
++int hosted_copyout_atomic64(uint64_t u64, user_addr_t dst);
++
++struct hosted_copyio_stats {
++	uint64_t copies, faults, unresolved;
++} hosted_copyio_stats;
++
++/* The same fault on the same page this many times in a row is not going to resolve (device memory). */
++#define HOSTED_COPYIO_RETRIES 8
++
++/*
++ * The page table of `map` does not allow `prot` at va: what handle_kernel_abort does for a fault of a
++ * copyio routine on a user address. True if the copy can try again.
++ */
++static bool
++hosted_copyio_fault(vm_map_t map, uint64_t va, vm_prot_t prot)
++{
++	thread_t      thread = current_thread();
++	kern_return_t result;
++
++	hosted_copyio_stats.faults++;
++	/* a reference or modify fault of the pmap: no VM work */
++	result = arm_fast_fault(map->pmap, va, prot, false, false);
++	if (result == KERN_SUCCESS) {
++		return true;
++	}
++	/* As on hardware: no paging from a context that has interrupts masked. */
++	if (result != KERN_PROTECTION_FAILURE &&
++	    (ml_get_interrupts_enabled() || startup_phase < STARTUP_SUB_EARLY_BOOT)) {
++		bool const was_recover = thread->recover;
++		thread->recover = true;         /* a copyio fault is not throttled */
++		result = vm_fault(map, va, prot, /* change_wiring */ FALSE, VM_KERN_MEMORY_NONE, THREAD_UNINT,
++		    /* caller_pmap */ NULL, /* caller_pmap_addr */ 0);
++		thread->recover = was_recover;
++		if (result == KERN_SUCCESS) {
++			return true;
++		}
++	}
++	hosted_copyio_stats.unresolved++;
++	return false;
++}
++
++/* Copies between kernel memory and `map`'s address space. 0 or EFAULT (part of the range may be copied). */
++static int
++hosted_copyio(vm_map_t map, uint64_t uaddr, void *kaddr, uint64_t size, bool to_user)
++{
++	uint8_t  *kernel = kaddr;
++	uint64_t  last_fault = ~0ULL;
++	unsigned  repeats = 0;
++
++	hosted_copyio_stats.copies++;
++	while (size != 0) {
++		uint64_t fault_va = 0;
++		uint64_t left = hosted_copy_user_pages(map->pmap, uaddr, kernel, size, to_user, &fault_va);
++		uint64_t done = size - left;
++
++		uaddr += done;
++		kernel += done;
++		size = left;
++		if (left == 0) {
++			break;
++		}
++		fault_va &= ~(uint64_t)ARM_PGMASK;
++		if (fault_va != last_fault) {
++			last_fault = fault_va;
++			repeats = 0;
++		} else if (++repeats >= HOSTED_COPYIO_RETRIES) {
++			hosted_copyio_stats.unresolved++;
++			return EFAULT;
++		}
++		if (!hosted_copyio_fault(map, uaddr, to_user ? (VM_PROT_READ | VM_PROT_WRITE) : VM_PROT_READ)) {
++			return EFAULT;
++		}
++	}
++	return 0;
++}
++
++/* For kernel code that holds a pmap and no map switch (hosted.h): no fault is resolved. */
++int
++hosted_copy_user(struct pmap *pmap, uint64_t uaddr, void *kaddr, uint64_t size, bool to_user)
++{
++	uint64_t fault_va = 0;
++
++	return hosted_copy_user_pages(pmap, uaddr, kaddr, size, to_user, &fault_va) == 0 ? 0 : EFAULT;
++}
++
++int
++hosted_bcopyin(const user_addr_t src, char *dst, vm_size_t len)
++{
++	return hosted_copyio(current_thread()->map, src, dst, len, false);
++}
++
++int
++hosted_bcopyout(const char *src, user_addr_t dst, vm_size_t len)
++{
++	return hosted_copyio(current_thread()->map, dst, (void *)(uintptr_t)src, len, true);
++}
++
++/*
++ * _bcopyinstr: the string up to and with its NUL, at most `max` bytes. Returns 0 and the length with the
++ * NUL in *actual; ENAMETOOLONG (and *actual = max) if there is no NUL in `max` bytes; EFAULT. Read piece
++ * by piece, and never past the end of the 4 KiB page a piece starts in: a string that ends in the last
++ * mapped page of a region must not fault on the page after it.
++ */
++int
++hosted_bcopyinstr(const user_addr_t src, char *dst, vm_size_t max, vm_size_t *actual)
++{
++	char      piece[256];
++	vm_map_t  map = current_thread()->map;
++	vm_size_t copied = 0;
++
++	while (copied < max) {
++		uint64_t  at = src + copied;
++		vm_size_t chunk = 0x1000 - (at & 0xfff);
++		vm_size_t take;
++
++		if (chunk > sizeof(piece)) {
++			chunk = sizeof(piece);
++		}
++		if (chunk > max - copied) {
++			chunk = max - copied;
++		}
++		if (hosted_copyio(map, at, piece, chunk, false) != 0) {
++			return EFAULT;
++		}
++		for (take = 0; take < chunk && piece[take] != '\0'; take++) {
++		}
++		bool ended = take < chunk;
++		if (ended) {
++			take++;                 /* the NUL */
++		}
++		memcpy(dst + copied, piece, take);
++		copied += take;
++		if (ended) {
++			*actual = copied;
++			return 0;
++		}
++	}
++	*actual = copied;
++	return ENAMETOOLONG;
++}
++
++/* One aligned word as a single access (copy_validate has checked the alignment). */
++static int
++hosted_copyio_atomic(user_addr_t uaddr, uint32_t size, uint32_t op, uint64_t *value)
++{
++	vm_map_t map = current_thread()->map;
++
++	hosted_copyio_stats.copies++;
++	for (unsigned tries = 0; tries <= HOSTED_COPYIO_RETRIES; tries++) {
++		if (hosted_user_atomic(map->pmap, uaddr, size, op, value)) {
++			return 0;
++		}
++		if (!hosted_copyio_fault(map, uaddr, op == HOSTED_UA_STORE ? (VM_PROT_READ | VM_PROT_WRITE) : VM_PROT_READ)) {
++			return EFAULT;
++		}
++	}
++	hosted_copyio_stats.unresolved++;
++	return EFAULT;
++}
++
++int
++hosted_copyin_atomic32(const user_addr_t src, uint32_t *dst)
++{
++	uint64_t value = 0;
++	int      result = hosted_copyio_atomic(src, 4, HOSTED_UA_LOAD, &value);
++
++	if (result == 0) {
++		*dst = (uint32_t)value;
++	}
++	return result;
++}
++
++int
++hosted_copyin_atomic64(const user_addr_t src, uint64_t *dst)
++{
++	uint64_t value = 0;
++	int      result = hosted_copyio_atomic(src, 8, HOSTED_UA_LOAD, &value);
++
++	if (result == 0) {
++		*dst = value;
++	}
++	return result;
++}
++
++/* ESTALE if the word is not `value`; else a short wait for an event (wfe on hardware) and 0. */
++int
++hosted_copyin_atomic32_wait_if_equals(const user_addr_t src, uint32_t value)
++{
++	uint64_t word = 0;
++	int      result = hosted_copyio_atomic(src, 4, HOSTED_UA_LOAD, &word);
++
++	if (result != 0) {
++		return result;
++	}
++	if ((uint32_t)word != value) {
++		return ESTALE;
++	}
++	__builtin_arm_yield();
++	return 0;
++}
++
++int
++hosted_copyout_atomic32(uint32_t u32, user_addr_t dst)
++{
++	uint64_t value = u32;
++
++	return hosted_copyio_atomic(dst, 4, HOSTED_UA_STORE, &value);
++}
++
++int
++hosted_copyout_atomic64(uint64_t u64, user_addr_t dst)
++{
++	uint64_t value = u64;
++
++	return hosted_copyio_atomic(dst, 8, HOSTED_UA_STORE, &value);
++}
++
++#endif /* XNU_HOSTED */
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+index 5e269d5..059787c 100644
+--- a/osfmk/arm64/hosted/hosted_machine.c
++++ b/osfmk/arm64/hosted/hosted_machine.c
+@@ -500,10 +500,12 @@ hosted_text_fixup(void *kva, uint64_t size)
+ 	return count;
+ }
+ 
++/* fleh_irq from user mode (hosted_user.c): the same body as an interrupt of kernel code. Call masked. */
+ void
+-hosted_thread_exception_return(void)
++hosted_user_interrupt(arm_saved_state_t *state)
+ {
+-	panic("hosted: return to user mode is not implemented");
++	hosted_stats.irq_user++;
++	hosted_interrupt(state);
+ }
+ 
+ #endif /* XNU_HOSTED */
+diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
+index 6fd42e3..b3905d3 100644
+--- a/osfmk/arm64/hosted/hosted_pmap.h
++++ b/osfmk/arm64/hosted/hosted_pmap.h
+@@ -386,15 +386,54 @@ hosted_tlb_flush_pmap(pmap_t pmap)
+ 
+ /* ---- copyin / copyout ------------------------------------------------------------------------ */
+ 
++/*
++ * The window address of user page `uaddr` if the tables allow `need` there; NULL if not. Called with the
++ * pmap's lock and the TLB lock held: the address is good until they are released (whoever takes the page
++ * away from the address space flushes after changing the entry, and so waits for the TLB lock).
++ */
++static uint8_t *
++hosted_user_window_locked(pmap_t pmap, uint64_t uaddr, uint32_t need)
++{
++	pt_entry_t pte = hosted_walk(pmap, uaddr);
++	uint32_t prot = hosted_pte_prot(pte, true);
++
++	if (prot == 0 || (need & ~prot) || !hosted_pa_in_window(pte_to_pa(pte))) {
++		return NULL;
++	}
++	return (uint8_t *)phystokv(pte_to_pa(pte)) + (uaddr & ARM_PGMASK);
++}
++
++/*
++ * The pmap's lock for a copy. A caller that has interrupts masked only tries: the holder may be the
++ * context this one interrupted.
++ */
++static bool
++hosted_copy_lock(pmap_t pmap)
++{
++	if (hosted_irq_masked()) {
++		return pmap_try_lock(pmap, PMAP_LOCK_SHARED);
++	}
++	pmap_lock(pmap, PMAP_LOCK_SHARED);
++	return true;
++}
++
+ /*
+  * Copies between kernel memory and a user address space through the RAM window: the user page's physical
+  * address is its kernel address. Returns 0, or the number of bytes left when the tables do not allow the
+- * access at the address reached (the caller resolves the fault and calls again).
++ * access at the address reached (*fault_va; the caller resolves the fault and calls again). kaddr NULL
++ * only checks the access.
++ *
++ * No lock is held while the caller's buffer is touched: a kernel address that is not in the host mapping
++ * yet faults, and its fill (hosted_kernel_fill) takes the TLB lock, which would never come free. Each
++ * piece goes through a bounce buffer on this stack (kernel stacks are mapped when they are entered,
++ * hosted_kernel_enter), the only kernel memory touched under the locks; a large copy is so many pieces.
+  */
+-uint64_t hosted_copy_user_pages(pmap_t pmap, uint64_t uaddr, void *kaddr, uint64_t size, bool to_user, uint64_t *fault_va);
++#define HOSTED_COPY_BOUNCE 1024
++
+ uint64_t
+ hosted_copy_user_pages(pmap_t pmap, uint64_t uaddr, void *kaddr, uint64_t size, bool to_user, uint64_t *fault_va)
+ {
++	uint8_t  bounce[HOSTED_COPY_BOUNCE] __attribute__((aligned(16)));
+ 	uint8_t *kernel = kaddr;
+ 	uint32_t need = to_user ? XH_PROT_WRITE : XH_PROT_READ;
+ 
+@@ -403,31 +442,34 @@ hosted_copy_user_pages(pmap_t pmap, uint64_t uaddr, void *kaddr, uint64_t size,
+ 		if (chunk > size) {
+ 			chunk = size;
+ 		}
+-		/*
+-		 * The TLB lock is what a TLB shootdown is on hardware: whoever takes this page away from the
+-		 * address space flushes after changing the entry, and so waits for the copy to end.
+-		 */
+-		pmap_lock(pmap, PMAP_LOCK_SHARED);
++		if (kernel != NULL && chunk > sizeof(bounce)) {
++			chunk = sizeof(bounce);
++		}
++		if (kernel != NULL && to_user) {
++			memcpy(bounce, kernel, chunk);          /* may fault and fill: no lock held */
++		}
++		if (!hosted_copy_lock(pmap)) {
++			*fault_va = uaddr;
++			return size;
++		}
+ 		uint32_t old = hosted_tlb_lock();
+-		pt_entry_t pte = hosted_walk(pmap, uaddr);
+-		uint32_t prot = hosted_pte_prot(pte, true);
+-		bool ok = prot != 0 && !(need & ~prot) && hosted_pa_in_window(pte_to_pa(pte));
+-		if (ok) {
+-			uint8_t *user = (uint8_t *)phystokv(pte_to_pa(pte)) + (uaddr & ARM_PGMASK);
+-			if (kernel != NULL) {
+-				if (to_user) {
+-					memcpy(user, kernel, chunk);
+-				} else {
+-					memcpy(kernel, user, chunk);
+-				}
++		uint8_t *user = hosted_user_window_locked(pmap, uaddr, need);
++		if (user != NULL && kernel != NULL) {
++			if (to_user) {
++				memcpy(user, bounce, chunk);
++			} else {
++				memcpy(bounce, user, chunk);
+ 			}
+ 		}
+ 		hosted_tlb_unlock(old);
+ 		pmap_unlock(pmap, PMAP_LOCK_SHARED);
+-		if (!ok) {
++		if (user == NULL) {
+ 			*fault_va = uaddr;
+ 			return size;
+ 		}
++		if (kernel != NULL && !to_user) {
++			memcpy(kernel, bounce, chunk);          /* may fault and fill: no lock held */
++		}
+ 		uaddr += chunk;
+ 		size -= chunk;
+ 		if (kernel != NULL) {
+@@ -437,4 +479,44 @@ hosted_copy_user_pages(pmap_t pmap, uint64_t uaddr, void *kaddr, uint64_t size,
+ 	return 0;
+ }
+ 
++/*
++ * One aligned 4- or 8-byte user word, as a single access (copyin_atomic*, copyout_atomic*; HOSTED_UA_* in
++ * hosted.h):
++ *   HOSTED_UA_LOAD   *value = the word
++ *   HOSTED_UA_STORE  the word = *value
++ * Returns true, or false and nothing done when the tables do not allow it (the caller resolves the fault).
++ */
++bool
++hosted_user_atomic(pmap_t pmap, uint64_t uaddr, uint32_t size, uint32_t op, uint64_t *value)
++{
++	uint64_t v = *value;                            /* the caller's word is touched outside the locks */
++
++	if ((size != 4 && size != 8) || (uaddr & (size - 1))) {
++		return false;
++	}
++	if (!hosted_copy_lock(pmap)) {
++		return false;
++	}
++	uint32_t old = hosted_tlb_lock();
++	uint8_t *user = hosted_user_window_locked(pmap, uaddr, op == HOSTED_UA_STORE ? XH_PROT_WRITE : XH_PROT_READ);
++	if (user != NULL) {
++		if (op == HOSTED_UA_STORE) {
++			if (size == 4) {
++				__atomic_store_n((uint32_t *)user, (uint32_t)v, __ATOMIC_SEQ_CST);
++			} else {
++				__atomic_store_n((uint64_t *)user, v, __ATOMIC_SEQ_CST);
++			}
++		} else {
++			v = size == 4 ? __atomic_load_n((uint32_t *)user, __ATOMIC_SEQ_CST) :
++			    __atomic_load_n((uint64_t *)user, __ATOMIC_SEQ_CST);
++		}
++	}
++	hosted_tlb_unlock(old);
++	pmap_unlock(pmap, PMAP_LOCK_SHARED);
++	if (user != NULL && op == HOSTED_UA_LOAD) {
++		*value = v;
++	}
++	return user != NULL;
++}
++
+ #endif /* XNU_HOSTED */
+diff --git a/osfmk/arm64/hosted/hosted_user.c b/osfmk/arm64/hosted/hosted_user.c
+new file mode 100644
+index 0000000..218742e
+--- /dev/null
++++ b/osfmk/arm64/hosted/hosted_user.c
+@@ -0,0 +1,752 @@
++/*
++ * OneiOS: user mode of the hosted kernel (arm64/hosted/hosted.h explains the model).
++ *
++ * An iOS thread's user code runs in another Linux process: the task process of its pmap
++ * (hosted_pmap_task), on a Linux thread of that process that is this thread's twin. What `eret` to EL0 is
++ * on hardware is the thread_run host call here: it gives the vCPU to the twin with the thread's saved user
++ * state and comes back when the twin traps (svc, fault, undefined instruction, brk) or when the vCPU's
++ * interrupt line rises. The trap is then handed to sleh_synchronous() or sleh_irq(), exactly as the EL0
++ * exception vectors would.
++ *
++ *   arm64_thread_exception_return (locore.s)
++ *     -> hosted_thread_exception_return (hosted_asm.s): back to the top of the kernel stack, as an
++ *        exception return leaves it
++ *     -> hosted_user_loop: return_to_user (ASTs), thread_run, the trap's handler, again
++ *
++ * A handler either returns (the loop goes round) or ends in thread_exception_return() from somewhere
++ * deep (a system call's return, a continuation), which enters the loop again on an empty stack.
++ */
++#include <mach/mach_types.h>
++#include <mach/vm_param.h>
++#include <mach/exception_types.h>
++#include <mach/mach_vm.h>
++#include <kern/thread.h>
++#include <kern/task.h>
++#include <kern/ast.h>
++#include <kern/debug.h>
++#include <kern/misc_protos.h>
++#include <kern/policy_internal.h>
++#include <kern/processor.h>
++#include <kern/recount.h>
++#include <kern/sched_prim.h>
++#include <kern/startup.h>
++#include <kern/kalloc.h>
++#include <arm/cpu_data_internal.h>
++#include <arm/cpu_internal.h>
++#include <arm/machine_routines.h>
++#include <arm/misc_protos.h>
++#include <arm/thread.h>
++#include <arm/pmap.h>
++#include <arm/commpage/commpage.h>
++#include <arm64/proc_reg.h>
++#include <arm64/machine_machdep.h>
++#include <sys/errno.h>
++#include <vm/pmap.h>
++#include <vm/vm_fault.h>
++#include <vm/vm_kern_xnu.h>
++#include <vm/vm_map_xnu.h>
++#include <pexpert/pexpert.h>
++#include <string.h>
++
++#if XNU_HOSTED
++
++#include <arm64/hosted/hosted.h>
++
++extern void sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, bool did_initiate_panic_lockdown);
++extern void psignal(void *, int);
++extern int proc_selfpid(void);
++extern void delay(int usec);
++
++#define HC(name, ...)   hosted_hc(HOSTED_FN(name), hosted_cpu(), HC_PAD(__VA_ARGS__ __VA_OPT__(, ) 0, 0, 0, 0, 0))
++#define HC_PAD(a1, a2, a3, a4, a5, ...) (uint64_t)(a1), (uint64_t)(a2), (uint64_t)(a3), (uint64_t)(a4), (uint64_t)(a5)
++
++struct hosted_user_stats {
++	uint64_t runs, syscalls, faults, fills, refills, interrupts, illegal, brk, fpe, exited;
++	uint64_t twins_made, twins_dropped;
++} hosted_user_stats;
++
++/* ---- the thread's Linux twin ------------------------------------------------------------------ */
++
++/*
++ * thread->machine.hosted_thread   the twin's handle + 1, 0 = none
++ * thread->machine.hosted_pmap     the pmap whose task process the twin is a thread of. The thread holds a
++ *                                 reference: the process (and with it xnuhost's handle of the twin) stays
++ *                                 until the twin is destroyed, whatever happens to the map (exec, exit).
++ * thread->machine.hosted_pac      the keys the twin was last told to run with, + 1
++ * thread->machine.hosted_refill   page | XH_PROT_* of the user fault being resolved (filled at the return)
++ */
++static void
++hosted_twin_drop(thread_t thread)
++{
++	uint64_t twin = thread->machine.hosted_thread;
++	pmap_t   pmap = thread->machine.hosted_pmap;
++
++	thread->machine.hosted_thread = 0;
++	thread->machine.hosted_pmap = NULL;
++	thread->machine.hosted_pac = 0;
++	thread->machine.hosted_refill = 0;
++	if (twin != 0) {
++		uint32_t old = hosted_irq_mask();
++		(void)HC(thread_destroy, twin - 1);
++		hosted_irq_restore(old);
++		hosted_user_stats.twins_dropped++;
++	}
++	if (pmap != NULL) {
++		pmap_destroy(pmap);
++	}
++}
++
++/* machine_thread_destroy: the thread is gone. */
++void
++hosted_thread_twin_destroy(thread_t thread)
++{
++	if (thread->machine.hosted_thread != 0 || thread->machine.hosted_pmap != NULL) {
++		hosted_twin_drop(thread);
++	}
++}
++
++/* A twin for `pmap`: its handle + 1, with a reference on the pmap for it; 0 if the host cannot make one. */
++static uint64_t
++hosted_twin_make(pmap_t pmap)
++{
++	uint64_t task = hosted_pmap_task(pmap);
++	uint64_t handle = 0;
++
++	if (task == 0) {
++		return 0;
++	}
++	pmap_reference(pmap);
++	uint32_t old = hosted_irq_mask();
++	int64_t rc = HC(thread_create, task, &handle);
++	hosted_irq_restore(old);
++	if (rc != 0) {
++		printf("hosted: thread_create in task %llu failed (%lld)\n", task, rc);
++		pmap_destroy(pmap);
++		return 0;
++	}
++	hosted_user_stats.twins_made++;
++	return handle + 1;
++}
++
++/*
++ * The twin of the current thread in the address space it is in now; a thread that changed address space
++ * (exec) gets a new one. Returns the handle + 1, 0 if there is none to be had.
++ */
++static uint64_t
++hosted_twin_ensure(thread_t thread)
++{
++	pmap_t pmap = thread->map->pmap;
++
++	if (thread->machine.hosted_thread == 0 || thread->machine.hosted_pmap != pmap) {
++		(void)ml_set_interrupts_enabled(TRUE);  /* host work and pmap locks: not with interrupts masked */
++		hosted_twin_drop(thread);
++		uint64_t twin = hosted_twin_make(pmap);
++		if (twin == 0) {
++			return 0;
++		}
++		thread->machine.hosted_pmap = pmap;
++		thread->machine.hosted_thread = twin;
++	}
++	/* A task with user JOP disabled (plain arm64 code) runs with the keys off. */
++	uint32_t pac = (thread->machine.arm_machine_flags & ARM_MACHINE_THREAD_DISABLE_USER_JOP) ? 0 : XH_PAC_ALL;
++	if (thread->machine.hosted_pac != pac + 1) {
++		uint32_t old = hosted_irq_mask();
++		(void)HC(thread_set_pac, thread->machine.hosted_thread - 1, pac);
++		hosted_irq_restore(old);
++		thread->machine.hosted_pac = pac + 1;
++	}
++	return thread->machine.hosted_thread;
++}
++
++/* ---- saved state <-> xh_user_state ------------------------------------------------------------ */
++
++/* The user context as the host runs it. Call masked (the state is signed). */
++static void
++hosted_state_to_user(arm_context_t *context, uint64_t tsd, bool keep_x18, struct xh_user_state *us)
++{
++	arm_saved_state64_t *ss = &context->ss.ss_64;
++
++#if defined(HAS_APPLE_PAC)
++	/* what AUTH_THREAD_STATE_IN_X0 is before an eret: pc, cpsr, lr, x16 and x17 are what the kernel signed */
++	ml_check_signed_state(&context->ss, ss->pc, ss->cpsr, ss->lr, ss->x[16], ss->x[17]);
++#endif
++	if (!PSR64_IS_USER(ss->cpsr)) {
++		panic("hosted: return to user mode with a kernel cpsr 0x%x", ss->cpsr);
++	}
++	for (int i = 0; i < 29; i++) {
++		us->x[i] = ss->x[i];
++	}
++	if (!keep_x18) {
++		us->x[18] = 0;
++	}
++	us->x[29] = ss->fp;
++	us->x[30] = ss->lr;
++	us->sp = ss->sp;
++	us->pc = ss->pc;
++	us->pstate = ss->cpsr & PSR64_NZCV_MASK;
++	us->tsd = tsd;
++	us->fpsr = context->ns.ns_64.fpsr;
++	us->fpcr = context->ns.ns_64.fpcr;
++	memcpy(us->v, &context->ns.ns_64.v, sizeof(us->v));
++}
++
++/* The trapped user context, as the EL0 vectors would have spilled it. Call masked. */
++static void
++hosted_state_from_user(const struct xh_user_state *us, arm_context_t *context, bool keep_x18, uint64_t far, uint64_t esr)
++{
++	arm_saved_state64_t *ss = &context->ss.ss_64;
++	uint64_t             x18 = ss->x[18];
++
++	for (int i = 0; i < 29; i++) {
++		ss->x[i] = us->x[i];
++	}
++	if (!keep_x18) {
++		ss->x[18] = x18;
++	}
++	ss->fp = us->x[29];
++	ss->lr = us->x[30];
++	ss->sp = us->sp;
++	ss->pc = us->pc;
++	ss->cpsr = (ss->cpsr & ~(uint32_t)PSR64_NZCV_MASK) | (uint32_t)(us->pstate & PSR64_NZCV_MASK);
++	ss->far = far;
++	ss->esr = esr;
++	context->ns.ns_64.fpsr = us->fpsr;
++	context->ns.ns_64.fpcr = us->fpcr;
++	memcpy(&context->ns.ns_64.v, us->v, sizeof(us->v));
++#if defined(HAS_APPLE_PAC)
++	ml_sign_thread_state(&context->ss, ss->pc, ss->cpsr, ss->lr, ss->x[16], ss->x[17]);
++#endif
++}
++
++/* The access a user fault was, as XH_PROT_* bits. */
++static uint32_t
++hosted_trap_access(const struct xh_trap *trap, uint64_t pc)
++{
++	uint32_t ec = (uint32_t)ESR_EC(trap->esr);
++
++	if (trap->access != 0) {
++		return trap->access;
++	}
++	if (ec == ESR_EC_IABORT_EL0 || (trap->esr == 0 && trap->far == pc)) {
++		return XH_PROT_EXEC;
++	}
++	if (ec == ESR_EC_DABORT_EL0 && (trap->esr & ISS_DA_WNR)) {
++		return XH_PROT_WRITE;
++	}
++	return XH_PROT_READ;
++}
++
++/*
++ * ESR_EL1 for a user fault. Linux reports the syndrome of its own page tables (the host mapping, which is
++ * only a TLB here): a fault of the kind the VM resolves is given as a permission fault of the access, so
++ * that the pmap's reference and modify emulation is tried before vm_fault. Anything else (alignment, a bus
++ * error) is passed on as Linux saw it.
++ */
++static uint64_t
++hosted_trap_fault_esr(const struct xh_trap *trap, uint32_t access)
++{
++	uint64_t esr = trap->esr;
++	uint32_t ec = (uint32_t)ESR_EC(esr);
++
++	if (ec == ESR_EC_DABORT_EL0 || ec == ESR_EC_IABORT_EL0) {
++		uint32_t fsc = (uint32_t)(esr & 0x3f);
++		bool vm = (fsc >= FSC_TRANSLATION_FAULT_L0 && fsc <= FSC_TRANSLATION_FAULT_L3) ||
++		    (fsc >= FSC_ACCESS_FLAG_FAULT_L1 && fsc <= FSC_ACCESS_FLAG_FAULT_L3) ||
++		    (fsc >= FSC_PERMISSION_FAULT_L1 && fsc <= FSC_PERMISSION_FAULT_L3);
++		if (!vm) {
++			return esr;
++		}
++	}
++	if (access & XH_PROT_EXEC) {
++		return ((uint64_t)ESR_EC_IABORT_EL0 << ESR_EC_SHIFT) | ESR_IL | FSC_PERMISSION_FAULT_L3;
++	}
++	return ((uint64_t)ESR_EC_DABORT_EL0 << ESR_EC_SHIFT) | ESR_IL | FSC_PERMISSION_FAULT_L3 |
++	       ((access & XH_PROT_WRITE) ? ISS_DA_WNR : 0);
++}
++
++/* ESR_EL1 and FAR_EL1 of a trap, as the vectors would have read them. */
++static uint64_t
++hosted_trap_esr(const struct xh_trap *trap, uint64_t pc, uint64_t *far)
++{
++	*far = 0;
++	switch (trap->kind) {
++	case XH_TRAP_SYSCALL:
++		return ((uint64_t)ESR_EC_SVC_64 << ESR_EC_SHIFT) | ESR_IL | (trap->svc & 0xffff);
++	case XH_TRAP_FAULT:
++		*far = trap->far;
++		return hosted_trap_fault_esr(trap, hosted_trap_access(trap, pc));
++	case XH_TRAP_BRK:
++		if (ESR_EC(trap->esr) != ESR_EC_UNCATEGORIZED) {
++			return trap->esr;       /* a breakpoint, watchpoint or single step, as Linux reported it */
++		}
++		return ((uint64_t)ESR_EC_BRK_AARCH64 << ESR_EC_SHIFT) | ESR_IL |
++		       ((trap->insn & 0xffe0001f) == 0xd4200000 ? ((trap->insn >> 5) & 0xffff) : 0);
++	case XH_TRAP_FPE:
++		return trap->esr != 0 ? trap->esr : (((uint64_t)ESR_EC_FLOATING_POINT_64 << ESR_EC_SHIFT) | ESR_IL);
++	case XH_TRAP_ILLEGAL:
++	default:
++		/* an undefined instruction; with a syndrome, what Linux saw (a failed pointer authentication) */
++		return trap->esr != 0 ? trap->esr : (((uint64_t)ESR_EC_UNCATEGORIZED << ESR_EC_SHIFT) | ESR_IL);
++	}
++}
++
++/*
++ * One stay in user mode: runs `context` on the twin until it traps and stores the trapped state back, with
++ * the trap's FAR and ESR. Call masked; returns masked (the vCPU is held by the host call for the whole
++ * stay). Returns thread_run's result (0, or a negative errno: no such twin).
++ */
++static int64_t
++hosted_user_enter(uint64_t twin, arm_context_t *context, uint64_t tsd, bool keep_x18, struct xh_trap *trap)
++{
++	struct xh_user_state us;
++	uint64_t             far = 0, esr;
++
++	hosted_state_to_user(context, tsd, keep_x18, &us);
++	bzero(trap, sizeof(*trap));
++	hosted_user_stats.runs++;
++	int64_t rc = HC(thread_run, twin - 1, &us, trap);
++	if (rc != 0) {
++		return rc;
++	}
++	if (trap->kind == XH_TRAP_EXITED || trap->kind == XH_TRAP_BOOT) {
++		return 0;               /* no user instruction ran: the state is as it was */
++	}
++	esr = trap->kind == XH_TRAP_INTERRUPT ? 0 : hosted_trap_esr(trap, us.pc, &far);
++	hosted_state_from_user(&us, context, keep_x18, far, esr);
++	return 0;
++}
++
++/*
++ * A brk reported with no syndrome and no instruction (the stub reads the instruction only for SIGILL): the
++ * immediate, which tells a pointer authentication trap from a breakpoint, is read from the task's text.
++ * Thread context, the task's map current; may fault the page in.
++ */
++static void
++hosted_user_brk_immediate(arm_context_t *context, const struct xh_trap *trap)
++{
++	uint32_t insn = 0;
++
++	if (trap->esr != 0 || trap->insn != 0 || ESR_EC(context->ss.ss_64.esr) != ESR_EC_BRK_AARCH64) {
++		return;
++	}
++	if (copyin(context->ss.ss_64.pc, &insn, sizeof(insn)) == 0 && (insn & 0xffe0001f) == 0xd4200000) {
++		context->ss.ss_64.esr |= (insn >> 5) & 0xffff;
++	}
++}
++
++/* ---- return to user ----------------------------------------------------------------------------- */
++
++/*
++ * The task process of this thread's address space is gone and nobody in the kernel ended it (the Linux
++ * out-of-memory killer, a signal from outside): the task cannot run another instruction.
++ */
++static void
++hosted_user_process_gone(thread_t thread, const struct xh_trap *trap)
++{
++	hosted_user_stats.exited++;
++	if (thread->machine.hosted_pmap != NULL && thread->machine.hosted_pmap->hosted_task != 0 &&
++	    current_proc() != NULL) {
++		printf("hosted: the task process of pid %d is gone (wait status 0x%x): killing the task\n",
++		    proc_selfpid(), trap->exit_status);
++		psignal(current_proc(), 9 /* SIGKILL */);
++	}
++	/* else: the address space was destroyed under the thread (exit, exec): its AST ends or moves it */
++	(void)ml_set_interrupts_enabled(TRUE);
++	delay(1000);
++}
++
++/*
++ * arm64_thread_exception_return and return_to_user of locore.s, then the EL0 exception vectors: never
++ * returns. Entered on the thread's kernel stack with nothing above it worth keeping.
++ */
++void
++hosted_user_loop(void)
++{
++	bool check_pfz = false;         /* x28 of return_to_user: set after an interrupt of user code */
++
++	for (;;) {
++		thread_t       thread = current_thread();
++		arm_context_t *context = thread->machine.contextData;
++		struct xh_trap trap;
++
++		if (__improbable(context == NULL)) {
++			panic("hosted: return to user mode in thread %p, which has no user state", thread);
++		}
++		thread->iotier_override = THROTTLE_LEVEL_NONE;
++		if (__improbable(thread->machine.preemption_count != 0)) {
++			panic("hosted: return to user mode with preemption disabled (%u), thread %p",
++			    thread->machine.preemption_count, thread);
++		}
++
++		uint64_t twin = hosted_twin_ensure(thread);
++		if (__improbable(twin == 0)) {
++			panic("hosted: no task process or thread for thread %p (xnuhost without the task layer?)", thread);
++		}
++		/* The page the last fault was resolved for: map it now, not at a second trap. */
++		uint64_t refill = thread->machine.hosted_refill;
++		if (refill != 0) {
++			thread->machine.hosted_refill = 0;
++			(void)ml_set_interrupts_enabled(TRUE);
++			if (hosted_user_fill(thread->machine.hosted_pmap, refill & ~(uint64_t)ARM_PGMASK, (uint32_t)(refill & 7))) {
++				hosted_user_stats.refills++;
++			}
++		}
++
++		/* return_to_user: every AST is taken before user mode, interrupts masked from the check on */
++		(void)hosted_irq_mask();
++		if (thread->machine.CpuDatap->cpu_pending_ast != 0) {
++			if (check_pfz && commpage_is_in_pfz64(context->ss.ss_64.pc)) {
++				/* in the commpage's preemption-free zone: user code comes back for it (x15) */
++				context->ss.ss_64.x[15] = 1;
++				check_pfz = false;
++			} else {
++				check_pfz = false;
++				ast_taken_user();       /* may not return (a continuation) */
++				continue;
++			}
++		}
++		check_pfz = false;
++		if (__improbable(thread->machine.hosted_pmap != thread->map->pmap)) {
++			continue;               /* the address space changed in an AST */
++		}
++
++#if PRECISE_USER_KERNEL_TIME
++		recount_enter_user();
++#endif
++		bool keep_x18 = (thread->machine.arm_machine_flags &
++		    (ARM_MACHINE_THREAD_PRESERVE_X18_SAVE | ARM_MACHINE_THREAD_PRESERVE_X18_INITIAL)) != 0;
++		int64_t rc = hosted_user_enter(twin, context, thread->machine.cthread_self, keep_x18, &trap);
++#if PRECISE_USER_KERNEL_TIME
++		recount_leave_user();
++#endif
++		if (__improbable(rc != 0)) {
++			/* xnuhost does not know the twin (its process was destroyed and the slot given away) */
++			printf("hosted: thread_run of thread %p failed (%lld): a new twin\n", thread, rc);
++			thread->machine.hosted_thread = 0;
++			continue;
++		}
++
++		switch (trap.kind) {
++		case XH_TRAP_INTERRUPT:
++			hosted_user_stats.interrupts++;
++			hosted_user_interrupt(&context->ss);    /* fleh_irq; preemption is the AST check above */
++			check_pfz = true;
++			continue;
++		case XH_TRAP_BOOT:
++			continue;
++		case XH_TRAP_EXITED:
++			hosted_user_process_gone(thread, &trap);
++			continue;
++		case XH_TRAP_FAULT: {
++			uint64_t far = context->ss.ss_64.far;
++			uint32_t access = hosted_trap_access(&trap, context->ss.ss_64.pc);
++
++			hosted_user_stats.faults++;
++			/* The software TLB: the page tables may allow what the task's host mapping does not have. */
++			(void)ml_set_interrupts_enabled(TRUE);
++			if (hosted_user_fill(thread->machine.hosted_pmap, far, access)) {
++				hosted_user_stats.fills++;
++				continue;
++			}
++			thread->machine.hosted_refill = (far & ~(uint64_t)ARM_PGMASK) | access;
++			(void)ml_set_interrupts_enabled(FALSE);
++			break;
++		}
++		case XH_TRAP_SYSCALL:
++			hosted_user_stats.syscalls++;
++			break;
++		case XH_TRAP_ILLEGAL:
++			hosted_user_stats.illegal++;
++			break;
++		case XH_TRAP_BRK:
++			hosted_user_stats.brk++;
++			(void)ml_set_interrupts_enabled(TRUE);
++			hosted_user_brk_immediate(context, &trap);
++			(void)ml_set_interrupts_enabled(FALSE);
++			break;
++		case XH_TRAP_FPE:
++			hosted_user_stats.fpe++;
++			break;
++		default:
++			panic("hosted: thread_run returned trap kind %u", trap.kind);
++		}
++		/* fleh_synchronous: masked, the handler unmasks as the saved cpsr says */
++		sleh_synchronous(context, context->ss.ss_64.esr, context->ss.ss_64.far, false);
++	}
++}
++
++/* ---- self-test (boot-arg hosted_selftest=1) ---------------------------------------------------- */
++
++/*
++ * Runs before bsd_init, in the bootstrap thread: copyin/copyout against an address space made for the
++ * test, kernel-to-kernel copies, and, when the host has the task layer, a few instructions of user code on
++ * a twin through hosted_user_enter (conversion, thread_run, fills), with the faults resolved as the trap
++ * path does. The syscall and exception dispatch of a real task needs BSD and is not covered here.
++ */
++static int hosted_selftest_passed, hosted_selftest_failed;
++
++static void
++hosted_selftest_check(bool ok, const char *what)
++{
++	if (ok) {
++		hosted_selftest_passed++;
++	} else {
++		hosted_selftest_failed++;
++	}
++	printf("hosted selftest: %s %s\n", ok ? "ok  " : "FAIL", what);
++}
++
++/*
++ * This early (or in a kernel with no interrupt controller driver) nothing takes the vCPU's interrupt: the
++ * line stays up and thread_run would hand every stay straight back. The test takes the interrupt itself.
++ */
++static void
++hosted_selftest_quiet_line(void)
++{
++	if (current_thread()->machine.CpuDatap->interrupt_handler != NULL) {
++		return;                 /* the kernel's handler took it when the test unmasked */
++	}
++	uint32_t old = hosted_irq_mask();
++	(void)HC(timer_set, UINT64_MAX);
++	for (int i = 0; i < 64; i++) {
++		uint32_t intid = (uint32_t)HC(irq_ack);
++		if (intid == XH_INTID_NONE) {
++			break;
++		}
++		(void)HC(irq_eoi, intid);
++	}
++	hosted_irq_restore(old);
++}
++
++static void
++hosted_selftest_user(vm_map_t map, uint64_t code, uint64_t data)
++{
++	static const uint32_t program[] = {
++		0xd28000e1,     /* mov x1, #7 */
++		0xf9000001,     /* str x1, [x0]         a page not touched yet: write fault */
++		0xf9400002,     /* ldr x2, [x0] */
++		0x91000442,     /* add x2, x2, #1 */
++		0x9e670040,     /* fmov d0, x2 */
++		0xd4209a40,     /* brk #0x4d2 */
++		0xd4001001,     /* svc #0x80            trapped where the host has seccomp */
++		0x00000001,     /* udf #1 */
++	};
++	pmap_t         pmap = map->pmap;
++	arm_context_t *context = kalloc_type(arm_context_t, Z_WAITOK | Z_ZERO | Z_NOFAIL);
++	struct xh_trap trap;
++	bool           saw_fault = false, saw_brk = false, saw_svc = false, saw_udf = false, x2_ok = false, v0_ok = false;
++	int            fills = 0, resolved = 0, interrupts = 0;
++
++	vm_map_switch_context_t sw = vm_map_switch_to(map);
++	int err = copyout(program, code, sizeof(program));
++	vm_map_switch_back(sw);
++	kern_return_t kr = mach_vm_protect(map, code, PAGE_SIZE, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
++	hosted_selftest_check(err == 0 && kr == KERN_SUCCESS, "user: the program is copied out, its page made read and execute");
++
++	uint64_t twin = hosted_twin_make(pmap);
++	if (twin == 0) {
++		printf("hosted selftest: SKIP user mode: no task process (xnuhost --no-tasks, or no task layer on this host)\n");
++		kfree_type(arm_context_t, context);
++		return;
++	}
++	context->ss.ash.flavor = ARM_SAVED_STATE64;
++	context->ss.ash.count = ARM_SAVED_STATE64_COUNT;
++	context->ns.nsh.flavor = ARM_NEON_SAVED_STATE64;
++	context->ns.nsh.count = ARM_NEON_SAVED_STATE64_COUNT;
++	context->ss.ss_64.pc = code;
++	context->ss.ss_64.x[0] = data;
++	context->ss.ss_64.x[9] = 0x1122334455667788ULL;
++	context->ss.ss_64.sp = data + PAGE_SIZE;
++	context->ss.ss_64.cpsr = PSR64_USER64_DEFAULT;
++	uint32_t old = hosted_irq_mask();
++#if defined(HAS_APPLE_PAC)
++	ml_sign_thread_state(&context->ss, code, context->ss.ss_64.cpsr, 0, 0, 0);
++#endif
++	hosted_irq_restore(old);
++
++	hosted_selftest_quiet_line();
++	for (int step = 0; step < 40 && !saw_udf; step++) {
++		arm_saved_state64_t *ss = &context->ss.ss_64;
++
++		old = hosted_irq_mask();
++		int64_t rc = hosted_user_enter(twin, context, 0, false, &trap);
++		hosted_irq_restore(old);        /* takes an interrupt that ended the stay */
++		if (rc != 0) {
++			printf("hosted selftest: thread_run failed (%lld)\n", rc);
++			break;
++		}
++		switch (trap.kind) {
++		case XH_TRAP_INTERRUPT:
++			interrupts++;
++			hosted_selftest_quiet_line();
++			break;
++		case XH_TRAP_FAULT: {
++			uint32_t  access = hosted_trap_access(&trap, ss->pc);
++			vm_prot_t prot = (access & XH_PROT_EXEC) ? (VM_PROT_READ | VM_PROT_EXECUTE) :
++			    (access & XH_PROT_WRITE) ? (VM_PROT_READ | VM_PROT_WRITE) : VM_PROT_READ;
++			saw_fault = true;
++			if (hosted_user_fill(pmap, ss->far, access)) {
++				fills++;
++				break;
++			}
++			if (++resolved > 12) {
++				printf("hosted selftest: fault at 0x%llx (access %u, esr 0x%llx) does not resolve\n", ss->far, access, ss->esr);
++				step = 1000;
++				break;
++			}
++			kr = vm_fault(map, ss->far, prot, FALSE, VM_KERN_MEMORY_NONE, THREAD_UNINT, NULL, 0);
++			if (kr != KERN_SUCCESS) {
++				printf("hosted selftest: vm_fault(0x%llx, prot %d) = %d\n", ss->far, prot, kr);
++				step = 1000;
++			}
++			break;
++		}
++		case XH_TRAP_BRK:
++			sw = vm_map_switch_to(map);
++			hosted_user_brk_immediate(context, &trap);
++			vm_map_switch_back(sw);
++			saw_brk = ESR_EC(ss->esr) == ESR_EC_BRK_AARCH64 && (ss->esr & 0xffff) == 0x4d2 && ss->pc == code + 5 * 4;
++			if (!saw_brk) {
++				printf("hosted selftest: brk: esr 0x%llx (host 0x%llx, insn 0x%x, signal %u), pc 0x%llx, program at 0x%llx\n",
++				    ss->esr, trap.esr, trap.insn, trap.signo, ss->pc, code);
++			}
++			x2_ok = ss->x[2] == 8 && ss->x[1] == 7 && ss->x[9] == 0x1122334455667788ULL;
++			v0_ok = (uint64_t)context->ns.ns_64.v.q[0] == 8;
++			old = hosted_irq_mask();
++			ss->pc += 4;
++#if defined(HAS_APPLE_PAC)
++			ml_sign_thread_state(&context->ss, ss->pc, ss->cpsr, ss->lr, ss->x[16], ss->x[17]);
++#endif
++			hosted_irq_restore(old);
++			break;
++		case XH_TRAP_SYSCALL:
++			saw_svc = ESR_EC(ss->esr) == ESR_EC_SVC_64 && (ss->esr & 0xffff) == 0x80 && ss->pc == code + 7 * 4;
++			break;
++		case XH_TRAP_ILLEGAL:
++			saw_udf = true;
++			break;
++		default:
++			printf("hosted selftest: trap kind %u\n", trap.kind);
++			step = 1000;
++			break;
++		}
++	}
++	hosted_selftest_check(saw_fault && fills > 0, "user: faults arrive and are filled from the page tables (task_map)");
++	hosted_selftest_check(saw_brk, "user: brk arrives as ESR_EC_BRK_AARCH64 with its immediate, pc at the instruction");
++	hosted_selftest_check(x2_ok, "user: registers come back (x1 = 7, x2 = 8 through the data page, x9 kept)");
++	hosted_selftest_check(v0_ok, "user: the vector registers come back (d0 = 8)");
++	if (hosted_info.features & XH_FEATURE_TASKS) {
++		hosted_selftest_check(saw_svc, "user: svc #0x80 arrives as ESR_EC_SVC_64, pc after it");
++	} else {
++		printf("hosted selftest: SKIP svc: this host does not trap system calls of tasks (qemu-user)\n");
++	}
++	hosted_selftest_check(saw_udf, "user: an undefined instruction arrives");
++	uint64_t word = 0;
++	sw = vm_map_switch_to(map);
++	err = copyin(data, &word, sizeof(word));
++	vm_map_switch_back(sw);
++	hosted_selftest_check(err == 0 && word == 7, "user: the task's store is read back by copyin");
++	printf("hosted selftest: user mode: %llu runs, %d fills, %d faults resolved by vm_fault, %d interrupts (line %u, handler %s)\n",
++	    hosted_user_stats.runs, fills, resolved, interrupts, hosted_cpu()->irq_pending,
++	    current_thread()->machine.CpuDatap->interrupt_handler != NULL ? "set" : "none");
++
++	old = hosted_irq_mask();
++	(void)HC(thread_destroy, twin - 1);
++	hosted_irq_restore(old);
++	pmap_destroy(pmap);             /* hosted_twin_make's reference */
++	kfree_type(arm_context_t, context);
++}
++
++static void
++hosted_selftest(void)
++{
++	uint32_t on = 0;
++
++	if (!PE_parse_boot_argn("hosted_selftest", &on, sizeof(on)) || on == 0) {
++		return;
++	}
++	printf("hosted selftest: copyio and user mode\n");
++
++	const vm_size_t size = 8 * PAGE_SIZE, span = 3 * PAGE_SIZE + 123;
++	pmap_t   pmap = pmap_create_options(NULL, 0, PMAP_CREATE_64BIT);
++	vm_map_t map = vm_map_create_options(pmap, 0x100000000ULL, 0x1000000000ULL, VM_MAP_CREATE_DEFAULT);
++	mach_vm_offset_t base = 0;
++	kern_return_t kr = mach_vm_allocate_kernel(map, (mach_vm_offset_ut *)&base, size,
++	    VM_MAP_KERNEL_FLAGS_ANYWHERE());
++	hosted_selftest_check(kr == KERN_SUCCESS && base >= 0x100000000ULL, "an address space with 8 pages of anonymous memory");
++	if (kr != KERN_SUCCESS) {
++		return;
++	}
++	uint8_t *out = kalloc_data(span, Z_WAITOK | Z_NOFAIL);
++	uint8_t *in = kalloc_data(span, Z_WAITOK | Z_ZERO | Z_NOFAIL);
++	for (vm_size_t i = 0; i < span; i++) {
++		out[i] = (uint8_t)(i * 7 + 3);
++	}
++
++	vm_map_switch_context_t sw = vm_map_switch_to(map);
++	int err = copyout(out, base + 5, span);
++	hosted_selftest_check(err == 0, "copyout across four pages that were never touched (vm_fault from copyio)");
++	err = copyin(base + 5, in, span);
++	hosted_selftest_check(err == 0 && memcmp(in, out, span) == 0, "copyin reads the same bytes back");
++
++	char      text[32];
++	vm_size_t length = 0;
++	static const char hello[] = "hosted xnu";
++	err = copyout(hello, base + 2 * PAGE_SIZE - sizeof(hello), sizeof(hello));      /* ends at a page end */
++	err = err != 0 ? err : copyinstr(base + 2 * PAGE_SIZE - sizeof(hello), text, sizeof(text), &length);
++	hosted_selftest_check(err == 0 && length == sizeof(hello) && strcmp(text, hello) == 0, "copyinstr of a string that ends with its page");
++	length = 0;
++	err = copyinstr(base + 2 * PAGE_SIZE - sizeof(hello), text, 4, &length);
++	hosted_selftest_check(err == ENAMETOOLONG && length == 4, "copyinstr: ENAMETOOLONG at the buffer's size");
++	err = copyinstr(base + size - 3, text, sizeof(text), &length);
++	hosted_selftest_check(err == EFAULT || (err == 0 && length <= 3), "copyinstr running off the mapping: EFAULT (or a NUL before it)");
++
++	uint32_t w32 = 0;
++	uint64_t w64 = 0;
++	err = copyout_atomic32(0xfeedf00d, base + 4 * PAGE_SIZE + 8);
++	err = err != 0 ? err : copyin_atomic32(base + 4 * PAGE_SIZE + 8, &w32);
++	hosted_selftest_check(err == 0 && w32 == 0xfeedf00d, "copyout_atomic32 / copyin_atomic32");
++	err = copyout_atomic64(0x0123456789abcdefULL, base + 4 * PAGE_SIZE + 16);
++	err = err != 0 ? err : copyin_atomic64(base + 4 * PAGE_SIZE + 16, &w64);
++	hosted_selftest_check(err == 0 && w64 == 0x0123456789abcdefULL, "copyout_atomic64 / copyin_atomic64");
++	hosted_selftest_check(copyin_atomic32(base + 4 * PAGE_SIZE + 9, &w32) == EINVAL, "copyin_atomic32 of an unaligned address: EINVAL");
++	hosted_selftest_check(copyin_atomic32_wait_if_equals(base + 4 * PAGE_SIZE + 8, 1) == ESTALE &&
++	    copyin_atomic32_wait_if_equals(base + 4 * PAGE_SIZE + 8, 0xfeedf00d) == 0, "copyin_atomic32_wait_if_equals: ESTALE, 0");
++
++	hosted_selftest_check(copyin(base + size + 16 * PAGE_SIZE, in, 64) == EFAULT, "copyin of an unmapped address: EFAULT, no panic");
++	hosted_selftest_check(copyout(out, base + size - 8, 64) == EFAULT, "copyout running off the mapping: EFAULT");
++	kr = mach_vm_protect(map, base + 6 * PAGE_SIZE, PAGE_SIZE, FALSE, VM_PROT_READ);
++	err = copyin(base + 6 * PAGE_SIZE, in, 64);
++	hosted_selftest_check(kr == KERN_SUCCESS && err == 0 && copyout(out, base + 6 * PAGE_SIZE, 64) == EFAULT,
++	    "a read-only page: copyin works, copyout is EFAULT");
++	hosted_selftest_check(copyin((user_addr_t)(uintptr_t)out, in, 64) == EFAULT,
++	    "a kernel address as a user pointer is refused (EFAULT)");
++	hosted_selftest_check(copyout(out, (user_addr_t)(uintptr_t)in, 64) == EFAULT,
++	    "a kernel address as a user destination is refused (EFAULT)");
++	hosted_selftest_check(copyin(hosted_info.user_va_limit - 64, in, 128) != 0, "a range across user_va_limit is refused");
++	disable_preemption();
++	err = copyin(base + 5, in, 64);
++	int err2 = copyin(base + size + 16 * PAGE_SIZE, in, 64);
++	enable_preemption();
++	hosted_selftest_check(err == 0 && err2 == EFAULT, "with preemption disabled: a mapped page is copied, an unmapped one is EFAULT");
++	vm_map_switch_back(sw);
++
++	/* The bootstrap thread's own map is the kernel's: kernel-to-kernel copyio. */
++	bzero(in, span);
++	err = copyin((user_addr_t)(uintptr_t)out, in, span);
++	hosted_selftest_check(err == 0 && memcmp(in, out, span) == 0, "kernel-to-kernel copyin (a kernel address, no bit 55)");
++	bzero(in, span);
++	err = copyout(out, (user_addr_t)(uintptr_t)in, span);
++	hosted_selftest_check(err == 0 && memcmp(in, out, span) == 0, "kernel-to-kernel copyout");
++	hosted_selftest_check(copyin(base, in, 64) == EFAULT, "a user address in a kernel-to-kernel copyin: EFAULT");
++
++	hosted_selftest_user(map, base + 7 * PAGE_SIZE, base + 5 * PAGE_SIZE);
++
++	kfree_data(out, span);
++	kfree_data(in, span);
++	vm_map_deallocate(map);
++	printf("hosted selftest: %d passed, %d failed\n", hosted_selftest_passed, hosted_selftest_failed);
++}
++STARTUP(EARLY_BOOT, STARTUP_RANK_LAST, hosted_selftest);
++
++#endif /* XNU_HOSTED */
+diff --git a/osfmk/arm64/locore.s b/osfmk/arm64/locore.s
+index 58c0650..9754117 100644
+--- a/osfmk/arm64/locore.s
++++ b/osfmk/arm64/locore.s
+@@ -1798,6 +1798,10 @@ LEXT(thread_bootstrap_return)
+ 	.globl EXT(arm64_thread_exception_return)
+ LEXT(arm64_thread_exception_return)
+ 	ARM64_PROLOG
++#if XNU_HOSTED
++	/* OneiOS hosted: user mode is the thread_run host call (arm64/hosted/hosted_asm.s, hosted_user.c). */
++	b		EXT(hosted_thread_exception_return)
++#endif
+ 	mrs		x0, TPIDR_EL1
+ 	LOAD_USER_PCB	dst=x21, src=x0, tmp=x28
+ 	mov		x28, xzr
+diff --git a/osfmk/arm64/pcb.c b/osfmk/arm64/pcb.c
+index 0ad765c..c234087 100644
+--- a/osfmk/arm64/pcb.c
++++ b/osfmk/arm64/pcb.c
+@@ -74,6 +74,10 @@
+ #include <pexpert/arm64/apple_arm64_cpu.h>
+ #include <pexpert/pexpert.h>
+ 
++#if XNU_HOSTED
++extern void hosted_thread_twin_destroy(thread_t thread);
++#endif
++
+ // fixme: rdar://114299113 tracks resolving the supportlib issue with hwtrace features
+ 
+ extern int debug_task;
+@@ -757,6 +761,10 @@ machine_thread_destroy(thread_t thread)
+ {
+ 	arm_context_t *thread_user_ss;
+ 
++#if XNU_HOSTED
++	hosted_thread_twin_destroy(thread);     /* OneiOS hosted: the thread's Linux twin in its task process */
++#endif
++
+ 	if (thread->machine.contextData) {
+ 		/* Disassociate the user save state from the thread before we free it. */
+ 		thread_user_ss = thread->machine.contextData;
+diff --git a/osfmk/conf/files.arm64 b/osfmk/conf/files.arm64
+index b6b7805..cf52d84 100644
+--- a/osfmk/conf/files.arm64
++++ b/osfmk/conf/files.arm64
+@@ -65,6 +65,8 @@ osfmk/arm64/sleh.c			standard
+ osfmk/arm64/start.s	optional nos_arm_asm config_pmap_ppl
+ osfmk/arm64/hosted/hosted_asm.s	optional nos_arm_asm
+ osfmk/arm64/hosted/hosted_machine.c	optional nos_arm_asm
++osfmk/arm64/hosted/hosted_user.c	optional nos_arm_asm
++osfmk/arm64/hosted/hosted_copyio.c	optional nos_arm_asm
+ osfmk/arm64/hosted/hosted_smp.c	optional nos_arm_asm
+ osfmk/arm64/pinst.s	optional nos_arm_asm
+ osfmk/arm64/cswitch.s	optional nos_arm_asm

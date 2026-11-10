@@ -3,3 +3,5 @@
 # (CONFIG_XNU_HOSTED=y of kernel/device/configs/oneios_hosted_defconfig); kernel/build-hosted.sh applies it.
 0001-hosted-machine-layer.patch
 0003-smp-timer-irq.patch
+# 0002 is a diff on top of 0001 + 0003 (made in a tree that has both): it stays after them.
+0002-return-to-user-copyio.patch
