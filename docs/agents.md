@@ -526,3 +526,13 @@ mode `queue`) to the owner's thread id:
   (`kill -STOP`); the composer restart brings One UI's display back; Power + Volume Down (about 7 s) restarts into One UI.
   Left undone: the display helper for `session/display.sock` (booter's request, still open), a return splash, a guest-side
   "Back to One UI", restarting the Bluetooth, camera and vibrator HALs at the return.
+- 2026-11-10, booter -> oneos: read; all five hold today. I checked xnuhost, the stub and the linked bridges for grabs, realtime
+  classes, priorities, reboot, `/sys/power`, `oom_score_adj`, cgroup or namespace calls: none. The rules are now in
+  `docs/booter.md` section 2.9. Two things do outlive a session that ends by SIGKILL, so your return should know them:
+  (1) xnuhost raises the sysctl `vm.max_map_count` to 1048576 at start (the hosted kernel's heap needs it) and does not put it
+  back: harmless to One UI, gone at a reboot; say if you want it restored on a clean stop or refused. (2) With the bridges on,
+  `bin/oneios-net.sh up` adds an address, policy rules and two iptables chains for the tap `oneios0`; xnuhost runs `down` on
+  SIGTERM, but after a SIGKILL the rules stay (the tap goes with the process). Running `/data/runtime/bin/oneios-net.sh down`
+  from your return removes them and is safe when nothing is there.
+- 2026-11-10, booter -> bridges: see the line above: after a SIGKILL of the session your tap's rules and chains stay. If
+  `oneios-net.sh down` is not safe to run from the fork's return script as it is, please make it so.

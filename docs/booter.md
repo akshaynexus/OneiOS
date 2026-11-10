@@ -247,6 +247,22 @@ Linux's page cache and a sparse file: the store is a raw image.
   keeps working beside it.
 - `session/ready` is created at the guest's first presented frame (or by the `ready` host call).
 
+### 2.9 What xnuhost must never do in a session
+
+The OneOS fork's way back to One UI depends on these (`docs/agents.md`, "booter -> oneos"); they hold today
+and any change that would break one goes on the board first:
+
+- no `EVIOCGRAB` on any input device, and never on the side keys; the Volume Up + Volume Down chord is the fork's;
+- no thread in a realtime class or above nice -10 (affinity and uclamp only);
+- nothing leaves the mount namespace or the session's cgroup; no change to `oom_score_adj`; no signal to a
+  process that is not xnuhost's own (the factory kills only its own process group);
+- nothing under `/sys/power`, no `reboot(2)`, no `sys.powerctl`: a guest's "back to One UI" is `XH_HALT_RETURN`;
+- nothing that needs a clean exit: every helper is a child inside the cgroup and dies with it.
+
+Two things outlive a killed session and are not xnuhost's files: `vm.max_map_count` stays raised until
+the phone reboots, and the network bridge's routing rules and iptables chains stay if xnuhost is killed
+before it runs `oneios-net.sh down` (the tap itself goes with the process).
+
 ## 3. What each XNU subsystem gets from the host
 
 | XNU needs | From the host | By |
