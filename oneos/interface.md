@@ -43,7 +43,8 @@ Anything below that the booter, release-kernel or image-build cannot meet: chang
 ## 2. Image set (image-build)
 
 - One `.tar.zst` the owner builds locally and imports in the app. Never downloaded. Same tar rules as above,
-  window at most 2^31 (`--long=31`), any size that fits the phone.
+  window at most 2^27 (`zstd -T0 -19 --long=27`: the app decompresses on the phone and keeps the window in
+  memory), any size that fits the phone; one file at most 16 GiB.
 - `manifest.json` at the top (first member if possible):
 
 ```json
@@ -105,7 +106,8 @@ SELinux stays as One UI had it, usually Enforcing), detached, in a **new mount n
 
 What is running around it: One UI's kernel, init, vendor HALs, **surfaceflinger and the vendor composer**
 (left running for a root SurfaceControl layer, plan section 5.5), audioserver, netd, vold, keystore2, the
-radio. Gone: zygote, zygote_secondary, system_server and every app. So no InputDispatcher: read
+radio. The switch holds the kernel wakelock `oneios_session` for the whole session (One UI's power manager is
+gone), and feeds Samsung's software watchdog. Gone: zygote, zygote_secondary, system_server and every app. So no InputDispatcher: read
 `/dev/input/event*` yourself. Do not `EVIOCGRAB` the volume-key device (see 6), or handle the chord yourself.
 
 ## 5. What xnuhost must do for the switch
