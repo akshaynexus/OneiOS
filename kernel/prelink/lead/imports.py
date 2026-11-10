@@ -62,6 +62,9 @@ for line in subprocess.run(['llvm-nm', '-n', str(R / 'out/kernel/current-hosted/
     p = line.split()
     if len(p) == 3 and not p[2].endswith('.original'):
         native_at.setdefault(p[2], int(p[0], 16))
+by_addr = {}
+for n, a in native_at.items(): by_addr.setdefault(a, []).append(n)
+def aliases(n): return by_addr.get(native_at.get(n), [n]) if n in native_at else [n]
 paired_starts = sorted(a for a in name_of if a in start_set and name_of[a] in native_at)
 
 
@@ -102,7 +105,7 @@ for ident, (va, fileoff) in sorted(cache.entries.items()):
         known = [(i, name_of[t]) for i, t in enumerate(slots) if t in name_of]
         for (i, a), (j, b) in zip(known, known[1:]):
             checked += 1
-            if not a < b and slots[i] != slots[j]:
+            if not any(x < y for x in aliases(a) for y in aliases(b)) and slots[i] != slots[j]:
                 violations.append((ident, sect['name'], a, b, how_of.get(slots[i]), how_of.get(slots[j]), slots[i], slots[j]))
         for i, t in enumerate(slots):
             if t is None or t in name_of:
@@ -113,7 +116,7 @@ for ident, (va, fileoff) in sorted(cache.entries.items()):
             entry[0] = max(entry[0], lower); entry[1] = min(entry[1], upper); entry[2].append(ident.split('.')[-1])
 
 print(f'order of known names: {checked} adjacent pairs checked, {len(violations)} out of order')
-for v in violations[:40]:
+for v in violations:
     print(f'  SUSPECT in {v[0]} {v[1]}: {v[2]} ({v[4]}, {v[6]:#x}) before {v[3]} ({v[5]}, {v[7]:#x})')
 unique, added = 0, 0
 for t, (lower, upper, kexts) in sorted(bounds.items()):

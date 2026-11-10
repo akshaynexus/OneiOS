@@ -2889,6 +2889,66 @@
     "sha256": "2a1f2a2bb6f749ce175c3c3b7c67736716eb451bd5133015c20bfac1bdf7ca62"
    },
    "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported symbols): in the 1 kext(s) that import this function (AppleMobileFileIntegrity) its slot lies between the slots of _proc_find and _proc_getexecutablevnode, and _proc_find_ident is the only exported kernel function between those names that no other original function is paired with. It is also the only one of them that our kernel places between _pzfind_unique and _proc_self, the paired functions on either side of this one in the original."
+  },
+  {
+   "original": "0xfffffe000ade810c",
+   "native_symbol": "_vnode_isfifo",
+   "check": {
+    "address": "0xfffffe000ade810c",
+    "size": 20,
+    "sha256": "16b2dce77e669892fe2a735490b521b91b3604ff3b41b966eb0fa35ca8710fdf"
+   },
+   "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported names) and the function's own code. align.py had it one name off. The body is v_type == 7 (VFIFO); in apfs's table its slot follows vnode_isdyldsharedcache and precedes vnode_isinuse. align.py had paired it with vnode_isblk."
+  },
+  {
+   "original": "0xfffffe000ade8120",
+   "native_symbol": "_vnode_isblk",
+   "check": {
+    "address": "0xfffffe000ade8120",
+    "size": 20,
+    "sha256": "7e78c8dcebf9adbc0ba1c02af4eb50496bccd3823e4cecf2c9fb3fde8802d1b5"
+   },
+   "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported names) and the function's own code. align.py had it one name off. The body is v_type == 3 (VBLK); in apfs's and the sandbox's tables its slot is the first of the vnode_is* run, before 0xfffffe000ade8134 (v_type == 4) and vnode_isdir. align.py had paired it with vnode_isspec."
+  },
+  {
+   "original": "0xfffffe000ade8134",
+   "native_symbol": "_vnode_ischr",
+   "check": {
+    "address": "0xfffffe000ade8134",
+    "size": 20,
+    "sha256": "e9d00ff3dd3270726b71ed1e510476b472ec869e4025d6f839c1b04512230fa0"
+   },
+   "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported names) and the function's own code. align.py had it one name off. The body is v_type == 4 (VCHR); its slot lies between vnode_isblk's and vnode_isdir's. align.py had paired it with vnode_issock."
+  },
+  {
+   "original": "0xfffffe000b10886c",
+   "native_symbol": "_psignal_sigkill_with_reason",
+   "check": {
+    "address": "0xfffffe000b10886c",
+    "size": 28,
+    "sha256": "8625e5e9b7ddcc488eac3b305c4c9d96ce7c92884a272a61442f70c27c9e8911"
+   },
+   "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported names) and the function's own code. align.py had it one name off. The body is psignal_internal(p, NULL, NULL, 0, SIGKILL, x1): two arguments, the signal fixed at 9. In the sandbox's table its slot follows 0xfffffe000b108888's and precedes ptrauth_utils_sign_blob_generic. align.py had paired it with psignal_locked (which takes the signal as its second argument)."
+  },
+  {
+   "original": "0xfffffe000b108888",
+   "native_symbol": "_psignal_sigkill_try_thread_with_reason",
+   "check": {
+    "address": "0xfffffe000b108888",
+    "size": 28,
+    "sha256": "ae1499c24ae275c7b966fcb9edfa1686cb618d71dea98ca46fea4304145bbe93"
+   },
+   "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported names) and the function's own code. align.py had it one name off. The body is psignal_internal(p, NULL, thread, PSIG_TRY_THREAD (8), SIGKILL, x2). In the sandbox's table its slot follows proc_uniqueid's and precedes psignal_sigkill_with_reason's. align.py had paired it with psignal_try_thread."
+  },
+  {
+   "original": "0xfffffe000b1591ec",
+   "native_symbol": "_cs_blob_reset_cache",
+   "check": {
+    "address": "0xfffffe000b1591ec",
+    "size": 24,
+    "sha256": "d494aa8df1ab4f4539e349c1ceac4cb27af68fada457840c8684505ebcf982e1"
+   },
+   "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported names) and the function's own code. align.py had it one name off. The body is one atomic add of 2 to a global counter and a return (cs_blob_generation_count += 2). In AMFI's table its slot follows copyoutstr's and precedes cs_entitlement_flags'. align.py had paired it with cs_text_fixup_page, a function of UniXNU's that the original kernel does not have."
   }
  ]
 }

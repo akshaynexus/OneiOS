@@ -5472,29 +5472,33 @@
    "evidence": "Kexts store its address, signed with the block isa discriminator 0x6ae1 (pacda), as the first word of a block literal built on the stack; 0x108 bytes before _NSConcreteGlobalBlock (paired by name). 47 kexts name it; unpaired, every stack block of a kext had a wrong isa."
   },
   {
-   "original": "0xfffffe000b7b2440",
-   "native_symbol": "_gIOPublishNotification",
-   "evidence": "IOService.cpp's notification type symbols, six consecutive pointers in declaration order: publish, first publish, matched, first match, terminated, will terminate. The last two are paired by name at 0xfffffe000b7b2460 and 0xfffffe000b7b2468 (8 apart, as in our kernel), and kexts pass the four slots before them as the first argument of addMatchingNotification (apfs 0x...2448, the sandbox 0x...2458). By position before the two named ones."
-  },
-  {
    "original": "0xfffffe000b7b2448",
-   "native_symbol": "_gIOFirstPublishNotification",
-   "evidence": "IOService.cpp's notification type symbols, six consecutive pointers in declaration order: publish, first publish, matched, first match, terminated, will terminate. The last two are paired by name at 0xfffffe000b7b2460 and 0xfffffe000b7b2468 (8 apart, as in our kernel), and kexts pass the four slots before them as the first argument of addMatchingNotification (apfs 0x...2448, the sandbox 0x...2458). By position before the two named ones."
+   "native_symbol": "_gIOPublishNotification",
+   "evidence": "Lead review, by the order of the kexts' data import tables (__got is in the alphabetical order of the imported names): in IOUSBHostFamily's table the slots run gIODTPlane, 0x...2458, 0x...2450, gIOGeneralInterest, gIOPowerPlane, gIOPropertyMatchKey, 0x...2448, gIOServicePlane, gIOTerminatedNotification; the sandbox's run 0x...2458, 0x...2710 (gIOMatchedNotification by the matcher), 0x...2448, gIOServicePlane. So 0x...2458 is gIOFirstMatchNotification, 0x...2450 gIOFirstPublishNotification and 0x...2448 gIOPublishNotification: this kernel does not keep the six symbols in the declaration order of the public source (gIOMatchedNotification is at 0x...2710). The earlier records, by position, were one off for these two, and the one for 0x...2440 (which no kext imports) is dropped."
   },
   {
    "original": "0xfffffe000b7b2450",
-   "native_symbol": "_gIOMatchedNotification",
-   "evidence": "IOService.cpp's notification type symbols, six consecutive pointers in declaration order: publish, first publish, matched, first match, terminated, will terminate. The last two are paired by name at 0xfffffe000b7b2460 and 0xfffffe000b7b2468 (8 apart, as in our kernel), and kexts pass the four slots before them as the first argument of addMatchingNotification (apfs 0x...2448, the sandbox 0x...2458). By position before the two named ones."
+   "native_symbol": "_gIOFirstPublishNotification",
+   "evidence": "Lead review, by the order of the kexts' data import tables (__got is in the alphabetical order of the imported names): in IOUSBHostFamily's table the slots run gIODTPlane, 0x...2458, 0x...2450, gIOGeneralInterest, gIOPowerPlane, gIOPropertyMatchKey, 0x...2448, gIOServicePlane, gIOTerminatedNotification; the sandbox's run 0x...2458, 0x...2710 (gIOMatchedNotification by the matcher), 0x...2448, gIOServicePlane. So 0x...2458 is gIOFirstMatchNotification, 0x...2450 gIOFirstPublishNotification and 0x...2448 gIOPublishNotification: this kernel does not keep the six symbols in the declaration order of the public source (gIOMatchedNotification is at 0x...2710). The earlier records, by position, were one off for these two, and the one for 0x...2440 (which no kext imports) is dropped."
   },
   {
    "original": "0xfffffe000b7b2458",
    "native_symbol": "_gIOFirstMatchNotification",
-   "evidence": "IOService.cpp's notification type symbols, six consecutive pointers in declaration order: publish, first publish, matched, first match, terminated, will terminate. The last two are paired by name at 0xfffffe000b7b2460 and 0xfffffe000b7b2468 (8 apart, as in our kernel), and kexts pass the four slots before them as the first argument of addMatchingNotification (apfs 0x...2448, the sandbox 0x...2458). By position before the two named ones."
+   "evidence": "Lead review, by the order of the kexts' data import tables (__got is in the alphabetical order of the imported names): in IOUSBHostFamily's table the slots run gIODTPlane, 0x...2458, 0x...2450, gIOGeneralInterest, gIOPowerPlane, gIOPropertyMatchKey, 0x...2448, gIOServicePlane, gIOTerminatedNotification; the sandbox's run 0x...2458, 0x...2710 (gIOMatchedNotification by the matcher), 0x...2448, gIOServicePlane. So 0x...2458 is gIOFirstMatchNotification, 0x...2450 gIOFirstPublishNotification and 0x...2448 gIOPublishNotification: this kernel does not keep the six symbols in the declaration order of the public source (gIOMatchedNotification is at 0x...2710). The earlier records, by position, were one off for these two, and the one for 0x...2440 (which no kext imports) is dropped."
   },
   {
    "original": "0xfffffe000b718680",
    "native_symbol": "__vfs_smr",
    "evidence": "The SMR domain APFS passes to smr_enter and smr_leave around its lookups (through a GOT slot): config/Private.exports gives the kext symbol apfs_smr the kernel's _vfs_smr. In the original kernel the same object is used by nchinit, resize_namecache, vntblinit, vfs_mountroot, mount_common, mount_dropcrossref and dounmount, the users of VFS_SMR(). Unpaired, the slot pointed into this kernel's zone_array and smr_enter asserted old_seq == SMR_SEQ_INVALID."
+  },
+  {
+   "original": "0xfffffe000b7af70c",
+   "native_symbol": "_rootdev",
+   "sections": [
+    "__DATA,__common",
+    "__DATA,__common"
+   ],
+   "evidence": "Lead review. The matcher paired this 32-bit variable with __stack_chk_guard (reference-data), but apfs and the sandbox import it in a slot after kernel_task/kernproc and before rootvp, where the guard (imported by both at 0xfffffe000b738000, in its right place) cannot be. apfs's mountroot stores rootvp and then stores vnode_specrdev's 32-bit result here (0xfffffe000a9c2d74..d88): rootdev = vnode_specrdev(rootvp). With the wrong pair that store went into the kernel's stack guard."
   }
  ]
 }
