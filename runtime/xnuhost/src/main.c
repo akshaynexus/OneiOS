@@ -284,6 +284,9 @@ static int boot(void)
     if (audio && br_virtio_snd_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, audio, audio_ctx)) kinds[ndev++] = XL_DEV_SND;
   }
 
+  // clusters=EEPPPPPP: the cluster types by hand (a bench run with no host topology to plan from).
+  for (unsigned i = 0; i < config.ncpu && config.clusters[i]; i++) machine.cpu_cluster[i] = config.clusters[i];
+
   // The device tree.
   xl_machine_board(&machine, config.ncpu, kinds, ndev);
   machine.timebase_hz = (uint32_t)g_info.timebase_hz;
@@ -449,8 +452,10 @@ int main(int argc, char **argv)
 
   LOGI("stopping: %s (reason %u, code %u)", stop_state.why, stop_state.reason, stop_state.code);
   for (unsigned i = 0; i < g_ncpu; i++)
-    LOGI("cpu%u: %llu interrupts, %llu device accesses, %llu emulated instructions, %llu task traps", i,
-         (unsigned long long)g_vcpu[i].stat_irqs, (unsigned long long)g_vcpu[i].stat_mmio, (unsigned long long)g_vcpu[i].stat_sysreg,
+    LOGI("cpu%u: %s, %llu interrupts (%llu timer, %llu IPI acknowledged, %llu re-raised), %llu device accesses, %llu emulated instructions, %llu task traps", i,
+         g_vcpu[i].started ? "started" : "never started",
+         (unsigned long long)g_vcpu[i].stat_irqs, (unsigned long long)g_vcpu[i].stat_timer, (unsigned long long)g_vcpu[i].stat_sgi,
+         (unsigned long long)g_vcpu[i].stat_reraised, (unsigned long long)g_vcpu[i].stat_mmio, (unsigned long long)g_vcpu[i].stat_sysreg,
          (unsigned long long)g_vcpu[i].stat_traps);
   // Debugging aid: XNUHOST_DUMP=FILE writes the first 64 MiB of the kernel's window at the stop.
   if (getenv("XNUHOST_DUMP")) {

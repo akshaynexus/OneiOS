@@ -60,7 +60,14 @@ uint32_t xh_impl_irq_ack(struct xh_cpu *cpu)
 void xh_impl_irq_eoi(struct xh_cpu *cpu, uint32_t intid) { xh_gic_eoi(cpu->index, intid); xh_cpu_line(cpu->index, false); }
 void xh_impl_irq_enable(struct xh_cpu *cpu, uint32_t intid, uint32_t enable) { xh_gic_enable(cpu->index, intid, enable != 0); xh_cpu_line(cpu->index, false); }
 void xh_impl_ipi(struct xh_cpu *cpu, uint32_t target, uint32_t sgi) { (void)cpu; xh_gic_send_sgi(target, sgi); }
-void xh_impl_timer_set(struct xh_cpu *cpu, uint64_t deadline) { xh_cpu_timer_set(V(cpu), deadline); }
+void xh_impl_timer_set(struct xh_cpu *cpu, uint64_t deadline)
+{
+  // One timer, two ways in: keep the register view (CNTV_CVAL_EL0, ENABLE) in step, so that a later
+  // trapped write of CNTV_CTL_EL0 (ArmCpu's enableCPUTimeBase) keeps this deadline.
+  V(cpu)->sys.cntv_cval = deadline;
+  if (deadline != UINT64_MAX) V(cpu)->sys.cntv_ctl = 1;
+  xh_cpu_timer_set(V(cpu), deadline);
+}
 void xh_impl_frame_resume(struct xh_cpu *cpu, const struct xh_frame *frame) { xh_cpu_frame_resume(V(cpu), frame); }
 
 uint64_t xh_impl_io_map(struct xh_cpu *cpu, uint64_t phys, uint64_t size)

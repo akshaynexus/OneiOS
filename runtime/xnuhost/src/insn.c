@@ -70,14 +70,24 @@ bool xh_decode_sys(uint32_t insn, xh_sys_insn *s)
 // Linux leaves that register 0 and user space cannot write it, so the host keeps the base in
 // TPIDR_EL0 (`mrs xN, TPIDR_EL0` is 0xd53bd040 | N) and rewrites the reads when the kernel maps a
 // page executable. The risk is a data word in text that happens to equal the encoding.
+//
+// iOS itself uses TPIDR_EL0 for something else: XNU keeps the CPU number in its low 12 bits and
+// _os_cpu_number() reads it to pick a per-CPU slot (libmalloc's magazines, libdispatch). With the TSD
+// base there the slot index would be garbage, so those reads become `mov xN, #0`: every thread
+// says CPU 0, which is always a valid slot (the number is only a hint: a thread can be moved right
+// after reading it). A write of TPIDR_EL0 would destroy the TSD base and becomes a nop.
+// Each word is classified by its original value, so one pass is right; a second pass over the same
+// page is not (it would zero the TSD reads): the kernel fixes a page once, as it is paged in.
 uint32_t xh_text_fixup(uint32_t *text, uint64_t size)
 {
   uint32_t count = 0;
   for (uint64_t i = 0; i < size / 4; i++) {
-    if ((text[i] & 0xffffffe0) == 0xd53bd060) {
-      text[i] = 0xd53bd040 | (text[i] & 31);
-      count++;
-    }
+    uint32_t insn = text[i] & 0xffffffe0, rt = text[i] & 31;
+    if (insn == 0xd53bd060) text[i] = 0xd53bd040 | rt;          // mrs xN, TPIDRRO_EL0 -> mrs xN, TPIDR_EL0
+    else if (insn == 0xd53bd040) text[i] = 0xd2800000 | rt;     // mrs xN, TPIDR_EL0   -> mov xN, #0
+    else if (insn == 0xd51bd040) text[i] = 0xd503201f;          // msr TPIDR_EL0, xN   -> nop
+    else continue;
+    count++;
   }
   return count;
 }

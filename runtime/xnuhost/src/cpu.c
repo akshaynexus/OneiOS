@@ -154,7 +154,7 @@ static uint64_t esr_of(ucontext_t *uc)
 
 // Saves the interrupted kernel context in a frame on its own stack and makes the signal return
 // into the kernel's upcall instead (xh_upcall_tramp), with interrupts masked.
-static void divert(xh_vcpu *v, ucontext_t *uc, uint32_t kind, void *upcall, uint64_t far, uint64_t esr)
+static void divert(xh_vcpu *v, ucontext_t *uc, uint32_t kind, void *upcall, uint64_t far, uint64_t esr, const siginfo_t *info)
 {
   mcontext_t *mc = &uc->uc_mcontext;
   struct xh_frame *frame = (struct xh_frame *)((mc->sp - 256 - sizeof *frame) & ~15ull);
@@ -169,6 +169,9 @@ static void divert(xh_vcpu *v, ucontext_t *uc, uint32_t kind, void *upcall, uint
   frame->kind = kind;
   frame->far = far;
   frame->esr = esr;
+  frame->signo = info ? (uint32_t)info->si_signo : 0;
+  frame->sigcode = info ? (uint32_t)info->si_code : 0;
+  if (kind == XH_FRAME_IRQ) v->acks_mark = __atomic_load_n(&v->stat_acks, __ATOMIC_RELAXED);
   v->cpu.irq_masked = 1;
   mc->regs[0] = (uint64_t)(uintptr_t)&v->cpu;
   mc->regs[1] = (uint64_t)(uintptr_t)frame;
@@ -181,7 +184,7 @@ static void divert(xh_vcpu *v, ucontext_t *uc, uint32_t kind, void *upcall, uint
 static void maybe_interrupt(xh_vcpu *v, ucontext_t *uc)
 {
   if (v->cpu.irq_pending && !v->cpu.irq_masked && !v->cpu.in_host && g_upcalls.irq)
-    divert(v, uc, XH_FRAME_IRQ, g_upcalls.irq, 0, 0);
+    divert(v, uc, XH_FRAME_IRQ, g_upcalls.irq, 0, 0, NULL);
 }
 
 static __attribute__((noreturn)) void host_fault(int signo, siginfo_t *info, ucontext_t *uc, const char *what)
@@ -258,7 +261,7 @@ void xh_cpu_signal(int signo, siginfo_t *info, void *context, struct xh_cpu *cpu
     return;
   }
   if (g_upcalls.exception) {
-    divert(v, uc, XH_FRAME_EXCEPTION, g_upcalls.exception, far, esr_of(uc));
+    divert(v, uc, XH_FRAME_EXCEPTION, g_upcalls.exception, far, esr_of(uc), info);
     errno = saved_errno;
     return;
   }
@@ -304,6 +307,15 @@ void xh_cpu_frame_resume(xh_vcpu *v, const struct xh_frame *frame)
   sigset_t all;
   sigfillset(&all);
   pthread_sigmask(SIG_SETMASK, &all, NULL);
+  // An exception return with the line up takes the interrupt at once. Here: a kick to ourselves,
+  // which stays pending until the signal return opens the mask, and then diverts the resumed
+  // context into the interrupt upcall. Not after an interrupt upcall that acknowledged nothing (a
+  // kernel with no handler for this CPU yet): that would only come straight back.
+  if (!frame->irq_masked && __atomic_load_n(&v->cpu.irq_pending, __ATOMIC_ACQUIRE) &&
+      (frame->kind != XH_FRAME_IRQ || __atomic_load_n(&v->stat_acks, __ATOMIC_RELAXED) != v->acks_mark)) {
+    v->stat_reraised++;
+    syscall(SYS_tgkill, getpid(), v->tid, SIG_KICK);
+  }
   xh_arch_sigreturn(&v->cpu, &sf, v->cpu.kernel_tpidr, 0, frame->irq_masked);
 }
 

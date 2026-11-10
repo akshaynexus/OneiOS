@@ -54,6 +54,7 @@ typedef struct {
   bool  legacy_boot_args;
   bool  selftest;
   int   bridges;            // runtime/bridges devices (network, sound, haptics, Bluetooth, CPU placement): 1, 0, -1 = by mode
+  char  clusters[XH_MAX_CPUS + 1]; // "EEPPPPPP": the cluster type of each vCPU, overriding the bridges' plan ("" = the plan, else all P)
   char  bluetooth[16];      // "virtual" (no controller, transport 10) or "hidl" (the phone's controller, transport 3)
 } xh_config;
 
@@ -139,7 +140,10 @@ bool     xh_mmio_covers(uint64_t pa);
 bool     xh_mmio_emulate(xh_regs *regs, uint32_t insn, uint64_t pa);
 
 // ---- interrupt controller: a GICv3 as ArmCpu drives it (gic.c) ----------------------------------
-#define XH_GIC_SPIS 224
+// INTIDs 32..1019. The board's devices use the low ones (32 + n); ArmCpu's software IPIs
+// (boot-arg armcpu-spi-ipi=1) are SPIs 1008 + core, pended by a GICD_ISPENDR write.
+#define XH_GIC_SPIS 992
+#define XH_GIC_IPI_SPI 1008
 void     xh_gic_init(unsigned ncpu, uint64_t dist_base, uint64_t redist_base);
 void     xh_gic_set_spi(unsigned intid, bool level);          // device line
 void     xh_gic_set_ppi(unsigned cpu, unsigned intid, bool level);
@@ -181,6 +185,8 @@ struct xh_vcpu {
   uint32_t  idle;           // 1 while in cpu_idle
   xh_sysreg_state sys;
   uint64_t  stat_irqs, stat_mmio, stat_sysreg, stat_traps;
+  uint64_t  stat_acks, acks_mark;     // interrupts acknowledged; the count when the last interrupt upcall began
+  uint64_t  stat_reraised, stat_timer, stat_sgi;   // frame_resume re-raises; INTID 27 and SGIs acknowledged
 };
 extern xh_vcpu g_vcpu[XH_MAX_CPUS];
 extern unsigned g_ncpu;

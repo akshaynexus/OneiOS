@@ -93,6 +93,9 @@ bool xh_sysreg_emulate(xh_vcpu *v, xh_regs *r, uint32_t insn)
   case XH_SYSREG(3, 3, 4, 2, 1):                             // DAIF
     if (s.read) value = v->sys.daif | (uint64_t)v->cpu.irq_masked << 7; else set_daif(v, value);
     break;
+  case XH_SYSREG(3, 0, 0, 0, 5):                             // MPIDR_EL1: Aff0 = the vCPU (the tree's "reg"), where
+    value = 0x80000000ull | v->cpu.index;                    // the host traps it (Linux answers it itself: 0x80000000)
+    break;
   case XH_SYSREG(3, 0, 4, 2, 2):                             // CurrentEL: EL1
     value = 4;
     break;

@@ -58,6 +58,11 @@ struct xh_frame {
   uint32_t irq_masked;        // the mask state to return to
   uint32_t kind;              // XH_FRAME_*
   uint64_t far, esr;          // for XH_FRAME_EXCEPTION
+  // Appended (present when vector->size covers mmio_emulate). For XH_FRAME_EXCEPTION: the Linux signal
+  // that reported the trap and its si_code: SIGSEGV/SIGBUS (a fault: far and esr are set), SIGILL (an
+  // undefined instruction the host does not emulate), SIGTRAP (brk), SIGFPE. Linux gives no esr for
+  // the last three. 0 in an XH_FRAME_IRQ frame.
+  uint32_t signo, sigcode;
 };
 #define XH_FRAME_IRQ        1u
 #define XH_FRAME_EXCEPTION  2u
@@ -67,7 +72,9 @@ struct xh_user_state {
   uint64_t x[31];
   uint64_t sp, pc, pstate;    // pstate: NZCV; the host forces EL0t
   uint64_t tsd;               // the thread's TSD base. iOS reads it from TPIDRRO_EL0; the host keeps
-                              // it in TPIDR_EL0 and text_fixup() rewrites the reads (docs/booter.md)
+                              // it in TPIDR_EL0 and text_fixup() rewrites the reads (docs/booter.md).
+                              // iOS's own use of TPIDR_EL0 (the CPU number in its low 12 bits) is
+                              // rewritten too: reads give 0, writes do nothing.
   uint32_t fpsr, fpcr;
   struct xh_vreg v[32];
 };
@@ -160,8 +167,12 @@ struct xh_vector {
   void     (*irq_eoi)(struct xh_cpu *, uint32_t intid);
   void     (*irq_enable)(struct xh_cpu *, uint32_t intid, uint32_t enable);
   void     (*ipi)(struct xh_cpu *, uint32_t target_cpu, uint32_t sgi);
-  void     (*timer_set)(struct xh_cpu *, uint64_t deadline);   // CNTVCT_EL0 value; UINT64_MAX cancels
-  void     (*frame_resume)(struct xh_cpu *, const struct xh_frame *);          // does not return
+  // The vCPU's deadline timer: INTID 27 (a level) is up from CNTVCT_EL0 >= deadline until the next
+  // timer_set. UINT64_MAX cancels. It is the same timer as the trapped CNTV_CVAL_EL0/CNTV_CTL_EL0.
+  void     (*timer_set)(struct xh_cpu *, uint64_t deadline);
+  // Does not return. A frame resumed unmasked while the vCPU's line is up is interrupted again at
+  // once (upcalls->irq on that frame's context), as an exception return with a pending interrupt.
+  void     (*frame_resume)(struct xh_cpu *, const struct xh_frame *);
 
   // devices
   uint64_t (*io_map)(struct xh_cpu *, uint64_t phys, uint64_t size);           // kernel VA, 0 if outside
@@ -170,7 +181,11 @@ struct xh_vector {
 
   // memory
   int64_t  (*ram_discard)(struct xh_cpu *, uint64_t phys, uint64_t size);      // give free pages back to Linux
-  uint32_t (*text_fixup)(struct xh_cpu *, void *text, uint64_t size);          // rewritten instruction count
+  // User text, exactly once per page of original text, before it is mapped executable: `mrs xN,
+  // TPIDRRO_EL0` becomes `mrs xN, TPIDR_EL0` (the TSD base), `mrs xN, TPIDR_EL0` becomes `mov xN, #0`
+  // (iOS's CPU number: always 0) and `msr TPIDR_EL0, xN` becomes `nop`. A second pass over a
+  // rewritten page would turn its TSD reads into zeros. Returns the rewritten instruction count.
+  uint32_t (*text_fixup)(struct xh_cpu *, void *text, uint64_t size);
 
   // iOS tasks (Linux processes) and threads
   int64_t  (*task_create)(struct xh_cpu *, uint64_t *task);

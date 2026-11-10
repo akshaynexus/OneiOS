@@ -50,8 +50,10 @@ static void test_insn(void)
   CHECK(xh_decode_sys(0xd538d080, &s) && s.read && xh_sys_key(&s) == XH_SYSREG(3, 0, 13, 0, 4) && s.rt == 0);                  // mrs x0, tpidr_el1
   CHECK(xh_decode_sys(0xd51b4223, &s) && !s.read && xh_sys_key(&s) == XH_SYSREG(3, 3, 4, 2, 1) && s.rt == 3);                  // msr daif, x3
   CHECK(!xh_decode_sys(0xd503201f, &s));                                                                                       // nop
-  uint32_t text[4] = { 0xd53bd060, 0xd53bd07e, 0xd53bd040, 0xd51bd060 };       // two TPIDRRO reads, a TPIDR read, a write
-  CHECK(xh_text_fixup(text, sizeof text) == 2 && text[0] == 0xd53bd040 && text[1] == 0xd53bd05e && text[2] == 0xd53bd040 && text[3] == 0xd51bd060);
+  // two TPIDRRO reads, a TPIDR read (iOS's CPU number), a TPIDRRO write (left alone), a TPIDR write
+  uint32_t text[5] = { 0xd53bd060, 0xd53bd07e, 0xd53bd043, 0xd51bd060, 0xd51bd049 };
+  CHECK(xh_text_fixup(text, sizeof text) == 4 && text[0] == 0xd53bd040 && text[1] == 0xd53bd05e && text[2] == 0xd2800003 &&
+        text[3] == 0xd51bd060 && text[4] == 0xd503201f);
 }
 
 // ---- trapped device access ----------------------------------------------------------------------
@@ -116,6 +118,14 @@ static void test_gic(void)
   CHECK(xh_gic_sysreg(1, &sgi1r, &v) && line[0] && xh_gic_ack(0) == 3);
   xh_gic_eoi(0, 3);
   CHECK(!line[0]);
+  // ArmCpu's software IPI of core 1 (armcpu-spi-ipi=1): SPI 1009, routed, enabled, pended by a GICD_ISPENDR write
+  xh_mmio_write(0x8000000 + 0x6000 + 8 * 1009, 8, 1);
+  xh_mmio_write(0x8000000 + 0x100 + (1009 / 32) * 4, 4, 1u << (1009 % 32));
+  CHECK(xh_mmio_read(0x8000000 + 0x80 + (1009 / 32) * 4, 4) & 1u << (1009 % 32));       // group 1 reads back
+  xh_mmio_write(0x8000000 + 0x200 + (1009 / 32) * 4, 4, 1u << (1009 % 32));
+  CHECK(xh_gic_pending(1) && !xh_gic_pending(0) && xh_gic_ack(1) == 1009);
+  xh_gic_eoi(1, 1009);
+  CHECK(xh_gic_ack(1) == XH_INTID_NONE);
   // the timer's line is a level read from the CPU layer
   xh_gic_enable(0, XH_INTID_VTIMER, true);
   xh_cpu_timer_set(&g_vcpu[0], 1);                                             // long past

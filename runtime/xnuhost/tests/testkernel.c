@@ -314,6 +314,27 @@ void kernel_main(const struct boot_args *args, const struct xh_vector *vector, s
   check(timer_fires == 5, "five timer interrupts were delivered into running kernel code");
   check(got == expect && f0 == f1, "and the interrupted computation's integer and floating-point state survived");
 
+  // 4b. A frame resumed unmasked while the line is up is interrupted again at once (an exception
+  // return with a pending interrupt): the timer is made due masked, then the host is asked to
+  // resume a frame of this very context, unmasked.
+  timer_fires = 0;
+  H->timer_set(cpu, now());                     // due now; masked, so only the line rises
+  start = now();
+  while (!cpu->irq_pending && now() - start < hz) {}
+  static struct xh_frame rf;
+  static volatile uint32_t resumed;
+  zero(&rf, sizeof rf);
+  resumed = 0;
+  __asm__ volatile("adr x9, 1f\n str x9, [%0, #256]\n mov x9, sp\n str x9, [%0, #248]\n str x29, [%0, #232]\n str x19, [%0, #152]\n"
+                   "str x20, [%0, #160]\n str x21, [%0, #168]\n str x22, [%0, #176]\n str x23, [%0, #184]\n str x24, [%0, #192]\n"
+                   "str x25, [%0, #200]\n str x26, [%0, #208]\n str x27, [%0, #216]\n str x28, [%0, #224]\n str x18, [%0, #144]\n"
+                   "mov x0, %1\n mov x1, %0\n blr %2\n 1:\n"
+                   : : "r"(&rf), "r"(cpu), "r"(H->frame_resume)
+                   : "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "x30", "cc", "memory");
+  resumed = timer_fires;                          // the upcall ran before the first instruction after the resume
+  cpu->irq_masked = 1;
+  check(resumed == 1, "frame_resume of an unmasked frame with the line up takes the interrupt at once");
+
   // 5. The timer through the registers ArmCpu writes.
   timer_fires = 0;
   uint64_t deadline = now() + hz / 200, ctl = 1;
@@ -374,7 +395,8 @@ void kernel_main(const struct boot_args *args, const struct xh_vector *vector, s
   // 7. Devices and tasks.
   test_devices();
   uint32_t text[2] = { 0xd53bd063, 0xd53bd040 };                  // mrs x3, tpidrro_el0; mrs x0, tpidr_el0
-  check(H->text_fixup(cpu, text, sizeof text) == 1 && text[0] == 0xd53bd043 && text[1] == 0xd53bd040, "text_fixup rewrites TPIDRRO_EL0 reads");
+  check(H->text_fixup(cpu, text, sizeof text) == 2 && text[0] == 0xd53bd043 && text[1] == 0xd2800000,
+        "text_fixup: TPIDRRO_EL0 reads become TPIDR_EL0 reads, TPIDR_EL0 reads (the CPU number) become 0");
   uint64_t scratch = page_alloc();
   *(volatile uint64_t *)(uintptr_t)kva(scratch) = 5;
   check(H->ram_discard(cpu, scratch, 0x4000) == 0 && *(volatile uint64_t *)(uintptr_t)kva(scratch) == 0, "ram_discard gives pages back (they read as zero)");

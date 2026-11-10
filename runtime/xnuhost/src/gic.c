@@ -43,6 +43,7 @@ static uint32_t best(unsigned c)
   if (!(g.ctlr & 2) && !(g.ctlr & 1)) return XH_INTID_NONE;
   for (unsigned w = 1; w < WORDS; w++) {
     uint32_t bits = (g.pending[w] | g.level[w]) & g.enabled[w] & ~g.active[w];
+    if (w == WORDS - 1) bits &= 0x0fffffff;   // 1020-1023 are not interrupts
     while (bits) {
       unsigned id = w * 32 + (unsigned)__builtin_ctz(bits);
       if (g.target[id] == c) return id;
@@ -124,6 +125,11 @@ uint32_t xh_gic_ack(unsigned cpu)
   } else if (id != XH_INTID_NONE) {
     g.pending[id / 32] &= ~(1u << (id % 32));
     g.active[id / 32] |= 1u << (id % 32);
+  }
+  if (id != XH_INTID_NONE) {
+    __atomic_add_fetch(&g_vcpu[cpu].stat_acks, 1, __ATOMIC_RELAXED);
+    if (id == XH_INTID_VTIMER) g_vcpu[cpu].stat_timer++;
+    else if (id < XH_SGI_COUNT || id >= XH_GIC_IPI_SPI) g_vcpu[cpu].stat_sgi++;
   }
   update();
   pthread_mutex_unlock(&g.lock);
@@ -234,6 +240,7 @@ static uint64_t dist_read(void *opaque, uint64_t off, unsigned size)
   else if (off == 0x4) v = WORDS - 1;                          // GICD_TYPER: ITLinesNumber
   else if (off == 0x8) v = 0x43b;                              // GICD_IIDR: implementer Arm
   else if (off == 0xffe8) v = 0x3b;                            // GICD_PIDR2: architecture revision 3
+  else if (off >= 0x80 && off < 0x100) v = 0xffffffff;         // GICD_IGROUPR: all group 1
   else if (off >= 0x100 && off < 0x400) {
     uint32_t *b = bank(off, &word);
     if (b) v = b[word] | (b == g.pending ? g.level[word] : 0);
