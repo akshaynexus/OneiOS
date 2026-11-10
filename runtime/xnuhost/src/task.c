@@ -104,7 +104,7 @@ typedef struct {
 typedef struct { bool used; uint16_t task; uint16_t area; uint8_t placed; /* vCPU + 1 it was last put with */ } thread;
 
 static struct {
-  bool available;
+  bool available, seccomp;
   uint64_t base;                             // of the stub region = the first address tasks may not use
   int trap_fd, sock;
   uint8_t *trap;                             // the whole trap memfd, mapped
@@ -122,6 +122,7 @@ struct message { uint32_t kind; int32_t pid; uint32_t slot, status; };
 enum { M_SPAWN = 1, M_SPAWNED, M_EXITED, M_KILL };
 
 bool xh_tasks_available(void) { return T.available; }
+bool xh_tasks_seccomp(void) { return T.seccomp; }
 uint64_t xh_tasks_va_limit(void) { return T.base; }
 
 static long futex(uint32_t *word, int op, uint32_t value, const struct timespec *timeout)
@@ -266,7 +267,10 @@ int xh_tasks_init(const xh_config *c)
   if (probe > 0 && waitpid(probe, &status, 0) == probe) seccomp = WIFEXITED(status) && WEXITSTATUS(status) == 0;
   config->filter_length = seccomp ? xh_task_filter(config->filter, T.base, T.base + text, g_mem.fd, T.trap_fd) : 0;
   if (seccomp && !config->filter_length) { LOGE("tasks: filter construction failed"); return -1; }
-  if (!seccomp) LOGI("tasks: no seccomp filter on this host: system calls of tasks are NOT trapped (faults are)");
+  if (!seccomp) {
+    LOGI("tasks: no seccomp filter on this host: `svc #0x80` is rewritten in text the kernel maps (text_fixup) and trapped as an undefined instruction; a svc in other code would reach the host");
+    xh_text_fixup_svc = true;
+  }
 
   int pair[2];
   if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, pair)) { LOGE("tasks: socketpair: %s", strerror(errno)); return -1; }
@@ -282,7 +286,8 @@ int xh_tasks_init(const xh_config *c)
   fcntl(T.sock, F_SETFD, FD_CLOEXEC);
   // xnuhost keeps the region reserved but needs none of it; leave it mapped so nothing else lands there.
   if (pthread_create(&T.reader, NULL, reader_main, NULL)) return -1;
-  T.available = seccomp;
+  T.available = true;
+  T.seccomp = seccomp;
   LOGI("tasks: factory pid %d, stub region 0x%llx, stub %zu bytes, filter %u instructions", T.factory,
        (unsigned long long)T.base, text, config->filter_length);
   return 0;
@@ -555,6 +560,12 @@ int64_t xh_thread_run(xh_vcpu *v, uint64_t handle, struct xh_user_state *state, 
   }
   *state = tp->state;
   *trap = tp->trap;
+  if (xh_text_fixup_svc && trap->kind == XH_TRAP_ILLEGAL && trap->insn == XH_SVC_MARK) {
+    // The system call text_fixup marked: as a trapped svc reports it, with pc after the instruction.
+    trap->kind = XH_TRAP_SYSCALL;
+    trap->svc = 0x80;
+    state->pc += 4;
+  }
   v->stat_traps++;
   return 0;
 }
@@ -563,6 +574,7 @@ int64_t xh_thread_run(xh_vcpu *v, uint64_t handle, struct xh_user_state *state, 
 
 int xh_tasks_init(const xh_config *c) { (void)c; return 0; }
 bool xh_tasks_available(void) { return false; }
+bool xh_tasks_seccomp(void) { return false; }
 uint64_t xh_tasks_va_limit(void) { return 0; }
 void xh_tasks_shutdown(void) {}
 

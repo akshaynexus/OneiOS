@@ -296,7 +296,10 @@ void  xh_virtio_input_set_abs(xh_virtio *dev, unsigned axis, int32_t min, int32_
 // ---- iOS tasks (task.c; aarch64 Linux only) -----------------------------------------------------
 // Forks the task factory. Must run before any other thread exists and before RAM is mapped.
 int     xh_tasks_init(const xh_config *c);
-bool    xh_tasks_available(void);
+bool    xh_tasks_available(void);      // tasks can run and their system calls reach the kernel
+bool    xh_tasks_seccomp(void);        // ... trapped by a seccomp filter (the phone); else by text_fixup (qemu-user)
+#define XH_SVC_MARK 0x00005c80u        // udf #0x5c80: what text_fixup leaves in place of `svc #0x80` without seccomp
+extern bool xh_text_fixup_svc;
 uint64_t xh_tasks_va_limit(void);
 void    xh_tasks_shutdown(void);
 int64_t xh_task_create(uint64_t *task);

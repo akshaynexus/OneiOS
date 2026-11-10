@@ -78,11 +78,17 @@ bool xh_decode_sys(uint32_t insn, xh_sys_insn *s)
 // after reading it). A write of TPIDR_EL0 would destroy the TSD base and becomes a nop.
 // Each word is classified by its original value, so one pass is right; a second pass over the same
 // page is not (it would zero the TSD reads): the kernel fixes a page once, as it is paged in.
+// A host with no seccomp (qemu-user) cannot trap a task's `svc`: Linux, or qemu, would run it as its
+// own system call. There, text_fixup also turns iOS's `svc #0x80` into an undefined instruction
+// (XH_SVC_MARK), and xh_thread_run reports that trap as the system call it stands for.
+bool xh_text_fixup_svc;
+
 uint32_t xh_text_fixup(uint32_t *text, uint64_t size)
 {
   uint32_t count = 0;
   for (uint64_t i = 0; i < size / 4; i++) {
     uint32_t insn = text[i] & 0xffffffe0, rt = text[i] & 31;
+    if (xh_text_fixup_svc && text[i] == 0xd4001001) { text[i] = XH_SVC_MARK; count++; continue; }
     if (insn == 0xd53bd060) text[i] = 0xd53bd040 | rt;          // mrs xN, TPIDRRO_EL0 -> mrs xN, TPIDR_EL0
     else if (insn == 0xd53bd040) text[i] = 0xd2800000 | rt;     // mrs xN, TPIDR_EL0   -> mov xN, #0
     else if (insn == 0xd51bd040) text[i] = 0xd503201f;          // msr TPIDR_EL0, xN   -> nop

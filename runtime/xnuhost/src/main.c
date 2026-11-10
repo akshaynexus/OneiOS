@@ -520,8 +520,8 @@ int main(int argc, char **argv)
     xh_mem_map_limit();
     ok = ok && x != MAP_FAILED;
     if (xh_mem_create(64 << 20) == 0 && xh_tasks_init(&config) == 0) {
-      LOGI("selftest: task factory: started; system-call trapping (seccomp): %s", xh_tasks_available() ? "yes" : "NO");
-      ok = ok && xh_tasks_available();
+      LOGI("selftest: task factory: started; system-call trapping (seccomp): %s", xh_tasks_seccomp() ? "yes" : "NO");
+      ok = ok && xh_tasks_seccomp();
       xh_tasks_shutdown();
     } else ok = false;
     LOGI("selftest: %s", ok ? "this host can run xnuhost" : "this host lacks something xnuhost needs (see above)");

@@ -72,6 +72,35 @@ diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_mac
 +}
 +
  #endif /* XNU_HOSTED */
+diff --git a/osfmk/arm64/hosted/hosted_user.c b/osfmk/arm64/hosted/hosted_user.c
+--- a/osfmk/arm64/hosted/hosted_user.c
++++ b/osfmk/arm64/hosted/hosted_user.c
+@@ -521,14 +521,14 @@
+ static void
+ hosted_selftest_user(vm_map_t map, uint64_t code, uint64_t data)
+ {
+-	static const uint32_t program[] = {
++	uint32_t program[] = {
+ 		0xd28000e1,     /* mov x1, #7 */
+ 		0xf9000001,     /* str x1, [x0]         a page not touched yet: write fault */
+ 		0xf9400002,     /* ldr x2, [x0] */
+ 		0x91000442,     /* add x2, x2, #1 */
+ 		0x9e670040,     /* fmov d0, x2 */
+ 		0xd4209a40,     /* brk #0x4d2 */
+-		0xd4001001,     /* svc #0x80            trapped where the host has seccomp */
++		0xd4001001,     /* svc #0x80            trapped by seccomp, or marked by text_fixup where there is none */
+ 		0x00000001,     /* udf #1 */
+ 	};
+ 	pmap_t         pmap = map->pmap;
+@@ -537,6 +537,8 @@
+ 	bool           saw_fault = false, saw_brk = false, saw_svc = false, saw_udf = false, x2_ok = false, v0_ok = false;
+ 	int            fills = 0, resolved = 0, interrupts = 0;
+ 
++	/* As cs_text_fixup_page does with a page of signed text before it is mapped. */
++	(void)hosted_text_fixup(program, sizeof(program));
+ 	vm_map_switch_context_t sw = vm_map_switch_to(map);
+ 	int err = copyout(program, code, sizeof(program));
+ 	vm_map_switch_back(sw);
 diff --git a/osfmk/arm64/pcb.c b/osfmk/arm64/pcb.c
 --- a/osfmk/arm64/pcb.c
 +++ b/osfmk/arm64/pcb.c

@@ -198,6 +198,9 @@ static void test_tasks(void)
   code[4] = 0xf9000020;      // str x0, [x1]
   code[5] = 0xd4200020;      // brk #1
   code[6] = 0x14000000;      // b .
+  // As the kernel does with a page of signed text before it maps it: on a host with no seccomp the
+  // svc becomes the undefined instruction thread_run reports as a system call.
+  H->text_fixup(C0, code, 7 * 4);
   const uint64_t code_va = 0x100000000ull, data_va = 0x200000000ull;
   check(H->task_map(C0, task, code_va, 0x4000, XH_PROT_READ | XH_PROT_EXEC, code_pa) == 0, "task_map of a code page at 0x100000000");
   check(H->task_map(C0, task, H->info->user_va_limit, 0x4000, XH_PROT_READ, code_pa) < 0, "task_map refuses the stub's region");
@@ -213,7 +216,7 @@ static void test_tasks(void)
     check(H->thread_run(C0, thread, &st, &trap) == 0 && trap.kind == XH_TRAP_SYSCALL && trap.svc == 0x80 && st.x[16] == 1 &&
           st.x[0] == 42 && st.pc == code_va + 12, "svc #0x80 arrives as a system-call trap with x16 and x0 intact");
     st.x[0] = 7;                                  // "the system call's return value"
-  } else put("SKIP the svc trap: no seccomp filter on this host\n");
+  } else put("SKIP the svc trap: this host has no task layer\n");
   check(H->thread_run(C0, thread, &st, &trap) == 0 && trap.kind == XH_TRAP_FAULT && trap.far == data_va &&
         (trap.access == XH_PROT_WRITE || trap.access == 0) && st.pc == code_va + 16, "a store to an unmapped page arrives as a fault");
   if (!(st.tsd == 0x1234500 && st.v[3].lo == 0x1122334455667788ull)) { put("  tsd, v3: "); hex(st.tsd); put(" "); hex(st.v[3].lo); put("\n"); }
