@@ -1,0 +1,1363 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 60d8aa6..628ee06 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -407,6 +407,7 @@ bsd/kern/kern_event.c			standard
+ bsd/kern/kern_control.c			optional networking bound-checks
+ bsd/kern/kern_exec.c			standard
+ bsd/kern/kern_exit.c			standard
++bsd/kern/oneios_hosted_root.c		standard
+ bsd/kern/kern_ktrace.c			standard
+ bsd/kern/kern_lockf.c			standard
+ bsd/kern/kern_fork.c			standard
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index fc2ebab..261ffbf 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8024,6 +8024,21 @@ native_owner_cache_prepare(proc_t p, user_addr_t scratch, user_addr_t *envp)
+ #define XNU_OWNER_CACHE_VOLUME_UUID "7A23BAC7-E86D-4DF4-B181-E6D80F212AE5"
+ #endif
+ 	const char *volume = XNU_OWNER_CACHE_VOLUME_UUID;
++#if XNU_HOSTED
++	/*
++	 * OneiOS: the SystemOS and OS volumes are the ones the image set names, read from the device tree nodes of
++	 * xnuhost's disks (kernel/patches/oneios-hosted/storage/OneiOSHostedDisk.cpp), not build-time constants.
++	 */
++	extern int oneios_hosted_volume_uuid(const char *, char *);
++	static char hosted_systemos_uuid[37], hosted_os_uuid[37];
++	if (!oneios_hosted_volume_uuid("systemos", hosted_systemos_uuid) || !oneios_hosted_volume_uuid("os", hosted_os_uuid)) {
++		printf("OneiOS: xnuhost's disks name no OS or SystemOS volume (an image set without manifest.json)\n");
++		return ENXIO;
++	}
++	volume = hosted_systemos_uuid;
++#undef XNU_OWNER_ROOT_VOLUME_UUID
++#define XNU_OWNER_ROOT_VOLUME_UUID hosted_os_uuid
++#endif
+ #if defined(XNU_OWNER_UNION_SYSTEMOS) && XNU_OWNER_UNION_SYSTEMOS
+ #if !CONFIG_UNION_MOUNTS
+ #error The owner composition requires the original native union-mount implementation
+@@ -9028,7 +9043,16 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
+ 	int error = EINVAL;
+ 	vnode_t data_root = NULLVP;
+ 	char device_path[64] = "/dev/md0";
+-#if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
++#if XNU_HOSTED
++	/*
++	 * OneiOS: the Data volume is the APFS volume on xnuhost's Data store, made on the first start, and its
++	 * content is the image set's seed, unpacked below once it is mounted (bsd/kern/oneios_hosted_root.c).
++	 */
++	extern int oneios_hosted_data_device(proc_t, user_addr_t, dev_t *, char *, size_t);
++	extern int oneios_hosted_data_seed(proc_t, user_addr_t, const char *);
++	if ((error = oneios_hosted_data_device(p, scratch, &device, device_path, sizeof(device_path)))) goto done;
++	size = 4096;
++#elif defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+ 	/* The typed provider supplies logical seed identity for both dense and
+ 	 * sparse media. A sparse disk has no contiguous logical-byte address. */
+ 	if (!native_ram_block_volume_seed(XNU_OWNER_DATA_VOLUME_UUID, &device, device_path,
+@@ -9080,6 +9104,10 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
+ 	if (actual != device || (vfs_flags(data_mount) & MNT_RDONLY) ||
+ 	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
+ 	if (!error) native_owner_data_stage = 4;
++#if XNU_HOSTED
++	if (!error) error = oneios_hosted_data_seed(p, scratch, "/private/var");
++	if (!error) native_owner_data_stage = 5;
++#endif
+ 	if (!error) native_gpu_addon_prepare(p, scratch);
+ 	if (!error) native_staged_apps_prepare(p, scratch, data_mount);
+ done:
+diff --git a/bsd/kern/oneios_hosted_root.c b/bsd/kern/oneios_hosted_root.c
+new file mode 100644
+index 0000000..1ba41df
+--- /dev/null
++++ b/bsd/kern/oneios_hosted_root.c
+@@ -0,0 +1,1202 @@
++/*
++ * OneiOS: what the hosted kernel does between its root mount and launchd, on top of UniXNU's owner-root path
++ * (load_init_program in kern_exec.c: the SystemOS union mount, the Data mount, the board launch policy).
++ *
++ *   oneios_hosted_data_device   The Data volume: the APFS volume on the disk xnuhost marks "data"
++ *                               (kernel/patches/oneios-hosted/storage/OneiOSHostedDisk.cpp), found by that role
++ *                               and not by a UUID. A store with no container (the first start, or one that was
++ *                               started over) is formatted with the OS volume's own newfs_apfs, spawned from
++ *                               here and waited for.
++ *   oneios_hosted_data_seed     The first start of that volume: the image set's Data seed (data.seed, a pax tar on
++ *                               the disk marked "seed"; docs/image-format.md section 5) is unpacked into it here,
++ *                               in the kernel, with the rules of userland/helpers/oneios-seed.c: numeric owners,
++ *                               modes, symbolic links, LIBARCHIVE.xattr.* attributes; no "..", no absolute path,
++ *                               no path through a symbolic link, nothing but files, folders and links. The whole
++ *                               seed is hashed while it is read and must be the SHA-256 the manifest lists (the
++ *                               seed disk's "oneios,sha256"); only then is <volume>/.oneios-seed written, last,
++ *                               so a half-filled or unverified volume is filled again and never used. A volume
++ *                               that records another seed is started over: the store's container is erased and
++ *                               the guest restarts (xnuhost exit 3), into a first start.
++ *   native_board_launch_policy  Before each launchd exec (UniXNU's native-board-launch-policy.patch): the App
++ *                               cryptex and the OS cryptex views under /private/preboot/Cryptexes, and the owner
++ *                               service manager (/private/var/oneios/bin/oneios-init), started once and given a
++ *                               bootstrap port when launchd's jobs have one. The disabled jobs are not written
++ *                               here: the seed carries db/com.apple.xpc.launchd/disabled.plist owned by root, and
++ *                               the unpack above keeps that owner.
++ *
++ * The unpack reads what scripts/image writes and nothing more: ustar headers, pax extended headers, GNU long names.
++ */
++#if XNU_HOSTED
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/proc.h>
++#include <sys/sysproto.h>
++#include <sys/fcntl.h>
++#include <sys/stat.h>
++#include <sys/mount.h>
++#include <sys/vnode.h>
++#include <sys/uio.h>
++#include <sys/wait.h>
++#include <sys/xattr.h>
++#include <sys/kauth.h>
++#include <kern/kalloc.h>
++#include <kern/clock.h>
++#include <kern/thread_call.h>
++#include <kern/task.h>
++#include <libkern/crypto/sha2.h>
++#include <pexpert/pexpert.h>
++
++/* kernel/patches/oneios-hosted/storage/OneiOSHostedDisk.cpp */
++extern int oneios_hosted_volume_uuid(const char *role, char uuid[37]);
++extern int oneios_hosted_disk_device(const char *role, dev_t *device, char *name, size_t size, uint64_t *bytes, char sha256[65]);
++extern int oneios_hosted_data_volume(dev_t *device, char *path, size_t size);
++extern int oneios_hosted_disk_zero(const char *role, uint64_t bytes);
++extern int native_verified_block_volume_device(const char *uuid, dev_t *device, char *path, size_t size);
++extern int native_verified_block_root_authorized(dev_t device);
++/* bsd/vfs/vfs_syscalls.c */
++extern int oneios_kern_mkdir(const char *path, int mode, vfs_context_t ctx);
++extern int oneios_kern_symlink(const char *target, const char *path, vfs_context_t ctx);
++extern int oneios_kern_unlink(const char *path, vfs_context_t ctx);
++extern int vn_setxattr(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_t context);
++/* osfmk/arm64/hosted */
++extern void hosted_halt(uint32_t reason, uint32_t code) __attribute__((noreturn));
++extern volatile int native_bindfs_boot_mount;
++extern void delay(int);
++
++int oneios_hosted_data_device(proc_t p, user_addr_t scratch, dev_t *device, char *path, size_t size);
++int oneios_hosted_data_seed(proc_t p, user_addr_t scratch, const char *root);
++int native_board_launch_policy(void *process, uint64_t scratch);
++
++/* For a debugger and the boot log. */
++volatile int oneios_data_format_status = -1;      /* 0 formatted this start; -1 not needed */
++volatile int oneios_data_seed_status = -1;        /* 0 filled or already this seed */
++volatile int oneios_cryptex_status = -1;
++volatile int oneios_cryptex_stage = 0;
++volatile int oneios_service_manager_status = -2;
++volatile int oneios_service_manager_pid = 0;
++
++#define ONEIOS_ERASE_BYTES      (UINT64_C(64) << 20)
++#define ONEIOS_MARKER           ".oneios-seed"
++#define ONEIOS_HALT_RESTART     1u                /* XH_HALT_RESTART */
++
++/* ---- the scratch page of the init process (one page, at least 4 KiB): fixed places below 0xa00 ---- */
++#define SCR_TYPE        0x100           /* mount: file system name */
++#define SCR_POINT       0x120           /* mount: the mount point */
++#define SCR_DATA        0x200           /* mount: the file system's arguments (0x150 bytes) or bindfs's source */
++#define SCR_SPEC        0x360           /* mount: the device path */
++#define SCR_STRINGS     0x400           /* spawn: path and arguments */
++#define SCR_ARGV        0x700           /* spawn: argv, up to 12 pointers */
++#define SCR_ENVP        0x780
++#define SCR_PID         0x790
++#define SCR_STATUS      0x7a0
++
++static int
++oneios_mount(proc_t p, user_addr_t scratch, const char *type, const char *point, int flags, const char *source)
++{
++	struct mount_args request = {.type = scratch + SCR_TYPE, .path = scratch + SCR_POINT, .flags = flags,
++		                     .data = scratch + SCR_DATA};
++	int32_t result = 0;
++	int error;
++	int bind = !strcmp(type, "bindfs");
++	if (strlen(point) >= SCR_DATA - SCR_POINT || strlen(source) >= 0xa0) {
++		return ENAMETOOLONG;
++	}
++	if ((error = copyout(type, request.type, strlen(type) + 1)) || (error = copyout(point, request.path, strlen(point) + 1))) {
++		return error;
++	}
++	if (bind) {
++		if ((error = copyout(source, request.data, strlen(source) + 1))) {
++			return error;
++		}
++	} else {
++		/* The APFS mount arguments UniXNU's owner mounts use (kern_exec.c native_owner_cache_prepare). */
++		uint8_t data[0x150] = {0};
++		user64_addr_t spec = scratch + SCR_SPEC;
++		uint64_t mount_flags = (uint64_t)flags & MNT_RDONLY;
++		uint16_t mode = 1;
++		uint32_t anonymous_owner = 99;
++		memcpy(data, &spec, sizeof(spec));
++		memcpy(data + 8, &mount_flags, sizeof(mount_flags));
++		memcpy(data + 16, &mode, sizeof(mode));
++		memcpy(data + 0x144, &anonymous_owner, sizeof(anonymous_owner));
++		memcpy(data + 0x148, &anonymous_owner, sizeof(anonymous_owner));
++		if ((error = copyout(source, spec, strlen(source) + 1)) || (error = copyout(data, request.data, sizeof(data)))) {
++			return error;
++		}
++	}
++	if (bind) {
++		native_bindfs_boot_mount = 1;
++	}
++	error = mount(p, &request, &result);
++	if (bind) {
++		native_bindfs_boot_mount = 0;
++	}
++	return error;
++}
++
++/* posix_spawn from the init process, before its own exec, as UniXNU-droidvm's launch policy starts its service
++ * manager. *pid is the child. */
++static int
++oneios_spawn(proc_t p, user_addr_t scratch, const char *const *argv, int *pid)
++{
++	user_addr_t pointers[12] = {0}, envp[1] = {0};
++	user_addr_t at = scratch + SCR_STRINGS;
++	int error, n = 0;
++	for (; argv[n]; n++) {
++		size_t length = strlen(argv[n]) + 1;
++		if (n == 11 || at + length > scratch + SCR_ARGV) {
++			return E2BIG;
++		}
++		if ((error = copyout(argv[n], at, length))) {
++			return error;
++		}
++		pointers[n] = at;
++		at += length;
++	}
++	int32_t child = 0, result = 0;
++	if ((error = copyout(pointers, scratch + SCR_ARGV, sizeof(pointers))) || (error = copyout(envp, scratch + SCR_ENVP, sizeof(envp))) ||
++	    (error = copyout(&child, scratch + SCR_PID, sizeof(child)))) {
++		return error;
++	}
++	struct posix_spawn_args request = {.pid = scratch + SCR_PID, .path = scratch + SCR_STRINGS, .adesc = USER_ADDR_NULL,
++		                           .argv = scratch + SCR_ARGV, .envp = scratch + SCR_ENVP};
++	if ((error = posix_spawn(p, &request, &result))) {
++		return error;
++	}
++	if ((error = copyin(scratch + SCR_PID, &child, sizeof(child)))) {
++		return error;
++	}
++	*pid = child;
++	return child > 0 ? 0 : ESRCH;
++}
++
++/* Waits for a child of the init process without a continuation (wait4 blocks through one, which would drop this
++ * stack): WNOHANG, 20 times a second. *status is its wait status. */
++static int
++oneios_wait(proc_t p, user_addr_t scratch, int pid, unsigned seconds, int *status)
++{
++	for (unsigned tick = 0; tick < seconds * 20; tick++) {
++		struct wait4_args request = {.pid = pid, .status = scratch + SCR_STATUS, .options = WNOHANG, .rusage = USER_ADDR_NULL};
++		int32_t result[2] = {0, 0};
++		int error = wait4(p, &request, result);
++		if (error) {
++			return error;
++		}
++		if (result[0] == pid) {
++			return copyin(scratch + SCR_STATUS, status, sizeof(*status));
++		}
++		delay(50 * 1000);
++	}
++	return ETIMEDOUT;
++}
++
++static int
++oneios_exists(const char *path)
++{
++	vnode_t vp = NULLVP;
++	if (vnode_lookup(path, 0, &vp, vfs_context_current())) {
++		return 0;
++	}
++	vnode_put(vp);
++	return 1;
++}
++
++/* Reads from a disk through its raw device: offset and length in whole sectors. */
++static int
++oneios_disk_read(vnode_t vp, uint64_t offset, void *buffer, uint32_t length, vfs_context_t ctx)
++{
++	int resid = 0;
++	int error = vn_rdwr(UIO_READ, vp, (caddr_t)buffer, (int)length, (off_t)offset, UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx),
++	    &resid, vfs_context_proc(ctx));
++	return error ? error : resid ? EIO : 0;
++}
++
++static int
++oneios_disk_open(const char *name, vnode_t *vp, vfs_context_t ctx)
++{
++	char path[48];
++	snprintf(path, sizeof(path), "/dev/r%s", name);
++	return vnode_open(path, FREAD, 0, 0, vp, ctx);
++}
++
++/* ---- the Data volume ---- */
++
++int
++oneios_hosted_data_device(proc_t p, user_addr_t scratch, dev_t *device, char *path, size_t size)
++{
++	static const char *const tools[] = {"/sbin/newfs_apfs", "/System/Library/Filesystems/apfs.fs/newfs_apfs"};
++	vfs_context_t ctx = vfs_context_current();
++	dev_t whole = NODEV;
++	char name[32], whole_path[48];
++	uint8_t *sector = NULL;
++	vnode_t vp = NULLVP;
++	int error, container = 0;
++
++	/* The store's disk is published with the others, before the root mount; allow for a late one. */
++	for (int waited = 0; !oneios_hosted_disk_device("data", &whole, name, sizeof(name), NULL, NULL); waited++) {
++		if (waited == 200) {
++			printf("OneiOS Data: xnuhost serves no Data store\n");
++			return ENXIO;
++		}
++		delay(50 * 1000);
++	}
++	snprintf(whole_path, sizeof(whole_path), "/dev/%s", name);
++	/* A container is there when the store begins with APFS's container superblock ("NXSB" at byte 32). */
++	sector = kalloc_data(4096, Z_WAITOK | Z_ZERO);
++	if (!sector) {
++		return ENOMEM;
++	}
++	if (!(error = oneios_disk_open(name, &vp, ctx))) {
++		error = oneios_disk_read(vp, 0, sector, 4096, ctx);
++		vnode_close(vp, FREAD, ctx);
++	}
++	container = !error && !memcmp(sector + 32, "NXSB", 4);
++	kfree_data(sector, 4096);
++	if (error) {
++		printf("OneiOS Data: %s cannot be read: %d\n", whole_path, error);
++		return error;
++	}
++	if (!container) {
++		static const char volume_name[] = "Data";
++		const char *tool = NULL;
++		int pid = 0, status = -1;
++		for (size_t i = 0; i < sizeof(tools) / sizeof(tools[0]) && !tool; i++) {
++			if (oneios_exists(tools[i])) {
++				tool = tools[i];
++			}
++		}
++		if (!tool) {
++			printf("OneiOS Data: the store is blank and the OS volume has no newfs_apfs\n");
++			return ENOENT;
++		}
++		/* Case-sensitive, with expanded records, as the image build's own APFS seed (scripts/image/seed-apfs-macos.sh).
++		 * No -U: the volume is found by its disk, whatever UUID it gets. */
++		const char *const argv[] = {tool, "-e", "-x", "-v", volume_name, whole_path, NULL};
++		printf("OneiOS Data: first start: %s -e -x -v %s %s\n", tool, volume_name, whole_path);
++		if ((error = oneios_spawn(p, scratch, argv, &pid)) || (error = oneios_wait(p, scratch, pid, 300, &status))) {
++			printf("OneiOS Data: newfs_apfs did not run: %d\n", error);
++			oneios_data_format_status = error;
++			return error;
++		}
++		if (!WIFEXITED(status) || WEXITSTATUS(status)) {
++			printf("OneiOS Data: newfs_apfs failed: wait status %#x\n", status);
++			oneios_data_format_status = EIO;
++			return EIO;
++		}
++		oneios_data_format_status = 0;
++	}
++	/* APFS publishes the volume after it has read the container: at once for a new one, late at a cold start. */
++	for (int waited = 0; !oneios_hosted_data_volume(device, path, size); waited++) {
++		if (waited == 600) {
++			printf("OneiOS Data: no APFS volume on %s after 30 s\n", whole_path);
++			return ENOENT;
++		}
++		delay(50 * 1000);
++	}
++	printf("OneiOS Data: %s on %s%s\n", path, whole_path, container ? "" : " (new)");
++	return 0;
++}
++
++/* ---- the seed: a sequential, hashed reader of the seed disk ---- */
++
++#define SEED_CHUNK      (1u << 20)
++#define SEED_BLOCK      512u
++#define SEED_PATH       4096u
++#define SEED_XATTRS     32
++
++/* name_size and value_size are the allocations; value_length is the decoded attribute. */
++struct seed_xattr { char *name; uint8_t *value; size_t name_size, value_size, value_length; };
++
++struct seed {
++	vnode_t         disk;
++	vfs_context_t   ctx;
++	uint64_t        bytes;          /* the seed's length */
++	uint64_t        next;           /* the disk offset of the next chunk */
++	uint8_t        *chunk;
++	uint32_t        have, at;       /* bytes of the chunk, and how many are consumed */
++	SHA256_CTX      sha;
++	const char     *root;
++	size_t          root_length;
++	char            pax_path[SEED_PATH], pax_link[SEED_PATH], gnu_path[SEED_PATH], gnu_link[SEED_PATH];
++	char            name[SEED_PATH], target[SEED_PATH], full[SEED_PATH + 64], prefix[SEED_PATH + 64], checked[SEED_PATH + 64];
++	long long       pax_size, pax_uid, pax_gid;
++	struct seed_xattr xattr[SEED_XATTRS];
++	int             xattrs;
++	uint64_t        files, dirs, links, file_bytes, xattr_set, xattr_failed;
++	const char     *why;            /* the reason of a refusal */
++};
++
++static int
++seed_bad(struct seed *s, const char *why)
++{
++	s->why = why;
++	return EINVAL;
++}
++
++/* The next bytes of the seed, at most `want`, without a copy: *data points into the chunk. 0 bytes = the end. */
++static int
++seed_take(struct seed *s, uint32_t want, const uint8_t **data, uint32_t *got)
++{
++	if (s->at == s->have) {
++		uint64_t left = s->bytes - s->next;
++		if (!left) {
++			*got = 0;
++			return 0;
++		}
++		uint32_t length = left > SEED_CHUNK ? SEED_CHUNK : (uint32_t)left;
++		uint32_t whole = (length + SEED_BLOCK - 1) & ~(SEED_BLOCK - 1);         /* the disk is padded to a sector */
++		int error = oneios_disk_read(s->disk, s->next, s->chunk, whole, s->ctx);
++		if (error) {
++			s->why = "the seed disk cannot be read";
++			return error;
++		}
++		SHA256_Update(&s->sha, s->chunk, length);
++		s->next += length;
++		s->have = length;
++		s->at = 0;
++	}
++	*got = s->have - s->at < want ? s->have - s->at : want;
++	*data = s->chunk + s->at;
++	s->at += *got;
++	return 0;
++}
++
++/* Exactly n bytes into buffer (NULL: skipped). *end = 1 when the seed ends before the first byte. */
++static int
++seed_read(struct seed *s, void *buffer, uint64_t n, int *end)
++{
++	uint64_t done = 0;
++	if (end) {
++		*end = 0;
++	}
++	while (done < n) {
++		const uint8_t *data;
++		uint32_t got;
++		int error = seed_take(s, n - done > SEED_CHUNK ? SEED_CHUNK : (uint32_t)(n - done), &data, &got);
++		if (error) {
++			return error;
++		}
++		if (!got) {
++			if (!done && end) {
++				*end = 1;
++				return 0;
++			}
++			return seed_bad(s, "the archive ends inside an entry");
++		}
++		if (buffer) {
++			memcpy((uint8_t *)buffer + done, data, got);
++		}
++		done += got;
++	}
++	return 0;
++}
++
++static int
++seed_number(struct seed *s, const uint8_t *field, size_t size, long long *value)
++{
++	long long v = 0;
++	if (field[0] & 0x80) {          /* base-256, for values that do not fit octal */
++		for (size_t i = 1; i < size; i++) {
++			v = (v << 8) | field[i];
++		}
++		*value = v;
++		return 0;
++	}
++	for (size_t i = 0; i < size && field[i]; i++) {
++		if (field[i] == ' ') {
++			continue;
++		}
++		if (field[i] < '0' || field[i] > '7') {
++			return seed_bad(s, "a header number is not octal");
++		}
++		v = v * 8 + (field[i] - '0');
++	}
++	*value = v;
++	return 0;
++}
++
++static void
++seed_clear_entry(struct seed *s)
++{
++	for (int i = 0; i < s->xattrs; i++) {
++		kfree_data(s->xattr[i].name, s->xattr[i].name_size);
++		kfree_data(s->xattr[i].value, s->xattr[i].value_size);
++	}
++	s->xattrs = 0;
++	s->pax_path[0] = s->pax_link[0] = s->gnu_path[0] = s->gnu_link[0] = 0;
++	s->pax_size = s->pax_uid = s->pax_gid = -1;
++}
++
++static int
++seed_base64(int c)
++{
++	if (c >= 'A' && c <= 'Z') {
++		return c - 'A';
++	}
++	if (c >= 'a' && c <= 'z') {
++		return c - 'a' + 26;
++	}
++	if (c >= '0' && c <= '9') {
++		return c - '0' + 52;
++	}
++	return c == '+' ? 62 : c == '/' ? 63 : -1;
++}
++
++static long long
++seed_decimal(const char *text)
++{
++	long long v = 0;
++	int negative = *text == '-';
++	for (text += negative; *text >= '0' && *text <= '9'; text++) {
++		v = v * 10 + (*text - '0');
++	}
++	return negative ? -v : v;
++}
++
++/* The records of a pax extended header: "LENGTH key=value\n", LENGTH counting the whole record. */
++static int
++seed_pax(struct seed *s, char *data, size_t size)
++{
++	size_t at = 0;
++	while (at < size) {
++		size_t length = 0, digits = 0;
++		while (at + digits < size && data[at + digits] >= '0' && data[at + digits] <= '9' && digits < 12) {
++			length = length * 10 + (size_t)(data[at + digits] - '0');
++			digits++;
++		}
++		if (!digits || at + digits >= size || data[at + digits] != ' ' || length < 5 || length > size - at ||
++		    data[at + length - 1] != '\n') {
++			return seed_bad(s, "a pax record is malformed");
++		}
++		char *key = data + at + digits + 1, *last = data + at + length - 1, *eq = key;
++		while (eq < last && *eq != '=') {
++			eq++;
++		}
++		if (eq == last) {
++			return seed_bad(s, "a pax record has no value");
++		}
++		*eq = 0;
++		*last = 0;
++		char *value = eq + 1;
++		size_t value_size = (size_t)(last - value);
++		if (!strcmp(key, "path") || !strcmp(key, "linkpath")) {
++			if (value_size >= SEED_PATH) {
++				return seed_bad(s, "a path is too long");
++			}
++			memcpy(!strcmp(key, "path") ? s->pax_path : s->pax_link, value, value_size + 1);
++		} else if (!strcmp(key, "size")) {
++			s->pax_size = seed_decimal(value);
++		} else if (!strcmp(key, "uid")) {
++			s->pax_uid = seed_decimal(value);
++		} else if (!strcmp(key, "gid")) {
++			s->pax_gid = seed_decimal(value);
++		} else if (!strncmp(key, "LIBARCHIVE.xattr.", 17)) {
++			if (s->xattrs == SEED_XATTRS) {
++				return seed_bad(s, "too many extended attributes on one entry");
++			}
++			struct seed_xattr *x = &s->xattr[s->xattrs];
++			x->name_size = strlen(key + 17) + 1;
++			x->value_size = value_size / 4 * 3 + 3;
++			x->value_length = 0;
++			x->name = kalloc_data(x->name_size, Z_WAITOK);
++			x->value = kalloc_data(x->value_size, Z_WAITOK);
++			if (!x->name || !x->value) {
++				if (x->name) {
++					kfree_data(x->name, x->name_size);
++				}
++				if (x->value) {
++					kfree_data(x->value, x->value_size);
++				}
++				return ENOMEM;
++			}
++			s->xattrs++;            /* from here seed_clear_entry frees it */
++			memcpy(x->name, key + 17, x->name_size);
++			unsigned accumulator = 0;
++			int bits = 0;
++			for (size_t i = 0; i < value_size && value[i] != '='; i++) {
++				int v = seed_base64((unsigned char)value[i]);
++				if (v < 0) {
++					return seed_bad(s, "an extended attribute is not base64");
++				}
++				accumulator = (accumulator << 6) | (unsigned)v;
++				bits += 6;
++				if (bits >= 8) {
++					bits -= 8;
++					x->value[x->value_length++] = (uint8_t)(accumulator >> bits);
++				}
++			}
++		}               /* mtime, atime and the rest: not carried */
++		at += length;
++	}
++	return 0;
++}
++
++/* The body of an extended header, padded to a block in the archive; NUL-terminated here. */
++static int
++seed_body(struct seed *s, long long size, char **body, size_t *allocated)
++{
++	if (size < 0 || size > 16 * 1024 * 1024) {
++		return seed_bad(s, "an extended header is too large");
++	}
++	size_t padded = ((size_t)size + SEED_BLOCK - 1) / SEED_BLOCK * SEED_BLOCK;
++	*allocated = padded + 1;
++	*body = kalloc_data(*allocated, Z_WAITOK);
++	if (!*body) {
++		return ENOMEM;
++	}
++	int error = padded ? seed_read(s, *body, padded, NULL) : 0;
++	if (error) {
++		kfree_data(*body, *allocated);
++		*body = NULL;
++		return error;
++	}
++	(*body)[size] = 0;
++	return 0;
++}
++
++static int
++seed_lookup(const char *path, vnode_t *vp, vfs_context_t ctx)
++{
++	return vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, vp, ctx);
++}
++
++/* A path of the seed: relative, no "..", and none of its parent folders is a symbolic link in the volume. The
++ * parent of the last entry is remembered: the entries of one folder follow each other. */
++static int
++seed_check_path(struct seed *s, const char *path)
++{
++	size_t n = strlen(path), parent = 0;
++	if (!path[0] || path[0] == '/') {
++		return seed_bad(s, "an entry's path is empty or absolute");
++	}
++	for (size_t i = 0; i <= n; i++) {
++		if (path[i] != '/' && path[i]) {
++			continue;
++		}
++		size_t start = i;
++		while (start && path[start - 1] != '/') {
++			start--;
++		}
++		if (i - start == 2 && path[start] == '.' && path[start + 1] == '.') {
++			return seed_bad(s, "an entry's path has ..");
++		}
++		if (path[i]) {
++			parent = i;
++		}
++	}
++	if (!parent) {
++		return 0;
++	}
++	if (strlen(s->checked) == parent && !strncmp(s->checked, path, parent)) {
++		return 0;
++	}
++	for (size_t i = 1; i <= parent; i++) {
++		if (path[i] != '/') {
++			continue;
++		}
++		vnode_t vp = NULLVP;
++		snprintf(s->prefix, sizeof(s->prefix), "%s/%.*s", s->root, (int)i, path);
++		if (!seed_lookup(s->prefix, &vp, s->ctx)) {
++			int link = vnode_vtype(vp) == VLNK;
++			vnode_put(vp);
++			if (link) {
++				return seed_bad(s, "an entry's path goes through a symbolic link");
++			}
++		}
++	}
++	memcpy(s->checked, path, parent);
++	s->checked[parent] = 0;
++	return 0;
++}
++
++static void
++seed_set_xattrs(struct seed *s, vnode_t vp)
++{
++	for (int i = 0; i < s->xattrs; i++) {
++		uio_t uio = uio_create(1, 0, UIO_SYSSPACE, UIO_WRITE);
++		int error = uio ? uio_addiov(uio, CAST_USER_ADDR_T(s->xattr[i].value), s->xattr[i].value_length) : ENOMEM;
++		if (!error) {
++			error = vn_setxattr(vp, s->xattr[i].name, uio, XATTR_NOSECURITY, s->ctx);
++		}
++		if (uio) {
++			uio_free(uio);
++		}
++		if (error) {
++			if (s->xattr_failed++ < 8) {
++				printf("OneiOS seed: xattr %s on %s: %d\n", s->xattr[i].name, s->full, error);
++			}
++		} else {
++			s->xattr_set++;
++		}
++	}
++}
++
++/* Owner first, then the mode: a change of owner clears the set-id bits. */
++static int
++seed_own(vnode_t vp, long long uid, long long gid, int mode, vfs_context_t ctx)
++{
++	struct vnode_attr va;
++	VATTR_INIT(&va);
++	VATTR_SET(&va, va_uid, (uid_t)uid);
++	VATTR_SET(&va, va_gid, (gid_t)gid);
++	int error = vnode_setattr(vp, &va, ctx);
++	if (!error && mode >= 0) {
++		VATTR_INIT(&va);
++		VATTR_SET(&va, va_mode, (mode_t)mode);
++		error = vnode_setattr(vp, &va, ctx);
++	}
++	return error;
++}
++
++static int
++seed_extract(struct seed *s, const char *path, int type, int mode, long long uid, long long gid, long long size, const char *target)
++{
++	vnode_t vp = NULLVP;
++	int error;
++	while (path[0] == '.' && path[1] == '/') {
++		path += 2;
++	}
++	size_t n = strlen(path);
++	while (n > 1 && path[n - 1] == '/') {
++		n--;
++	}
++	if (n == 1 && path[0] == '.') {         /* the volume's own top: only its owner and mode */
++		if (type != '5') {
++			return seed_bad(s, "the top entry is not a folder");
++		}
++		snprintf(s->full, sizeof(s->full), "%s", s->root);
++		if ((error = vnode_lookup(s->root, 0, &vp, s->ctx))) {
++			return error;
++		}
++		error = seed_own(vp, uid, gid, mode, s->ctx);
++		vnode_put(vp);
++		return error;
++	}
++	snprintf(s->full, sizeof(s->full), "%s/%.*s", s->root, (int)n, path);
++	const char *clean = s->full + s->root_length + 1;
++	if ((error = seed_check_path(s, clean))) {
++		return error;
++	}
++	if (type == '5') {
++		if (size) {
++			return seed_bad(s, "a folder with content");
++		}
++		error = oneios_kern_mkdir(s->full, 0700, s->ctx);
++		if (error && error != EEXIST) {
++			return error;
++		}
++		if ((error = seed_lookup(s->full, &vp, s->ctx))) {
++			return error;
++		}
++		if (vnode_vtype(vp) != VDIR) {
++			vnode_put(vp);
++			return seed_bad(s, "something that is not a folder is in the way");
++		}
++		error = seed_own(vp, uid, gid, mode, s->ctx);
++		if (!error) {
++			seed_set_xattrs(s, vp);
++		}
++		vnode_put(vp);
++		s->dirs++;
++		return error;
++	}
++	if (type == '2') {
++		if (size) {
++			return seed_bad(s, "a symbolic link with content");
++		}
++		if (!target[0]) {
++			return seed_bad(s, "a symbolic link without a target");
++		}
++		error = oneios_kern_unlink(s->full, s->ctx);
++		if (error && error != ENOENT) {
++			return error;
++		}
++		if ((error = oneios_kern_symlink(target, s->full, s->ctx)) || (error = seed_lookup(s->full, &vp, s->ctx))) {
++			return error;
++		}
++		error = seed_own(vp, uid, gid, -1, s->ctx);
++		if (!error) {
++			seed_set_xattrs(s, vp);
++		}
++		vnode_put(vp);
++		s->links++;
++		return error;
++	}
++	if (size < 0) {
++		return seed_bad(s, "a file with a negative size");
++	}
++	if ((error = vnode_open(s->full, O_CREAT | O_TRUNC | FWRITE | O_NOFOLLOW, 0600, 0, &vp, s->ctx))) {
++		return error;
++	}
++	uint64_t left = (uint64_t)size, offset = 0;
++	while (left && !error) {
++		const uint8_t *data;
++		uint32_t got;
++		int resid = 0;
++		error = seed_take(s, left > SEED_CHUNK ? SEED_CHUNK : (uint32_t)left, &data, &got);
++		if (!error && !got) {
++			error = seed_bad(s, "the archive ends inside an entry");
++		}
++		if (error) {
++			break;
++		}
++		error = vn_rdwr(UIO_WRITE, vp, (caddr_t)(uintptr_t)data, (int)got, (off_t)offset, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT,
++		    vfs_context_ucred(s->ctx), &resid, vfs_context_proc(s->ctx));
++		if (!error && resid) {
++			error = EIO;
++		}
++		offset += got;
++		left -= got;
++	}
++	if (!error && ((uint64_t)size & (SEED_BLOCK - 1))) {
++		error = seed_read(s, NULL, SEED_BLOCK - ((uint64_t)size & (SEED_BLOCK - 1)), NULL);       /* the entry's padding */
++	}
++	if (!error) {
++		error = seed_own(vp, uid, gid, mode, s->ctx);
++	}
++	if (!error) {
++		seed_set_xattrs(s, vp);
++	}
++	int close_error = vnode_close(vp, FWRITE, s->ctx);
++	s->files++;
++	s->file_bytes += (uint64_t)size;
++	return error ? error : close_error;
++}
++
++/* 0 = no marker; 1 = this seed; 2 = another. */
++static int
++seed_marker(const char *root, const char *hash, vfs_context_t ctx)
++{
++	char path[MAXPATHLEN], have[160] = {0};
++	vnode_t vp = NULLVP;
++	int resid = 0;
++	snprintf(path, sizeof(path), "%s/" ONEIOS_MARKER, root);
++	if (vnode_open(path, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx)) {
++		return 0;
++	}
++	(void)vn_rdwr(UIO_READ, vp, have, sizeof(have) - 1, 0, UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++	vnode_close(vp, FREAD, ctx);
++	for (char *c = have; *c; c++) {
++		if (*c == '\n') {
++			*c = 0;
++			break;
++		}
++	}
++	return !strcmp(have, hash) ? 1 : 2;
++}
++
++static int
++seed_write_marker(const char *root, const char *hash, vfs_context_t ctx)
++{
++	char path[MAXPATHLEN], text[80];
++	vnode_t vp = NULLVP;
++	int resid = 0;
++	snprintf(path, sizeof(path), "%s/" ONEIOS_MARKER, root);
++	int length = snprintf(text, sizeof(text), "%s\n", hash);
++	int error = vnode_open(path, O_CREAT | O_TRUNC | FWRITE | O_NOFOLLOW, 0644, 0, &vp, ctx);
++	if (error) {
++		return error;
++	}
++	error = vn_rdwr(UIO_WRITE, vp, text, length, 0, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++	if (!error && resid) {
++		error = EIO;
++	}
++	if (!error) {
++		error = VNOP_FSYNC(vp, MNT_WAIT, ctx);
++	}
++	mount_t mp = vnode_mount(vp);
++	int close_error = vnode_close(vp, FWRITE, ctx);
++	if (!error && !close_error && mp) {
++		(void)VFS_SYNC(mp, MNT_WAIT, ctx);
++	}
++	return error ? error : close_error;
++}
++
++static int
++seed_unpack(struct seed *s)
++{
++	uint8_t header[SEED_BLOCK];
++	int zero_blocks = 0, entries = 0, error = 0, end = 0;
++	seed_clear_entry(s);
++	while (!(error = seed_read(s, header, SEED_BLOCK, &end)) && !end) {
++		int empty = 1;
++		for (unsigned i = 0; i < SEED_BLOCK; i++) {
++			if (header[i]) {
++				empty = 0;
++				break;
++			}
++		}
++		if (empty) {
++			if (++zero_blocks == 2) {
++				break;
++			}
++			continue;
++		}
++		zero_blocks = 0;
++		unsigned sum = 0;
++		long long recorded = 0, size = 0, uid = 0, gid = 0, mode = 0;
++		for (unsigned i = 0; i < SEED_BLOCK; i++) {
++			sum += (i >= 148 && i < 156) ? ' ' : header[i];
++		}
++		if ((error = seed_number(s, header + 148, 8, &recorded))) {
++			break;
++		}
++		if (sum != (unsigned)recorded) {
++			error = seed_bad(s, "a header's checksum is wrong: not a tar, or damaged");
++			break;
++		}
++		if ((error = seed_number(s, header + 124, 12, &size))) {
++			break;
++		}
++		int type = header[156] ? header[156] : '0';
++		if (type == 'x' || type == 'g' || type == 'L' || type == 'K') {
++			char *body = NULL;
++			size_t allocated = 0;
++			if ((error = seed_body(s, size, &body, &allocated))) {
++				break;
++			}
++			if (type == 'x') {
++				error = seed_pax(s, body, (size_t)size);
++			} else if (type != 'g') {       /* a global header: nothing of it applies to an entry */
++				if ((size_t)size >= SEED_PATH) {
++					error = seed_bad(s, "a path is too long");
++				} else {
++					strlcpy(type == 'L' ? s->gnu_path : s->gnu_link, body, SEED_PATH);
++				}
++			}
++			kfree_data(body, allocated);
++			if (error) {
++				break;
++			}
++			continue;
++		}
++		if (s->pax_path[0]) {
++			strlcpy(s->name, s->pax_path, SEED_PATH);
++		} else if (s->gnu_path[0]) {
++			strlcpy(s->name, s->gnu_path, SEED_PATH);
++		} else if (header[345] && !memcmp(header + 257, "ustar", 5)) {
++			snprintf(s->name, SEED_PATH, "%.155s/%.100s", header + 345, header);
++		} else {
++			snprintf(s->name, SEED_PATH, "%.100s", header);
++		}
++		if (s->pax_link[0]) {
++			strlcpy(s->target, s->pax_link, SEED_PATH);
++		} else if (s->gnu_link[0]) {
++			strlcpy(s->target, s->gnu_link, SEED_PATH);
++		} else {
++			snprintf(s->target, SEED_PATH, "%.100s", header + 157);
++		}
++		if (s->pax_size >= 0) {
++			size = s->pax_size;
++		}
++		if ((error = seed_number(s, header + 108, 8, &uid)) || (error = seed_number(s, header + 116, 8, &gid)) ||
++		    (error = seed_number(s, header + 100, 8, &mode))) {
++			break;
++		}
++		if (s->pax_uid >= 0) {
++			uid = s->pax_uid;
++		}
++		if (s->pax_gid >= 0) {
++			gid = s->pax_gid;
++		}
++		if (type != '0' && type != '5' && type != '2' && type != '7') {
++			error = seed_bad(s, "an entry that is not a file, folder or symbolic link");
++			break;
++		}
++		if ((error = seed_extract(s, s->name, type == '7' ? '0' : type, (int)(mode & 07777), uid, gid, size, s->target))) {
++			break;
++		}
++		seed_clear_entry(s);
++		entries++;
++	}
++	seed_clear_entry(s);
++	if (!error && !entries) {
++		error = seed_bad(s, "the archive has no entries");
++	}
++	/* What follows the end of the archive (tar pads its last record) is part of the file the manifest hashed. */
++	while (!error) {
++		const uint8_t *data;
++		uint32_t got = 0;
++		error = seed_take(s, SEED_CHUNK, &data, &got);
++		if (!got) {
++			break;
++		}
++	}
++	return error;
++}
++
++int
++oneios_hosted_data_seed(proc_t p __unused, user_addr_t scratch __unused, const char *root)
++{
++	static const char hex[] = "0123456789abcdef";
++	vfs_context_t ctx = vfs_context_current();
++	dev_t device = NODEV;
++	char name[32], want[65] = {0}, have[65] = {0};
++	uint64_t bytes = 0;
++	uint8_t digest[SHA256_DIGEST_LENGTH];
++	struct seed *s = NULL;
++	int error;
++
++	int seed_disk = oneios_hosted_disk_device("seed", &device, name, sizeof(name), &bytes, want);
++	int verified = seed_disk && strlen(want) == 64;
++	int state = seed_marker(root, verified ? want : "unverified", ctx);
++	if (state == 1 || (state == 2 && !verified)) {
++		/* This seed is in the volume (or the set lists no seed hash to compare with: the volume stays). */
++		oneios_data_seed_status = 0;
++		return 0;
++	}
++	if (state == 2) {
++		/* Another seed's volume. Its container goes, and the guest starts again into a first start. */
++		printf("OneiOS Data: the volume holds another seed than %s: the store is started over\n", want);
++		if (!oneios_hosted_disk_zero("data", ONEIOS_ERASE_BYTES)) {
++			printf("OneiOS Data: the store could not be erased\n");
++			return EIO;
++		}
++		hosted_halt(ONEIOS_HALT_RESTART, 0);
++	}
++	if (!seed_disk) {
++		printf("OneiOS Data: a new volume and no Data seed in the image set\n");
++		return ENOENT;
++	}
++	if (!bytes || (bytes & (SEED_BLOCK - 1))) {
++		printf("OneiOS Data: the seed is %llu bytes: not a tar\n", bytes);
++		return EINVAL;
++	}
++	s = kalloc_data(sizeof(*s), Z_WAITOK | Z_ZERO);
++	if (!s) {
++		return ENOMEM;
++	}
++	s->chunk = kalloc_data(SEED_CHUNK, Z_WAITOK);
++	s->ctx = ctx;
++	s->bytes = bytes;
++	s->root = root;
++	s->root_length = strlen(root);
++	SHA256_Init(&s->sha);
++	if (!s->chunk) {
++		error = ENOMEM;
++	} else if (!(error = oneios_disk_open(name, &s->disk, ctx))) {
++		printf("OneiOS Data: unpacking the seed (%llu MiB on %s) into %s\n", bytes >> 20, name, root);
++		error = seed_unpack(s);
++		vnode_close(s->disk, FREAD, ctx);
++	}
++	if (!error) {
++		SHA256_Final(digest, &s->sha);
++		for (unsigned i = 0; i < sizeof(digest); i++) {
++			have[2 * i] = hex[digest[i] >> 4];
++			have[2 * i + 1] = hex[digest[i] & 15];
++		}
++		if (verified && strcmp(have, want)) {
++			printf("OneiOS Data: the seed read is %s, the manifest lists %s: the volume is not marked\n", have, want);
++			error = EAUTH;
++		}
++	}
++	if (!error) {
++		error = seed_write_marker(root, verified ? want : "unverified", ctx);
++	}
++	if (error) {
++		printf("OneiOS Data: seed: error %d%s%s%s%s (after %llu files, %llu folders, %llu links)\n", error, s->why ? ": " : "",
++		    s->why ? s->why : "", s->full[0] ? ": " : "", s->full, s->files, s->dirs, s->links);
++	} else {
++		printf("OneiOS Data: seed %s: %llu files (%llu bytes), %llu folders, %llu links, %llu extended attributes%s\n",
++		    verified ? "verified" : "NOT verified (no manifest hash)", s->files, s->file_bytes, s->dirs, s->links, s->xattr_set,
++		    s->xattr_failed ? ", some extended attributes NOT set" : "");
++	}
++	if (s->chunk) {
++		kfree_data(s->chunk, SEED_CHUNK);
++	}
++	kfree_data(s, sizeof(*s));
++	oneios_data_seed_status = error;
++	return error;
++}
++
++/* ---- the launch policy ---- */
++
++/* The App cryptex (app.img) at /private/preboot/Cryptexes/App, and the SystemOS volume, already the upper layer
++ * of the root union, by its cryptex path: /System and /usr bound over /private/preboot/Cryptexes/OS (not as unions:
++ * a lookup there stays on SystemOS). The mount points are folders of the Data volume shown over the root's empty
++ * /private/preboot as a read-only union, as UniXNU's native_cryptex_os_view does. Once per boot; never fatal. */
++static int
++oneios_cryptex_views(proc_t p, user_addr_t scratch)
++{
++	static const char *const folders[] = {"/private/var/oneios", "/private/var/oneios/preboot", "/private/var/oneios/preboot/Cryptexes",
++		                              "/private/var/oneios/preboot/Cryptexes/App", "/private/var/oneios/preboot/Cryptexes/OS",
++		                              "/private/var/oneios/preboot/Cryptexes/OS/System", "/private/var/oneios/preboot/Cryptexes/OS/usr"};
++	vfs_context_t ctx = vfs_context_current();
++	char uuid[37], device_path[64];
++	dev_t device = NODEV;
++	int error;
++	for (size_t i = 0; i < sizeof(folders) / sizeof(folders[0]); i++) {
++		error = oneios_kern_mkdir(folders[i], 0755, ctx);
++		if (error && error != EEXIST) {
++			return error;
++		}
++	}
++	oneios_cryptex_stage = 1;
++	if ((error = oneios_mount(p, scratch, "bindfs", "/private/preboot", MNT_RDONLY | MNT_UNION, "/private/var/oneios/preboot"))) {
++		return error;
++	}
++	oneios_cryptex_stage = 2;
++	if ((error = oneios_mount(p, scratch, "bindfs", "/private/preboot/Cryptexes/OS/System", MNT_RDONLY, "/System")) ||
++	    (error = oneios_mount(p, scratch, "bindfs", "/private/preboot/Cryptexes/OS/usr", MNT_RDONLY, "/usr"))) {
++		return error;
++	}
++	oneios_cryptex_stage = 3;
++	if (!oneios_hosted_volume_uuid("app", uuid)) {
++		return ENXIO;           /* a set without app.img: Safari's daemons are missing, the rest runs */
++	}
++	for (int waited = 0; !native_verified_block_volume_device(uuid, &device, device_path, sizeof(device_path)); waited++) {
++		if (waited == 200) {
++			return ENOENT;
++		}
++		delay(50 * 1000);
++	}
++	if ((error = oneios_mount(p, scratch, "apfs", "/private/preboot/Cryptexes/App", MNT_RDONLY, device_path))) {
++		return error;
++	}
++	oneios_cryptex_stage = 4;
++	/* What is mounted there must be that verified volume, read-only. */
++	vnode_t vp = NULLVP;
++	if ((error = vnode_lookup("/private/preboot/Cryptexes/App", 0, &vp, ctx))) {
++		return error;
++	}
++	mount_t mp = vnode_mount(vp);
++	vnode_t device_vnode = vfs_devvp(mp);
++	dev_t actual = device_vnode ? vnode_specrdev(device_vnode) : NODEV;
++	if (device_vnode) {
++		vnode_put(device_vnode);
++	}
++	if (!(vfs_flags(mp) & MNT_RDONLY) || actual != device || !native_verified_block_root_authorized(actual)) {
++		error = EAUTH;
++	}
++	vnode_put(vp);
++	if (!error) {
++		oneios_cryptex_stage = 5;
++	}
++	return error;
++}
++
++/* The owner service manager's bootstrap port, as UniXNU-droidvm's droidvm_fix_ownervisor_bootstrap: it is spawned
++ * before launchd exists, so its task has none, and a bootstrap port is inherited only at task creation. launchd
++ * keeps no bootstrap in its own task; its jobs have one. Once a job has one, the kernel copies that send right
++ * into the manager's task (it waits for it before it starts anything). */
++typedef struct ipc_port *oneios_ipc_port_t;
++extern kern_return_t task_get_special_port(task_t, int, oneios_ipc_port_t *);
++extern kern_return_t task_set_special_port(task_t, int, oneios_ipc_port_t);
++extern void ipc_port_release_send(oneios_ipc_port_t);
++#define ONEIOS_TASK_BOOTSTRAP_PORT 4
++#define ONEIOS_IP_VALID(port) ((port) != (oneios_ipc_port_t)0 && (port) != (oneios_ipc_port_t)~0UL)
++static thread_call_t oneios_bootstrap_call;
++static unsigned oneios_bootstrap_tries;
++volatile int oneios_service_manager_bootstrap;    /* 1 adopted; -2 the manager is gone; -3 gave up */
++
++static oneios_ipc_port_t
++oneios_bootstrap_donor(int preferred)
++{
++	for (int pid = 2; pid <= 4096; pid++) {
++		if (pid == oneios_service_manager_pid) {
++			continue;
++		}
++		proc_t donor = proc_find(pid);
++		if (!donor) {
++			continue;
++		}
++		const char *name = proc_best_name(donor);
++		task_t task = proc_task(donor);
++		oneios_ipc_port_t port = (oneios_ipc_port_t)0;
++		/* The session's daemons hold the user-domain bootstrap that LaunchServices clients need. */
++		int wanted = !preferred || !strcmp(name, "backboardd") || !strcmp(name, "SpringBoard");
++		if (task && wanted && task_get_special_port(task, ONEIOS_TASK_BOOTSTRAP_PORT, &port) == KERN_SUCCESS && ONEIOS_IP_VALID(port)) {
++			proc_rele(donor);
++			return port;
++		}
++		proc_rele(donor);
++	}
++	return (oneios_ipc_port_t)0;
++}
++
++static void
++oneios_bootstrap_adopt(thread_call_param_t unused0 __unused, thread_call_param_t unused1 __unused)
++{
++	uint64_t deadline;
++	oneios_ipc_port_t port = (oneios_ipc_port_t)0;
++	proc_t manager = proc_find(oneios_service_manager_pid);
++	if (!manager) {
++		oneios_service_manager_bootstrap = -2;
++		return;
++	}
++	task_t task = proc_task(manager);
++	oneios_ipc_port_t current = (oneios_ipc_port_t)0;
++	if (task && task_get_special_port(task, ONEIOS_TASK_BOOTSTRAP_PORT, &current) == KERN_SUCCESS && ONEIOS_IP_VALID(current)) {
++		ipc_port_release_send(current);
++		oneios_service_manager_bootstrap = 1;
++		proc_rele(manager);
++		return;
++	}
++	/* The first minute only a session daemon's; after that any job's. */
++	if (task) {
++		port = oneios_bootstrap_donor(1);
++		if (!ONEIOS_IP_VALID(port) && oneios_bootstrap_tries > 30) {
++			port = oneios_bootstrap_donor(0);
++		}
++	}
++	if (ONEIOS_IP_VALID(port)) {
++		task_set_special_port(task, ONEIOS_TASK_BOOTSTRAP_PORT, port);  /* consumes the send right */
++		oneios_service_manager_bootstrap = 1;
++		proc_rele(manager);
++		printf("OneiOS: the service manager (pid %d) has a bootstrap port\n", oneios_service_manager_pid);
++		return;
++	}
++	proc_rele(manager);
++	if (++oneios_bootstrap_tries > 900) {   /* half an hour */
++		oneios_service_manager_bootstrap = -3;
++		return;
++	}
++	clock_interval_to_deadline(2, NSEC_PER_SEC, &deadline);
++	thread_call_enter_delayed(oneios_bootstrap_call, deadline);
++}
++
++static int
++oneios_service_manager(proc_t p, user_addr_t scratch)
++{
++	static const char path[] = "/private/var/oneios/bin/oneios-init";
++	const char *const argv[] = {path, NULL};
++	uint64_t deadline;
++	int pid = 0, error;
++	if (!oneios_exists(path)) {
++		return ENOENT;          /* a seed built without the helpers (no iOS SDK on the build machine) */
++	}
++	if ((error = oneios_spawn(p, scratch, argv, &pid))) {
++		return error;
++	}
++	oneios_service_manager_pid = pid;
++	oneios_bootstrap_call = thread_call_allocate(oneios_bootstrap_adopt, NULL);
++	if (oneios_bootstrap_call) {
++		clock_interval_to_deadline(2, NSEC_PER_SEC, &deadline);
++		thread_call_enter_delayed(oneios_bootstrap_call, deadline);
++	}
++	return 0;
++}
++
++/* Runs before each launchd exec attempt (load_init_program_at_path); every part is done once. Never fatal: launchd
++ * starts without the cryptex views or the manager, and the boot log says which is missing. */
++int
++native_board_launch_policy(void *process, uint64_t scratch)
++{
++	static int done;
++	if (done) {
++		return 0;
++	}
++	done = 1;
++	oneios_cryptex_status = oneios_cryptex_views(process, (user_addr_t)scratch);
++	printf("OneiOS launch policy: cryptex views: stage %d, status %d\n", oneios_cryptex_stage, oneios_cryptex_status);
++	oneios_service_manager_status = oneios_service_manager(process, (user_addr_t)scratch);
++	if (oneios_service_manager_status == ENOENT) {
++		printf("OneiOS launch policy: no /private/var/oneios/bin/oneios-init in this seed: no service manager\n");
++	} else {
++		printf("OneiOS launch policy: service manager: status %d, pid %d\n", oneios_service_manager_status, oneios_service_manager_pid);
++	}
++	return 0;
++}
++
++#endif /* XNU_HOSTED */
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+index 33639b4..2f8d5d8 100644
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -15656,3 +15656,34 @@ fs_snapshot(__unused proc_t p, struct fs_snapshot_args *uap,
+ 
+ 	return error;
+ }
++
++#if XNU_HOSTED
++/*
++ * OneiOS: mkdir, symlink and unlink by kernel paths, for the Data volume's first start, which unpacks the image
++ * set's seed in the kernel before launchd (bsd/kern/oneios_hosted_root.c).
++ */
++int oneios_kern_mkdir(const char *path, int mode, vfs_context_t ctx);
++int oneios_kern_symlink(const char *target, const char *path, vfs_context_t ctx);
++int oneios_kern_unlink(const char *path, vfs_context_t ctx);
++
++int
++oneios_kern_mkdir(const char *path, int mode, vfs_context_t ctx)
++{
++	struct vnode_attr va;
++	VATTR_INIT(&va);
++	VATTR_SET(&va, va_mode, mode & ACCESSPERMS);
++	return mkdir1at(ctx, CAST_USER_ADDR_T(path), &va, AT_FDCWD, UIO_SYSSPACE);
++}
++
++int
++oneios_kern_symlink(const char *target, const char *path, vfs_context_t ctx)
++{
++	return symlinkat_internal(ctx, CAST_USER_ADDR_T(target), AT_FDCWD, CAST_USER_ADDR_T(path), UIO_SYSSPACE);
++}
++
++int
++oneios_kern_unlink(const char *path, vfs_context_t ctx)
++{
++	return unlink1(ctx, NULLVP, CAST_USER_ADDR_T(path), UIO_SYSSPACE, 0);
++}
++#endif /* XNU_HOSTED */
+diff --git a/osfmk/arm64/hosted/hosted_blk.c b/osfmk/arm64/hosted/hosted_blk.c
+new file mode 100644
+index 0000000..519cdc0
+--- /dev/null
++++ b/osfmk/arm64/hosted/hosted_blk.c
+@@ -0,0 +1,31 @@
++/*
++ * OneiOS: a device register of xnuhost's board read or written through the mmio_read / mmio_write host calls,
++ * for a driver that would otherwise take a fault per access on a mapped device page (the disks:
++ * kernel/patches/oneios-hosted/storage/OneiOSHostedDisk.cpp). Host calls are made masked (hosted.h).
++ */
++#include <stdint.h>
++#include <arm64/hosted/hosted.h>
++
++#if XNU_HOSTED
++
++uint32_t oneios_hosted_mmio_read32(uint64_t physical);
++void oneios_hosted_mmio_write32(uint64_t physical, uint32_t value);
++
++uint32_t
++oneios_hosted_mmio_read32(uint64_t physical)
++{
++	uint32_t old = hosted_irq_mask();
++	uint32_t value = (uint32_t)hosted_hc(HOSTED_FN(mmio_read), hosted_cpu(), physical, 4, 0, 0, 0);
++	hosted_irq_restore(old);
++	return value;
++}
++
++void
++oneios_hosted_mmio_write32(uint64_t physical, uint32_t value)
++{
++	uint32_t old = hosted_irq_mask();
++	(void)hosted_hc(HOSTED_FN(mmio_write), hosted_cpu(), physical, 4, value, 0, 0);
++	hosted_irq_restore(old);
++}
++
++#endif /* XNU_HOSTED */
+diff --git a/osfmk/conf/files.arm64 b/osfmk/conf/files.arm64
+index cf52d84..f89aeea 100644
+--- a/osfmk/conf/files.arm64
++++ b/osfmk/conf/files.arm64
+@@ -65,6 +65,7 @@ osfmk/arm64/sleh.c			standard
+ osfmk/arm64/start.s	optional nos_arm_asm config_pmap_ppl
+ osfmk/arm64/hosted/hosted_asm.s	optional nos_arm_asm
+ osfmk/arm64/hosted/hosted_machine.c	optional nos_arm_asm
++osfmk/arm64/hosted/hosted_blk.c	optional nos_arm_asm
+ osfmk/arm64/hosted/hosted_user.c	optional nos_arm_asm
+ osfmk/arm64/hosted/hosted_copyio.c	optional nos_arm_asm
+ osfmk/arm64/hosted/hosted_smp.c	optional nos_arm_asm

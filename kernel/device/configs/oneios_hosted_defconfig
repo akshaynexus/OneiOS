@@ -18,6 +18,32 @@ CONFIG_XNU_NATIVE_UFS=n
 CONFIG_XNU_NATIVE_ADRENO=n
 CONFIG_XNU_BOOT_PROGRESS=n
 # The board's archives (scripts/build-oneios-board.py), started by oneios_board_late_start.
-CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/oneios-drivers/liboneiosdrivers.a -Wl,-force_load,{tree}/build/oneios-board/liboneiosboard.a"
+# and, hosted only, the disks (kernel/patches/oneios-hosted/storage, built by build-oneios-hosted-storage.py, which
+# kernel/build-hosted.sh adds to the board's archives): started by native_source_storage_start.
+CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/oneios-drivers/liboneiosdrivers.a -Wl,-force_load,{tree}/build/oneios-board/liboneiosboard.a -Wl,-force_load,{tree}/build/oneios-hosted-storage/liboneioshostedstorage.a"
 # The hosted machine layer: XNU as a process under xnuhost (kernel/patches/oneios-hosted, kernel/build-hosted.sh).
 CONFIG_XNU_HOSTED=y
+# The root of the hosted guest (kernel/patches/oneios-hosted/0004-root-mount-launchd.patch), with UniXNU's owner-root
+# path as the DroidVM iPadOS 27 board has it: the OS volume is accepted as root because its disk is a verified one
+# (xnuhost checks every chunk: the disk's "oneios,verified"), the SystemOS volume is mounted over / as a union, the
+# boot manifest is published, the Data volume is mounted at /private/var and the board's launch policy runs before
+# launchd. Not XNU_NATIVE_RAM_BLOCK: the Data volume is on xnuhost's Data store (first start: newfs_apfs, then the
+# image set's seed is unpacked in the kernel).
+# UniXNU's build lets the root audit and owner-root acceptance in only where verified block storage is linked: its
+# own NativeVirtioBlock, or a source-built storage archive (XNU_SOURCE_STORAGE). The hosted kernel's is the second
+# kind, kernel/patches/oneios-hosted/storage: it answers native_verified_block_root_authorized for a disk that
+# xnuhost verifies (every chunk checked against the image set's hash lists before the guest reads it; the disk
+# node's "oneios,verified"). The option only says that such an archive is linked; it brings no code of UniXNU's
+# and none of its signed block hashes.
+CONFIG_XNU_SOURCE_STORAGE=y
+CONFIG_XNU_OWNER_ROOT_AUDIT=y
+CONFIG_XNU_OWNER_ROOT_TRUST=y
+CONFIG_XNU_OWNER_CACHE_MOUNT=y
+CONFIG_XNU_OWNER_CACHE_STARTUP=y
+CONFIG_XNU_OWNER_BOOT_MANIFEST=y
+CONFIG_XNU_OWNER_DATA_MOUNT=y
+CONFIG_XNU_OWNER_UNION_SYSTEMOS=y
+CONFIG_XNU_BOARD_LAUNCH_POLICY=y
+# UniXNU's build wants an OS volume UUID for the boot manifest at build time. The hosted kernel does not use it: the
+# OS and SystemOS volume UUIDs come from the device tree nodes of xnuhost's disks ("oneios,volume-uuid").
+CONFIG_XNU_OWNER_ROOT_VOLUME_UUID="00000000-0000-0000-0000-000000000000"

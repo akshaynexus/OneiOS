@@ -40,6 +40,19 @@ if n != 1:
     raise SystemExit('build-hosted: board.toml has no [kernel] patch_series')
 open(path, 'w').write(new)
 PY
+# The disks (0004-root-mount-launchd.patch): OneiOSHostedDisk and the source IOBlockStorageDevice as one more board
+# archive of this build only (kernel/patches/oneios-hosted/storage/build-oneios-hosted-storage.py), force-loaded by
+# the hosted defconfig. It goes before build-oneios-board.py, which stays the last of the committed list.
+cp "$ROOT/kernel/patches/oneios-hosted/storage/build-oneios-hosted-storage.py" "$DEVICE/scripts/"
+python3 -I - "$DEVICE/board.toml" <<'PY'
+import re, sys
+board = sys.argv[1]
+text = open(board).read()
+new, n = re.subn(r'^(\s*)("build-oneios-board\.py")', lambda m: m.group(1) + '"build-oneios-hosted-storage.py",\n' + m.group(1) + m.group(2), text, count=1, flags=re.M)
+if n != 1:
+    raise SystemExit('build-hosted: board.toml archives have no build-oneios-board.py')
+open(board, 'w').write(new)
+PY
 # The GPU (0005-gpu-3d.patch): Droid-VM's virtio-gpu 3D driver as one more board archive of this build only
 # (kernel/patches/oneios-hosted/gpu/build-oneios-gpu.py), force-loaded like the board's others.
 cp "$ROOT/kernel/patches/oneios-hosted/gpu/build-oneios-gpu.py" "$DEVICE/scripts/"

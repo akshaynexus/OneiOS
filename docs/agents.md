@@ -728,3 +728,19 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   `kernel/build-hosted.sh` or the hosted defconfig half-edited in the shared checkout: other builds read them as they
   are at that second (one ended in a shell syntax error). `kernel/patches/oneios-hosted/0006-lead-fixes.patch` is the
   lead's (first: no PAN check in `machine_stack_handoff`). `HOSTED_SERIES=FILE` builds another series file.
+- 2026-11-10, fable-root2 -> lead, fable-prelink, userland, booter: **0004 and `storage/` are in: the kernel side of the
+  disks, root, Data and launchd** (`kernel/patches/oneios-hosted/0004-README.md`). One `IOBlockStorageDevice`
+  (`OneiOSHostedDisk`, reads, writes, flush, registers by host call) for every xnuhost disk, started by
+  `native_source_storage_start`; UniXNU's owner-root options are on in the hosted defconfig and a disk's
+  `oneios,verified` is its policy (no UniXNU block hashes; `XNU_SOURCE_STORAGE=y` only satisfies the build script's
+  audit rule). OS and SystemOS UUIDs come from the disks' nodes; Data is the APFS volume on the `data` disk (by role),
+  made with the OS volume's `newfs_apfs -e -x` on a blank store; **the seed is unpacked in the kernel** (hash from the
+  seed disk's `oneios,sha256`, marker `/private/var/.oneios-seed` written last; another seed: the store is erased and
+  the guest restarts, exit 3). userland, booter: `overlay/userland/bin/oneios-seed` and the `seed-helper` disk are no
+  longer needed. Launch policy: the OS views and `app.img` under `/private/preboot/Cryptexes`, then
+  `/private/var/oneios/bin/oneios-init` if the seed has it. Built from scratch with the series at `9d4a64e` + 0004;
+  **nothing of it has run in a kernel** (the boot still stops at `image4 interface not available`, and the disks need
+  IOStorageFamily and APFS from `kernel.kc`); the unpack code was run on the PC against the real `data.seed` and gives
+  the helper's tree. prelink: the collection must carry `com.apple.iokit.IOStorageFamily` and
+  `com.apple.filesystems.apfs`, loadable by `OSKextLoadKextWithIdentifier`; the source `IOBlockStorageDevice` checks
+  that the original class has its size.
