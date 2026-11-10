@@ -3427,23 +3427,23 @@
   },
   {
    "original": "0xfffffe000b34f4b8",
-   "native_symbol": "__ZN18IOMemoryDescriptor6getTagEv",
+   "native_symbol": "__ZN18IOMemoryDescriptor16getMapperOptionsEv",
    "check": {
     "address": "0xfffffe000b34f4b8",
     "size": 12,
     "sha256": "2e06bda738ff93c0b332bb8e94d761c0de490fb72f0705aaa773b3f1b9653a10"
    },
-   "evidence": "The last two functions of IOMemoryDescriptor.cpp before IOMultiMemoryDescriptor.cpp: a setter and a getter of one field, setTag and getTag in the source. Note the layout: the original keeps the tag as 16 bits at +0x40 of the object, our kernel as 32 bits at +0x58 (public header): the pair is by meaning, and each side's methods use its own layout, so an object must not be read by one side's inline code and the other's methods. IOStorageFamily calls getTag for each request."
+   "evidence": "Lead review, by the order of the kexts' import tables: in IOStorageFamily's the slots run withOptions (11...), 0x...f4b8, 0x...f4ac, withAddressRange (16...), the constructor, so both names sort between '11withOptions' and '16withAddressRange'; getTag/setTag ('6...') sort after every two-digit name and cannot be there. The two are a 16-bit getter and setter of one field (ldrh/strh at +0x40): getMapperOptions() and setMapperOptions(uint16_t), which follow setTag/getTag in the source. The layout note stands: the original keeps the field at +0x40, our kernel at its own offset; each side's methods use its own layout."
   },
   {
    "original": "0xfffffe000b34f4ac",
-   "native_symbol": "__ZN18IOMemoryDescriptor6setTagEj",
+   "native_symbol": "__ZN18IOMemoryDescriptor16setMapperOptionsEt",
    "check": {
     "address": "0xfffffe000b34f4ac",
     "size": 12,
     "sha256": "30a0e2412a771c2aa6b8d5a638bd655640028516d30a4d62e4c49d46ca32f8df"
    },
-   "evidence": "The last two functions of IOMemoryDescriptor.cpp before IOMultiMemoryDescriptor.cpp: a setter and a getter of one field, setTag and getTag in the source. Note the layout: the original keeps the tag as 16 bits at +0x40 of the object, our kernel as 32 bits at +0x58 (public header): the pair is by meaning, and each side's methods use its own layout, so an object must not be read by one side's inline code and the other's methods. IOStorageFamily calls getTag for each request."
+   "evidence": "Lead review, by the order of the kexts' import tables: in IOStorageFamily's the slots run withOptions (11...), 0x...f4b8, 0x...f4ac, withAddressRange (16...), the constructor, so both names sort between '11withOptions' and '16withAddressRange'; getTag/setTag ('6...') sort after every two-digit name and cannot be there. The two are a 16-bit getter and setter of one field (ldrh/strh at +0x40): getMapperOptions() and setMapperOptions(uint16_t), which follow setTag/getTag in the source. The layout note stands: the original keeps the field at +0x40, our kernel at its own offset; each side's methods use its own layout."
   },
   {
    "original": "0xfffffe000adec710",
@@ -5357,7 +5357,7 @@
   },
   {
    "original": "0xfffffe000ac4bd40",
-   "native_symbol": "_get_task_pidsuspended",
+   "native_symbol": "_task_is_app_suspended",
    "ported": true,
    "optional": true,
    "check": {
@@ -5365,7 +5365,7 @@
     "size": 16,
     "sha256": "8d9d5229bb16beb4bde6c314115f5f8b3200d9140c9c9eb729fa5f5159dbd1e9"
    },
-   "evidence": "Byte-identical (16 bytes) to 0xfffffe000adbbc24 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Between get_threadtask_early and current_thread_aborted as in bsd_kern.c: returns the bool at task+0x412, the byte task_pidsuspend sets and clears in the 27 kernel (task->pidsuspended). No symbol in the original image; IOHIDFamily calls it."
+   "evidence": "Lead review, by import order: IOHIDFamily's slots run task_deallocate, this one, task_reference, thread_call_allocate_with_options, so the imported name sorts between task_deallocate and task_reference; get_task_pidsuspended does not. The body returns bit 0 of one task byte (pidsuspended): task_is_app_suspended, the same read as get_task_pidsuspended in our kernel. Was: Byte-identical (16 bytes) to 0xfffffe000adbbc24 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Between get_threadtask_early and current_thread_aborted as in bsd_kern.c: returns the bool at task+0x412, the byte task_pidsuspend sets and clears in the 27 kernel (task->pidsuspended). No symbol in the original image; IOHIDFamily calls it."
   },
   {
    "original": "0xfffffe000ac9afdc",
@@ -6002,11 +6002,6 @@
    "evidence": "Kexts store its address, signed with the block isa discriminator 0x6ae1 (pacda), as the first word of a block literal built on the stack; 0x108 bytes before _NSConcreteGlobalBlock (paired by name). 47 kexts name it; unpaired, every stack block of a kext had a wrong isa."
   },
   {
-   "original": "0xfffffe000b7b2440",
-   "native_symbol": "_gIOPublishNotification",
-   "evidence": "IOService.cpp's notification type symbols, six consecutive pointers in declaration order: publish, first publish, matched, first match, terminated, will terminate. The last two are paired by name at 0xfffffe000b7b2460 and 0xfffffe000b7b2468 (8 apart, as in our kernel), and kexts pass the four slots before them as the first argument of addMatchingNotification (apfs 0x...2448, the sandbox 0x...2458). By position before the two named ones."
-  },
-  {
    "original": "0xfffffe000b7b2458",
    "native_symbol": "_gIOFirstMatchNotification",
    "evidence": "IOService.cpp's notification type symbols, six consecutive pointers in declaration order: publish, first publish, matched, first match, terminated, will terminate. The last two are paired by name at 0xfffffe000b7b2460 and 0xfffffe000b7b2468 (8 apart, as in our kernel), and kexts pass the four slots before them as the first argument of addMatchingNotification (apfs 0x...2448, the sandbox 0x...2458). By position before the two named ones."
@@ -6030,6 +6025,15 @@
    "original": "0xfffffe0007ec7ed8",
    "native_symbol": "__ZN8OSObject9metaClassE",
    "evidence": "In 20 import tables this target sits between OSObject::gMetaClass and OSString::metaClass, where OSObject::metaClass sorts; the matcher's data rule had OSCollection::superClass, which holds the same value (the address of OSObject's metaclass object) and sorts elsewhere."
+  },
+  {
+   "original": "0xfffffe000b7af70c",
+   "native_symbol": "_rootdev",
+   "sections": [
+    "__DATA,__common",
+    "__DATA,__common"
+   ],
+   "evidence": "Lead review. The matcher paired this 32-bit variable with __stack_chk_guard (reference-data), but apfs and the sandbox import it in a slot after kernel_task/kernproc and before rootvp, where the guard (imported by both at 0xfffffe000b738000, in its right place) cannot be. apfs's mountroot stores rootvp and then stores vnode_specrdev's 32-bit result here (0xfffffe000a9c2d74..d88): rootdev = vnode_specrdev(rootvp). With the wrong pair that store went into the kernel's stack guard."
   }
  ]
 }
