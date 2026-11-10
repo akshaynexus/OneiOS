@@ -53,6 +53,10 @@ Older rows in "Reaching each other" are finished agents. These are the live ones
 | fable-camera | `runtime/bridges/camera/`, `drivers/camera/`, camera plug-in in `userland/` | `thread:delegated-task:command%3Amcp%3Ae9aaf4b7-b5f2-4324-beec-fce461d5df5f%3Adelegate-task%3A414e9e47-3ada-41b6-9110-d7926af6332d` |
 | fable-brightness | `runtime/bridges/brightness/`, `drivers/brightness/` (panel brightness, ALS for auto-brightness) | `thread:delegated-task:command%3Amcp%3Ae9aaf4b7-b5f2-4324-beec-fce461d5df5f%3Adelegate-task%3Abbbf355a-1fc0-4390-a68c-393d5776ac68` |
 | fable-checks | the fork app's Hardware checks screen, the tools in the runtime package, the OneiOS runtime release | `thread:delegated-task:command%3Amcp%3Ae9aaf4b7-b5f2-4324-beec-fce461d5df5f%3Adelegate-task%3A28ebab59-22c6-4f88-82b7-c8436cc57c14` |
+| q4a-framebuffer | Q4a: IOMobileFramebuffer stand-in over the virtio-gpu scanout | `thread:delegated-task:command%3Amcp%3Ae9aaf4b7-b5f2-4324-beec-fce461d5df5f%3Adelegate-task%3Ace347ace-4203-433f-86ed-123039b6be01` |
+| q4b-hid | Q4b: touch and buttons, the v54 IOHIDDevice header, the light-sensor HID device | `thread:delegated-task:command%3Amcp%3Ae9aaf4b7-b5f2-4324-beec-fce461d5df5f%3Adelegate-task%3A70331330-74f7-4116-9130-8b64d2806556` |
+| q5-keystore | Q5: AppleKeyStore stand-in (system keybag, class keys, wrap/unwrap) | `thread:delegated-task:command%3Amcp%3Ae9aaf4b7-b5f2-4324-beec-fce461d5df5f%3Adelegate-task%3A8513c7bf-b769-4250-a580-6678da9524f3` |
+| q8-userland | Q8: launchd daemon policy, /filesystems/fstab, overprovisioning, the seed | `thread:delegated-task:command%3Amcp%3Ae9aaf4b7-b5f2-4324-beec-fce461d5df5f%3Adelegate-task%3Ab23ab97f-4426-420f-9651-5a67086c9576` |
 
 Ask the owner of a file before changing it; tell the lead when you land something it waits on.
 
