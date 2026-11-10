@@ -691,16 +691,6 @@
    "evidence": "Stub 0xfffffe000aa79ab4. Called with the vnode and its decmpfs cnode as a tail call from APFS's compressed-file check (0xfffffe000a982dac); the function directly after _decmp_get_func. APFS's import stubs are in the alphabetical order of the imported symbols (decmpfs_cnode_set_vnode_cached_nchildren, _size, _total_size, decmpfs_cnode_set_vnode_state, then this block up to decmpfs_update_attributes, decmpfs_validate_compressed_file, devfs_make_node): the stub's place between its named neighbours, and the function's place in bsd/kern/decmpfs.c's order among the paired ones, both give this name."
   },
   {
-   "original": "0xfffffe000ae04840",
-   "native_symbol": "_decmpfs_hides_rsrc",
-   "check": {
-    "address": "0xfffffe000ae04840",
-    "size": 168,
-    "sha256": "e941b0a9489c6d1c565ab52fc9b388dee58df29b9d0d9532326792468487cf47"
-   },
-   "evidence": "Stub 0xfffffe000aa79ac4. Between decmpfs_file_is_compressed and decmpfs_init alphabetically (hides_rsrc or hides_xattr; APFS imports one); the function directly after decmpfs_update_attributes, as hides_rsrc is in the source. APFS's import stubs are in the alphabetical order of the imported symbols (decmpfs_cnode_set_vnode_cached_nchildren, _size, _total_size, decmpfs_cnode_set_vnode_state, then this block up to decmpfs_update_attributes, decmpfs_validate_compressed_file, devfs_make_node): the stub's place between its named neighbours, and the function's place in bsd/kern/decmpfs.c's order among the paired ones, both give this name."
-  },
-  {
    "original": "0xfffffe000ae04bac",
    "native_symbol": "_decmpfs_pagein_compressed",
    "check": {
@@ -809,16 +799,6 @@
     "sha256": "8352e15bb30e639fac6a461f9da1c723fab4983749b42ac3c31721d3993b4913"
    },
    "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported symbols): in the 2 kext(s) that import this function (AppleGPIOICController, AppleT8150CLPC) its slot lies between the slots of _lck_grp_attr_alloc_init and _mach_absolute_time, and _lck_ticket_init is the only exported kernel function between those names that no other original function is paired with. It is also the only one of them that our kernel places between __Z21lck_rw_sleep_deadlineP8lck_rw_s18lck_sleep_action_tPviy and _hw_lck_ticket_destroy, the paired functions on either side of this one in the original."
-  },
-  {
-   "original": "0xfffffe000abd8788",
-   "native_symbol": "_lck_ticket_lock",
-   "check": {
-    "address": "0xfffffe000abd8788",
-    "size": 56,
-    "sha256": "dca2430c0e1431892d2271852a71b76d7b18173e42d7e129c4a3351235131664"
-   },
-   "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported symbols): in the 1 kext(s) that import this function (AppleT8150CLPC) its slot lies between the slots of _IOLockUnlock and _mach_absolute_time, and _lck_ticket_lock is the only exported kernel function between those names that no other original function is paired with. It is also the only one of them that our kernel places between _hw_lck_ticket_lock and _hw_lck_ticket_lock_try, the paired functions on either side of this one in the original."
   },
   {
    "original": "0xfffffe000abfc1b8",
@@ -2629,16 +2609,6 @@
     "sha256": "e9aec07bbb3f90ab2e2c554fe44e1b373875686e94a1d6a32c3db66b2e8aee85"
    },
    "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported symbols): in the 16 kext(s) that import this function (AppleARMPlatform, AppleBasebandM20, AppleEmbeddedUSB, AppleEmbeddedUSBHost, AppleIPAppender, ApplePIODMA) its slot lies between the slots of _clock_get_calendar_microtime and _clock_get_uptime, and _clock_get_system_microtime is the only exported kernel function between those names that no other original function is paired with. It is also the only one of them that our kernel places between _mach_absolute_time and _absolutetime_to_microtime, the paired functions on either side of this one in the original."
-  },
-  {
-   "original": "0xfffffe000ade775c",
-   "native_symbol": "_vfs_context_iskernel",
-   "check": {
-    "address": "0xfffffe000ade775c",
-    "size": 80,
-    "sha256": "68dfedd112dd6a6adc310f308af5b8b11fa0ec6913391442550351ee3e5bf761"
-   },
-   "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported symbols): in the 1 kext(s) that import this function (apfs) its slot lies between the slots of _vfs_context_is_dataless_manipulator and _vfs_context_issignal, and _vfs_context_iskernel is the only exported kernel function between those names that no other original function is paired with."
   },
   {
    "original": "0xfffffe000adfdda4",
