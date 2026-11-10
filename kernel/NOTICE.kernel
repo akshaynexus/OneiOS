@@ -1,0 +1,18 @@
+
+kernel/xnu.macho is the XNU kernel built from source by kernel/ of this repository. It is not Apple's
+kernelcache and contains no Apple kernel extension. Its build record (kernel/xnu.macho.build.json) names the
+source commits and every patch.
+
+  - XNU (https://github.com/apple-oss-distributions/xnu, tag in the build record): Copyright (c) Apple Inc.
+    and others. Subject to the Apple Public Source License Version 2.0 (the "License"); you may not use this
+    file except in compliance with the License. A copy is at https://opensource.apple.com/apsl/ and in the
+    XNU source as APPLE_LICENSE. The software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+    KIND, either express or implied; see the License for the rights and limitations it sets.
+    This is a Modified version (APSL 2.1(b), 2.2): the modifications are the patch series named in the build
+    record. Their source is public: UniXNU (https://github.com/UniXNU/UniXNU), Droid-VM/UniXNU-droidvm
+    (https://github.com/Droid-VM/UniXNU-droidvm) and kernel/ of https://github.com/akshaynexus/OneiOS, at
+    the commits in the record. Parts of XNU carry their own notices (BSD, CMU Mach, NetBSD, FreeBSD and
+    others); they are kept in the source files.
+  - UniXNU patches and drivers: Copyright (c) 2026, UniXNU contributors. BSD-2-Clause-Patent.
+  - libfirehose_kernel (libdispatch, https://github.com/apple-oss-distributions/libdispatch): Apache License 2.0.
+  - libpthread kernel part, libplatform headers: APSL 2.0.

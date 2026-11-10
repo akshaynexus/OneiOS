@@ -1,0 +1,46 @@
+# Pull requests and pushes: script checks, the host tests, and a runtime package built with the pinned NDK.
+# Nothing of Apple's is downloaded here: no IPSW, no KDK, no kernelcache. The kernel is built by
+# kernel/build-linux.sh or kernel/build-macos.sh on a developer's machine (kernel/README.md).
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: No firmware or large binaries in git
+        run: .github/scripts/check-tracked-files.sh
+      - name: Script syntax
+        run: |
+          set -euo pipefail
+          git ls-files -z '*.sh' | xargs -0 -n1 bash -n
+          git ls-files -z '*.py' | xargs -0 python3 -m py_compile
+          shellcheck -S error $(git ls-files 'kernel/*.sh' 'runtime/*.sh' '.github/*.sh')
+      - name: NDK 28.2.13676358 and the Rust target
+        run: .github/scripts/setup-build.sh
+      - name: Host tests
+        run: |
+          set -euo pipefail
+          runtime/package/test.sh
+          kernel/tests/host.sh
+          # Other areas: any executable tests/host.sh below the repository runs here.
+          for t in $(git ls-files '*/tests/host.sh' | grep -v '^kernel/'); do echo "== $t"; "$t"; done
+      - name: Runtime package
+        run: runtime/package.sh 0.0.0-ci
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: oneios-runtime-ci
+          path: |
+            out/release/*.tar.zst
+            out/release/*.sha256
+            out/release/*.runtime.json
+          retention-days: 14

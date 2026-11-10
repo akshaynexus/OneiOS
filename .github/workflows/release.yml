@@ -1,0 +1,61 @@
+# A tag vN.N.N (or vN.N.N-suffix, a pre-release) on main: build the runtime package with the pinned NDK and
+# attach it and its .sha256 to the GitHub release of that tag (docs/releases.md).
+# The release holds OneiOS's own code only; nothing of Apple's is downloaded or uploaded here.
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: The tag is a version and its commit is on main
+        run: |
+          set -euo pipefail
+          [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.]*)?$ ]] || { echo "tag $TAG is not vN.N.N[-suffix]"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_SHA is not on main"; exit 1; }
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+      - run: .github/scripts/check-tracked-files.sh
+      - name: NDK 28.2.13676358 and the Rust target
+        run: .github/scripts/setup-build.sh
+      - name: Host tests
+        run: |
+          set -euo pipefail
+          runtime/package/test.sh
+          kernel/tests/host.sh
+      - name: Kernel from the kernel release, when the tag names one
+        # kernel/release-kernel.txt (optional): "KERNEL_TAG SHA256" of an xnu-<build id>.tar.zst that
+        # kernel/publish.sh uploaded from a build machine. The package step checks its build record again.
+        run: |
+          set -euo pipefail
+          [ -s kernel/release-kernel.txt ] || { echo "no kernel pinned: runtime only"; exit 0; }
+          read -r ktag ksha < kernel/release-kernel.txt
+          mkdir -p out/kernel/current out/kernel/dl
+          gh release download "$ktag" --repo "$GITHUB_REPOSITORY" --pattern 'xnu-*.tar.zst' --dir out/kernel/dl
+          echo "$ksha  $(ls out/kernel/dl/xnu-*.tar.zst)" | sha256sum -c -
+          zstd -dc out/kernel/dl/xnu-*.tar.zst | tar -x -C out/kernel/current
+      - name: Package
+        run: runtime/package.sh "$VERSION"
+      - name: Release
+        run: |
+          set -euo pipefail
+          asset=out/release/oneios-runtime-$VERSION-arm64.tar.zst
+          ( cd out/release && sha256sum -c "$(basename "$asset").sha256" )
+          flags=()
+          [[ $VERSION == *-* ]] && flags+=(--prerelease)
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "OneiOS runtime $VERSION" "${flags[@]}" \
+              --notes "Runtime package for the OneOS fork (branch oneios). OneiOS's own code only: no Apple firmware; the iOS image set is built locally. See docs/releases.md."
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "$asset" "$asset.sha256"
