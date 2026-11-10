@@ -11,7 +11,7 @@ Apple rule (README "Rules"): a release carries nothing of Apple's. Refused by na
 .ipsw, .dmg, .aea, .img and the other firmware names of .gitignore. Refused by content: IMG4/IM4P containers,
 AEA archives, disk images, and every Mach-O. The one exception is the XNU that kernel/ builds from Apple's
 open source: a Mach-O with a build record NAME.build.json next to it that names this builder, carries the
-file's SHA-256 and says no kernelcache kexts were added. A kernel collection (MH_FILESET) is refused with or
+file's SHA-256, says no kernelcache kexts were added and lists no source whose licence forbids redistribution. A kernel collection (MH_FILESET) is refused with or
 without a record: it holds Apple's kexts and belongs to the image set.
 """
 import fnmatch
@@ -117,6 +117,8 @@ def own_kernel(path, relative):
         raise Refused(f'{relative}: the build record does not say "no kernelcache kexts, not prelinked"')
     if record.get('apple_binary_inputs') != []:
         raise Refused(f'{relative}: the build record lists Apple binary inputs: {record.get("apple_binary_inputs")}')
+    if record.get('restricted_sources') != []:
+        raise Refused(f'{relative}: the kernel links sources that may not be redistributed: {record.get("restricted_sources")}')
     if not record.get('build_id'):
         raise Refused(f'{relative}: the build record has no build_id')
     return record

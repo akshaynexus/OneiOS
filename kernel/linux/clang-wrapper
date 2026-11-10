@@ -1,0 +1,27 @@
+#!/bin/bash
+# clang in the toolchain's CommandLineTools/usr/bin: what xnu's makefiles get from `xcrun -find clang`.
+# UniXNU's own wrapper (scripts/linux/clang) takes one fixed triple from the environment, set by its driver for a
+# plain arm64 iOS 17 kernel. OneiOS builds arm64e (PAC: the S24 Ultra's cores have it), so this one chooses the
+# triple from -arch and adds what Apple's clang does by itself for an arm64e kernel:
+#   -fptrauth-function-pointer-type-discrimination   on for -mkernel in Apple clang, opt-in upstream
+#   -mllvm -disable-atexit-based-global-dtor-lowering  C++ static destructors go to __mod_term_func
+#   -D__ARM_ARCH_8_2__ .. 8_5__                       Apple clang predefines them for its CPUs
+# Dropped: -mno-implicit-sme (Apple-only; upstream emits no SME here).
+real=${CROSS_CLANG:-clang}
+case "$(basename "$0")" in *++) real=${real%clang}clang++ ;; esac
+arch=arm64
+args=()
+prev=
+for a in "$@"; do
+  [ "$prev" = -arch ] && arch=$a
+  prev=$a
+  case "$a" in -mno-implicit-sme) continue ;; esac
+  args+=("$a")
+done
+ios=${ONEIOS_IOS_VERSION:-27.0}
+if [ "$arch" = arm64e ]; then
+  exec "$real" -target "arm64e-apple-ios$ios" -fptrauth-function-pointer-type-discrimination \
+    -mllvm -disable-atexit-based-global-dtor-lowering \
+    -D__ARM_ARCH_8_2__=1 -D__ARM_ARCH_8_3__=1 -D__ARM_ARCH_8_4__=1 -D__ARM_ARCH_8_5__=1 "${args[@]}"
+fi
+exec "$real" -target "arm64-apple-ios$ios" -mllvm -disable-atexit-based-global-dtor-lowering "${args[@]}"

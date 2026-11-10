@@ -1,0 +1,31 @@
+# OneiOS as a UniXNU device repository (schema 2): the iOS 27.0.1 guest of xnuhost on the Galaxy S24 Ultra.
+# Layers: UniXNU profiles/arch/arm64e, the "linuxhost" SoC layer (socs/linuxhost: XNU as a process on One UI's
+# Linux kernel), the OS profile ios-27.0.1-24A446 (kernel/unixnu/profiles/os, staged into the UniXNU checkout),
+# and this board. Built by kernel/build-linux.sh and kernel/build-macos.sh; the kernel-to-booter contract is
+# kernel/README.md "What the booter gets".
+schema_version = 2
+
+[board]
+name = "oneios"
+soc = "linuxhost"
+soc_source = "linuxhost"
+os_profile = "ios-27.0.1-24A446"
+description = "OneiOS guest (XNU under xnuhost on One UI's kernel), iOS 27, iPhone18,2"
+kit = "oneios"
+
+# The whole list (a layer's list replaces the one below it). No storage, display or GPU driver of UniXNU's boards:
+# xnuhost's host drivers take their place (docs/plan.md 5.5).
+[components]
+include = ["ArmDTPlatform", "ArmCpu", "XnuPrelink"]
+
+[kernel]
+defconfig = "oneios_defconfig"
+config_fragments = ["arch:configs/common.config", "os:configs/ios.config"]
+patch_series = ["arch:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu-12377/series"]
+archives = [
+  "build-corecrypto-14.py",
+  "build-corecrypto-14.py --namespace",
+  "component:ArmDTPlatform",
+  "component:ArmCpu",
+  "build-libpthread-kernel.py",
+]

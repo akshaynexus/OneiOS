@@ -64,7 +64,7 @@ record() { # PATH [KEY=JSON...]: a build record for the Mach-O, with fields repl
 import hashlib, json, sys
 path = sys.argv[1]
 r = {'builder': 'oneios-kernel', 'build_id': 'test-1', 'sha256': hashlib.sha256(open(path, 'rb').read()).hexdigest(),
-     'prelinked': False, 'kernelcache_kexts_added': False, 'apple_binary_inputs': [], 'xnu': 'xnu-0', 'profile': 'test'}
+     'prelinked': False, 'kernelcache_kexts_added': False, 'apple_binary_inputs': [], 'restricted_sources': [], 'xnu': 'xnu-0', 'profile': 'test'}
 for pair in sys.argv[2:]:
     key, value = pair.split('=', 1)
     r[key] = json.loads(value)
@@ -90,6 +90,8 @@ m4() { macho kernel/xnu.macho 12; record kernel/xnu.macho; }
 refuse "kernel collection (MH_FILESET)" m4
 m5() { macho kernel/xnu.macho 2; record kernel/xnu.macho 'builder="someone"'; }
 refuse "record of another builder" m5
+m6() { macho kernel/xnu.macho 2; record kernel/xnu.macho 'restricted_sources=["corecrypto-2023"]'; }
+refuse "kernel that links a non-redistributable source" m6
 link() { ln -s /etc/passwd "$T/extra/link"; }
 refuse "symbolic link" link
 

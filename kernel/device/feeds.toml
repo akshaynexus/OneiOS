@@ -1,0 +1,5 @@
+# Sources of the OneiOS board, in addition to UniXNU's feeds.toml and the profiles.
+[[source]]
+kind = "soc"
+name = "linuxhost"
+local = "socs/linuxhost"

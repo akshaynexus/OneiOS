@@ -1,0 +1,14 @@
+diff --git a/scripts/unixnu/feeds.py b/scripts/unixnu/feeds.py
+index a20e9fe..59e99e6 100644
+--- a/scripts/unixnu/feeds.py
++++ b/scripts/unixnu/feeds.py
+@@ -207,6 +207,9 @@ def resolve(ctx):
+ 
+ def update_submodules(ctx):
+     """Check out module submodules recorded by this repository and the device repository."""
++    if os.environ.get('UNIXNU_SUBMODULES') == 'keep':
++        # OneiOS: the caller checked out the submodules its board needs (kernel/lib/stage.sh).
++        return
+     bases = [ctx.root, ctx.device]
+     if getattr(ctx, 'soc', None):
+         bases.append(ctx.soc.path)

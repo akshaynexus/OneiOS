@@ -16,8 +16,13 @@ KDK_SHA256=faef4393becf65c88a2791770904909babf1826d23d2ea478bf878a6417851ab
 XCODE_VERSION=27.1
 
 # external/NAME
+# Droid-VM-UniXNU is the build base: the fork of UniXNU that Droid-VM's iPadOS 27 guest is built with, the only
+# published tree whose xnu-12377 arm64e series, with UniXNU-droidvm's board patches on top, has brought iPadOS 27.0.1
+# up to SpringBoard. UniXNU-droidvm's patches apply on that fork's series and not on upstream's (2026-11-10: 10 of
+# 24 fail on upstream 1446f44). UniXNU (upstream) is the reference the profile notes link to; nothing is built from it.
 PINS_SOURCES='
 UniXNU               https://github.com/UniXNU/UniXNU.git                 1446f449b6ac98b8a386752f520e402866ddbe99 main
+Droid-VM-UniXNU      https://github.com/Droid-VM/UniXNU.git               62d0b11773ec17561fb409ed6e4c5adfa29ff45b wip/droidvm
 UniXNU-droidvm       https://github.com/Droid-VM/UniXNU-droidvm.git       f9121cdc629d64cbd148980cdeef1f069c7f0068 wip/hackintosh
 xnu-linux-toolchain  https://github.com/Allenwdk/xnu-linux-toolchain.git  909990e4ec2c6cda30c20cdb23219946918c7fd6 main
 '

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Fetch the kernel's sources into external/ at the commits of pins.sh (shallow: one commit each, about 40 MB in all).
-#   kernel/fetch.sh            UniXNU, UniXNU-droidvm, xnu-linux-toolchain
+#   kernel/fetch.sh            every row of pins.sh
 #   kernel/fetch.sh -l         the pins and the state on disk
 #   kernel/fetch.sh NAME...    only these
 # UniXNU's own sources (the XNU tag, Apple's open-source references, its driver and kit submodules) are fetched by

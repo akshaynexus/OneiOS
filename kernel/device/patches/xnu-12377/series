@@ -1,0 +1,30 @@
+# Board patch paths for xnu-12377, one per line in application order (after the arm64e and iOS 27 series of
+# Droid-VM-UniXNU). Which patch is here and which is left out, and why: kernel/profiles/iphone18-2-ios27.md.
+#
+# 1. From UniXNU-droidvm's iPadOS 27 board (ipados27/patches/xnu-12377), in its order: what an iOS-family 27.0.1
+#    userland needs from any non-Apple host. Left out: the Gunyah vCPU patches (non-apple-vcpu-park,
+#    non-apple-vcpu-start-flush, non-apple-idle-wfi, non-apple-sigp-recover), droidvm-amp, droidvm-sched-trace and
+#    droidvm-early-panic: xnuhost's machine layer takes their place.
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/ipados27-bringup.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/native-board-launch-policy.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/zzx-pmap-sync-flush.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/zzw-native-sandbox-grant-patterns.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/source-storage-start.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-native4k-once.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-pressure-pageable.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-free-target-bytes.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-dyld-16k-peek-first.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-native-pac-user-jop.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-timebase-24mhz.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-text-fixup-bitmap.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-gpu-grant-apps.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-native-pac-user-ib.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-osmetaclass-adopt-superclass.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-gpu-sandbox-first.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-surface-gpu-wait.patch
+#
+# 2. The compiler. Stock clang has no __builtin_xnu_type_*: data-only fallbacks, compiled only where the builtins
+#    are missing (Apple clang on a Mac keeps the real ones). From xnu-linux-toolchain at its pin.
+../../../../external/xnu-linux-toolchain/patches/xnu/portable-kalloc-type-builtins.patch
+#
+# 3. OneiOS's own (this directory).

@@ -1,0 +1,11 @@
+schema_version = 2
+
+# The "SoC" of a OneiOS guest: no hardware of its own. XNU runs as a process on One UI's Linux kernel; the CPU is the
+# phone's (Cortex-X4/A720/A520, ARMv9.2-A, PAC), and memory, interrupts, time and devices come from xnuhost
+# (runtime/xnuhost) through the hooks of patches/xnu-12377/oneios-host-hooks.patch.
+[soc]
+name = "linuxhost"
+description = "XNU as a process on a Linux kernel (xnuhost)"
+
+[components]
+include = ["ArmCpu", "ArmDTPlatform"]
