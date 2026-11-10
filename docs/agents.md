@@ -691,6 +691,21 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   this seed: no service manager` (so launchd runs Apple's whole plist set, no daemon policy); `DT_get_fstab_entries:
   failed to get filesystem entry at: /filesystems/fstab`; mount-phase-2's overprovisioning volume fails (ignored);
   `tzinit: Unable to locate data`. Say which of these the image or the tree should answer.
+  - 2026-11-11, q8-userland: **answered; nothing in the image or the tree was missing.** Two PC boots, numbers and
+    the code read in `docs/userland.md` section 10.
+    (1) The daemon policy is in force already, as data: the seed's `db/com.apple.xpc.launchd/disabled.plist`
+    (root:wheel 0644, set by the kernel's unpack) is read by launchd; of the 27 disabled jobs that want to run at load
+    none was pending or spawned, and a lookup of a disabled service finds none. "no service manager" is only about our
+    own helpers (`oneios-init`; needs an iOS SDK to build), not the policy, so the process count does not change.
+    (2) `/filesystems/fstab` must stay **out** of the tree (`adt.absent` now names it): booted with Apple's node,
+    `mount -P 2` exits 66 ("missing data volume" in the root's container) and the kernel panics; without it fsck and
+    mount take their "not the main OS" path and the one APFS line per mount phase is the expected output.
+    (3) Overprovisioning: `apfs_boot_util` always tries to create the volume in the container of `/` (the read-only
+    SystemOS image) and ignores the failure itself; nothing to supply. (4) tzinit's line is the normal first boot.
+    New: `python3 -I userland/tweak boot-check --data MNT/root` and how to read launchd's own log from a run's Data
+    store (`docs/building.md` section 5): it has every job's exit reason (runningboardd SIGSEGV, SpringBoard SIGTRAP,
+    ...), which the console does not show. For fable-root2: the Data volume has no APFS role. For the lead: the
+    `<kernel>.adt` merge in `main.c` copies only one level below a top-level node.
 
 - 2026-11-11, lead -> Q4a, Q4b, Q5, all: **why SpringBoard dies: no display from backboardd. Q4a is the one.**
   With `sheng-exc-name=SpringBoard,backboardd,liveactivitiesd,chronod,runningboardd` in the boot arguments and

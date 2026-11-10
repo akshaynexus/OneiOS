@@ -82,6 +82,11 @@ osenvironment = "main"
 [adt.absent]
 # Nodes that must not be in the tree: their daemons load by them (_LimitLoadToDeviceTree).
 baseband = "DT has it (compatible baseband,n41). No modem: with the node CommCenter starts the baseband path and aborts (iOSPlus10 docs/laurel_sprout/cellular.md 40-62)"
+# [F] read in /sbin/mount, /sbin/fsck, apfs_boot_util, libsystem_info and the APFS kext of 24A446, and booted both ways
+# on 2026-11-11 (docs/userland.md section 10). Apple's node says "the System, Preboot, xART, Data, Update, Hardware and
+# Baseband volumes are in the container the root is in" and os_env_type 1 says "this is the main OS". Here each image
+# is its own container and the kernel has mounted everything before launchd.
+"filesystems/fstab" = "DT has it (os_env_type 1, seven volumes by APFS role). With it, fsck runs fsck_apfs on the OS container and `mount -P 2` looks for a Data-role volume in the root's container, finds none, exits 66 and the kernel panics (launchd's boot task mount-phase-2 must succeed). Without it both take their 'not the main OS' path, the APFS kext logs one line (DT_get_fstab_entries: failed to get filesystem entry at: /filesystems/fstab) per mount phase, and nothing is left to mount"
 
 [mobilegestalt.expect]
 # What oneios-mg checks in the running guest (helpers/oneios-mg.c). All come from the device tree.

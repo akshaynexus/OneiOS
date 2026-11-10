@@ -1,9 +1,12 @@
 # iOS 27 userland for OneiOS
 
-Owner: userland. Code: `userland/`. Date: 2026-11-10.
+Owner: userland. Code: `userland/`. Date: 2026-11-11.
 
-**State: written and tested on the build machine only.** No iOS 27 root has been run through it (the OS
-images are not fetched on this machine) and nothing has booted. The tests use a generated fake root; `scripts/image/build.sh` with the hook was run end to end on stand-in inputs only. Marks:
+**State: run on the real root and booted on the PC; nothing has run on the phone.** `scripts/image/build.sh` with
+the hook builds the image set of 24A446 from the real images, and the hosted kernel boots that set under
+qemu-aarch64 to launchd and about 120 processes. In that boot launchd applies the daemon policy (section 10 has
+the numbers and how to check a run). The guest helpers are not built (no iOS SDK here), so nothing of
+`/private/var/oneios/bin` runs. The tests use a generated fake root. Marks:
 [F] taken from a source that is named, [I] inferred, [U] unknown until a boot.
 
 What this part does: it takes Apple's iOS 27.0.1 system for iPhone18,2 (24A446) as it is and prepares
@@ -17,11 +20,15 @@ The image build runs it (`scripts/image/build.sh` calls `userland/image-hook`, h
 `docs/image-format.md` section 6). By hand:
 
 ```sh
-python3 -I -m roottweak apply --root OS_TREE --data DATA_TREE --out OUT   # from userland/; --layout sealed
-python3 -I -m roottweak daemons                                           # the daemon policy as text
-python3 -I -m roottweak cdhash FILE...                                    # CDHash of signed Mach-O files
+python3 -I userland/tweak apply --root OS_TREE --data DATA_TREE --out OUT   # --layout sealed
+python3 -I userland/tweak daemons                                           # the daemon policy as text
+python3 -I userland/tweak cdhash FILE...                                    # CDHash of signed Mach-O files
+python3 -I userland/tweak boot-check --data DATA_VOLUME [--root OS_TREE]    # after a boot: section 10
 python3 -I userland/tests/test_roottweak.py && python3 -I userland/tests/test_helpers.py
 ```
+
+(`userland/tweak` is the package's command; `python3 -I -m roottweak` does not find the package, because `-I`
+leaves the current folder out of the module path.)
 
 Python 3.11 or later, standard library only. Output in `OUT` (the hook puts it in the image set's
 `overlay/userland/`):
@@ -59,7 +66,7 @@ and vphone-cli 2.14.2's `Research/Guest` notes, which were measured on iOS 27.0/
 | Tweak | What it does | From |
 |---|---|---|
 | `version` | Reads the build from `SystemVersion.plist`; refuses another iOS version | - |
-| `launchd-jobs` | Disables the jobs of the daemon policy (section 4): `db/com.apple.xpc.launchd/disabled.plist` = `{label: true}`, root:wheel 0644, with the empty `disabled.migrated` beside it. Labels the root does not have are reported, not written. `rw`: also takes them out of `System/Library/xpc/launchd.plist` | vphone-cli `GuestServiceProfile.swift`, `service_trimming.md`; droidvm `package/DroidVMLaunchPolicy.c`, `scripts/seed-data-disable-jobs.py`; UniXNU `scripts/check-launchd-watchdog-policy.py` (launchd honours the file only when root owns it) |
+| `launchd-jobs` | Disables the jobs of the daemon policy (section 4): `db/com.apple.xpc.launchd/disabled.plist` = `{label: true}`, root:wheel 0644, with the empty `disabled.migrated` beside it. Labels the root does not have are reported, not written (the real root has all 142). launchd reads the file once per boot, after the boot task `finish-demo-restore`, and only when uid 0 owns it and neither group nor others can write it (read in `/sbin/launchd` of 24A446; section 10). `rw`: also takes them out of `System/Library/xpc/launchd.plist` | vphone-cli `GuestServiceProfile.swift`, `service_trimming.md`; droidvm `package/DroidVMLaunchPolicy.c`, `scripts/seed-data-disable-jobs.py`; UniXNU `scripts/check-launchd-watchdog-policy.py` (launchd honours the file only when root owns it) |
 | DisableAllowed | iOS 27 marks some jobs `DisableAllowed = false` in `com.apple.jetsamproperties.V54.plist`; launchd runs them although disabled. `sealed`: the affected labels are named in the report and the contract. `rw`: the mark is removed | vphone-cli `service_trimming.md` "iOS 27 and DisableAllowed" (`patch-jetsam-disable-allowed`) |
 | `launchd-crash-policy` | `rw` only: `_PanicOnCrash` renamed, `RecoverOnCrash` removed for backboardd, SpringBoard, configd, runningboardd, so a crash loop does not restart the guest during bring-up | iOSPlus10 `scripts/laurel/ios26-root-spec.py`, `docs/laurel_sprout/ios26-backboardd.md` |
 | `host-services` | Places `/private/var/oneios`: `bin/` (helpers), `services.d/*.conf`, `enabled/`, `identity.expect`. `sealed`: the kernel starts `bin/oneios-init`. `rw`: a launchd job `com.oneios.init` | ownervisor (the manager outside launchd), droidvm `add-ownervisor-data.py`; job keys from iOSPlus10 `scripts/net/root-add-ssh.py` |
@@ -109,10 +116,12 @@ The file holds every label with its reason; `roottweak daemons` prints it. Summa
 vphone keeps it on the iPhone because SpringBoard reconnects to it every second without it. It is kept. If
 it crash-loops without a baseband, `--disable com.apple.CommCenter` (with its two helpers) is the fallback.
 
-On a sealed root, a disabled job marked `DisableAllowed = false` still runs. On vphone's iPad guest of
-24A446 those were analyticsd, OTATaskingAgent, diagnosticextensionsd, mobile.softwareupdated and
-symptomsd-diag; whether the iPhone's `V54` file has the same marks is [U] until the hook runs on the real
-root (the report names them).
+On a sealed root, a disabled job marked `DisableAllowed = false` may still run (launchd has the line
+`Ignoring disabled state because DisableAllowed=false`). The iPhone's `V54` file marks the same five as
+vphone's iPad guest of 24A446: analyticsd, OTATaskingAgent, diagnosticextensionsd, mobile.softwareupdated and
+symptomsd-diag [F, the report of the real root]. In the PC boot of 2026-11-11 none of the five was started in
+the 7 minutes after launchd came up, launchd logged no such line, and backboardd's lookup of
+`com.apple.analyticsd` found no service; whether one of them starts later is [U].
 
 ## 5. iPadOS to iOS: what differs from UniXNU and droidvm
 
@@ -128,6 +137,7 @@ owner's IPSW (`out/kernel-inputs/24A446/devicetree.bin`, read locally, never com
 | Scale fixup | two instructions of the iPad cache so a virtual display is not forced to an iPad mini layout | **not done**: QuartzCore gives a virtual device's mode @2x; @3x needs the same method re-found in the iPhone cache, or a display mode that carries a preferred scale of 3 |
 | Buttons | hold, voldown, volup, home-button-type 2 | the same three; the tree also has `ringeren` (Action button), no host key for it |
 | Baseband | none (Wi-Fi iPad) | the tree has `/baseband` (`baseband,n41`): the booter must leave it out |
+| `/filesystems/fstab` | not in their trees either (UniXNU's boots log the same APFS line) | the tree has it; the booter must leave it out (section 10) |
 | Telephony daemons | CommCenter disabled | kept and idled (section 4) |
 | fairplayd | `fairplayd.A2` | `fairplayd.H2` |
 | Setup panes | iPad set | the same flags cover SIM and Face ID panes [I] |
@@ -149,10 +159,15 @@ owner's IPSW (`out/kernel-inputs/24A446/devicetree.bin`, read locally, never com
 - `adt.required`: properties that need a value or the guest stalls: `unique-chip-id`, the three MAC
   addresses (MobileGestalt waits 5 s per answer without them), `manifest-properties` (cryptexd), a `wlan`
   node, `/bluetooth` transport-encoding 10, `/defaults/vmm-present`.
-- `adt.absent`: `baseband`.
+- `adt.absent`: `baseband`, and `filesystems/fstab` (section 10: with Apple's node the boot stops in
+  mount-phase-2).
 - `display`: the framebuffer to present, and `scale_note` (the open @3x question).
-- `launch_policy.disable_jobs`: the labels; the kernel writes `disabled.plist` as root before launchd
-  starts, as droidvm does, because the first-start unpack of the seed is the only thing that sets owners.
+- `launch_policy.disable_jobs`: the labels. `launch_policy.override`: where they are in force from. The seed
+  carries `db/com.apple.xpc.launchd/disabled.plist` and the kernel's unpack of the seed sets its owner (root)
+  and mode; the kernel's launch policy writes nothing itself (`kernel/patches/oneios-hosted/0004-README.md`,
+  step 5). The report's line "the kernel writes the same override" is from before that was decided; its wording
+  stays until the seed changes for another reason, because the report is a file of the seed and a seed with
+  another hash makes every Data store start over.
 - `launch_policy.service_manager`: start `/private/var/oneios/bin/oneios-init` once and give its task
   launchd's bootstrap port (droidvm `spawn_service_manager`, `droidvm_fix_ownervisor_bootstrap`).
 - `launch_policy.force_enabled`: disabled jobs that will run anyway.
@@ -205,8 +220,8 @@ GPU tests once it runs: droidvm `package/metalcheck`, `gfxprobe`, `gfxbench`.
 | Stage | Needs | Who |
 |---|---|---|
 | launchd starts | The OS and SystemOS volumes mounted as Apple's root; the dyld cache; AMFI with Apple's three trust caches. Boot tasks with RequireSuccess (fsck, mount phases, data protection, launchd_cache_loader) must succeed: nothing here touches them | kernel, booter |
-| Data volume | First start: `newfs_apfs -e -x` on the store, mount at `/private/var`, `oneios-seed`, then launchd. Split (board, 2026-11-10): userland supplies the unpacker, which the hook puts in `overlay/userland/bin/oneios-seed` with its CDHash in `owner-trust.json`; booter and kernel make the store, format and mount it, hand the unpacker and the seed to the guest and run it before launchd. Not confirmed by them yet | userland (unpack); booter + kernel (the rest) |
-| launchd settles | `disabled.plist` in force; `unique-chip-id`, MAC addresses, `manifest-properties` in the tree; software AES (or configd waits 5 minutes); no watchdogd | kernel, booter; this part's list |
+| Data volume | First start: `newfs_apfs -e -x -v Data` on the store, mount at `/private/var`, the seed unpacked **in the kernel** with its owners and modes, then launchd (`0004-README.md`; booted). The user-space unpacker `oneios-seed` is not used; the hook still places it in `overlay/userland/bin` when the helpers are built. No `/filesystems/fstab` in the tree and no Overprovision volume: section 10 | userland (the seed); kernel (the rest) |
+| launchd settles | `disabled.plist` in force (booted: section 10); `unique-chip-id`, MAC addresses, `manifest-properties` in the tree; software AES (or configd waits 5 minutes); no watchdogd | kernel, booter; this part's list |
 | keybagd, securityd | Key-store stand-in: no passcode, wrap/unwrap for the keychain; empty `keybags/` | kernel; `data-layout` |
 | backboardd | The original IOMobileFramebuffer with a host display behind it; a Digitizer/Touch Screen HID service; the CA preferences of 3.1; backlight properties (iOS 26.5's CoreBrightness crashed on missing `backlight-calibration-parameters`; [U] on 27) | kernel, booter; `preferences` |
 | SpringBoard | Identity = iPhone (`oneios-mg` checks it); Setup skipped; migration recorded; watchdogs relaxed; CommCenter and sleepd answering; PosterBoard's store (data-protection class); staged apps and a fresh LaunchServices database; @3x | all; `preferences`, `launchd-jobs` |
@@ -214,11 +229,112 @@ GPU tests once it runs: droidvm `package/metalcheck`, `gfxprobe`, `gfxbench`.
 
 ## 9. What is still missing for SpringBoard
 
-1. A run on the real root. Needs the OS images (10.6 GiB fetch). The first run's report tells which policy labels the iPhone root lacks.
-2. iOS builds of the helpers (an SDK on the build machine), and their CDHashes in the kernel's owner trust module.
-3. The first-start Data path: the unpacker is written and host-tested; the store, `newfs_apfs`, the mount and the call are booter's and the kernel's and not written.
+1. Done: the run on the real root (all 142 labels of the default policy are in the iPhone's cache) and a PC boot with it (section 10).
+2. iOS builds of the helpers (an SDK on the build machine), and their CDHashes in the kernel's owner trust module. Until then the kernel's line `no /private/var/oneios/bin/oneios-init in this seed: no service manager` stays. It is about our own helpers (boot stages on the console, the MobileGestalt check, a debug shell), not about the daemon policy.
+3. Done by the kernel: the first-start Data path (`0004`), with the seed unpacked in the kernel.
 4. The @3x scale: no fixup for the iPhone's QuartzCore yet, and the phone path of `-[CADisplayMode preferredScale]` has not been read (it needs `systemos.img`, not fetched here). Without it the guest may come up @2x (660x1434 points) and lay out wrongly.
 5. Kernel features of section 6 for this profile (release-kernel, booter).
-6. CommCenter without a baseband: kept by the iPhone evidence, unproven on this kernel.
+6. CommCenter without a baseband: in the PC boot launchd refused `com.apple.CommCenter.plist` (`_LimitLoadToDeviceTree baseband`: "cannot be loaded on this hardware"), loaded `com.apple.CommCenter-noncellular.plist` under the same label and CommCenter ran with no exit in the 5 minutes the log covers. Longer runs and SpringBoard's use of it: [U].
 7. The Metal plug-in: nothing built (needs a Mac with Xcode 27.1), and upstream's holds the iPad cache's QuartzCore addresses, which must be re-found in the iPhone's cache first (section 7.1). Until then CPU rendering.
 8. Camera, cellular, Face ID, NFC, haptics: idled or disabled, not provided.
+
+
+## 10. The PC boots of 2026-11-11: what the image and the device tree answer
+
+Two boots under qemu-aarch64 (`docs/building.md` section 5; `out/kernel/24A446/kernel.kc` as it was at 03:28,
+sha256 `8ba32d67...`; the image set of 24A446 with this hook's seed). Their logs are in `out/q8/` on the build machine
+(`boot1.log`, `boot1-launchd.log`, `boot2-fstab.log`); nothing of this ran on the phone.
+
+### How to read what user space did
+
+launchd writes its own log to the Data volume, `/private/var/log/com.apple.xpc.launchd/launchd.log`: every job it
+spawns, every job it refuses and why, and every exit with its reason (`exited due to SIGSEGV`, `OS_REASON_DYLD`,
+...), which the console does not show. After a run has stopped:
+
+```sh
+apfs-fuse -o ro,vol=2 DATA_DIR/data.img MNT        # the Data volume is the third of its container (index 2)
+less MNT/root/log/com.apple.xpc.launchd/launchd.log
+python3 -I userland/tweak boot-check --data MNT/root --root OS_MNT/root   # OS_MNT: apfs-fuse -o ro out/image/24A446/os.img OS_MNT
+fusermount3 -u MNT
+```
+
+`boot-check` exits 1 when a disabled job was started (other than one marked `DisableAllowed = false`), when the
+override would not be read (owner, mode) or when there is no launchd.log.
+
+### The daemon policy: in force, as data
+
+No binary and no kernel hook is needed for it. launchd of 24A446 (read in its code, then booted):
+
+- reads `/private/var/db/com.apple.xpc.launchd/disabled.plist` once per boot, after the boot task
+  `finish-demo-restore` and before `sysstatuscheck`; with `disabled.migrated` beside it, it does not look for the
+  older `/private/var/db/launchd.db/*/overrides.plist`;
+- takes the file only when `st_uid == 0` and `st_mode & 022 == 0`; otherwise it goes on with no override and
+  logs nothing. The seed has it as root:wheel 0644 and the Data volume of the boot shows the same.
+
+Boot 1, `boot-check` on the Data volume it left (stopped 8 minutes after launchd started; launchd.log covers the first 5):
+
+```
+override: 142 jobs disabled; root owns it, mode 0644: launchd reads it
+launchd.log: 70 jobs spawned, 54 pending at load
+cache: 27 of the disabled jobs want to run at load, 0 of them pending or spawned; of the 93 other such jobs, 46
+lookups of disabled jobs that found no service: com.apple.analyticsd (asked by backboardd[55])
+no disabled job was started: the policy is in force
+```
+
+The cache has 725 jobs. The 27 are those of the 142 with `RunAtLoad` or `KeepAlive` (assistantd,
+identityservicesd, imagent, watchdogd, routined, the software update jobs, ...); the other 115 start on demand
+and were not asked for. The process count of a boot does not drop against the earlier runs, because those runs
+had the same seed: the kernel's line "no service manager" was read as "no daemon policy", which it is not.
+launchd refused 18 more jobs by itself ("cannot be loaded on this hardware", "on current os variant").
+
+### `/filesystems/fstab`: the tree must not have it
+
+What reads it in 24A446 (each read in its code):
+
+| Reader | With the node | Without it (what the tree gives now) |
+|---|---|---|
+| APFS kext, `DT_get_fstab_entries` (behind `sysctl vfs.generic.apfs.edt_fstab`, which is what `getfsent` of libsystem_info reads) | takes the container that holds a System-role volume as the boot container and looks up each entry's `vol.fs_role` in it; a role that is not there fails the whole list (read, not booted), except Data (0x40), whose entry is blanked (booted) | logs `failed to get filesystem entry at: /filesystems/fstab` once per call; `getfsent` returns nothing |
+| `/sbin/fsck` (boot task fsck) | `os_env_type` 1: runs `fsck_apfs` on the OS container (15 s under qemu, passed) | `failed to get filesystem info`, `not booting main or diagnostic OS. Skipping fsck on OS container` |
+| `/sbin/mount -P 1`, `-P 2` (mount-phase-1, -2) | looks for a Data-role volume in the boot container; with `os_env_type` 1 and phase 2 a missing one is `mount: missing data volume`, exit 66 | `data volume missing, but not required in env: 0`; no entries, nothing mounted; phase 2 goes on to `apfs_boot_util` |
+| `apfs_boot_util 2` | only for the exclaves storage path, which a system without exclaves skips | the same |
+
+Apple's node describes one container with the System, Preboot, xART, Data, Baseband-Data, Update and Hardware
+volumes. OneiOS has one container per image and a Data store of its own, and the kernel has mounted all of them
+before launchd (`0004-README.md`), so there is nothing for the mount phases to mount.
+
+Boot 2 was the test: the same set and Data store, the tree with `/filesystems/fstab` = `os_env_type 1`, Apple's
+`system-vol` and `data-vol` entries (a private xnuhost that copies a sidecar's whole subtree; not committed).
+Result: fsck ran `fsck_apfs`; mount-phase-1 logged `failed to lookup data volume`, `not required in env: 1` and
+`DT_get_fstab_entries:12873: failed to get volume for role: 64`; mount-phase-2 logged `mount: missing data
+volume` and the kernel stopped with `panic: mount[8] exited ... exit status 66`.
+
+So: `adt.absent` names `filesystems/fstab` (device profile, boot contract), the booter leaves it out as it does
+now, and the one kext line per mount phase is the expected output of this layout, as on UniXNU's boards. Not
+tried: a node with entries but no `os_env_type` (it would only silence the line).
+
+### Overprovisioning: nothing to supply
+
+`apfs_boot_util 2` always does it on iOS (`APFSOverProvModel()` in APFS.framework is the constant 2; only a
+recovery boot skips it). It takes the container of `/` by `statfs`, which here is the SystemOS image (the union's
+top layer: "Found container size of 6157238272 bytes"), reserves 1 % of it (at most 1 GiB) and looks there for a
+volume with role 0x2c0, else creates one named `Overprovision`. The image is read-only and hash-checked, so the
+creation fails with `e00002c1` and the task's own code goes on ("Ignoring..."). Neither the image set nor the
+tree can answer it: the volume would have to be in Apple's image. Nothing is lost: the reserve keeps free blocks
+for the NAND of a real iPhone; here the writable store is a sparse file on One UI's file system.
+
+### `tzinit: Unable to locate data; resetting to system partition`
+
+The normal first boot of a volume with no downloaded time zone asset: tzinit finds no `/var/db/timezone/tz_latest`
+and points `/var/db/timezone/zoneinfo` at `/usr/share/zoneinfo.default` (the link is on the Data volume after
+boot 1). Nothing to supply.
+
+### Seen in passing, for their owners
+
+- The Data volume made by `newfs_apfs -e -x -v Data` has no APFS role (`apfsutil`: "No specific role"), not the
+  Data role (0x40). Nothing in these boots asked for it; newfs_apfs has `-R role` and the string "Volume role 0x%x
+  is not allowed for an unencrypted volume" (not tried).
+- xnuhost's sidecar tree merge (`<kernel>.adt`) copies a node's properties and its children's, not deeper levels.
+- launchd.log of boot 1 names the exits the console does not: parsecd, runningboardd and powerexceptionsd with
+  SIGSEGV, wcd and SpringBoard (twice in the log's 5 minutes) with SIGTRAP, powerexceptionsd once with the dyld
+  assertion `!sMemoryManagerInitialized`, `iomfb_fdr_loader` exit 1.
+

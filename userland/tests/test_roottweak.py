@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
 import fakeroot  # noqa: E402
-from roottweak import cli, config, launchd, macho  # noqa: E402
+from roottweak import bootcheck, cli, config, launchd, macho  # noqa: E402
 from roottweak.tree import Tree, TreeError  # noqa: E402
 
 
@@ -391,6 +391,12 @@ class Sealed(Case):
         self.assertEqual((c['display']['width'], c['display']['height'], c['display']['scale']), (1320, 2868, 3))
         self.assertIn('scale_note', c['display'])
         self.assertIn('chosen/unique-chip-id', c['adt']['required'])
+        # the two nodes of Apple's tree that must stay out: the modem, and the fstab that names volumes this layout has not
+        self.assertEqual(sorted(c['adt']['absent']), ['baseband', 'filesystems/fstab'])
+        self.assertIn('exits 66', c['adt']['absent']['filesystems/fstab'])
+        override = c['launch_policy']['override']
+        self.assertEqual((override['path'], override['owner'], override['mode']),
+                         ('/private/var/db/com.apple.xpc.launchd/disabled.plist', 'root:wheel', '0644'))
         self.assertEqual((c['layout'], c['build'], c['kernel_args']), ('sealed', fakeroot.BUILD, []))
         self.assertIn('key-store', [f['name'] for f in c['kernel_features']])
         self.assertEqual(self.states()['target-type'], 'kept')
@@ -549,6 +555,72 @@ class Trees(unittest.TestCase):
             tree.write_plist('p.plist', {'a': 1, 'b': True})
             self.assertEqual(tree.merge_plist('p.plist', {'a': 1, 'b': 1, 'c': 2}), ['b', 'c'])
             self.assertEqual(tree.merge_plist('p.plist', {'a': 1, 'b': 1, 'c': 2}), [])
+
+class BootCheck(Case):
+    """boot-check on a Data tree as a boot leaves it. The log lines are written here in launchd's format."""
+    LOG = """\
+2026-11-10 14:11:18.969742 (user/501) <Notice>: pending spawn, domain in on-demand-only mode: com.apple.sleepd
+2026-11-10 14:11:19.407385 (user/501/com.apple.sleepd) <Notice>: service state: spawning
+2026-11-10 14:11:25.728310 (system/com.apple.backboardd) <Notice>: service state: spawning
+2026-11-10 14:11:27.945354 (user/501/com.apple.SpringBoard [32]) <Notice>: service state: running
+2026-11-10 14:11:29.000000 (user/501) <Warning>: failed lookup: name = com.apple.nfcd, requestor = backboardd[55], error = 3: No such process
+"""
+
+    def booted(self, more=''):
+        self.apply()
+        log = os.path.join(self.data, 'log/com.apple.xpc.launchd/launchd.log')
+        os.makedirs(os.path.dirname(log), exist_ok=True)
+        with open(log, 'w') as f:
+            f.write(self.LOG + more)
+
+    def test_the_policy_was_applied(self):
+        self.booted()
+        lines, problems = bootcheck.check(self.data, self.root, ignore_owner=os.getuid() != 0)
+        self.assertEqual(problems, [])
+        text = '\n'.join(lines)
+        self.assertIn('2 jobs spawned, 1 pending at load', text)
+        self.assertIn('com.apple.nfcd (asked by backboardd[55])', text)
+        self.assertIn('no disabled job was started', text)
+
+    def test_a_disabled_job_that_ran_is_a_problem_unless_launchd_may_not_disable_it(self):
+        self.booted('2026-11-10 14:12:00.000000 (system/com.apple.nfcd) <Notice>: service state: spawning\n'
+                    '2026-11-10 14:12:01.000000 (system/com.apple.analyticsd [70]) <Notice>: service state: spawning\n')
+        lines, problems = bootcheck.check(self.data, self.root, ignore_owner=True)
+        self.assertEqual(problems, ['1 disabled jobs were started: com.apple.nfcd'])
+        self.assertIn('run although disabled (DisableAllowed = false): com.apple.analyticsd', lines)
+        # without the OS volume's files only launchd's own line says a job may not be disabled
+        _, problems = bootcheck.check(self.data, None, ignore_owner=True)
+        self.assertEqual(problems, ['2 disabled jobs were started: com.apple.analyticsd, com.apple.nfcd'])
+
+    def test_what_launchd_asks_of_the_override_file(self):
+        self.booted()
+        st = os.stat(os.path.join(self.data, bootcheck.OVERRIDE))
+        values = list(st)
+        as_root = os.stat_result(values[:4] + [0, 0] + values[6:])
+        self.assertIsNone(bootcheck.accepted(as_root))
+        self.assertIn('uid 501', bootcheck.accepted(os.stat_result(values[:4] + [501, 501] + values[6:])))
+        writable = os.stat_result([as_root.st_mode | 0o020] + list(as_root)[1:])
+        self.assertIn('group and others', bootcheck.accepted(writable))
+        if os.getuid() != 0:
+            _, problems = bootcheck.check(self.data, self.root)
+            self.assertEqual(len(problems), 1)
+            self.assertIn('root owns it', problems[0])
+
+    def test_no_log_and_the_command(self):
+        self.apply()
+        _, problems = bootcheck.check(self.data, self.root, ignore_owner=True)
+        self.assertIn('launchd.log', problems[0])
+        self.booted()
+        stdout = sys.stdout
+        sys.stdout = open(os.path.join(self.top, 'check'), 'w')
+        try:
+            status = cli.main(['boot-check', '--data', self.data, '--root', self.root, '--ignore-owner'])
+        finally:
+            sys.stdout.close()
+            sys.stdout = stdout
+        self.assertEqual(status, 0)
+        with open(os.path.join(self.top, 'check')) as f:
+            self.assertIn('the policy is in force', f.read())
 
 
 class MachO(unittest.TestCase):

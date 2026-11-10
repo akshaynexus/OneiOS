@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""roottweak by hand: `python3 -I userland/tweak COMMAND ...` (apply, daemons, cdhash, boot-check; --help lists them).
+
+`python3 -I -m roottweak` does not find the package: -I leaves the current folder out of the module path.
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from roottweak import cli  # noqa: E402
+
+sys.exit(cli.main())

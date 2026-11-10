@@ -114,6 +114,11 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   processes named in the boot argument `sheng-exc-name=SpringBoard,backboardd,...` (default: backboardd, chronod,
   liveactivitiesd; launchd always). `scripts/debug/dsc.py ADDR...` names those addresses in the image set's dyld
   shared cache (it finds the slide from a whole backtrace; its header says how to give it the cache).
+- What user space did, after the run has stopped: the Data volume is in `--data`'s `data.img` and launchd keeps
+  its own log on it (every job spawned or refused, every exit with its reason).
+  `apfs-fuse -o ro,vol=2 out/run/data/data.img MNT`, then `MNT/root/log/com.apple.xpc.launchd/launchd.log`, and
+  `python3 -I userland/tweak boot-check --data MNT/root` says whether launchd applied the daemon policy
+  ([userland.md](userland.md) section 10); `fusermount3 -u MNT` before the next run.
 - What the PC cannot show: seccomp (qemu-user has none; a marked trap instruction stands in), real timing, the
   phone's GPU, panel, HALs, SELinux and KernelSU.
 

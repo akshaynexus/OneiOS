@@ -156,8 +156,19 @@ def launchd_jobs(cx):
     else:
         cx.say('kept', 'DisableAllowed', 'none of the disabled jobs is marked DisableAllowed = false')
     if not cx.rw:
+        # The line's wording is kept as it was first written: the report is a file of the seed, and a seed with
+        # another hash makes every Data store start over. What happens is in the contract below and in
+        # docs/userland.md section 6: the seed carries the override and the kernel's unpack sets its owner; the
+        # kernel writes nothing itself (kernel/patches/oneios-hosted/0004-README.md, step 5).
         cx.say('contract', 'launch policy', 'the kernel writes the same override before launchd starts '
                '(launch_policy.disable_jobs), for a Data volume whose file owners it cannot trust')
+        cx.contract['launch_policy']['override'] = {
+            'path': f'/private/var/{path}', 'marker': f'/private/var/{launchd.OVERRIDES_DIR}/disabled.migrated',
+            'owner': 'root:wheel', 'mode': '0644', 'carried_by': 'the Data seed; the first start\'s unpack sets the owner',
+            'read_by_launchd': 'once per boot, after the boot task finish-demo-restore, only when uid 0 owns the file and '
+                               'neither group nor others can write it; a job in it is not spawned and its Mach '
+                               'services are not registered (roottweak boot-check shows it from launchd.log)',
+        }
 
 
 def launchd_crash_policy(cx):

@@ -65,7 +65,7 @@ compile "$HERE/oneios-mg.c" -framework CoreFoundation -o "$OUT/oneios-mg"
 for name in oneios-init oneios-bootstat oneios-seed oneios-mg; do sign "$OUT/$name"; done
 rm -f "$ENT"
 # The same reader the image build uses: fails on a file that is not signed, says the architecture and page size.
-(cd "$HERE/.." && python3 -I -m roottweak cdhash "$OUT/oneios-init" "$OUT/oneios-bootstat" "$OUT/oneios-seed" "$OUT/oneios-mg") | tee "$OUT/cdhashes.txt"
+python3 -I "$HERE/../tweak" cdhash "$OUT/oneios-init" "$OUT/oneios-bootstat" "$OUT/oneios-seed" "$OUT/oneios-mg" | tee "$OUT/cdhashes.txt"
 if grep -v -q 'arm64e pages=4096' "$OUT/cdhashes.txt"; then
   echo "build.sh: a helper is not arm64e with 4 KiB signature pages (lines above)" >&2; exit 1
 fi

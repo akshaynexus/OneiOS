@@ -1,8 +1,10 @@
 """roottweak: the command the image build runs.
 
-  python3 -I -m roottweak apply --root OS_TREE --data DATA_TREE --out OUT_DIR [--layout sealed|rw] [options]
-  python3 -I -m roottweak daemons [--group NAME ...]         the daemon policy, as text
-  python3 -I -m roottweak cdhash FILE ...                    CDHash and signature facts of signed Mach-O files
+  python3 -I userland/tweak apply --root OS_TREE --data DATA_TREE --out OUT_DIR [--layout sealed|rw] [options]
+  python3 -I userland/tweak daemons [--group NAME ...]         the daemon policy, as text
+  python3 -I userland/tweak cdhash FILE ...                    CDHash and signature facts of signed Mach-O files
+  python3 -I userland/tweak boot-check --data DATA_VOLUME [--root OS_TREE]
+                                                             after a boot: did launchd apply the daemon policy?
 
 apply writes into the trees and, in OUT_DIR:
   tweaks.manifest.json   every path changed, with the owner and mode the guest needs (the build may not be root)
@@ -15,7 +17,7 @@ import json
 import os
 import sys
 
-from . import SCHEMA, config, macho, tweaks
+from . import SCHEMA, bootcheck, config, macho, tweaks
 from .tree import ROOT, Manifest, Tree, TreeError
 
 
@@ -121,6 +123,15 @@ def _cdhash(a):
     return status
 
 
+def _boot_check(a):
+    lines, problems = bootcheck.check(a.data, a.root, a.ignore_owner)
+    for line in lines:
+        print(line)
+    for problem in problems:
+        print(f'boot-check: {problem}', file=sys.stderr)
+    return 1 if problems else 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog='roottweak', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='command', required=True)
@@ -161,6 +172,13 @@ def main(argv=None):
     s = sub.add_parser('cdhash', help='CDHash of signed Mach-O files')
     s.add_argument('files', nargs='+')
     s.set_defaults(run=_cdhash)
+
+    s = sub.add_parser('boot-check', help='after a boot: did launchd apply the daemon policy (reads the Data volume)')
+    s.add_argument('--data', required=True, metavar='DIR', help='the files of the Data volume a boot left (/private/var), '
+                   'for example the root folder of an apfs-fuse mount of the store')
+    s.add_argument('--root', metavar='DIR', help='the files of the OS volume: adds the jobs that run at load and the DisableAllowed marks')
+    s.add_argument('--ignore-owner', action='store_true', help='the tree was copied by a user who is not root: do not check the override\'s owner')
+    s.set_defaults(run=_boot_check)
 
     a = p.parse_args(argv)
     try:
