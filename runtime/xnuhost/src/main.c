@@ -174,11 +174,11 @@ static int boot(void)
   // RAM: the kernel's window, then the boot framebuffer the kernel's console draws into.
   uint64_t fb_bytes = ((uint64_t)fb_width * fb_height * 4 + 0x1fffff) & ~0x1fffffull;
   uint64_t window = config.ram_bytes - fb_bytes;
-  uint64_t phys = 0x800000000ull + (kernel.base & 0x1fffff);
-  if (xh_mem_map(phys, kernel.base) || xh_mem_io(XL_BOARD_IO_BASE, XL_BOARD_IO_SIZE)) return -1;
+  if (xh_mem_map(kernel.base) || xh_mem_io(XL_BOARD_IO_BASE, XL_BOARD_IO_SIZE)) return -1;
+  uint64_t phys = g_mem.phys;                       // physical = where it is mapped (mem.c)
   boot_fb_pa = phys + window;
-  LOGI("memory: %llu MiB at physical 0x%llx, mapped at 0x%llx (slide 0x%llx); I/O aperture 0x%llx",
-       (unsigned long long)(window >> 20), (unsigned long long)phys, (unsigned long long)(uintptr_t)g_mem.host,
+  LOGI("memory: %llu MiB at 0x%llx, physical = virtual (slide 0x%llx); I/O aperture 0x%llx",
+       (unsigned long long)(window >> 20), (unsigned long long)phys,
        (unsigned long long)((uintptr_t)g_mem.host - kernel.base), (unsigned long long)(uintptr_t)g_mem.io_host);
 
   // The board: GIC, console, disks, input, display.

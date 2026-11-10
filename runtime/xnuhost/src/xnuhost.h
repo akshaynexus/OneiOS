@@ -15,6 +15,7 @@
 // ---- log (log.c) --------------------------------------------------------------------------------
 enum { XH_LOG_ERROR, XH_LOG_INFO, XH_LOG_DEBUG };
 void xh_log_open(const char *path, int level);
+int  xh_log_level(void);
 void xh_log(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void xh_log_raw(const char *text, size_t length);       // guest console bytes, line-buffered
 // Async-signal-safe: fixed text and hex numbers straight to the log descriptor.
@@ -106,9 +107,9 @@ typedef struct {
 extern xh_mem g_mem;
 // Creates the RAM memfd (before the task factory forks).
 int  xh_mem_create(uint64_t size);
-// Maps the window so that virt = base_hint + (link_base & 2 MiB-1) style constraints hold:
-// the mapping address is congruent to `low21` modulo 2 MiB.
-int  xh_mem_map(uint64_t phys, uint64_t low21);
+// Maps the window at an address congruent to `low21` modulo 2 MiB; that address is also its
+// physical address (g_mem.phys == g_mem.host).
+int  xh_mem_map(uint64_t low21);
 // Reserves the PROT_NONE aperture the board's device windows live in.
 int  xh_mem_io(uint64_t phys, uint64_t size);
 // Host pointer for guest physical [pa, pa+len), NULL if not inside RAM.

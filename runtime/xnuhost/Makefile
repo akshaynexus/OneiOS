@@ -76,8 +76,9 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	     --display none --no-input --width 64 --height 64 2>&1 | tee $(A)/check.log; \
 	  grep -q 'TESTKERNEL: all passed' $(A)/check.log; fi
 
+# The tests create devices and never free them: leak detection off, the other checks on.
 test: $(H)/test_xnuhost check-arm64
-	$(H)/test_xnuhost
+	ASAN_OPTIONS=detect_leaks=0 $(H)/test_xnuhost
 
 clean:
 	rm -rf build

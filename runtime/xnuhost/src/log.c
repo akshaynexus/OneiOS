@@ -12,6 +12,8 @@ static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 static char console_line[512];
 static size_t console_used;
 
+int xh_log_level(void) { return log_level; }
+
 void xh_log_open(const char *path, int level)
 {
   log_level = level;

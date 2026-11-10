@@ -28,28 +28,33 @@ int xh_mem_create(uint64_t size)
   return 0;
 }
 
-int xh_mem_map(uint64_t phys, uint64_t low21)
+// The window's physical address IS its address in xnuhost: one number names a byte of RAM for
+// the kernel's pointers, its "physical" addresses (page tables it may still write, DMA addresses in
+// virtqueues, boot_args.physBase) and the offsets tasks map (address - base). Code that runs before
+// the kernel's MMU switch and computes physical addresses therefore still touches the right bytes.
+int xh_mem_map(uint64_t low21)
 {
   uint64_t want = RAM_HINT + (low21 & 0x1fffff);
   void *p = MAP_FAILED;
   for (int attempt = 0; attempt < 16 && p == MAP_FAILED; attempt++, want += 0x400000000ull) {
-#ifdef MAP_FIXED_NOREPLACE
     p = mmap((void *)(uintptr_t)want, g_mem.size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_SHARED | MAP_FIXED_NOREPLACE, g_mem.fd, 0);
-#else
-    p = mmap((void *)(uintptr_t)want, g_mem.size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_SHARED, g_mem.fd, 0);
-#endif
     if (p != MAP_FAILED && (uint64_t)(uintptr_t)p != want) { munmap(p, g_mem.size); p = MAP_FAILED; }
   }
   if (p == MAP_FAILED) { LOGE("cannot map %llu MiB of RAM executable: %s", (unsigned long long)(g_mem.size >> 20), strerror(errno)); return -1; }
   g_mem.host = p;
-  g_mem.phys = phys;
+  g_mem.phys = (uint64_t)(uintptr_t)p;
   madvise(p, g_mem.size, MADV_DONTDUMP);
   return 0;
 }
 
+// The board's device windows: reserved, inaccessible pages. At their physical addresses when those
+// are free in this process (so a device's physical address is also its pointer), else elsewhere;
+// the io_map host call and xh_info.io_virt say where.
 int xh_mem_io(uint64_t phys, uint64_t size)
 {
-  void *p = mmap((void *)(uintptr_t)IO_HINT, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+  void *p = mmap((void *)(uintptr_t)phys, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+  if (p != MAP_FAILED && (uint64_t)(uintptr_t)p != phys) { munmap(p, size); p = MAP_FAILED; }
+  if (p == MAP_FAILED) p = mmap((void *)(uintptr_t)IO_HINT, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
   if (p == MAP_FAILED) { LOGE("cannot reserve the I/O aperture: %s", strerror(errno)); return -1; }
   g_mem.io_host = p;
   g_mem.io_phys = phys;

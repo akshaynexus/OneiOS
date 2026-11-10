@@ -59,6 +59,7 @@ bool xh_sysreg_emulate(xh_vcpu *v, xh_regs *r, uint32_t insn)
 {
   xh_sys_insn s;
   v->stat_sysreg++;
+  if (xh_log_level() >= XH_LOG_DEBUG) xh_log_signal("emulated instruction, pc", insn, r->pc);
   if (insn == 0xd4000002 || insn == 0xd4000003) {            // hvc #0, smc #0
     r->x[0] = (uint64_t)psci(v, r);
     r->pc += 4;
@@ -112,7 +113,7 @@ bool xh_sysreg_emulate(xh_vcpu *v, xh_regs *r, uint32_t insn)
     // Any other EL1 or EL2 register: a per-CPU shadow that reads back what was written. This lets
     // unchanged start-up code run; it does not give the write its hardware meaning (page tables,
     // vectors and PAC keys are the hosted kernel's own business).
-    if (s.op1 == 3 && s.op0 == 3) return false;              // an EL0 register Linux refused: not ours
+    // That includes EL0-class registers Linux refuses at EL0 (XNU's start clears TPIDRRO_EL0).
     {
       uint64_t *slot = shadow(&v->sys, key);
       if (!slot) return false;

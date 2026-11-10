@@ -204,6 +204,14 @@ int xh_config_finish(xh_config *c)
       d->writable = d->data_store = true;
       if (exists(c->image, "data.seed", path, sizeof path)) strcpy(d->seed, path);
     }
+    // The Data seed is a tar (docs/image-format.md): Linux cannot write APFS, so the guest makes the
+    // Data volume itself on the first start and unpacks the seed, which it reads as the last
+    // read-only disk. (An APFS seed image is copied into the store instead: blk.c.)
+    if (exists(c->image, "data.seed", path, sizeof path)) {
+      xh_disk_config *d = &c->disk[c->ndisk++];
+      memset(d, 0, sizeof *d);
+      strcpy(d->path, path);
+    }
   }
   if (c->ram_bytes & 0x1fffff || c->ram_bytes < (256ull << 20)) { fprintf(stderr, "xnuhost: --ram must be a multiple of 2 MiB, at least 256 MiB\n"); return -1; }
   return 0;
