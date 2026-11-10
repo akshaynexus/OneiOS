@@ -1,7 +1,8 @@
 #!/bin/bash
 # Build xnuhost for arm64 Android and leave it in STAGE/bin (runtime/package.sh calls this).
 #   runtime/build.sh STAGE        build and stage bin/xnuhost (static; the task stub is inside it) and the
-#                                 bridges' helpers bin/oneios-audio and bin/oneios-net.sh
+#                                 bridges' helpers bin/oneios-audio and bin/oneios-net.sh, and the display helper
+#                                 (runtime/display): bin/oneios-display, bin/liboneios-display.so, lib/oneios-display.dex
 #   runtime/build.sh --test       host unit tests of the loader and of xnuhost, then the Android binary
 #                                 booting the test kernel under qemu-aarch64 when that is installed
 # NDK: $NDK, else $ANDROID_NDK_HOME, else $HOME/Android/Sdk/ndk/28.2.13676358.
@@ -12,6 +13,7 @@ NDK=${NDK:-${ANDROID_NDK_HOME:-$HOME/Android/Sdk/ndk/28.2.13676358}}
 if [ "${1:-}" = --test ]; then
   make -s -C "$ROOT/runtime/loader" NDK="$NDK" test android
   make -s -C "$ROOT/runtime/xnuhost" NDK="$NDK" test
+  make -s -C "$ROOT/runtime/display" NDK="$NDK" test all
   exit 0
 fi
 STAGE=${1:?usage: runtime/build.sh STAGE | --test}
@@ -25,5 +27,13 @@ cp "$ROOT/runtime/bridges/net/oneios-net.sh" "$STAGE/bin/oneios-net.sh"
 make -s -C "$ROOT/runtime/xnuhost" NDK="$NDK" build/android/gpuctl
 "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" -o "$STAGE/bin/gpuctl" "$ROOT/runtime/xnuhost/build/android/gpuctl"
 chmod 0755 "$STAGE/bin/gpuctl"
-chmod 0755 "$STAGE/bin/xnuhost" "$STAGE/bin/oneios-audio" "$STAGE/bin/oneios-net.sh"
+# The display helper: a launcher, the library app_process loads, and the dex with the layer (needs javac and d8).
+D=$ROOT/runtime/display/build/android
+make -s -C "$ROOT/runtime/display" NDK="$NDK" build/android/oneios-display build/android/liboneios-display.so build/android/oneios-display.dex
+mkdir -p "$STAGE/lib"
+"$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" -o "$STAGE/bin/oneios-display" "$D/oneios-display"
+"$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" -o "$STAGE/bin/liboneios-display.so" "$D/liboneios-display.so"
+cp "$D/oneios-display.dex" "$STAGE/lib/oneios-display.dex"
+chmod 0644 "$STAGE/lib/oneios-display.dex"
+chmod 0755 "$STAGE/bin/xnuhost" "$STAGE/bin/oneios-audio" "$STAGE/bin/oneios-net.sh" "$STAGE/bin/oneios-display" "$STAGE/bin/liboneios-display.so"
 echo "build: $STAGE/bin/xnuhost ($(stat -c %s "$STAGE/bin/xnuhost") bytes)"

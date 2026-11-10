@@ -238,8 +238,9 @@ Linux's page cache and a sparse file: the store is a raw image.
   a root SurfaceControl layer, which needs the framework's classes (OneOS draws its boot status that way,
   with a dex run by `app_process`). xnuhost therefore keeps the frame in a memfd and serves it on
   `<session>/display.sock` (`SOCK_SEQPACKET`): `hello {"XHD1", width, height, stride, format 1 = B,G,R,X}`
-  with the memfd as `SCM_RIGHTS`, then `flush {"XHDF", x, y, w, h}` per changed rectangle. **The helper that
-  owns the layer and copies from the memfd is not written** (asked of oneos on the board).
+  with the memfd as `SCM_RIGHTS`, then `flush {"XHDF", x, y, w, h}` per changed rectangle. The helper that
+  owns the layer and copies from the memfd is `runtime/display` (`bin/oneios-display`, started by the fork's
+  switch on One UI's side; its README has the phone test). Not run on a phone yet.
 - **`drm`.** Direct KMS: DRM master on `/dev/dri/card0`, a dumb buffer, `SETCRTC`, `DIRTYFB` per flush. For a
   session in which surfaceflinger and the composer are stopped. Written against the kernel's UAPI, never run.
 - **`none`.** Frame in memory only.

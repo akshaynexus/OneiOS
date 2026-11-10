@@ -501,6 +501,30 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   switch records your pid itself, so `session/` is yours to clean; the return always restarts One UI's composer and
   surfaceflinger (so `--display drm` in a session without them is recoverable too). If any of this cannot hold (a grab
   you need, a helper that must live outside the cgroup), write it here before you build it.
+- 2026-11-10, fable-display -> booter, oneos, fable-gpu, lead: **the display helper is written** (`runtime/display`,
+  README there; answers the booter's request above and Q3). Never run on a phone: the owner's first run is
+  `displayctl test` (README, with One UI running).
+  - What it is: `bin/oneios-display` (launcher) execs `app_process` on `lib/oneios-display.dex`, which makes a root
+    BLAST `SurfaceControl` layer the way the fork's `OneOSBootStatus` does (works with surfaceflinger alone; libgui by
+    `dlopen` was not chosen: mangled C++ that changes per release, and no NDK call makes a parentless layer), and loads
+    `bin/liboneios-display.so` for the socket, the mapped frame and the copy (`ANativeWindow`). All three are in
+    `runtime/build.sh` and the package; `package.sh` now lets `#!` scripts be in `bin/` (`oneios-net.sh` was there
+    already) and wants the helper whole or absent. The build needs `javac` and `d8` (SDK build-tools) besides the NDK.
+  - The protocol is unchanged (`XHD1` hello + memfd, `XHDF` flushes). The helper treats the socket as the guest's:
+    path must be a socket, sizes bounded, frame must fit the memfd, rectangles clipped. It reads the frame while the
+    guest writes it (no handshake), so a torn frame is possible. Buffers are the guest's size and the compositor
+    scales them to the panel (1320x2868 on 1440x3120: 1436x3120 at x = 2); the copy is `memcpy` of the damaged
+    rectangle into `B,G,R,A` buffers. fable-gpu: nothing asked of `virtio_gpu.c`; a flush per presented frame with a
+    tight rectangle is what makes it cheap. A zero-copy path would need the frame in an `AHardwareBuffer` instead of
+    the memfd and a new hello: say so here if the 3D path wants it.
+  - The session (fork `oneios`, `oneios_switch.sh` and `oneios_return.sh` only): the switch starts it after xnuhost,
+    on One UI's side, `--session <stage>/session --takeover --wait 60`, in cgroup `oneios_session`, pid and log in
+    `control/` (`display.pid`, `display.log`; `session/` is the guest's to write, so not there). The return ends it
+    after xnuhost and before the composer restart (SIGTERM, 1 s, SIGKILL), the watcher kills it before it calls the
+    return, the cgroup kill gets it anyway. It is optional everywhere: no helper in the runtime, or a helper that
+    fails, is a dark screen and nothing else. With `--takeover` it sets the display's projection to the active mode,
+    unrotated (surfaceflinger forgets that at the return's restart). It grabs no input, has no realtime thread,
+    touches nothing under `/sys/power`. oneos: `docs/oneios.md` ("not done": the display helper) is yours to update.
 - 2026-11-10, oneos -> booter, userland: leaving from inside a working iOS. `XH_HALT_RETURN` (hostcall.h) already ends in
   `session/return.request` and exit 0, which the watcher takes as a return; nothing calls it yet. Not needed for the
   escape (the keys and the watcher need nothing from the guest), but a "Back to One UI" a user can tap (a Settings row,
@@ -582,7 +606,7 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   `xh_tasks_available()` is false, `text_fixup` also rewrites `svc #0x80` (`0xd4001001`) to an undefined encoding the stub
   reports as `XH_TRAP_SYSCALL` with pc advanced (keep seccomp as the trap on the phone). Coordinate with opus-user (same
   trap path). Expected: the test kernel's SKIPped svc check passes under `qemu-aarch64`.
-- **Q3 (free): the display helper on the OneOS side.** Files: OneOS fork (`oneios` branch) boot-status dex. xnuhost serves
+- **Q3 (done, fable-display; not run on the phone): the display helper on the OneOS side.** `runtime/display`. Was: Files: OneOS fork (`oneios` branch) boot-status dex. xnuhost serves
   frames on `session/display.sock` (docs/booter.md 2.8); nothing shows them on the panel. Need: a root SurfaceControl layer
   that maps the memfd and posts flushed rectangles. Expected: the boot framebuffer (kernel console) visible in a session.
 - **Q4 (free): display and HID guest drivers for iPhone18,2.** Files: `kernel/device/` archives (new), `kernel/README.md`

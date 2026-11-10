@@ -5,6 +5,8 @@
 #   runtime.json           the manifest: version, git commit, every file with size, SHA-256 and mode
 #   bin/                   xnuhost and its helpers, built for arm64 Android by runtime/build.sh (the booter's);
 #                          without that script: a placeholder xnuhost that prints "not built yet" and exits 2
+#   lib/                   what a helper loads that is not a program: oneios-display.dex (runtime/display, the
+#                          SurfaceControl layer that bin/oneios-display runs with app_process)
 #   scripts/               runtime/scripts/* (session helpers), when there are any
 #   kernel/                the XNU built by kernel/ (out/kernel/current, or KERNEL_DIR), with its build record
 #   NOTICE, LICENSE        licences; the APSL notice when a kernel is inside
@@ -60,9 +62,14 @@ fi
 chmod 0755 "$STAGE"/bin/*
 for binary in "$STAGE"/bin/*; do
   kind=$(od -An -tx1 -N20 "$binary" | tr -d ' \n')
-  # ELF, 64-bit, little-endian, machine 0xb7 (AArch64)
-  case "$kind" in 7f454c460201*b700) ;; *) echo "package: $binary is not an arm64 ELF" >&2; exit 1 ;; esac
+  # ELF, 64-bit, little-endian, machine 0xb7 (AArch64); or a helper script (#!)
+  case "$kind" in 7f454c460201*b700|2321*) ;; *) echo "package: $binary is not an arm64 ELF or a script" >&2; exit 1 ;; esac
 done
+# The display helper is whole or absent: its launcher needs the library and the dex (runtime/display).
+if [ -e "$STAGE/bin/oneios-display" ]; then
+  [ -f "$STAGE/bin/liboneios-display.so" ] && [ "$(head -c 4 "$STAGE/lib/oneios-display.dex" 2>/dev/null)" = "dex" ] ||
+    { echo "package: bin/oneios-display without bin/liboneios-display.so or lib/oneios-display.dex" >&2; exit 1; }
+fi
 
 # 2. Scripts (0755 when they have a #! line).
 if [ -d "$ROOT/runtime/scripts" ] && [ -n "$(ls -A "$ROOT/runtime/scripts")" ]; then
