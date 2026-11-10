@@ -1,13 +1,16 @@
 # The guest OneiOS presents: iPhone18,2 on iOS 27.0.1. Read by roottweak; the booter builds the device tree
 # from the [adt] tables through the boot contract (docs/userland.md, "Boot contract").
 #
-# Marks: [F] taken from a source named beside it, [I] inferred, [U] to be read from the owner's IPSW
-# (its DeviceTree and BuildManifest) by image-build before the first boot.
+# Marks: [F] taken from a source named beside it, [I] inferred, [U] unknown. "DT" is the IPSW's own device tree
+# for v54ap (24A446), read on the build machine from out/kernel-inputs/24A446/devicetree.bin (image-build's
+# scripts/image/kernel-inputs.sh); only the few values below are written down here.
 
 [device]
 product = "iPhone18,2"        # [F] owner's target
 board = "v54ap"               # [F] vphone-android android/create/installer/src/cfw.rs IPHONES table
-target_type = "V54"           # [I] the board without "ap", upper case, as J820AP -> J820 in UniXNU's iPad profile
+target_type = "V54"           # [F] DT / target-type
+chip_id = 0x8150              # [F] profiles/ios-27.0.1-iPhone18,2.toml (BuildManifest, T8150)
+board_id = 0x0E               # [F] the same
 device_class = "iPhone"
 os = "iOS"
 version = "27.0.1"
@@ -15,7 +18,8 @@ version = "27.0.1"
 # [F] vphone-cli Research/Guest/service_trimming.md "iOS 27 and DisableAllowed".
 
 [display]
-# The iPhone's own panel, portrait. [I] public figures for this model; [U] against the IPSW's device tree.
+# The iPhone 17 Pro Max's own panel, portrait. [F] DT /product: artwork-device-subtype 2868, artwork-scale-factor 3,
+# artwork-device-idiom phone; width and ppi are the model's public figures [I].
 # SpringBoard picks its layout by the point size and the artwork subtype, so the guest keeps the iPhone's
 # metrics and the host scales the picture to its panel (1440x3120: the same shape within 0.3 %).
 width = 1320
@@ -30,7 +34,7 @@ refresh_hz = 120
 # UniXNU profiles/os/ipados-27.0.1-24A446/profile.toml sets these three for the iPad; these are the iPhone's.
 model = "iPhone18,2"
 "target-type" = "V54"
-compatible = "V54AP"
+compatible = ["V54AP", "iPhone18,2", "AppleARM"]   # [F] DT; UniXNU puts the board first and its own platform name after
 
 [adt.chosen]
 # [F] the same values UniXNU's iPad profile and ios-sweet's mkadt set: with this tuple mobileactivationd
@@ -52,11 +56,12 @@ osenvironment = "main"
 # without APPLE2 and MTL2,2 (with them SplashBoard writes snapshots only Apple's GPU decodes: blank switcher cards).
 "artwork-device-idiom" = "phone"
 "artwork-scale-factor" = 3
-"artwork-display-gamut" = "sRGB"
+"artwork-device-subtype" = 2868
+"artwork-display-gamut" = "sRGB"      # DT has P3; UniXNU-droidvm gives its display sRGB (--display-gamut), as the host layer does
 
 [adt.buttons]
 # [F] make-droidvm-adt.py: with home-button-type 2 the lock screen opens by a swipe up, as on this iPhone.
-"button-names" = ["hold", "voldown", "volup"]
+"button-names" = ["volup", "voldown", "hold"]   # DT also has "ringeren" (the Action button): no host key for it
 "home-button-type" = 2
 
 [adt.required]
@@ -71,12 +76,12 @@ osenvironment = "main"
 "chosen/mac-address-ethernet0" = "6 bytes"
 "chosen/manifest-properties" = "present (may be empty): cryptexd panics in libimage4 without it"
 "chosen/manifest-object-properties" = "present (may be empty)"
-"chosen/board-id" = "the IPSW's BuildManifest ApBoardID for v54ap [U]"
-"chosen/chip-id" = "the IPSW's BuildManifest ApChipID for v54ap [U]"
+"chosen/board-id" = "0x0E (device.board_id)"
+"chosen/chip-id" = "0x8150 (device.chip_id)"
 
 [adt.absent]
 # Nodes that must not be in the tree: their daemons load by them (_LimitLoadToDeviceTree).
-baseband = "no modem: with the node CommCenter starts the baseband path and aborts (iOSPlus10 docs/laurel_sprout/cellular.md 40-62)"
+baseband = "DT has it (compatible baseband,n41). No modem: with the node CommCenter starts the baseband path and aborts (iOSPlus10 docs/laurel_sprout/cellular.md 40-62)"
 
 [mobilegestalt.expect]
 # What oneios-mg checks in the running guest (helpers/oneios-mg.c). All come from the device tree.
@@ -86,3 +91,4 @@ DeviceClassNumber = "1"
 "main-screen-width" = "1320"
 "main-screen-height" = "2868"
 "main-screen-scale" = "3"
+ArtworkDeviceSubType = "2868"

@@ -8,6 +8,7 @@ Small programs of ours that run inside the iOS guest. Source only; built by `bui
 |---|---|---|
 | `oneios-init.c` | Starts and supervises our services outside launchd (the role of Droid-VM/ownervisor): `services.d/NAME.conf`, `enabled/NAME`, logs, a status file. Waits for launchd's bootstrap port when the kernel started it | `tests/test_helpers.py` (cc build) |
 | `oneios-bootstat.c` | Prints `ONEIOS-GUEST stage=...` on the console as backboardd and SpringBoard come up, then lock and screen changes | the same |
+| `oneios-seed.c` | First start: unpacks the image set's `data.seed` (pax tar) into the new, empty Data volume as root: owners, modes, links, extended attributes; marks the volume with the seed's SHA-256. Refuses paths that leave the volume | the same |
 | `oneios-mg.c` | Asks MobileGestalt for the identity and checks it against `identity.expect` (iPhone, @3x) | none: needs CoreFoundation |
 
 `roottweak apply --helpers DIR` installs every signed Mach-O of DIR in `/private/var/oneios/bin` and lists its

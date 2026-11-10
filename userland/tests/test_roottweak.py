@@ -371,7 +371,8 @@ class Sealed(Case):
     def test_the_contract_names_the_iphone(self):
         self.apply()
         c = self.read('boot-contract.json')
-        self.assertEqual(c['adt']['root'], {'model': 'iPhone18,2', 'target-type': 'V54', 'compatible': 'V54AP'})
+        self.assertEqual(c['adt']['root'], {'model': 'iPhone18,2', 'target-type': 'V54', 'compatible': ['V54AP', 'iPhone18,2', 'AppleARM']})
+        self.assertEqual(c['app_cryptex']['image'], 'app.img')
         self.assertEqual(c['adt']['chosen']['display-scale'], 3)
         self.assertEqual(c['adt']['product']['artwork-device-idiom'], 'phone')
         self.assertEqual((c['display']['width'], c['display']['height'], c['display']['scale']), (1320, 2868, 3))
@@ -395,6 +396,36 @@ class Sealed(Case):
         self.root = empty
         self.apply(expect=1)
         self.assertIn('not an iOS root', self.log)
+
+
+class Hook(Case):
+    def test_the_image_hook_speaks_api_1(self):
+        import subprocess
+        overlay, owners, info = (os.path.join(self.top, n) for n in ('overlay', 'owners.tsv', 'info.json'))
+        os.mkdir(overlay)
+        env = {'PATH': os.environ['PATH'], 'ONEIOS_HOOK_API': '1', 'ONEIOS_OS_ROOT': self.root, 'ONEIOS_DATA': self.data,
+               'ONEIOS_OVERLAY': overlay, 'ONEIOS_OWNERS': owners, 'ONEIOS_INFO': info, 'ONEIOS_BUILD': fakeroot.BUILD,
+               'ONEIOS_HELPERS': os.path.join(self.top, 'none'), 'ONEIOS_METAL_PLUGIN': os.path.join(self.top, 'none'),
+               'ONEIOS_ROOTTWEAK_ARGS': '--keep com.apple.momentsd'}
+        hook = os.path.join(os.path.dirname(HERE), 'image-hook')
+        before = digest(self.root)
+        done = subprocess.run([sys.executable, '-I', hook], env=env, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(digest(self.root), before)
+        self.assertEqual(sorted(os.listdir(os.path.join(overlay, 'userland'))),
+                         ['boot-contract.json', 'owner-trust.json', 'report.json', 'report.txt', 'tweaks.manifest.json'])
+        with open(owners) as f:
+            rules = dict(line.rstrip('\n').split('\t', 1) for line in f)
+        self.assertEqual(rules['db/com.apple.xpc.launchd/disabled.plist'], '0\t0\t0644')
+        self.assertEqual(rules['mobile/Library/Preferences/com.apple.springboard.plist'], '501\t501\t0600')
+        self.assertEqual(rules['tmp'], '0\t0\t1777')
+        with open(info) as f:
+            summary = json.load(f)
+        self.assertEqual((summary['layout'], summary['disabled_jobs'], summary['build']), ('sealed', 9, fakeroot.BUILD))
+        self.assertTrue(any(line.startswith('oneios-init') for line in summary['off']))
+        self.assertNotIn('com.apple.momentsd', self.plist(self.data, 'db/com.apple.xpc.launchd/disabled.plist'))
+        env['ONEIOS_HOOK_API'] = '2'
+        self.assertNotEqual(subprocess.run([sys.executable, '-I', hook], env=env, capture_output=True).returncode, 0)
 
 
 class ReadWrite(Case):

@@ -30,7 +30,7 @@ class Helpers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.build = tempfile.TemporaryDirectory()
-        for name in ('oneios-init', 'oneios-bootstat'):
+        for name in ('oneios-init', 'oneios-bootstat', 'oneios-seed'):
             subprocess.run([CC, *FLAGS, os.path.join(HELPERS, name + '.c'), '-o', os.path.join(cls.build.name, name)], check=True)
 
     @classmethod
@@ -189,6 +189,137 @@ class Helpers(unittest.TestCase):
         self.assertEqual(last, 'springboard-up')
         usage = subprocess.run([os.path.join(self.build.name, 'oneios-bootstat'), '--bogus'], capture_output=True)
         self.assertEqual(usage.returncode, 2)
+
+    # ---- oneios-seed -------------------------------------------------------------------------------------------
+    def seed(self, entries, fmt=None):
+        """A tar as image-build writes the Data seed: pax, numeric owners, xattrs as LIBARCHIVE.xattr records."""
+        import io
+        import tarfile
+        path = os.path.join(self.tmp.name, 'data.seed')
+        with tarfile.open(path, 'w', format=fmt or tarfile.PAX_FORMAT) as tar:
+            for name, kind, extra in entries:
+                info = tarfile.TarInfo(name)
+                info.uid, info.gid, info.mode = extra.get('uid', 0), extra.get('gid', 0), extra.get('mode', 0o644)
+                info.uname = info.gname = ''
+                info.pax_headers = extra.get('pax', {})
+                if kind == 'dir':
+                    info.type = tarfile.DIRTYPE
+                    tar.addfile(info)
+                elif kind == 'link':
+                    info.type, info.linkname = tarfile.SYMTYPE, extra['target']
+                    tar.addfile(info)
+                elif kind == 'hard':
+                    info.type, info.linkname = tarfile.LNKTYPE, extra['target']
+                    tar.addfile(info)
+                else:
+                    data = extra.get('data', b'')
+                    info.size = len(data)
+                    tar.addfile(info, io.BytesIO(data))
+        return path
+
+    def unpack(self, seed, *args):
+        target = os.path.join(self.tmp.name, 'volume')
+        os.makedirs(target, exist_ok=True)
+        done = subprocess.run([os.path.join(self.build.name, 'oneios-seed'), *args, seed, target], capture_output=True, text=True)
+        return done, target
+
+    def test_seed_unpacks_files_folders_links_modes_and_long_names(self):
+        long_name = 'containers/' + '/'.join(['a-folder-with-a-long-name'] * 6) + '/file-with-a-name-longer-than-a-ustar-header-holds.plist'
+        big = os.urandom(200000)
+        entries = [
+            ('mobile', 'dir', {'mode': 0o755, 'uid': 501, 'gid': 501}),
+            ('mobile/Library', 'dir', {'mode': 0o700}),
+            ('mobile/Library/a.plist', 'file', {'data': b'bplist00 stand-in', 'mode': 0o600, 'uid': 501, 'gid': 501}),
+            ('mobile/empty', 'file', {'mode': 0o644}),
+            ('mobile/big', 'file', {'data': big}),
+            ('mobile/tool', 'file', {'data': b'#!', 'mode': 0o4755}),
+            ('tmp', 'dir', {'mode': 0o1777}),
+            ('link', 'link', {'target': 'mobile/Library'}),
+        ]
+        parts = long_name.split('/')
+        entries += [('/'.join(parts[:i]), 'dir', {'mode': 0o755}) for i in range(1, len(parts))]
+        entries.append((long_name, 'file', {'data': b'deep'}))
+        seed = self.seed(entries)
+        digest = 'ab' * 32
+        done, target = self.unpack(seed, '--hash', digest)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('5 files (200023 bytes), 10 folders, 1 links', done.stdout)
+        with open(os.path.join(target, 'mobile/big'), 'rb') as f:
+            self.assertEqual(f.read(), big)
+        with open(os.path.join(target, long_name), 'rb') as f:
+            self.assertEqual(f.read(), b'deep')
+        self.assertEqual(os.path.getsize(os.path.join(target, 'mobile/empty')), 0)
+        self.assertEqual(os.readlink(os.path.join(target, 'link')), 'mobile/Library')
+        mode = lambda p: os.lstat(os.path.join(target, p)).st_mode & 0o7777  # noqa: E731
+        self.assertEqual([mode('mobile/Library'), mode('mobile/Library/a.plist'), mode('tmp'), mode('mobile/tool')],
+                         [0o700, 0o600, 0o1777, 0o4755])
+        with open(os.path.join(target, '.oneios-seed')) as f:
+            self.assertEqual(f.read(), digest + '\n')
+        # the same seed again: left alone; another seed: refused, nothing touched
+        os.remove(os.path.join(target, 'mobile/empty'))
+        again, _ = self.unpack(seed, '--hash', digest)
+        self.assertEqual((again.returncode, os.path.exists(os.path.join(target, 'mobile/empty'))), (0, False))
+        other, _ = self.unpack(seed, '--hash', 'cd' * 32)
+        self.assertEqual(other.returncode, 3)
+        self.assertEqual(self.unpack(seed, '--hash', 'XYZ')[0].returncode, 2)
+        # GNU long names read as well
+        import tarfile
+        shutil.rmtree(target)
+        done, target = self.unpack(self.seed(entries, tarfile.GNU_FORMAT))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertTrue(os.path.isfile(os.path.join(target, long_name)))
+        self.assertFalse(os.path.exists(os.path.join(target, '.oneios-seed')))
+
+    def test_seed_sets_extended_attributes(self):
+        import base64
+        value = bytes(range(256))
+        seed = self.seed([('f', 'file', {'data': b'x', 'pax': {'LIBARCHIVE.xattr.user.oneios.test': base64.b64encode(value).decode()}})])
+        done, target = self.unpack(seed)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        try:
+            have = os.getxattr(os.path.join(target, 'f'), 'user.oneios.test')
+        except OSError:
+            self.assertIn('1 extended attributes NOT set', done.stdout)  # a file system without user xattrs: said, not hidden
+            return
+        self.assertEqual(have, value)
+        self.assertIn('1 extended attributes', done.stdout)
+
+    def test_seed_refuses_what_could_leave_the_volume(self):
+        outside = os.path.join(self.tmp.name, 'outside')
+        os.mkdir(outside)
+        for entries, words in (
+            ([('../escape', 'file', {'data': b'x'})], '..'),
+            ([('a/../../escape', 'file', {'data': b'x'})], '..'),
+            ([('/abs', 'file', {'data': b'x'})], 'absolute'),
+            ([('out', 'link', {'target': outside}), ('out/escape', 'file', {'data': b'x'})], 'through a symbolic link'),
+            ([('a', 'file', {'data': b'x'}), ('b', 'hard', {'target': 'a'})], 'not a file, folder or symbolic link'),
+        ):
+            shutil.rmtree(os.path.join(self.tmp.name, 'volume'), ignore_errors=True)
+            done, target = self.unpack(self.seed(entries), '--hash', 'ab' * 32)
+            self.assertEqual(done.returncode, 1, entries)
+            self.assertIn(words, done.stderr)
+            self.assertEqual(os.listdir(outside), [])
+            self.assertFalse(os.path.exists(os.path.join(self.tmp.name, 'escape')))
+            self.assertFalse(os.path.exists(os.path.join(target, '.oneios-seed')), 'a failed unpack must not be marked done')
+
+    def test_seed_refuses_a_damaged_archive(self):
+        seed = self.seed([('a', 'file', {'data': b'x' * 5000}), ('b', 'file', {'data': b'y'})])
+        with open(seed, 'rb') as f:
+            data = f.read()
+        cut = os.path.join(self.tmp.name, 'cut.seed')
+        with open(cut, 'wb') as f:
+            f.write(data[:3000])
+        done, _ = self.unpack(cut)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('ends inside an entry', done.stderr)
+        with open(cut, 'wb') as f:
+            f.write(b'\x01' * 2048)
+        done, _ = self.unpack(cut)
+        self.assertEqual(done.returncode, 1)
+        self.assertTrue(done.stderr.startswith('oneios-seed: a header'), done.stderr)
+        with open(cut, 'wb') as f:
+            f.write(b'\0' * 4096)
+        self.assertEqual(self.unpack(cut)[0].returncode, 1)
 
 
 if __name__ == '__main__':

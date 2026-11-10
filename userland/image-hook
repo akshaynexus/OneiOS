@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""The image build's userland hook (docs/image-format.md section 6, hook API 1): runs roottweak on the Data seed.
+
+image-build's `scripts/image/build.sh` runs this once with ONEIOS_* in the environment. The OS, SystemOS and App
+images are never edited (the sealed layout), so everything here is a change to the Data seed (ONEIOS_DATA),
+a file for the image set's overlay/ (ONEIOS_OVERLAY) or a line of the boot contract.
+
+Leaves in ONEIOS_OVERLAY/userland/: boot-contract.json (for the booter and the kernel), owner-trust.json (for the
+trust cache), tweaks.manifest.json, report.txt, report.json. Owners go to ONEIOS_OWNERS, a summary to ONEIOS_INFO.
+
+Optional inputs, each used when it is there:
+  ONEIOS_HELPERS        signed guest helpers (default out/userland/helpers, from userland/helpers/build.sh)
+  ONEIOS_METAL_PLUGIN   a built Metal plugin bundle (default out/userland/NativeAdrenoMetal.bundle)
+  ONEIOS_ROOTTWEAK_ARGS more `roottweak apply` arguments, split like a shell line (--group fewest, --disable LABEL)
+"""
+import json
+import os
+import shlex
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from roottweak import cli  # noqa: E402
+
+
+def main():
+    env = os.environ
+    if env.get('ONEIOS_HOOK_API') != '1':
+        sys.exit(f'image-hook: hook API {env.get("ONEIOS_HOOK_API")!r}, this hook speaks 1')
+    try:
+        os_root, data, overlay = env['ONEIOS_OS_ROOT'], env['ONEIOS_DATA'], env['ONEIOS_OVERLAY']
+    except KeyError as e:
+        sys.exit(f'image-hook: {e.args[0]} is not set')
+    out = os.path.join(overlay, 'userland')
+    repo = os.path.dirname(HERE)
+    args = ['apply', '--layout', 'sealed', '--root', os_root, '--data', data, '--out', out]
+    if env.get('ONEIOS_BUILD'):
+        args += ['--build', env['ONEIOS_BUILD']]
+    helpers = env.get('ONEIOS_HELPERS') or os.path.join(repo, 'out/userland/helpers')
+    if os.path.isdir(helpers):
+        args += ['--helpers', helpers]
+    plugin = env.get('ONEIOS_METAL_PLUGIN') or os.path.join(repo, 'out/userland/NativeAdrenoMetal.bundle')
+    if os.path.isdir(plugin):
+        args += ['--metal-plugin', plugin]
+    args += shlex.split(env.get('ONEIOS_ROOTTWEAK_ARGS', ''))
+    status = cli.main(args)
+    if status:
+        return status
+
+    with open(os.path.join(out, 'tweaks.manifest.json')) as f:
+        manifest = json.load(f)
+    owners = env.get('ONEIOS_OWNERS')
+    if owners:
+        with open(owners, 'a') as f:
+            for e in manifest['entries']:
+                if e['volume'] == 'data' and 'uid' in e:
+                    f.write(f'{e["path"]}\t{e["uid"]}\t{e["gid"]}\t{e.get("mode", "-")}\n')
+    info = env.get('ONEIOS_INFO')
+    if info:
+        with open(os.path.join(out, 'report.json')) as f:
+            report = json.load(f)
+        with open(os.path.join(out, 'boot-contract.json')) as f:
+            contract = json.load(f)
+        with open(os.path.join(out, 'owner-trust.json')) as f:
+            trust = json.load(f)
+        with open(info, 'w') as f:
+            json.dump({
+                'tool': 'userland/roottweak', 'schema': manifest['schema'], 'layout': 'sealed', 'build': report['build'],
+                'contract': 'overlay/userland/boot-contract.json', 'owner_trust': 'overlay/userland/owner-trust.json',
+                'disabled_jobs': len(contract['launch_policy']['disable_jobs']),
+                'owner_cdhashes': len(trust['cdhashes']),
+                'off': [f'{r["item"]}: {r["note"]}' for r in report['results'] if r['state'] == 'off'],
+                'not_found': [r['item'] for r in report['results'] if r['state'] == 'not-found'],
+            }, f, indent=2)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -19,7 +19,7 @@ ONEIOS = 'oneios'                       # in the Data tree: /private/var/oneios
 ONEIOS_GUEST = '/private/var/oneios'
 INIT_LABEL = 'com.oneios.init'
 INIT_ROOT_PATH = 'usr/libexec/oneios-init'  # rw layout: the manager on the OS volume
-HELPERS = ('oneios-init', 'oneios-bootstat', 'oneios-mg')
+HELPERS = ('oneios-init', 'oneios-bootstat', 'oneios-mg')  # oneios-seed runs before Data exists: it is not installed here
 LOGD = (272, 272)
 RECOVER_LABELS = ('com.apple.backboardd', 'com.apple.SpringBoard', 'com.apple.configd', 'com.apple.runningboardd')
 
@@ -248,7 +248,7 @@ def host_services(cx):
         # The debug shell, when the helper build was given one (helpers/README.md): any other file of the folder.
         for name in sorted(os.listdir(helpers)):
             source = os.path.join(helpers, name)
-            if name in HELPERS or name.startswith('.') or not os.path.isfile(source):
+            if name in HELPERS or name == 'oneios-seed' or name.startswith('.') or not os.path.isfile(source):
                 continue
             with open(source, 'rb') as f:
                 if macho.is_macho(f.read(8)):
@@ -408,6 +408,15 @@ def app_cryptex(cx):
     """The App cryptex (Safari's daemons and support files) where iOS looks for it: /private/preboot/Cryptexes/App.
     Its files stay Apple's and pass AMFI through the cryptex's own trust cache."""
     source = cx.options.get('appos')
+    if not source and not cx.rw:
+        # image-build ships the cryptex as its own read-only image (docs/image-format.md: app.img)
+        cx.contract['app_cryptex'] = {'image': 'app.img', 'mount': '/private/preboot/Cryptexes/App', 'readonly': True,
+                                      'also': 'the SystemOS volume by its cryptex path: /System over '
+                                              '/private/preboot/Cryptexes/OS/System and /usr over .../OS/usr, not as unions '
+                                              '(UniXNU zzyb-native-cryptex-os-view.patch)'}
+        cx.say('contract', 'App cryptex', 'not copied: the kernel mounts the image set\'s app.img at '
+               '/private/preboot/Cryptexes/App (app_cryptex)')
+        return
     if not source:
         cx.say('off', 'App cryptex', 'no --appos DIR (the extracted Cryptex1,AppOS volume): Safari\'s daemons are missing')
         return
