@@ -1,0 +1,26 @@
+# Apple firmware and everything built from it stays out of git and out of releases:
+# scripts fetch it from Apple and build it locally (out/), like iOSPlus10.
+*.ipsw
+*.dmg
+*.aea
+*.img
+*.simg
+*.erofs
+*.im4p
+*.img4
+*.kc
+*.macho
+*.zip
+kernelcache*
+BuildManifest.plist
+Restore.plist
+firmware/
+inputs/
+out/
+logs/
+dumps/
+external/
+.DS_Store
+__pycache__/
+target/
+build/
