@@ -173,7 +173,7 @@ index, pairs, sign extension) and run against the device models.
   unmaps the whole address space but its region, installs the handlers and the seccomp filter, optionally
   drops to another uid, and becomes the service thread.
 - **System calls.** The filter returns `SECCOMP_RET_TRAP` for every system call whose instruction pointer is
-  outside the stub's text, and inside it allows only the eleven calls the stub makes (`mmap` only on the two
+  outside the stub's text, and inside it allows only the twelve calls the stub makes (`mmap` only on the two
   memfds or anonymous). iOS's `svc #0x80` therefore never reaches Linux: the thread gets SIGSYS, the stub's
   handler copies its registers (x0-x30 with x16 intact, sp, pc, NZCV, v0-v31, FPSR, FPCR, the thread
   register) to the thread's trap page, wakes xnuhost and waits. Seccomp user notification is not used: it

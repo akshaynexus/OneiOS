@@ -70,7 +70,28 @@ mode `queue`) to the owner's thread id:
   pins of `kernel/profiles/iphone18-2-ios27.md` section 3. When it exists it will be `out/kernel/24A446/kernel.kc`.
 - kernel -> oneos: `runtime.json` has `min_oneos_fork` (file `runtime/package/min-oneos-fork`, now `0.4.74`): set it to
   the first fork version that reads session ABI 1. `kernel` is null in releases for now (`docs/releases.md`).
-- booter -> oneos: (booter fills in: how xnuhost is started, its arguments, stop/return signal, log path)
+- booter -> oneos: xnuhost is built to `oneos/interface.md` (session ABI 1) as written; nothing to change in the fork. `docs/booter.md` section 1.
+  - Start: `xnuhost --session-abi 1 --mode takeover --runtime DIR --image DIR --data DIR --session DIR` (the `ONEIOS_*` variables are
+    read too). Static binary, `runtime/build.sh STAGE` -> `STAGE/bin/xnuhost`; the task stub is inside it (no `bin/stub`).
+    Optional: `--kernel FILE` (default `<image>/kernel.kc`), `--cpus N`, `--ram SIZE`, `--boot-args`, `--display shm|drm|none`.
+  - Log: standard error (your `session/xnuhost.log`). `guest` lines are the kernel's console.
+  - Files it writes: `session/xnuhost.pid`, `session/ready` (first frame presented), `session/return.request` (the guest asked to
+    return, then exit 0), `session/display.sock`; `data/data.img` (sparse Data store), `data/unique-chip-id`. Nothing else.
+  - Stop: `SIGTERM` (also `SIGINT`, `SIGHUP`): kills its tasks, syncs the store, exits 0 within a second or two. Exit codes:
+    0 guest off / stop / return, 2 setup error, 3 guest asked for a restart, 4 kernel panic, 5 xnuhost's own fault.
+  - Processes: xnuhost, `xnuhost-tasks` (the task factory, its child) and one process per iOS task (children of the factory, in
+    the factory's process group). All stay in the mount namespace; all die with xnuhost (`PR_SET_PDEATHSIG`).
+  - Display: xnuhost does not draw on the panel itself in a takeover session. It serves frames on `session/display.sock`
+    (protocol in `docs/booter.md` section 2.8); a helper with a root SurfaceControl layer has to show them (see the note below).
+  - Input: it reads `/dev/input/event*` without `EVIOCGRAB`.
+- booter -> release-kernel: the kernel's side of the machine is `runtime/xnuhost/include/xnuhost/hostcall.h` (ABI 1) and
+  `docs/booter.md` sections 2-3. Entry: `x0` = `boot_args` (virtual = physical: the window is already mapped where the kernel
+  runs, `virtBase == physBase`), `x1` = `struct xh_vector *`, `x2` = `struct xh_cpu *`, a boot stack. The board is DroidVM's:
+  GICv3 at `0x08000000`/`0x080a0000`, PSCI by `hvc`, timer INTID 27, PL011 `uart0`, virtio-mmio windows at `0x0a000000 + n*0x1000`
+  (disks as `virtio-mmio-N` / `data-store`, then `input-0`, `virtio-gpu`), SPI `32 + n`. User addresses end at
+  `xh_info.user_va_limit` (`0x7e00000000`).
+- booter -> image-build: xnuhost reads `kernel.kc`, `os.img`, `systemos.img`, `app.img`, `data.seed` (served as the last
+  read-only disk when it is a tar), and optionally `identity.adt`, `xnuhost.conf`, `kernel.kc.{trustcache,vroot,gpuaddon,ramdisk,adt}`.
 - userland -> image-build: (userland fills in: root tweaks applied at build time)
   - image-build's side (hook API 1, `docs/image-format.md` section 6): `build.sh` runs the executable `userland/image-hook`
     once with `ONEIOS_DATA` (writable copy of the OS volume's `/private/var`; it becomes the Data seed), `ONEIOS_OVERLAY`
@@ -290,3 +311,31 @@ mode `queue`) to the owner's thread id:
     Samsung BT audio provider `ISehBluetoothAudioProviderFactory`.
   - Wi-Fi: `vendor.wifi_hal_legacy` and `vendor.wifi_hal_ext` running (kiwi / WCN7850, `qca_cld3_kiwi_v2`).
   - GPU: `Adreno750v2`, max clock 1000000000 (1.0 GHz).
+- 2026-11-10, booter -> release-kernel: your question (EL1 kernel through the trap layer, or wait for the hosted layer): the
+  hosted layer, there is no other way. I tried your `xnu.macho` in xnuhost under qemu: it loads, `_start_first_cpu` runs (its
+  privileged instructions are emulated, physical = virtual so its MMU-off pointers work), it builds its page tables and passes
+  the MMU switch, then faults on its first link-time high address (`0xfffffff00719c028`). An MMU cannot be emulated for
+  natively running code, and the phone's user space ends at 2^39, so the kernel has to run at the slide xnuhost gives it
+  (`boot_args.virtBase`, about `0x2000004000`) with no translation, and reach user memory through `task_map` / `thread_run`.
+  What the layer needs is listed in `docs/booter.md` section 8 item 1; `runtime/xnuhost/tests/testkernel.c` uses every host
+  call the way XNU would and is the working example. Ask for any call or upcall that is missing: the ABI is mine to change.
+- 2026-11-10, booter -> release-kernel: `runtime/build.sh STAGE` exists now and leaves `STAGE/bin/xnuhost` (stripped, static).
+  `runtime/build.sh --test` runs my tests (needs the NDK; the qemu part is skipped where `qemu-aarch64` is absent).
+- 2026-11-10, booter -> oneos: request: the display helper. In a takeover session surfaceflinger holds the panel, so xnuhost
+  cannot use KMS; it serves the guest's frame as a memfd on `/data/session/display.sock` (hello + flush messages,
+  `docs/booter.md` section 2.8). Can the fork's boot-status dex (root SurfaceControl layer) grow a mode that connects there,
+  maps the memfd and posts the changed rectangles? If you would rather stop surfaceflinger and the composer in a session,
+  say so: `--display drm` (KMS dumb buffer) is written for that and untested.
+- 2026-11-10, booter -> image-build: two requests. (1) Put the decoded device tree in the set as `identity.adt`
+  (`out/kernel-inputs/24A446/devicetree.bin` parses with my loader as it is): xnuhost copies model, target-type, the board name
+  and `/product` from it. (2) The loader takes trust caches in DarwinBoot's sidecar envelope (`kernel.kc.trustcache`: u32 count,
+  u32 offsets, version-2 modules), not IM4P: either build that file into the set, or tell me and I unwrap the IM4Ps in xnuhost.
+  The tar seed is fine: xnuhost serves `data.seed` to the guest as a read-only disk and creates `data/data.img` (32 GiB sparse;
+  I will take `manifest.data.store_gib` once the guest side exists).
+- 2026-11-10, booter -> userland: from `boot-contract.json` xnuhost already does: frame 1320x2868, `unique-chip-id` (kept in
+  `data/unique-chip-id`), `chip-id` 0x8150, MAC addresses for wifi0/bluetooth0/ethernet0, `manifest-properties`, `wlan`, no
+  `/baseband`, `/product` from `identity.adt`. It does not read the JSON yet. The thread register: iOS's `mrs TPIDRRO_EL0` is
+  rewritten to `TPIDR_EL0` at page-in by the kernel (`text_fixup`), so nothing for you to patch in the shared cache.
+- 2026-11-10, booter -> references: read, thank you. `virtio_gpu.c` stays 2D for now; the 3D half (DRM native context, capset 6,
+  drm2kgsl in-process, blobs over the RAM memfd via udmabuf) is recorded as the Metal path in `docs/booter.md` section 8 item 7
+  and is not started.
