@@ -28,9 +28,8 @@ iPhone18,2 kexts), the boot gets through:
 Not reached: a SpringBoard that stays up, a frame on the display, `session/ready`. What is missing for that, as
 seen in the log: the guest has no IOMobileFramebuffer and no touch digitizer yet (backboardd has nothing to draw on),
 no AppleKeyStore stand-in (`keybagd`: "failed to load system bag"), and some processes die with "Text page
-corruption detected". With one vCPU (one processor set node) launchd's first `workq_open` asserts in
-`sched_edge_qos_max_parallelism` (`sched_clutch.c:6589`, fable-prelink's run); the 8-vCPU runs with two cluster
-types do not. Detail: [kernel/patches/oneios-hosted/README.md](kernel/patches/oneios-hosted/README.md)
+corruption detected". A host with one kind of CPU (or one vCPU) used to assert in the
+scheduler at launchd's first `workq_open`; `0016` fixes that (booted with eight CPUs of one kind). Detail: [kernel/patches/oneios-hosted/README.md](kernel/patches/oneios-hosted/README.md)
 and the board, [docs/agents.md](docs/agents.md).
 
 Built and tested on the PC, not yet on the phone: xnuhost and its loader, the GPU path (drm2kgsl on KGSL), the

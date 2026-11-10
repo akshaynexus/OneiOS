@@ -714,7 +714,7 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
     must lose that task, not panic the kernel. The vCPU also sits 10 s in the host call with interrupts masked.
 - 2026-11-11, lead: two more kernel patches. `0016`: a host with fewer than two kinds of CPU (one vCPU, or all the
   same) is a non-standard topology for the scheduler, as with `cpus=N` (fable-prelink's `sched_clutch.c:6589` at
-  launchd's first `workq_open`); built, **not booted yet with one kind**. `0017`: the debugger cross-call's
+  launchd's first `workq_open`); booted with `--set clusters=PPPPPPPP`: launchd's early boot completes and the daemons start. `kernel/build-linux.sh` (the VM kernel) still builds after 0006-0017 (154 s, 2026-11-11). `0017`: the debugger cross-call's
   acknowledge timeout is 100000000 ticks, not 240000 (10 ms): the first stackshot of a busy system panicked with
   `Debugger synch pending on cpu 0`; a vCPU is a host thread and answers when it runs.
 - 2026-11-11, lead, review of fable-brightness's `3dc790a` and fable-camera's `2f3e28c` (read, not run: the guest
