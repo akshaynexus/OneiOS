@@ -24,3 +24,6 @@
 0012-first-start-diagnosis.patch
 0013-shared-region-size.patch
 0014-parallel-code-hash.patch
+# lead: the nested-kernel-fault check counts per thread, not per CPU (a copyout that sleeps let another thread's
+# first fault on that CPU look nested: the stop once launchd's daemons ran).
+0015-fault-depth-per-thread.patch

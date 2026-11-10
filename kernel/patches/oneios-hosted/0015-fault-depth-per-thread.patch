@@ -1,0 +1,63 @@
+diff --git a/osfmk/arm/thread.h b/osfmk/arm/thread.h
+--- a/osfmk/arm/thread.h
++++ b/osfmk/arm/thread.h
+@@ -110,8 +110,12 @@
+ #else
+ 	unsigned int              reserved0;
+ 	unsigned int              reserved1;
++#if XNU_HOSTED
++	unsigned int              hosted_fault_depth;      /* OneiOS hosted: kernel faults this thread is inside (hosted_exception_upcall) */
++#else
+ 	unsigned int              reserved2;
+ #endif
++#endif
+ 
+ 	uint32_t                  arm_machine_flags;       /* thread flags (arm64/machine_machdep.h) */
+ 	arm_context_t *           contextData;             /* allocated user context */
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+--- a/osfmk/arm64/hosted/hosted_machine.c
++++ b/osfmk/arm64/hosted/hosted_machine.c
+@@ -374,7 +374,15 @@
+ 
+ /* ---- kernel faults --------------------------------------------------------------------------- */
+ 
+-static uint32_t hosted_fault_depth[MAX_CPUS];
++/*
++ * A kernel fault taken while the same thread is still handling one is allowed a few levels (the fault path can
++ * touch pageable memory of its own); deeper is a loop, reported with the registers instead of a stack overflow.
++ * Counted per thread: the handler blocks (a copyout that pages in), the CPU goes on with another thread whose own
++ * first fault is not nested, and the handler may finish on a different CPU. A count per CPU stopped the boot with
++ * "kernel fault inside the fault handler" at the first copyout that slept while another thread faulted (launchd's
++ * daemons reading the loaded-kext list).
++ */
++#define HOSTED_FAULT_DEPTH_MAX 4
+ 
+ static void __dead2
+ hosted_fatal_fault(const struct xh_frame *frame, const char *why)
+@@ -435,7 +443,6 @@
+ 	arm_context_t context;
+ 	uint64_t      esr = hosted_kernel_esr(frame);
+ 	uint32_t      ec = (uint32_t)ESR_EC(esr);
+-	unsigned      index = cpu->index < MAX_CPUS ? cpu->index : 0;
+ 
+ 	hosted_stats.kernel_faults++;
+ 	/* The software TLB: the page tables may already allow what the host mapping does not have yet. */
+@@ -459,14 +466,16 @@
+ 	if (current_thread() == NULL) {
+ 		hosted_fatal_fault(frame, "hosted: kernel fault before the first thread, address");
+ 	}
+-	if (hosted_fault_depth[index]++ != 0) {
++	(void)cpu;
++	thread_t faulting = current_thread();
++	if (faulting->machine.hosted_fault_depth++ >= HOSTED_FAULT_DEPTH_MAX) {
+ 		hosted_fatal_fault(frame, "hosted: kernel fault inside the fault handler, address");
+ 	}
+ 	hosted_frame_to_context(frame, &context, esr);
+ 	sleh_synchronous(&context, esr, frame->far, false);
+ 	/* sleh_synchronous may have enabled interrupts and switched CPUs: mask before the frame is touched. */
+ 	(void)hosted_irq_mask();
+-	hosted_fault_depth[hosted_cpu()->index < MAX_CPUS ? hosted_cpu()->index : 0] = 0;
++	faulting->machine.hosted_fault_depth--;
+ 	hosted_context_to_frame(&context, frame);
+ 	hosted_frame_resume(frame);
+ }
