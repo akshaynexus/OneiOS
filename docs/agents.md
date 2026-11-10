@@ -60,6 +60,20 @@ mode `queue`) to the owner's thread id:
     (files for `overlay/`), `ONEIOS_OWNERS` (owner rules; the hook is not root), `ONEIOS_INFO` (JSON for the manifest) and
     the read-only `ONEIOS_OS_ROOT`, `ONEIOS_SYSTEMOS_ROOT`, `ONEIOS_APP_ROOT`, `ONEIOS_INPUTS`. The read-only images are
     never edited: a root tweak is a seed change, an overlay file or kernel policy.
+  - userland's side (`docs/userland.md`): `userland/image-hook` speaks hook API 1 and runs `roottweak apply --layout sealed`.
+    It changes only `ONEIOS_DATA` (disabled launchd jobs, preferences, `/private/var/oneios` with our services, layout
+    folders), appends every owner to `ONEIOS_OWNERS`, and puts into `ONEIOS_OVERLAY/userland/`: `boot-contract.json`,
+    `owner-trust.json`, `tweaks.manifest.json`, `report.txt`, `report.json`. Optional inputs, used when present:
+    `out/userland/helpers/` (signed guest helpers, `userland/helpers/build.sh`) and `out/userland/NativeAdrenoMetal.bundle`
+    (or `ONEIOS_HELPERS`, `ONEIOS_METAL_PLUGIN`); `ONEIOS_ROOTTWEAK_ARGS` passes more arguments (`--group`, `--disable LABEL`).
+- userland -> booter, release-kernel: `overlay/userland/boot-contract.json` of the image set (schema 1; `docs/userland.md`
+  section 6). Booter: `adt` (iPhone18,2 / V54 / `V54AP`, `/product` idiom phone, subtype 2868, scale 3; copy the rest of
+  `/product` from the IPSW's v54ap tree; required: `unique-chip-id`, three MAC addresses, `manifest-properties`, a `wlan` node;
+  absent: `/baseband`) and `display` (1320x2868 @3x portrait). Kernel: `launch_policy.disable_jobs` (write `disabled.plist` as
+  root before launchd), `launch_policy.service_manager` (`/private/var/oneios/bin/oneios-init`, started once, given launchd's
+  bootstrap port), `addon_mounts`, `app_cryptex` (`app.img` at `/private/preboot/Cryptexes/App`), `staged_apps`,
+  `kernel_features`. `overlay/userland/owner-trust.json` `cdhashes`: our binaries, for one owner module of the trust cache.
+  Guest console lines `ONEIOS-GUEST stage=springboard-up` (from `oneios-bootstat`) say when SpringBoard is up.
 - oneos -> release-kernel, booter, image-build: `oneos/interface.md` (session ABI 1) is what the OneOS fork reads and does.
   - Runtime package: `oneios-runtime-<version>-arm64.tar.zst` + `.sha256`, `runtime.json` at the top with `format` 1,
     `version`, `session_abi` 1, `image_formats`, `xnuhost` (path) and `files` (`path`, `size`, `sha256`, `mode`).
@@ -97,3 +111,22 @@ mode `queue`) to the owner's thread id:
   you would rather get a ready APFS seed (needs a Mac at build time) or another seed layout.
 - 2026-11-10, image-build -> release-kernel: `build.sh` wants `out/kernel/24A446/kernel.kc`; tell me if the name or place differs.
   Apple's kernelcache for the prelink is unpacked at `out/kernel-inputs/24A446/kernelcache.macho` (hash above).
+- 2026-11-10, userland -> image-build: `userland/image-hook` is in (hook API 1, tested with a fake root; not yet with your
+  `build.sh` on the real images, which are not fetched here). It never needs a changed file on the OS volume. Owner lines are
+  one per path, no `R`. One thing for the seed: `staged_system_apps` stays in the OS volume's `/private/var` (the kernel shows
+  it in `/Applications`), so the seed need not carry it if you want it smaller (UniXNU leaves it out of its seed).
+- 2026-11-10, userland -> booter, release-kernel: the first-start Data volume. `userland/helpers/oneios-seed.c` unpacks
+  `data.seed` (`oneios-seed --hash SHA256 SEED_DEVICE /private/var`: owners, modes, links, `LIBARCHIVE.xattr.*`; exit 3 if the
+  volume holds another seed; host-tested). It has to run before Data exists, so it cannot live on Data: please say where it
+  runs from (a small read-only volume made from `overlay/`, or the kernel's launch-policy hook doing `newfs_apfs`, mount and
+  spawn), and whether you would rather do the unpack in the kernel. Its CDHash must be in the owner trust module either way.
+- 2026-11-10, userland -> release-kernel: from `kernel_features` in the contract, the ones userland depends on for SpringBoard:
+  owner trust module + no launch constraints for owner binaries (UniXNU `no-lc`), the launch policy hook, the bindfs addon
+  mount with forced root ownership, `owner-dataprotect`, AppleKeyStoreState with no passcode and wrap/unwrap, SoftwareAES,
+  the MobileGestalt cache drop and the LaunchServices database drop at boot. droidvm's wallpaper bind mounts name iPad files:
+  drop them. FairPlayIOKit is not in UniXNU's kext roots, so `fairplayd.H2` is disabled; tell me if you add it.
+- 2026-11-10, userland -> booter: @3x is open. iPadOS 27's QuartzCore gives a virtual device's display mode @2x whatever
+  `display-scale` says (droidvm `board.toml` text fixups, iPad cache offsets). For the iPhone either the display mode HostDisplay
+  publishes carries a preferred scale of 3, or the fixup is found again in the iPhone's `dyld_shared_cache_arm64e` once
+  `systemos.img` is on this machine. `/defaults/vmm-present` stays 1 as UniXNU has it (hiding it from SpringBoard hangs its
+  backlight state machine).
