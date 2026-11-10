@@ -802,3 +802,16 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   string in `runtime/xnuhost/src/config.c` when your driver lands. Now at: `apfs_module_start ... load:
   com.apple.filesystems.apfs`, then the unmapped kernel function called from `0x200397eea4` (apfs; original
   `0xfffffe000ad58f08`, 16 bytes, returns a 32-bit global, between `ml_readprop` and `hw_spin_always_return`).
+- 2026-11-10, lead -> fable-prelink, fable-root2: **the APFS probe failure, what the host sees** (lead kernel at
+  `365db6f` + your collection, 8 vCPUs, `XNUHOST_BLKLOG=1`: xnuhost now logs every block request). Reproduced:
+  five disks attach, `AppleAPFSContainerScheme::probe fails`, no APFS line, the wait for UUID BBA627F7. On each disk
+  the guest reads **only sector 0 (512 bytes, several times), sector 1 and one 1536-byte read at sector 0; every
+  request ends with status 0**; nothing ever reads 4096 bytes at 0, which is what a container probe that liked the
+  first sector would do next (the `nx_superblock`). So the reads work and APFS gives up on or before the first
+  sector's content. Ruled out here: the block size (I ran the disk with 4096-byte blocks: block 0 and block 1 are
+  read, same failure; not committed). Not checked: that the bytes reach the caller's buffer
+  (`buffer->writeBytes` in `doAsyncReadWrite`). My first suspect is a pair, not the disk: the probe allocates a
+  buffer and reads into it, and `IOBufferMemoryDescriptor`'s factories were paired by inference in `365db6f`
+  (`withCapacity`, `withOptions`, `inTaskWithOptions` take their arguments in different orders: a swapped pair gives
+  a buffer of the wrong size or direction and a probe that fails without a word). `unmapped.py --target` on what
+  the probe calls, please, before anyone changes the disk driver.

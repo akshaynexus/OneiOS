@@ -2,6 +2,7 @@
 // virtio-blk device (VirtIO 1.2, 5.2) over blk.c. A read-only disk offers VIRTIO_BLK_F_RO, which
 // NativeVirtioBlock requires of the verified images.
 #include "xnuhost.h"
+#include <stdlib.h>
 #include <string.h>
 
 #define F_RO (1ull << 5)
@@ -39,6 +40,10 @@ static int64_t blk_handle(xh_virtio *dev, unsigned queue, uint16_t head, xh_viov
   }
   if (req.type == T_FLUSH) status = xh_blk_flush(disk) ? S_IOERR : S_OK;
   else if (req.type != T_IN && req.type != T_OUT && req.type != T_GET_ID) status = S_UNSUPP;
+  // Debugging: XNUHOST_BLKLOG=1 logs every request (which disk, what, where, how it ended).
+  static int trace = -1;
+  if (trace < 0) trace = getenv("XNUHOST_BLKLOG") != NULL;
+  if (trace) LOGI("blk %p: type %u sector %llu, %u parts, %llu bytes, status %u", (void *)disk, req.type, (unsigned long long)req.sector, n - 2, (unsigned long long)(offset - req.sector * 512), status);
   iov[n - 1].data[0] = status;
   return (int64_t)written + 1;
 }
