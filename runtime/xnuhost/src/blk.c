@@ -8,6 +8,7 @@
 //              (not a tar) is copied in, holes kept; a tar seed is the userland's to unpack.
 #define _GNU_SOURCE
 #include "xnuhost.h"
+#include "imageset.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -16,7 +17,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-struct xh_blk { int fd; uint64_t bytes; bool writable; };
+struct xh_blk { int fd; uint64_t bytes; bool writable; xh_verify *verify; };
 
 #define DATA_DEFAULT_BYTES (32ull << 30)      // sparse: costs what the guest writes
 
@@ -91,9 +92,14 @@ bad:
 uint64_t xh_blk_bytes(const xh_blk *b) { return b->bytes; }
 bool xh_blk_writable(const xh_blk *b) { return b->writable; }
 
+// A read-only image whose chunks are checked against the image set's hash list before the guest
+// gets them (imageset.c). A chunk that differs is a read error.
+void xh_blk_set_verify(xh_blk *b, xh_verify *verify) { if (!b->writable) b->verify = verify; }
+
 int xh_blk_read(xh_blk *b, uint64_t offset, void *buffer, uint64_t length)
 {
   if (offset > b->bytes || length > b->bytes - offset) return -1;
+  if (b->verify && xh_verify_range(b->verify, b->fd, offset, length)) return -1;
   for (uint64_t done = 0; done < length;) {
     ssize_t n = pread(b->fd, (char *)buffer + done, length - done, (off_t)(offset + done));
     if (n < 0 && errno == EINTR) continue;

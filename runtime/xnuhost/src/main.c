@@ -15,6 +15,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "bridges/devices.h"
+#include "imageset.h"
 #include "xnuloader/boot.h"
 #include "xnuloader/machine.h"
 #include "xnuloader/macho.h"
@@ -180,6 +181,60 @@ static bool net_script(const char *verb)
   return status == 0;
 }
 
+// ---- the image set (imageset.c): which disk is which volume, and the checks on what the guest reads ----
+static xh_imageset image_set;
+static bool have_image_set;
+static xh_disk_identity disk_identity[XH_MAX_DISKS];
+static char seed_sha256[65];
+
+static int image_set_open(void)
+{
+  const char *error = NULL;
+  int rc = xh_imageset_load(config.image, &image_set, &error);
+  if (rc < 0) { LOGE("image set %s: %s", config.image, error); return -1; }
+  if (rc > 0) { LOGI("image set: no manifest.json in %s: its disks are not verified and carry no identity", config.image); return 0; }
+  have_image_set = true;
+  const xh_imageset_file *seed = xh_imageset_role(&image_set, "data-seed");
+  for (unsigned i = 0; seed && i < 32; i++) snprintf(seed_sha256 + i * 2, 3, "%02x", seed->sha256[i]);
+  // The unpacker of the Data seed has to run before the Data volume exists: the guest gets it as a disk.
+  char path[64];
+  uint64_t bytes = 0;
+  rc = xh_imageset_helper_disk(&image_set, path, sizeof path, &bytes, &error);
+  if (rc < 0) { LOGE("image set %s: %s", config.image, error); return -1; }
+  if (rc == 0 && config.ndisk < XH_MAX_DISKS) {
+    xh_disk_config *d = &config.disk[config.ndisk];
+    memset(d, 0, sizeof *d);
+    strcpy(d->path, path);
+    disk_identity[config.ndisk++] = (xh_disk_identity){ .role = "seed-helper", .bytes = bytes };
+  } else LOGI("image set: no overlay/userland/bin/oneios-seed: a new Data volume cannot be filled");
+  return 0;
+}
+
+// The identity of disk i in its device tree node; a read-only image of the set gets its chunk checks.
+static int image_set_disk(unsigned i, xh_blk *disk)
+{
+  const char *error = NULL;
+  const xh_disk_config *c = &config.disk[i];
+  xh_disk_identity *id = &disk_identity[i];
+  if (!have_image_set || id->role) return 0;
+  if (c->data_store) {
+    *id = (xh_disk_identity){ .role = "data", .volume_uuid = image_set.data_uuid, .volume_name = image_set.data_name, .sha256_hex = seed_sha256 };
+    return 0;
+  }
+  const xh_imageset_file *f = xh_imageset_find(&image_set, c->path);
+  if (!f || c->writable) return 0;
+  if (!strcmp(f->role, "os") || !strcmp(f->role, "systemos") || !strcmp(f->role, "app")) {
+    xh_verify *verify = xh_verify_open(&image_set, f, &error);
+    if (!verify) { LOGE("disk %s: %s", c->path, error); return -1; }
+    if (xh_blk_bytes(disk) != f->size) { LOGE("disk %s: %llu bytes, manifest.json lists %llu", c->path, (unsigned long long)xh_blk_bytes(disk), (unsigned long long)f->size); return -1; }
+    xh_blk_set_verify(disk, verify);
+    *id = (xh_disk_identity){ .role = f->role, .verified = xh_verify_digest(verify), .volume_uuid = f->volume_uuid };
+  } else if (!strcmp(f->role, "data-seed")) {
+    *id = (xh_disk_identity){ .role = "seed", .bytes = f->size, .sha256_hex = seed_sha256 };
+  }
+  return 0;
+}
+
 static int boot(void)
 {
   const char *error = NULL;
@@ -210,12 +265,15 @@ static int boot(void)
   xh_gic_notify = gic_line;
   xh_gic_map();
   xh_uart_init(XL_BOARD_UART);
+  if (image_set_open()) return -1;
   for (unsigned i = 0; i < config.ndisk; i++) {
     xh_blk *disk = xh_blk_open(&config.disk[i], &error);
     if (!disk) { LOGE("disk %s: %s (%s)", config.disk[i].path, error, strerror(errno)); return -1; }
+    if (image_set_disk(i, disk)) return -1;
     if (!xh_virtio_blk_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, disk)) return -1;
-    LOGI("disk %u: %s, %llu MiB, %s", ndev, config.disk[i].path, (unsigned long long)(xh_blk_bytes(disk) >> 20),
-         config.disk[i].data_store ? "Data store" : config.disk[i].writable ? "writable" : "read-only");
+    LOGI("disk %u: %s, %llu MiB, %s%s%s%s", ndev, config.disk[i].path, (unsigned long long)(xh_blk_bytes(disk) >> 20),
+         config.disk[i].data_store ? "Data store" : config.disk[i].writable ? "writable" : "read-only",
+         disk_identity[i].role ? ", role " : "", disk_identity[i].role ? disk_identity[i].role : "", disk_identity[i].verified ? ", chunks verified" : "");
     kinds[ndev++] = config.disk[i].data_store ? XL_DEV_DATA_STORE : XL_DEV_BLOCK;
   }
   xh_virtio *input = xh_virtio_input_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev);
@@ -299,6 +357,15 @@ static int boot(void)
   if (getentropy(machine.random_seed, sizeof machine.random_seed)) { LOGE("no entropy for the kernel's seed"); return -1; }
   xl_blob ramdisk = sidecar("ramdisk", 1ull << 30), trust = sidecar("trustcache", 16 << 20), addon = sidecar("gpuaddon", 64 << 20),
           policies = sidecar("vroot", 128 << 20);
+  // Apple's trust caches of the set (IM4P) and the owner module, as the sidecar the kernel takes, unless one is shipped.
+  if (!trust.data && have_image_set && xh_imageset_find(&image_set, "trust/static.trustcache")) {
+    trust = xh_imageset_trustcaches(&image_set, &error);
+    if (!trust.data) { LOGE("trust caches of %s: %s", config.image, error); return -1; }
+    LOGI("trust caches: %u modules from the image set, %zu bytes", (unsigned)trust.data[0], trust.size);
+  }
+  // The root: the OS volume, matched by its APFS volume UUID.
+  const xh_imageset_file *os = have_image_set ? xh_imageset_role(&image_set, "os") : NULL;
+  if (os && *os->volume_uuid) machine.root_volume_uuid = os->volume_uuid;
   machine.ramdisk = ramdisk.data != NULL;
   machine.trust_cache = trust.data != NULL;
   machine.gpu_addon = addon.data != NULL;
@@ -351,6 +418,14 @@ static int boot(void)
       if (!xl_adt_get(chosen, their_chosen->props[p].name))
         xl_adt_set(chosen, their_chosen->props[p].name, their_chosen->props[p].value, their_chosen->props[p].length);
     xl_adt_free(other);
+  }
+
+  // Each disk's identity for the kernel's storage (imageset.h).
+  for (unsigned i = 0, blocks = 0; have_image_set && i < config.ndisk; i++) {
+    char name[40];
+    if (config.disk[i].data_store) snprintf(name, sizeof name, "arm-io/data-store");
+    else snprintf(name, sizeof name, "arm-io/virtio-mmio-%u", blocks++);
+    xh_imageset_describe(xl_adt_find(tree, name), &disk_identity[i]);
   }
 
   xl_boot_request request = {

@@ -14,8 +14,8 @@ QEMU ?= $(shell command -v qemu-aarch64 2>/dev/null)
 WARN := -Wall -Wextra -Werror
 INC := -Iinclude -Isrc -Istub -I../loader/include -I../bridges/include -I../../drivers/bridge
 CFLAGS ?= -O2 -g
-SRC := main log config insn mem mmio gic sysreg uart blk virtio virtio_blk virtio_input virtio_gpu display input cpu hostcalls task
-PORTABLE := log config insn mmio gic sysreg uart blk virtio virtio_blk virtio_input virtio_gpu cpu task
+SRC := main log config insn mem mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input virtio_gpu display input cpu hostcalls task
+PORTABLE := log config insn mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input virtio_gpu cpu task
 LOADER_SRC := $(wildcard ../loader/src/*.c)
 HDR := $(wildcard include/xnuhost/*.h src/*.h stub/*.h ../loader/include/xnuloader/*.h)
 A := build/android
@@ -57,7 +57,11 @@ $(A)/xnuhost: $(SRC:%=$(A)/%.o) $(A)/kctx.o $(A)/arch.o $(patsubst ../loader/src
 # ---- host unit tests ----
 $(H)/test_xnuhost: tests/test_xnuhost.c $(PORTABLE:%=src/%.c) $(HDR)
 	@mkdir -p $(H)
-	$(CC) -std=gnu11 -O1 -g $(WARN) $(INC) -fsanitize=address,undefined tests/test_xnuhost.c $(PORTABLE:%=src/%.c) -lpthread -o $@
+	$(CC) -std=gnu11 -O1 -g $(WARN) $(INC) -fsanitize=address,undefined tests/test_xnuhost.c $(PORTABLE:%=src/%.c) ../loader/src/adt.c ../loader/src/boot.c -lpthread -o $@
+# The image set (imageset.c) on stand-in files; ONEIOS_IMAGE_SET=DIR adds a real set's lists and trust caches.
+$(H)/test_imageset: tests/test_imageset.c src/imageset.c $(HDR)
+	@mkdir -p $(H)
+	$(CC) -std=gnu11 -O1 -g $(WARN) $(INC) -fsanitize=address,undefined tests/test_imageset.c src/imageset.c ../loader/src/adt.c ../loader/src/boot.c -lpthread -o $@
 
 # ---- the test kernel: our own freestanding AArch64 program wrapped as a Mach-O (no Apple files) ----
 KERNEL_FLAGS := --target=aarch64-unknown-none-elf -O2 -ffreestanding -fno-builtin -fno-stack-protector -fpie -fvisibility=hidden \
@@ -82,8 +86,9 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	  grep -q 'TESTKERNEL: all passed' $(A)/check.log; fi
 
 # The tests create devices and never free them: leak detection off, the other checks on.
-test: $(H)/test_xnuhost check-arm64
+test: $(H)/test_xnuhost $(H)/test_imageset check-arm64
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_xnuhost
+	ASAN_OPTIONS=detect_leaks=0 $(H)/test_imageset
 
 clean:
 	rm -rf build
