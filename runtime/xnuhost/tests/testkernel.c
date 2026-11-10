@@ -353,6 +353,24 @@ void kernel_main(const struct boot_args *args, const struct xh_vector *vector, s
   check(H->kernel_unmap(cpu, kv, 0x4000) == 0 && H->kernel_map(cpu, kv + 0x4000, 0x4000, XH_PROT_READ, kpage) == 0 &&
         *(volatile uint64_t *)(uintptr_t)(kv + 0x4000) == 0x600dcafe, "kernel_unmap, and the page mapped again elsewhere");
 
+  // 6c. A device page the kernel mapped itself: the fault's frame handed to mmio_emulate (what the
+  // exception upcall does when its page-table entry points into the I/O aperture).
+  static struct xh_frame mf;
+  static uint32_t mcode[2];
+  zero(&mf, sizeof mf);
+  mcode[0] = 0xb9400023;                         // ldr w3, [x1]
+  mcode[1] = 0xb8004422;                         // str w2, [x1], #4
+  mf.pc = (uint64_t)(uintptr_t)mcode; mf.x[3] = ~0ull; mf.x[1] = 0x1000;
+  check(vector->size >= offsetof(struct xh_vector, mmio_emulate) + sizeof vector->mmio_emulate &&
+        H->mmio_emulate(cpu, &mf, 0x08000000 + 0xffe8) == 0 && (mf.x[3] >> 4 & 15) == 3 && mf.x[3] >> 32 == 0 &&
+        mf.pc == (uint64_t)(uintptr_t)mcode + 4, "mmio_emulate: a load from GICD_PIDR2 on a frame, pc advanced");
+  mf.x[2] = 1u << 9;                             // GICD_ISENABLER1: enable SPI 41
+  check(H->mmio_emulate(cpu, &mf, 0x08000000 + 0x104) == 0 && mf.x[1] == 0x1004 && mf.pc == (uint64_t)(uintptr_t)mcode + 8 &&
+        (H->mmio_read(cpu, 0x08000000 + 0x104, 4) & 1u << 9), "mmio_emulate: a store with writeback reaches the device");
+  H->mmio_write(cpu, 0x08000000 + 0x184, 4, 1u << 9);
+  mf.pc = (uint64_t)(uintptr_t)mcode;
+  check(H->mmio_emulate(cpu, &mf, 0x1000) < 0 && mf.pc == (uint64_t)(uintptr_t)mcode, "mmio_emulate refuses an address outside the aperture");
+
   // 7. Devices and tasks.
   test_devices();
   uint32_t text[2] = { 0xd53bd063, 0xd53bd040 };                  // mrs x3, tpidrro_el0; mrs x0, tpidr_el0

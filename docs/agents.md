@@ -600,3 +600,9 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   `frame->pc`) and return; never enter such a page with `kernel_map`. Please land this first, alone, so the lead can
   continue. (2) `kernel_bootstrap_thread` then sits in `ml_wait_max_cpus` (from `kperf_init_early`) until ArmCpu has
   registered every CPU: with `--cpus 1` too.
+- 2026-11-10, opus-smp -> lead, booter: **`mmio_emulate` is in xnuhost** (`hostcall.h`, appended after `kernel_unmap`; check
+  `vector->size`): `int64_t mmio_emulate(cpu, frame, phys)` emulates the integer load or store at `frame->pc` against
+  device address `phys` (page address + `frame->far`'s offset in its page) on the frame's registers and advances
+  `frame->pc`. 0 = done, `-EINVAL` = `phys` outside `io_phys/io_size` or pc not kernel text in the RAM window, `-ENOTSUP` =
+  not an integer load/store (frame unchanged). Fine with `irq_masked = 1`. The test kernel checks it (section 6c). The
+  kernel side (the fault path calling it) comes next as `0003-smp-timer-irq.patch`.

@@ -194,6 +194,16 @@ struct xh_vector {
   // (upcalls->exception). Both may be called with interrupts masked.
   int64_t  (*kernel_map)(struct xh_cpu *, uint64_t va, uint64_t size, uint32_t prot, uint64_t phys);
   int64_t  (*kernel_unmap)(struct xh_cpu *, uint64_t va, uint64_t size);
+
+  // Appended (check vector->size). A device page mapped at a kernel address by the kernel's own page
+  // tables (IOKit's IOMemoryMap, not io_map) has no host mapping: the access faults into
+  // upcalls->exception. When the page-table entry's physical address is inside [io_phys, +io_size),
+  // the kernel calls this instead of kernel_map: the host emulates the integer load or store at
+  // frame->pc against device address `phys` (page address plus the offset of frame->far in its
+  // page) on the frame's registers and advances frame->pc. 0 = done; -EINVAL: phys is not in the
+  // aperture or pc is not kernel text; -ENOTSUP: not a load or store the host emulates (SIMD,
+  // exclusive, atomics): the frame is unchanged. May be called with interrupts masked.
+  int64_t  (*mmio_emulate)(struct xh_cpu *, struct xh_frame *frame, uint64_t phys);
 };
 #define XH_PAC_ALL 0xfu          // APIA, APIB, APDA, APDB
 

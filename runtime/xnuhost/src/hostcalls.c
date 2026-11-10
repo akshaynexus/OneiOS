@@ -101,12 +101,31 @@ int64_t xh_impl_thread_set_pac(struct xh_cpu *cpu, uint64_t thread, uint32_t ena
 int64_t xh_impl_kernel_map(struct xh_cpu *cpu, uint64_t va, uint64_t size, uint32_t prot, uint64_t phys) { (void)cpu; return xh_mem_kernel_map(va, size, prot, phys); }
 int64_t xh_impl_kernel_unmap(struct xh_cpu *cpu, uint64_t va, uint64_t size) { (void)cpu; return xh_mem_kernel_unmap(va, size); }
 
+// A load or store on a device page the kernel mapped itself (IOMemoryMap): the kernel found the
+// physical address in its page table and hands the fault back.
+int64_t xh_impl_mmio_emulate(struct xh_cpu *cpu, struct xh_frame *frame, uint64_t phys)
+{
+  if (!frame || phys < g_mem.io_phys || phys - g_mem.io_phys >= g_mem.io_size) return -EINVAL;
+  // The instruction is kernel text: in the RAM window (the kernel collection is loaded there).
+  uint32_t *insn = xh_ram(frame->pc - g_info.ram_virt + g_info.ram_phys, 4);
+  if (!insn || (frame->pc & 3) || frame->pc < g_info.ram_virt) return -EINVAL;
+  xh_regs regs;
+  memcpy(regs.x, frame->x, sizeof regs.x);
+  regs.sp = frame->sp; regs.pc = frame->pc; regs.pstate = frame->pstate;
+  if (!xh_mmio_emulate(&regs, *insn, phys)) return -ENOTSUP;
+  memcpy(frame->x, regs.x, sizeof regs.x);
+  frame->sp = regs.sp; frame->pc = regs.pc;
+  V(cpu)->stat_mmio++;
+  xh_cpu_line(cpu->index, false);                  // a device write may have changed this CPU's line
+  return 0;
+}
+
 #define THUNK(name) extern void xh_hc_##name(void);
 THUNK(console_write) THUNK(halt) THUNK(ready) THUNK(set_upcalls) THUNK(wall_time) THUNK(cpu_start) THUNK(cpu_idle)
 THUNK(irq_ack) THUNK(irq_eoi) THUNK(irq_enable) THUNK(ipi) THUNK(timer_set) THUNK(frame_resume) THUNK(io_map)
 THUNK(mmio_read) THUNK(mmio_write) THUNK(ram_discard) THUNK(text_fixup) THUNK(task_create) THUNK(task_destroy)
 THUNK(task_map) THUNK(task_unmap) THUNK(task_protect) THUNK(task_read) THUNK(task_write) THUNK(thread_create)
-THUNK(thread_destroy) THUNK(thread_run) THUNK(thread_set_pac) THUNK(kernel_map) THUNK(kernel_unmap)
+THUNK(thread_destroy) THUNK(thread_run) THUNK(thread_set_pac) THUNK(kernel_map) THUNK(kernel_unmap) THUNK(mmio_emulate)
 
 const struct xh_vector *xh_vector(void)
 {
@@ -119,7 +138,7 @@ const struct xh_vector *xh_vector(void)
   SET(irq_ack); SET(irq_eoi); SET(irq_enable); SET(ipi); SET(timer_set); SET(frame_resume); SET(io_map);
   SET(mmio_read); SET(mmio_write); SET(ram_discard); SET(text_fixup); SET(task_create); SET(task_destroy);
   SET(task_map); SET(task_unmap); SET(task_protect); SET(task_read); SET(task_write); SET(thread_create);
-  SET(thread_destroy); SET(thread_run); SET(thread_set_pac); SET(kernel_map); SET(kernel_unmap);
+  SET(thread_destroy); SET(thread_run); SET(thread_set_pac); SET(kernel_map); SET(kernel_unmap); SET(mmio_emulate);
   return &v;
 }
 
