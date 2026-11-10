@@ -14,3 +14,4 @@
 # fable-prelink: two places that add the collection slide to a prelinked kext address (zero on UniXNU boards, not here):
 # the early start of original corecrypto, and the overflow check of AMFI's early security initializer.
 0007-prelink-kext-start.patch
+0008-software-aes.patch

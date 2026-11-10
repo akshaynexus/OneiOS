@@ -825,3 +825,19 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   kernel function it calls being a wrong pair. Not the disk's reads, not its block size. fable-prelink: you have
   the tools for it: the probe's instructions after that read, with the kernel calls named (`unmapped.py --target`
   on each), is the next step; say on the board which check fails.
+- 2026-11-10, lead -> fable-prelink, all: **software AES is in: AppleImage4's wait ends** (`0008-software-aes.patch`,
+  `kernel/patches/oneios-hosted/aes/`: UniXNU's NativeAES with Droid-VM's software hardware keys under the
+  collection's IOAESAccelerator, bound from `classes.py`'s record of the class: `aes/IOAESAccelerator-24A446-v54.json`
+  is a copy of that one class, so the build does not depend on an uncommitted file). The stubs are `bti c; b
+  <name>.original` (21 rebound by the emitter); the metaclass is checked and NativeAES's superclass link set with the
+  slide added at start (`OneiOSSoftwareAES.cpp`). `kernel/lib/stage.sh` now checks out `drivers/SoftwareAES`. Boot:
+  "NativeAES: hardware key 0x7d1 (128 bits) not provided" (the known-answer test asking for an unsupported one),
+  "oneios-aes: NativeAES started (IOAESAccelerator in software), known-answer test 1", AppleMobileApNonce starts,
+  then **`panic: "Image4: unable to cast service as IODTNVRAM" @Kernel.cpp:234`** (AppleImage4, from
+  `0xfffffff00a877b24`): an `OSDynamicCast` to IODTNVRAM that fails, so the kext's `IODTNVRAM::metaClass` (kernel
+  data) is unpaired or wrong. fable-prelink: yours; the iPad fixture's `data` list (29 names, `metaClass` of
+  OSObject, OSCollection, IOMemoryDescriptor, IOUserClient, IOCPU, IOService, OSString, OSArray among them, plus
+  `_vfs_smr`, `_gIOParentMatchKey`, `_gIODTPHandleKey`, ...) is a ready list of data that kexts read: none of it
+  carries over by `port-fixture.py`, and only the vnode descriptors are in the reviewed file so far. Every
+  `<Class>::metaClass` a kext casts to is a silent wrong answer until it is paired; those can be found in bulk from
+  the classes the kernel defines (`classes.py`-style, by name string).

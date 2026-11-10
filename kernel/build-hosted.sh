@@ -70,6 +70,23 @@ if n != 1:
     raise SystemExit('build-hosted: the hosted defconfig has no CONFIG_XNU_EXTRA_LD_ARCHIVES')
 open(config, 'w').write(new)
 PY
+# Software AES (0008-software-aes.patch): UniXNU's NativeAES under the collection's IOAESAccelerator, one more board
+# archive of this build only (kernel/patches/oneios-hosted/aes/build-oneios-aes.py). AppleImage4's start waits for it.
+cp "$ROOT/kernel/patches/oneios-hosted/aes/build-oneios-aes.py" "$DEVICE/scripts/"
+python3 -I - "$DEVICE/board.toml" "$DEVICE/configs/oneios_hosted_defconfig" <<'PY'
+import re, sys
+board, config = sys.argv[1:]
+text = open(board).read()
+new, n = re.subn(r'^(\s*)("build-oneios-gpu\.py")', lambda m: m.group(1) + '"build-oneios-aes.py",\n' + m.group(1) + m.group(2), text, count=1, flags=re.M)
+if n != 1:
+    raise SystemExit('build-hosted: board.toml archives have no build-oneios-gpu.py')
+open(board, 'w').write(new)
+text = open(config).read()
+new, n = re.subn(r'^(CONFIG_XNU_EXTRA_LD_ARCHIVES="[^"\n]*)"', lambda m: m.group(1) + ' -Wl,-force_load,{tree}/build/oneios-aes/liboneiosaes.a"', text, count=1, flags=re.M)
+if n != 1:
+    raise SystemExit('build-hosted: the hosted defconfig has no CONFIG_XNU_EXTRA_LD_ARCHIVES')
+open(config, 'w').write(new)
+PY
 mkdir -p "$UNIXNU_OUT_DIR"
 [ -e "$UNIXNU_OUT_DIR/feeds" ] || [ ! -d "$ROOT/out/kernel/unixnu/feeds" ] || ln -s "$ROOT/out/kernel/unixnu/feeds" "$UNIXNU_OUT_DIR/feeds"
 

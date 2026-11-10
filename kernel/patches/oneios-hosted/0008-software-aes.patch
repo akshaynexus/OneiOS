@@ -1,0 +1,31 @@
+diff --git a/osfmk/arm64/oneios_host.c b/osfmk/arm64/oneios_host.c
+--- a/osfmk/arm64/oneios_host.c
++++ b/osfmk/arm64/oneios_host.c
+@@ -43,6 +43,18 @@ __attribute__((weak)) void
+ oneios_gpu3d_start(void)
+ {
+ }
++
++/*
++ * Software AES: UniXNU's NativeAES as the IOAESAccelerator of the kernel collection, which AppleImage4's start
++ * waits for; without one IOResources never finishes matching, the disks get no BSD nodes and the root volume is
++ * never found (kernel/patches/oneios-hosted/aes: OneiOSSoftwareAES.cpp and build-oneios-aes.py, an archive that
++ * kernel/build-hosted.sh adds to the link). Weak, as the others: a hosted kernel linked without the archive
++ * starts none.
++ */
++__attribute__((weak)) void
++oneios_software_aes_start(void)
++{
++}
+ #endif /* XNU_HOSTED */
+ 
+ void oneios_board_late_start(void);
+@@ -53,6 +65,8 @@ oneios_board_late_start(void)
+ 	droidvm_cpufreq_attach();
+ 	oneios_drivers_start();
+ #if XNU_HOSTED
++	/* first: AppleImage4 is already waiting for it, and with it IOResources' matching */
++	oneios_software_aes_start();
+ 	oneios_gpu3d_start();
+ #endif /* XNU_HOSTED */
+ }
