@@ -26,6 +26,576 @@
  ],
  "functions": [
   {
+   "original": "0xfffffe000b2ffafc",
+   "native_symbol": "_IOSetCoreAnalyticsSendEventProc",
+   "check": {
+    "address": "0xfffffe000b2ffafc",
+    "size": 44,
+    "sha256": "73d3eb741e44c50a85115f120e7eb1f457da06a6b9f509ef09cd2a2f2e02fbc6"
+   },
+   "evidence": "Stores x0 in a global when it is NULL and returns 0, else returns kIOReturnExclusiveAccess... (0xe00002e2) without storing: IOSetCoreAnalyticsSendEventProc, the function directly before IOService::initialize in IOService.cpp here and in our kernel. CoreAnalyticsFamily registers its send-event procedure with it."
+  },
+  {
+   "original": "0xfffffe000b39159c",
+   "native_symbol": "__ZN14IOReportLegend17addReporterLegendEP9IOServiceP10IOReporterPKcS5_",
+   "check": {
+    "address": "0xfffffe000b39159c",
+    "size": 696,
+    "sha256": "6c0406952c14b604c2c706c466f7834b4b764804ef55dfdf5e323d3c45c88bff"
+   },
+   "evidence": "Static, four arguments (service, reporter, group, subgroup), returns kIOReturnError for a NULL service or reporter, and uses the property names \"IOReportLegend\" and \"IOReportLegendPublic\": IOReportLegend::addReporterLegend(IOService *, IOReporter *, const char *, const char *), before addLegendEntry in IOReportLegend.cpp. CoreAnalyticsFamily calls it."
+  },
+  {
+   "original": "0xfffffe000b3deca0",
+   "native_symbol": "_rootDomainShutdown",
+   "check": {
+    "address": "0xfffffe000b3deca0",
+    "size": 16,
+    "sha256": "1c7bfb61170ddfbb91b4b3bc8b19e5c6c9e78af19b8fdfd4c630e7f88a389e91"
+   },
+   "evidence": "The C entry points at the end of IOPMrootDomain.cpp's sleep/wake section, in our kernel's order: registerSleepWakeInterest and registerPrioritySleepWakeInterest (the root domain's registerInterest with gIOGeneralInterest, respectively gIOPriorityPowerStateInterest, the data the matcher pairs by name, and the three arguments shifted), acknowledgeSleepWakeNotification and vetoSleepWakeNotification (one argument to a root-domain virtual), rootDomainRestart and rootDomainShutdown (both return kIOReturnUnsupported). AppleH16ANEInterface registers a priority interest."
+  },
+  {
+   "original": "0xfffffe000b3dec90",
+   "native_symbol": "_rootDomainRestart",
+   "check": {
+    "address": "0xfffffe000b3dec90",
+    "size": 16,
+    "sha256": "1c7bfb61170ddfbb91b4b3bc8b19e5c6c9e78af19b8fdfd4c630e7f88a389e91"
+   },
+   "evidence": "The C entry points at the end of IOPMrootDomain.cpp's sleep/wake section, in our kernel's order: registerSleepWakeInterest and registerPrioritySleepWakeInterest (the root domain's registerInterest with gIOGeneralInterest, respectively gIOPriorityPowerStateInterest, the data the matcher pairs by name, and the three arguments shifted), acknowledgeSleepWakeNotification and vetoSleepWakeNotification (one argument to a root-domain virtual), rootDomainRestart and rootDomainShutdown (both return kIOReturnUnsupported). AppleH16ANEInterface registers a priority interest."
+  },
+  {
+   "original": "0xfffffe000b3dec50",
+   "native_symbol": "_vetoSleepWakeNotification",
+   "check": {
+    "address": "0xfffffe000b3dec50",
+    "size": 64,
+    "sha256": "4923de241f133ceca74b2191f5082abc46c9dc705fdf0c15b16a9e9da60ab96d"
+   },
+   "evidence": "The C entry points at the end of IOPMrootDomain.cpp's sleep/wake section, in our kernel's order: registerSleepWakeInterest and registerPrioritySleepWakeInterest (the root domain's registerInterest with gIOGeneralInterest, respectively gIOPriorityPowerStateInterest, the data the matcher pairs by name, and the three arguments shifted), acknowledgeSleepWakeNotification and vetoSleepWakeNotification (one argument to a root-domain virtual), rootDomainRestart and rootDomainShutdown (both return kIOReturnUnsupported). AppleH16ANEInterface registers a priority interest."
+  },
+  {
+   "original": "0xfffffe000b3dec10",
+   "native_symbol": "_acknowledgeSleepWakeNotification",
+   "check": {
+    "address": "0xfffffe000b3dec10",
+    "size": 64,
+    "sha256": "a20b92a137e0f6726805a92229105c7956ab0fb75863a989d53e42c95a30de89"
+   },
+   "evidence": "The C entry points at the end of IOPMrootDomain.cpp's sleep/wake section, in our kernel's order: registerSleepWakeInterest and registerPrioritySleepWakeInterest (the root domain's registerInterest with gIOGeneralInterest, respectively gIOPriorityPowerStateInterest, the data the matcher pairs by name, and the three arguments shifted), acknowledgeSleepWakeNotification and vetoSleepWakeNotification (one argument to a root-domain virtual), rootDomainRestart and rootDomainShutdown (both return kIOReturnUnsupported). AppleH16ANEInterface registers a priority interest."
+  },
+  {
+   "original": "0xfffffe000b3debc0",
+   "native_symbol": "_registerPrioritySleepWakeInterest",
+   "check": {
+    "address": "0xfffffe000b3debc0",
+    "size": 80,
+    "sha256": "775df06dfe805bdc768c415af0435987e0b9b2ec3d2f5c7b4a4cedcd03af9504"
+   },
+   "evidence": "The C entry points at the end of IOPMrootDomain.cpp's sleep/wake section, in our kernel's order: registerSleepWakeInterest and registerPrioritySleepWakeInterest (the root domain's registerInterest with gIOGeneralInterest, respectively gIOPriorityPowerStateInterest, the data the matcher pairs by name, and the three arguments shifted), acknowledgeSleepWakeNotification and vetoSleepWakeNotification (one argument to a root-domain virtual), rootDomainRestart and rootDomainShutdown (both return kIOReturnUnsupported). AppleH16ANEInterface registers a priority interest."
+  },
+  {
+   "original": "0xfffffe000b3deb70",
+   "native_symbol": "_registerSleepWakeInterest",
+   "check": {
+    "address": "0xfffffe000b3deb70",
+    "size": 80,
+    "sha256": "bc5c152f86de87bc41eee75f70ce96713fe66f8cc01254f4ab92de5bca539956"
+   },
+   "evidence": "The C entry points at the end of IOPMrootDomain.cpp's sleep/wake section, in our kernel's order: registerSleepWakeInterest and registerPrioritySleepWakeInterest (the root domain's registerInterest with gIOGeneralInterest, respectively gIOPriorityPowerStateInterest, the data the matcher pairs by name, and the three arguments shifted), acknowledgeSleepWakeNotification and vetoSleepWakeNotification (one argument to a root-domain virtual), rootDomainRestart and rootDomainShutdown (both return kIOReturnUnsupported). AppleH16ANEInterface registers a priority interest."
+  },
+  {
+   "original": "0xfffffe000ad578e8",
+   "native_symbol": "_current_thread",
+   "check": {
+    "address": "0xfffffe000ad578e8",
+    "size": 12,
+    "sha256": "615633785e3003f7fa3af59d0405ee664ff6c53fde585d7da7e160f658a05750"
+   },
+   "evidence": "mrs x0, TPIDR_EL1; ret: the out-of-line current_thread() of osfmk/arm64/machine_routines.c that kexts link against (it is why no kext reads TPIDR_EL1 itself). Bound to our current_thread, which reads TPIDR_EL0 in the hosted kernel. AppleH16ANEInterface, AppleImage4 and the sandbox call it."
+  },
+  {
+   "original": "0xfffffe000ade7414",
+   "native_symbol": "_vfs_context_pid",
+   "check": {
+    "address": "0xfffffe000ade7414",
+    "size": 72,
+    "sha256": "ba037705c057447c0657a744995aac3c0655f89523a0c3ee9db8fde24ef6338a"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c in source order between vfs_setowner and vfs_context_proc (both paired): vfs_idle_time, then vfs_context_pid, which resolves the context's thread to its process and tail-calls proc_pid (the matcher's pair at the branch target). AppleDiskImages2 calls vfs_context_pid."
+  },
+  {
+   "original": "0xfffffe000ade739c",
+   "native_symbol": "_vfs_idle_time",
+   "check": {
+    "address": "0xfffffe000ade739c",
+    "size": 120,
+    "sha256": "f4c02e3c30401afe56bbc00a86c4250b6425b629281ca85c92ea5e1500529bfd"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c in source order between vfs_setowner and vfs_context_proc (both paired): vfs_idle_time, then vfs_context_pid, which resolves the context's thread to its process and tail-calls proc_pid (the matcher's pair at the branch target). AppleDiskImages2 calls vfs_context_pid."
+  },
+  {
+   "original": "0xfffffe000b33132c",
+   "native_symbol": "__ZN22IOInterruptEventSource20interruptEventSourceEP8OSObjectPFvS1_PS_iEP9IOServicei",
+   "check": {
+    "address": "0xfffffe000b33132c",
+    "size": 196,
+    "sha256": "7b460e692f69f964fab8d801822a773169ff3cfbbcaf51ed00da5ec3b965c50e"
+   },
+   "evidence": "Four arguments, allocates from IOInterruptEventSource::gMetaClass (paired by name) and calls the virtual init with them: the factory with a function action (the block variant calls this one first and does not allocate). After IOInterruptEventSource.cpp's static initializer. AUC calls it."
+  },
+  {
+   "original": "0xfffffe000b268ad0",
+   "native_symbol": "__ZN8OSObjectD2Ev",
+   "check": {
+    "address": "0xfffffe000b268ad0",
+    "size": 16,
+    "sha256": "36c614153927e889ba546ff5d63d9e12d41556108c9ba5f965a537c849f64fef"
+   },
+   "evidence": "OSObject's structors in libkern/c++/OSObject.cpp: four consecutive 44-byte constructors after OSObject_typed_operator_delete, each storing OSObject's vtable (0xfffffe0007ef75d8 + 16) and the retain count 1, in our kernel's order C2Ev, C1Ev, C2EPK11OSMetaClass, C1EPK11OSMetaClass (not folded: all four are exported); and the trivial base destructor (-1 over the vtable pointer) that the class macro emits before the deleting one. AUC's and AMFI's OSObject subclasses call the third constructor and the destructor."
+  },
+  {
+   "original": "0xfffffe000b268d08",
+   "native_symbol": "__ZN8OSObjectC1EPK11OSMetaClass",
+   "check": {
+    "address": "0xfffffe000b268d08",
+    "size": 44,
+    "sha256": "9681083bfe2a1db74993136f6b1c08fab20ce5ace2f85edbe61e05defcec2d28"
+   },
+   "evidence": "OSObject's structors in libkern/c++/OSObject.cpp: four consecutive 44-byte constructors after OSObject_typed_operator_delete, each storing OSObject's vtable (0xfffffe0007ef75d8 + 16) and the retain count 1, in our kernel's order C2Ev, C1Ev, C2EPK11OSMetaClass, C1EPK11OSMetaClass (not folded: all four are exported); and the trivial base destructor (-1 over the vtable pointer) that the class macro emits before the deleting one. AUC's and AMFI's OSObject subclasses call the third constructor and the destructor."
+  },
+  {
+   "original": "0xfffffe000b268cdc",
+   "native_symbol": "__ZN8OSObjectC2EPK11OSMetaClass",
+   "check": {
+    "address": "0xfffffe000b268cdc",
+    "size": 44,
+    "sha256": "9681083bfe2a1db74993136f6b1c08fab20ce5ace2f85edbe61e05defcec2d28"
+   },
+   "evidence": "OSObject's structors in libkern/c++/OSObject.cpp: four consecutive 44-byte constructors after OSObject_typed_operator_delete, each storing OSObject's vtable (0xfffffe0007ef75d8 + 16) and the retain count 1, in our kernel's order C2Ev, C1Ev, C2EPK11OSMetaClass, C1EPK11OSMetaClass (not folded: all four are exported); and the trivial base destructor (-1 over the vtable pointer) that the class macro emits before the deleting one. AUC's and AMFI's OSObject subclasses call the third constructor and the destructor."
+  },
+  {
+   "original": "0xfffffe000b268cb0",
+   "native_symbol": "__ZN8OSObjectC1Ev",
+   "check": {
+    "address": "0xfffffe000b268cb0",
+    "size": 44,
+    "sha256": "9681083bfe2a1db74993136f6b1c08fab20ce5ace2f85edbe61e05defcec2d28"
+   },
+   "evidence": "OSObject's structors in libkern/c++/OSObject.cpp: four consecutive 44-byte constructors after OSObject_typed_operator_delete, each storing OSObject's vtable (0xfffffe0007ef75d8 + 16) and the retain count 1, in our kernel's order C2Ev, C1Ev, C2EPK11OSMetaClass, C1EPK11OSMetaClass (not folded: all four are exported); and the trivial base destructor (-1 over the vtable pointer) that the class macro emits before the deleting one. AUC's and AMFI's OSObject subclasses call the third constructor and the destructor."
+  },
+  {
+   "original": "0xfffffe000b268c84",
+   "native_symbol": "__ZN8OSObjectC2Ev",
+   "check": {
+    "address": "0xfffffe000b268c84",
+    "size": 44,
+    "sha256": "9681083bfe2a1db74993136f6b1c08fab20ce5ace2f85edbe61e05defcec2d28"
+   },
+   "evidence": "OSObject's structors in libkern/c++/OSObject.cpp: four consecutive 44-byte constructors after OSObject_typed_operator_delete, each storing OSObject's vtable (0xfffffe0007ef75d8 + 16) and the retain count 1, in our kernel's order C2Ev, C1Ev, C2EPK11OSMetaClass, C1EPK11OSMetaClass (not folded: all four are exported); and the trivial base destructor (-1 over the vtable pointer) that the class macro emits before the deleting one. AUC's and AMFI's OSObject subclasses call the third constructor and the destructor."
+  },
+  {
+   "original": "0xfffffe000b337780",
+   "native_symbol": "__ZN18IOTimerEventSource16timerEventSourceEjP8OSObjectPFvS1_PS_E",
+   "check": {
+    "address": "0xfffffe000b337780",
+    "size": 296,
+    "sha256": "2f170d8bdf65e4f0831822531d50a9199f27cab02a8c7e84ac0c05b6b1a04541"
+   },
+   "evidence": "IOTimerEventSource's factories: 0xfffffe000b337a00 takes two arguments, allocates the 96-byte object, stores IOTimerEventSource's vtable (paired by name) and calls the virtual init(options, owner, action) (slot 40) with options 1 inlined: timerEventSource(OSObject *, Action). 0xfffffe000b337780, three arguments (it saves six registers), is the one with options; the matcher's order rule had given it the two-argument name. AUC calls the first."
+  },
+  {
+   "original": "0xfffffe000b337a00",
+   "native_symbol": "__ZN18IOTimerEventSource16timerEventSourceEP8OSObjectPFvS1_PS_E",
+   "check": {
+    "address": "0xfffffe000b337a00",
+    "size": 284,
+    "sha256": "b139339690381494574ac5ecd2c6627f835b00bbb8ab337936c83689348c7a75"
+   },
+   "evidence": "IOTimerEventSource's factories: 0xfffffe000b337a00 takes two arguments, allocates the 96-byte object, stores IOTimerEventSource's vtable (paired by name) and calls the virtual init(options, owner, action) (slot 40) with options 1 inlined: timerEventSource(OSObject *, Action). 0xfffffe000b337780, three arguments (it saves six registers), is the one with options; the matcher's order rule had given it the two-argument name. AUC calls the first."
+  },
+  {
+   "original": "0xfffffe000b2feb28",
+   "native_symbol": "__ZN9IOServiceD2Ev",
+   "check": {
+    "address": "0xfffffe000b2feb28",
+    "size": 16,
+    "sha256": "36c614153927e889ba546ff5d63d9e12d41556108c9ba5f965a537c849f64fef"
+   },
+   "evidence": "Writes -1 over the object's first word (the vtable pointer) and returns: the base destructor, emitted by OSDefineMetaClassAndStructors directly after the two IOService constructors (0xfffffe000b2fead0, 0xfffffe000b2feafc) and before the deleting one. Kext subclasses' destructors call it (IOTimeSyncFamily at its class teardown path)."
+  },
+  {
+   "original": "0xfffffe000b30184c",
+   "native_symbol": "__ZN9IOService33getSystemStateNotificationServiceEv",
+   "check": {
+    "address": "0xfffffe000b30184c",
+    "size": 16,
+    "sha256": "939e271b83f9aab4f6b8a74ca68886d4a55d52fa26b913920b56037d4df69fd1"
+   },
+   "evidence": "Four accessors that return one global each, directly before IOService::setPlatform in IOService.cpp; our kernel has getPlatform, getPMRootDomain, getResourceService, (resources,) getSystemStateNotificationService there in that order. The first and third read neighbouring globals of __DATA (gIOPlatform, gIOResources), the second and fourth zero-initialized ones (gIOPMRootDomain, the notification service). By position; AppleTemperatureSensor calls the third, AMFI the first."
+  },
+  {
+   "original": "0xfffffe000b30183c",
+   "native_symbol": "__ZN9IOService18getResourceServiceEv",
+   "check": {
+    "address": "0xfffffe000b30183c",
+    "size": 16,
+    "sha256": "bf3ba8bc50fdf3b6f09495a003206348b5841635d9823a8e3f94c4151107069e"
+   },
+   "evidence": "Four accessors that return one global each, directly before IOService::setPlatform in IOService.cpp; our kernel has getPlatform, getPMRootDomain, getResourceService, (resources,) getSystemStateNotificationService there in that order. The first and third read neighbouring globals of __DATA (gIOPlatform, gIOResources), the second and fourth zero-initialized ones (gIOPMRootDomain, the notification service). By position; AppleTemperatureSensor calls the third, AMFI the first."
+  },
+  {
+   "original": "0xfffffe000b30182c",
+   "native_symbol": "__ZN9IOService15getPMRootDomainEv",
+   "check": {
+    "address": "0xfffffe000b30182c",
+    "size": 16,
+    "sha256": "2f1bc7626dfbf7955b83191aac4c5cf4515cf2ae4c199002c1216f5dc5c422a5"
+   },
+   "evidence": "Four accessors that return one global each, directly before IOService::setPlatform in IOService.cpp; our kernel has getPlatform, getPMRootDomain, getResourceService, (resources,) getSystemStateNotificationService there in that order. The first and third read neighbouring globals of __DATA (gIOPlatform, gIOResources), the second and fourth zero-initialized ones (gIOPMRootDomain, the notification service). By position; AppleTemperatureSensor calls the third, AMFI the first."
+  },
+  {
+   "original": "0xfffffe000b30181c",
+   "native_symbol": "__ZN9IOService11getPlatformEv",
+   "check": {
+    "address": "0xfffffe000b30181c",
+    "size": 16,
+    "sha256": "c057c9856358a9c12385c922742da5e07bdbf4310609a3a805a93beeba63ef8b"
+   },
+   "evidence": "Four accessors that return one global each, directly before IOService::setPlatform in IOService.cpp; our kernel has getPlatform, getPMRootDomain, getResourceService, (resources,) getSystemStateNotificationService there in that order. The first and third read neighbouring globals of __DATA (gIOPlatform, gIOResources), the second and fourth zero-initialized ones (gIOPMRootDomain, the notification service). By position; AppleTemperatureSensor calls the third, AMFI the first."
+  },
+  {
+   "original": "0xfffffe000b2feafc",
+   "native_symbol": "__ZN9IOServiceC2Ev",
+   "check": {
+    "address": "0xfffffe000b2feafc",
+    "size": 44,
+    "sha256": "bf954cb51861d9396055a5846d11a91e7e8ee4fed57bbefbcefe5caf10adc3ac"
+   },
+   "evidence": "The class's constructors as OSDefineMetaClassAndStructors emits them, after IOService.cpp's static initializer: retain count 1 (the inlined OSObject constructor), then IOService's vtable (0xfffffe0007ef6d00 + 16, signed): IOService::IOService(const OSMetaClass *) and IOService::IOService(), identical code at consecutive addresses in that order. FairPlayIOKit's driver class constructor calls the first."
+  },
+  {
+   "original": "0xfffffe000b2fead0",
+   "native_symbol": "__ZN9IOServiceC2EPK11OSMetaClass",
+   "check": {
+    "address": "0xfffffe000b2fead0",
+    "size": 44,
+    "sha256": "bf954cb51861d9396055a5846d11a91e7e8ee4fed57bbefbcefe5caf10adc3ac"
+   },
+   "evidence": "The class's constructors as OSDefineMetaClassAndStructors emits them, after IOService.cpp's static initializer: retain count 1 (the inlined OSObject constructor), then IOService's vtable (0xfffffe0007ef6d00 + 16, signed): IOService::IOService(const OSMetaClass *) and IOService::IOService(), identical code at consecutive addresses in that order. FairPlayIOKit's driver class constructor calls the first."
+  },
+  {
+   "original": "0xfffffe000b305530",
+   "native_symbol": "__ZN9IOService12nameMatchingEPKcP12OSDictionary",
+   "check": {
+    "address": "0xfffffe000b305530",
+    "size": 260,
+    "sha256": "f62dd7d3ca60657a06f720317755c8f73c9704510792ce6de9b32fa4ba63434d"
+   },
+   "evidence": "(name, table): OSSymbol::withCString(name), a table made when x1 is NULL, then setObject(gIONameMatchKey, symbol) (the data the matcher pairs by name) and release: IOService::nameMatching(const char *, OSDictionary *), after nameMatching(const OSString *, ...) in IOService.cpp. IOTimeSyncFamily calls it."
+  },
+  {
+   "original": "0xfffffe000b3ee91c",
+   "native_symbol": "_PE_i_can_has_debugger",
+   "check": {
+    "address": "0xfffffe000b3ee91c",
+    "size": 44,
+    "sha256": "6ba846eb65a9f553684d73f04512cce1fe9244bc19181b0e799d2615bbd29acd"
+   },
+   "evidence": "When x0 is not NULL stores the debug boot-argument flags there (or 0 when debugging is not enabled), returns the enabled flag: PE_i_can_has_debugger(uint32_t *), between PE_call_timebase_callback and PE_update_panic_crc in pexpert/arm/pe_init.c. IOSurface calls it."
+  },
+  {
+   "original": "0xfffffe000b2a1dec",
+   "native_symbol": "__ZN5OSSet7withSetEPKS_j",
+   "check": {
+    "address": "0xfffffe000b2a1dec",
+    "size": 172,
+    "sha256": "85cf952373129bb074422f5bbe619e5e0316ea7821a22cc006366f000914b0a8"
+   },
+   "evidence": "Each allocates from OSSet::gMetaClass (the data the matcher pairs by name) and calls one of OSSet's four init virtuals in order (vtable +208, +216, +224, +232): the factories of libkern/c++/OSSet.cpp, which the original links after the file's static initializer. The order alignment had taken the first for OSString::withString (the window was OSString's): IOAVFamily's withCapacity(0) then faulted in OSString::initWithString(NULL)."
+  },
+  {
+   "original": "0xfffffe000b2a1d40",
+   "native_symbol": "__ZN5OSSet9withArrayEPK7OSArrayj",
+   "check": {
+    "address": "0xfffffe000b2a1d40",
+    "size": 172,
+    "sha256": "e79110728fe2d024ed399d90915d6567e963dcbaaaf4eece934dc7947ef56ee1"
+   },
+   "evidence": "Each allocates from OSSet::gMetaClass (the data the matcher pairs by name) and calls one of OSSet's four init virtuals in order (vtable +208, +216, +224, +232): the factories of libkern/c++/OSSet.cpp, which the original links after the file's static initializer. The order alignment had taken the first for OSString::withString (the window was OSString's): IOAVFamily's withCapacity(0) then faulted in OSString::initWithString(NULL)."
+  },
+  {
+   "original": "0xfffffe000b2a1c8c",
+   "native_symbol": "__ZN5OSSet11withObjectsEPPK8OSObjectjj",
+   "check": {
+    "address": "0xfffffe000b2a1c8c",
+    "size": 180,
+    "sha256": "62cebe74dc85a40e1bc61dc0eaf07f580e6bb88cb499566f8288ab63599cf630"
+   },
+   "evidence": "Each allocates from OSSet::gMetaClass (the data the matcher pairs by name) and calls one of OSSet's four init virtuals in order (vtable +208, +216, +224, +232): the factories of libkern/c++/OSSet.cpp, which the original links after the file's static initializer. The order alignment had taken the first for OSString::withString (the window was OSString's): IOAVFamily's withCapacity(0) then faulted in OSString::initWithString(NULL)."
+  },
+  {
+   "original": "0xfffffe000b2a1bf0",
+   "native_symbol": "__ZN5OSSet12withCapacityEj",
+   "check": {
+    "address": "0xfffffe000b2a1bf0",
+    "size": 156,
+    "sha256": "1233600349aae03f2cbb59e914148ce96f9e6e99b3a9d935d88f43c051820a0b"
+   },
+   "evidence": "Each allocates from OSSet::gMetaClass (the data the matcher pairs by name) and calls one of OSSet's four init virtuals in order (vtable +208, +216, +224, +232): the factories of libkern/c++/OSSet.cpp, which the original links after the file's static initializer. The order alignment had taken the first for OSString::withString (the window was OSString's): IOAVFamily's withCapacity(0) then faulted in OSString::initWithString(NULL)."
+  },
+  {
+   "original": "0xfffffe000b2e42a8",
+   "native_symbol": "__ZN15IORegistryEntry8getPlaneEPKc",
+   "check": {
+    "address": "0xfffffe000b2e42a8",
+    "size": 112,
+    "sha256": "e95dd6aa75564b05336b024350c88456594d96d78ab0645675d903764b758526"
+   },
+   "evidence": "Takes the registry lock, looks x0 (a C string) up in the planes dictionary global through OSDictionary's getObject(const char *) slot, unlocks and returns the plane: IORegistryEntry::getPlane(const char *), the function after makePlane in IORegistryEntry.cpp. IOAccessoryManager calls it."
+  },
+  {
+   "original": "0xfffffe000b2afaf4",
+   "native_symbol": "_uuid_generate_time",
+   "check": {
+    "address": "0xfffffe000b2afaf4",
+    "size": 360,
+    "sha256": "87d66dc97808dd02b11eba40b4fbd982b7ed31d5af58c3686ade406070195bd8"
+   },
+   "evidence": "libkern/uuid/uuid.c in source order, the three functions the matcher left between its own pairs (uuid_compare, uuid_generate_random, uuid_generate_early_random, uuid_generate, uuid_is_null ...): uuid_clear zeroes 16 bytes at x0, uuid_copy copies 16 bytes from x1 to x0, uuid_generate_time is the 360-byte function between uuid_generate_early_random and uuid_generate. IOSkywalkFamily calls uuid_clear."
+  },
+  {
+   "original": "0xfffffe000b2af9cc",
+   "native_symbol": "_uuid_copy",
+   "check": {
+    "address": "0xfffffe000b2af9cc",
+    "size": 16,
+    "sha256": "a80496f17e576dc4bc6f97dca9ff6ac148d8a25c159d8ccb2ded7c03cccee1f4"
+   },
+   "evidence": "libkern/uuid/uuid.c in source order, the three functions the matcher left between its own pairs (uuid_compare, uuid_generate_random, uuid_generate_early_random, uuid_generate, uuid_is_null ...): uuid_clear zeroes 16 bytes at x0, uuid_copy copies 16 bytes from x1 to x0, uuid_generate_time is the 360-byte function between uuid_generate_early_random and uuid_generate. IOSkywalkFamily calls uuid_clear."
+  },
+  {
+   "original": "0xfffffe000b2af9b4",
+   "native_symbol": "_uuid_clear",
+   "check": {
+    "address": "0xfffffe000b2af9b4",
+    "size": 12,
+    "sha256": "b50fe8a1f6bf8076998832a62b68f8eeaa6a572fb9b0f229eb0e6f7ac7e2ac58"
+   },
+   "evidence": "libkern/uuid/uuid.c in source order, the three functions the matcher left between its own pairs (uuid_compare, uuid_generate_random, uuid_generate_early_random, uuid_generate, uuid_is_null ...): uuid_clear zeroes 16 bytes at x0, uuid_copy copies 16 bytes from x1 to x0, uuid_generate_time is the 360-byte function between uuid_generate_early_random and uuid_generate. IOSkywalkFamily calls uuid_clear."
+  },
+  {
+   "original": "0xfffffe000b2d4cf4",
+   "native_symbol": "_IOLockInitWithState",
+   "check": {
+    "address": "0xfffffe000b2d4cf4",
+    "size": 52,
+    "sha256": "568d12477a997906558ce8ab5255785a6487a2729e81f7e937d6110bd05942bb"
+   },
+   "evidence": "(lock, state): when state is 1 (locked) takes the mutex (the inline fast path, else the slow lock), otherwise returns: IOLockInitWithState, the function before IOLockAlloc in IOLocks.cpp. IONetworkingFamily calls it."
+  },
+  {
+   "original": "0xfffffe000b264704",
+   "native_symbol": "_cdevsw_setkqueueok",
+   "check": {
+    "address": "0xfffffe000b264704",
+    "size": 164,
+    "sha256": "ef84d0156cf37373c4b77f23bfdd90b28464f9949f0544828253feb5a01310ab"
+   },
+   "evidence": "Major in w0 (bound 63), compares the caller's cdevsw (112 bytes) with the table entry and then marks the major in the kqueue-ok flags: cdevsw_setkqueueok(maj, csw, extra_flags), between cdevsw_add_with_bdev and devsw_lock in bsd/kern/bsd_stubs.c. IOSerialFamily calls it."
+  },
+  {
+   "original": "0xfffffe000ac47dd8",
+   "native_symbol": "_zone_require_ro",
+   "check": {
+    "address": "0xfffffe000ac47dd8",
+    "size": 132,
+    "sha256": "dc7e6e5fa4ddb4b6eae1f1cd8f41210fffb7d6001188cf0af6757aa8fbe6fccb"
+   },
+   "evidence": "Checks that the element address in x2 lies in the read-only zone range and on an element boundary of the zone id in x0, panics otherwise: zone_require_ro(zid, elem_size, addr), the one function between zalloc_ro and zalloc_ro_mut here and in our kernel. The sandbox kext calls it on its read-only label data."
+  },
+  {
+   "original": "0xfffffe000b383d18",
+   "native_symbol": "__ZN12IOUserClient23registerFilterCallbacksEPK19io_filter_callbacksm",
+   "check": {
+    "address": "0xfffffe000b383d18",
+    "size": 56,
+    "sha256": "4fe137c1401abe80ebb55be08b0b1532bde69c3b4810680da33dd7d9cf56212f"
+   },
+   "evidence": "Returns kIOReturnBadArgument (0xe00002c2) when the size in x1 is under 24, else stores x0 into a global once by compare-and-swap and returns success or kIOReturnBusy (0xe00002d5): IOUserClient::registerFilterCallbacks(callbacks, size), at the end of IOUserClient.cpp before the IOKitDiagnostics sysctl. The sandbox kext registers its IOKit filter with it."
+  },
+  {
+   "original": "0xfffffe000b0fb814",
+   "native_symbol": "_proc_get_filter_message_flag",
+   "check": {
+    "address": "0xfffffe000b0fb814",
+    "size": 88,
+    "sha256": "fbffb1ecc95f4b7f48ef162bef968d80bc255c6b8850a5e1e5d27c78eeb36364"
+   },
+   "evidence": "The syscall-filter block of bsd/kern/kern_proc.c, eight consecutive functions before proc_ro_alloc in the same order as our kernel: the mask size switch (0 -> 558 system calls, 1 -> 128 Mach traps, 2 -> the kobject count global), get and set mask (selector in w1), the two callback registrations (a versioned structure, version 1), the index setter (selector in w0), set and get of the filter message flag (the getter returns EINVAL for a NULL process). The sandbox kext calls them at policy initialization."
+  },
+  {
+   "original": "0xfffffe000b0fb7d4",
+   "native_symbol": "_proc_set_filter_message_flag",
+   "check": {
+    "address": "0xfffffe000b0fb7d4",
+    "size": 64,
+    "sha256": "1eb233ea3a435afe4f80ed5881435ce23aab9d4667c601a13a88d2b82adfdec8"
+   },
+   "evidence": "The syscall-filter block of bsd/kern/kern_proc.c, eight consecutive functions before proc_ro_alloc in the same order as our kernel: the mask size switch (0 -> 558 system calls, 1 -> 128 Mach traps, 2 -> the kobject count global), get and set mask (selector in w1), the two callback registrations (a versioned structure, version 1), the index setter (selector in w0), set and get of the filter message flag (the getter returns EINVAL for a NULL process). The sandbox kext calls them at policy initialization."
+  },
+  {
+   "original": "0xfffffe000b0fb78c",
+   "native_symbol": "_proc_set_sandbox_info_callbacks",
+   "check": {
+    "address": "0xfffffe000b0fb78c",
+    "size": 72,
+    "sha256": "37987bfc5789bc8de593619a806f873305745462c5699a472065f7e14f105c44"
+   },
+   "evidence": "The syscall-filter block of bsd/kern/kern_proc.c, eight consecutive functions before proc_ro_alloc in the same order as our kernel: the mask size switch (0 -> 558 system calls, 1 -> 128 Mach traps, 2 -> the kobject count global), get and set mask (selector in w1), the two callback registrations (a versioned structure, version 1), the index setter (selector in w0), set and get of the filter message flag (the getter returns EINVAL for a NULL process). The sandbox kext calls them at policy initialization."
+  },
+  {
+   "original": "0xfffffe000b0fb6ec",
+   "native_symbol": "_proc_set_syscall_filter_index",
+   "check": {
+    "address": "0xfffffe000b0fb6ec",
+    "size": 160,
+    "sha256": "f7350bef9087dacec2f8f83586b60f7c88426c1ca95b9e04cdf73ffe59713881"
+   },
+   "evidence": "The syscall-filter block of bsd/kern/kern_proc.c, eight consecutive functions before proc_ro_alloc in the same order as our kernel: the mask size switch (0 -> 558 system calls, 1 -> 128 Mach traps, 2 -> the kobject count global), get and set mask (selector in w1), the two callback registrations (a versioned structure, version 1), the index setter (selector in w0), set and get of the filter message flag (the getter returns EINVAL for a NULL process). The sandbox kext calls them at policy initialization."
+  },
+  {
+   "original": "0xfffffe000b0fb688",
+   "native_symbol": "_proc_set_syscall_filter_callbacks",
+   "check": {
+    "address": "0xfffffe000b0fb688",
+    "size": 100,
+    "sha256": "38c820564c308e575ca96b71e9fb9c79bc4eaf4852ec9ea109ab5f73caf45c84"
+   },
+   "evidence": "The syscall-filter block of bsd/kern/kern_proc.c, eight consecutive functions before proc_ro_alloc in the same order as our kernel: the mask size switch (0 -> 558 system calls, 1 -> 128 Mach traps, 2 -> the kobject count global), get and set mask (selector in w1), the two callback registrations (a versioned structure, version 1), the index setter (selector in w0), set and get of the filter message flag (the getter returns EINVAL for a NULL process). The sandbox kext calls them at policy initialization."
+  },
+  {
+   "original": "0xfffffe000b0fb554",
+   "native_symbol": "_proc_set_syscall_filter_mask",
+   "check": {
+    "address": "0xfffffe000b0fb554",
+    "size": 308,
+    "sha256": "0ccd8ca40574d76840280d18419b3ed162c611fb7e89b73c3552d4451d2a682c"
+   },
+   "evidence": "The syscall-filter block of bsd/kern/kern_proc.c, eight consecutive functions before proc_ro_alloc in the same order as our kernel: the mask size switch (0 -> 558 system calls, 1 -> 128 Mach traps, 2 -> the kobject count global), get and set mask (selector in w1), the two callback registrations (a versioned structure, version 1), the index setter (selector in w0), set and get of the filter message flag (the getter returns EINVAL for a NULL process). The sandbox kext calls them at policy initialization."
+  },
+  {
+   "original": "0xfffffe000b0fb468",
+   "native_symbol": "_proc_get_syscall_filter_mask",
+   "check": {
+    "address": "0xfffffe000b0fb468",
+    "size": 236,
+    "sha256": "05e8dc3f757f57f5bad48f2f37c9a56c12dfbfbf4c531feb1274d7d721ead578"
+   },
+   "evidence": "The syscall-filter block of bsd/kern/kern_proc.c, eight consecutive functions before proc_ro_alloc in the same order as our kernel: the mask size switch (0 -> 558 system calls, 1 -> 128 Mach traps, 2 -> the kobject count global), get and set mask (selector in w1), the two callback registrations (a versioned structure, version 1), the index setter (selector in w0), set and get of the filter message flag (the getter returns EINVAL for a NULL process). The sandbox kext calls them at policy initialization."
+  },
+  {
+   "original": "0xfffffe000b0fb434",
+   "native_symbol": "_proc_get_syscall_filter_mask_size",
+   "check": {
+    "address": "0xfffffe000b0fb434",
+    "size": 52,
+    "sha256": "d69e20387a4fcb2804c22a3d634379ed15dba51616ff1b86630ea1e8f8fca4ea"
+   },
+   "evidence": "The syscall-filter block of bsd/kern/kern_proc.c, eight consecutive functions before proc_ro_alloc in the same order as our kernel: the mask size switch (0 -> 558 system calls, 1 -> 128 Mach traps, 2 -> the kobject count global), get and set mask (selector in w1), the two callback registrations (a versioned structure, version 1), the index setter (selector in w0), set and get of the filter message flag (the getter returns EINVAL for a NULL process). The sandbox kext calls them at policy initialization."
+  },
+  {
+   "original": "0xfffffe000b2d3f9c",
+   "native_symbol": "_IOFreeTypeImpl",
+   "check": {
+    "address": "0xfffffe000b2d3f9c",
+    "size": 8,
+    "sha256": "50dc895abebd04bc747b98b2b8431afc32c35cfb23ea023d0f8ad5043ee8000f"
+   },
+   "evidence": "Two instructions (bti c and a tail call) directly after IOMallocTypeImpl's neighbours in IOLib.cpp: IOFreeTypeImpl(view, address), the only function of that block that is a bare tail call of the typed free. The sandbox kext and IOStorageFamily call it."
+  },
+  {
+   "original": "0xfffffe000abd2fec",
+   "native_symbol": "_lck_grp_attr_free",
+   "check": {
+    "address": "0xfffffe000abd2fec",
+    "size": 20,
+    "sha256": "2d06b2c5e09ad970314da3c1a17498ea544995bc579b0839fe59b8a065b68542"
+   },
+   "evidence": "By link order between two paired neighbours, where our kernel has exactly as many functions between the same two names as the original has, so each takes the name at its position (sizes checked for plausibility): csblob_get_identity between csblob_get_teamid and csblob_get_cdhash; mac_label_set between mac_label_get and mac_necp_check_open; developer_mode_state, research_mode_state, extended_research_mode_state between disable_developer_mode and restricted_execution_mode_enable; restricted_execution_mode_state after it; PE_imgsrc_mount_supported as the last of five before PE_get_default; lck_grp_attr_free after lck_grp_attr_setstat. The sandbox kext calls them."
+  },
+  {
+   "original": "0xfffffe000b3ecca4",
+   "native_symbol": "_PE_imgsrc_mount_supported",
+   "check": {
+    "address": "0xfffffe000b3ecca4",
+    "size": 36,
+    "sha256": "55de1139dcc7f837a3c53a93abeb20235f3d439f6e0aada8bce3c8919a7fc580"
+   },
+   "evidence": "By link order between two paired neighbours, where our kernel has exactly as many functions between the same two names as the original has, so each takes the name at its position (sizes checked for plausibility): csblob_get_identity between csblob_get_teamid and csblob_get_cdhash; mac_label_set between mac_label_get and mac_necp_check_open; developer_mode_state, research_mode_state, extended_research_mode_state between disable_developer_mode and restricted_execution_mode_enable; restricted_execution_mode_state after it; PE_imgsrc_mount_supported as the last of five before PE_get_default; lck_grp_attr_free after lck_grp_attr_setstat. The sandbox kext calls them."
+  },
+  {
+   "original": "0xfffffe000b13180c",
+   "native_symbol": "_restricted_execution_mode_state",
+   "check": {
+    "address": "0xfffffe000b13180c",
+    "size": 44,
+    "sha256": "c13feca8d497f6791a7e342aab7e9a22e48052cd15fcf53c7877794a08106317"
+   },
+   "evidence": "By link order between two paired neighbours, where our kernel has exactly as many functions between the same two names as the original has, so each takes the name at its position (sizes checked for plausibility): csblob_get_identity between csblob_get_teamid and csblob_get_cdhash; mac_label_set between mac_label_get and mac_necp_check_open; developer_mode_state, research_mode_state, extended_research_mode_state between disable_developer_mode and restricted_execution_mode_enable; restricted_execution_mode_state after it; PE_imgsrc_mount_supported as the last of five before PE_get_default; lck_grp_attr_free after lck_grp_attr_setstat. The sandbox kext calls them."
+  },
+  {
+   "original": "0xfffffe000b131788",
+   "native_symbol": "_extended_research_mode_state",
+   "check": {
+    "address": "0xfffffe000b131788",
+    "size": 68,
+    "sha256": "9fc04c87c5dd82ce33a5ac3e7b9a6f6621ca069d51604355a33e7528f904d41a"
+   },
+   "evidence": "By link order between two paired neighbours, where our kernel has exactly as many functions between the same two names as the original has, so each takes the name at its position (sizes checked for plausibility): csblob_get_identity between csblob_get_teamid and csblob_get_cdhash; mac_label_set between mac_label_get and mac_necp_check_open; developer_mode_state, research_mode_state, extended_research_mode_state between disable_developer_mode and restricted_execution_mode_enable; restricted_execution_mode_state after it; PE_imgsrc_mount_supported as the last of five before PE_get_default; lck_grp_attr_free after lck_grp_attr_setstat. The sandbox kext calls them."
+  },
+  {
+   "original": "0xfffffe000b131744",
+   "native_symbol": "_research_mode_state",
+   "check": {
+    "address": "0xfffffe000b131744",
+    "size": 68,
+    "sha256": "8c9688ecf4f8932e7cfc64086e8a1827096bd3f62c57e3651c14e0511d17ae28"
+   },
+   "evidence": "By link order between two paired neighbours, where our kernel has exactly as many functions between the same two names as the original has, so each takes the name at its position (sizes checked for plausibility): csblob_get_identity between csblob_get_teamid and csblob_get_cdhash; mac_label_set between mac_label_get and mac_necp_check_open; developer_mode_state, research_mode_state, extended_research_mode_state between disable_developer_mode and restricted_execution_mode_enable; restricted_execution_mode_state after it; PE_imgsrc_mount_supported as the last of five before PE_get_default; lck_grp_attr_free after lck_grp_attr_setstat. The sandbox kext calls them."
+  },
+  {
+   "original": "0xfffffe000b131728",
+   "native_symbol": "_developer_mode_state",
+   "check": {
+    "address": "0xfffffe000b131728",
+    "size": 28,
+    "sha256": "56aee725e898c0ec522ed19e57c25a3cb9cc37d52a7e549adda798cec61faa7f"
+   },
+   "evidence": "By link order between two paired neighbours, where our kernel has exactly as many functions between the same two names as the original has, so each takes the name at its position (sizes checked for plausibility): csblob_get_identity between csblob_get_teamid and csblob_get_cdhash; mac_label_set between mac_label_get and mac_necp_check_open; developer_mode_state, research_mode_state, extended_research_mode_state between disable_developer_mode and restricted_execution_mode_enable; restricted_execution_mode_state after it; PE_imgsrc_mount_supported as the last of five before PE_get_default; lck_grp_attr_free after lck_grp_attr_setstat. The sandbox kext calls them."
+  },
+  {
+   "original": "0xfffffe000b3f43d8",
+   "native_symbol": "_mac_label_set",
+   "check": {
+    "address": "0xfffffe000b3f43d8",
+    "size": 84,
+    "sha256": "48c281587f01670053e590a89fba0f1577d6c66fecefc8574da4b17514629f59"
+   },
+   "evidence": "By link order between two paired neighbours, where our kernel has exactly as many functions between the same two names as the original has, so each takes the name at its position (sizes checked for plausibility): csblob_get_identity between csblob_get_teamid and csblob_get_cdhash; mac_label_set between mac_label_get and mac_necp_check_open; developer_mode_state, research_mode_state, extended_research_mode_state between disable_developer_mode and restricted_execution_mode_enable; restricted_execution_mode_state after it; PE_imgsrc_mount_supported as the last of five before PE_get_default; lck_grp_attr_free after lck_grp_attr_setstat. The sandbox kext calls them."
+  },
+  {
+   "original": "0xfffffe000b0b7f84",
+   "native_symbol": "_csblob_get_identity",
+   "check": {
+    "address": "0xfffffe000b0b7f84",
+    "size": 100,
+    "sha256": "b1c75212e5c0a1c5cd02845bd5f67a03a1eedfc820cba8755649cfc36a0e413b"
+   },
+   "evidence": "By link order between two paired neighbours, where our kernel has exactly as many functions between the same two names as the original has, so each takes the name at its position (sizes checked for plausibility): csblob_get_identity between csblob_get_teamid and csblob_get_cdhash; mac_label_set between mac_label_get and mac_necp_check_open; developer_mode_state, research_mode_state, extended_research_mode_state between disable_developer_mode and restricted_execution_mode_enable; restricted_execution_mode_state after it; PE_imgsrc_mount_supported as the last of five before PE_get_default; lck_grp_attr_free after lck_grp_attr_setstat. The sandbox kext calls them."
+  },
+  {
    "original": "0xfffffe000abd2fd8",
    "native_symbol": "_lck_grp_attr_setstat",
    "check": {
@@ -1495,6 +2065,21 @@
     "__DATA_CONST,__const"
    ],
    "evidence": "Read as a 32-bit shift count by AMFI's stack check above (0xfffffe000923fcc8) and zero in the file (set at boot): PAGE_SHIFT_CONST. The matcher left it unpaired."
+  },
+  {
+   "original": "0xfffffe0007ef6d00",
+   "native_symbol": "__ZTV9IOService",
+   "evidence": "A vtable (two zero words, then entries): among its first 40 entries the matcher names 9 of OSObject's and 24 of IORegistryEntry's methods, and the two constructors after IOService.cpp's static initializer (0xfffffe000b2fead0, 0xfffffe000b2feafc) store it + 16 into the object: IOService's vtable. 89 kexts name it (their IOService subclasses' constructors and super calls); unpaired it kept its collection address inside another object of this kernel."
+  },
+  {
+   "original": "0xfffffe0007ef75d8",
+   "native_symbol": "__ZTV8OSObject",
+   "evidence": "A vtable whose first 11 named entries are OSObject's methods; AMFI calls its entry at +128 (slot 14, free) directly as super::free of its OSObject subclasses. 63 kexts name it."
+  },
+  {
+   "original": "0xfffffe0007ec7f88",
+   "native_symbol": "__ZTV12IOUserClient",
+   "evidence": "A vtable with OSObject's and IORegistryEntry's methods in its first entries; AMFI's user client calls entries +1360 and +1376 (slots 168 and 170, past IOService's own) directly as super calls: IOUserClient's vtable. 56 kexts name it."
   }
  ]
 }

@@ -35,10 +35,12 @@ def main():
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--threshold', type=float, default=2.0)
     parser.add_argument('--holdout', type=int, default=2500)
-    parser.add_argument('--span', type=int, default=0, help='functions between two strong pairs that may be paired by position')
+    parser.add_argument('--position', action='store_true',
+                        help='also pair the one function between two anchors by position (measure it: 1 %% wrong in the '
+                             'reference order, 10 %% in a DEVELOPMENT kernel order)')
     parser.add_argument('--features', help='kernel whose function of the same name gives the features (the RELEASE reference, '
                         'closer to the original code than a DEVELOPMENT kernel), when --reference is only the order')
-    parser.add_argument('--also', action='append', default=[], help='pairs of an earlier run (another order): read as paired')
+    parser.add_argument('--also', action='append', default=[], help='pairs of an earlier run (another order) or a reviewed file: read as paired')
     parser.add_argument('--explain', help='print the alignment of the window around this original function and stop')
     args = parser.parse_args()
     sys.path.insert(0, args.xnuprelink)
@@ -54,8 +56,12 @@ def main():
     data_of = {int(k, 16): v['name'] for k, v in pairing['data'].items() if v.get('name')}
     matched = set(name_of)
     for path in args.also:
-        for pair in json.loads(Path(path).read_text())['pairs']:
-            name_of.setdefault(int(pair['original'], 16), pair['native_symbol'])
+        record = json.loads(Path(path).read_text())             # align.py output, or a reviewed file
+        for pair in record.get('pairs', record.get('functions', [])):
+            if 'pairs' in record:
+                name_of.setdefault(int(pair['original'], 16), pair['native_symbol'])
+            else:
+                name_of[int(pair['original'], 16)] = pair['native_symbol']
     reference = Image(Path(args.reference).read_bytes())
     symbols = reference.symbols()
     code = [s for s in reference.segments if 'EXEC' in s['name']]
@@ -148,6 +154,11 @@ def main():
             fo = Counter({k: v for k, v in fo.items() if k[2:] not in hidden})
         shared, union = sum((fo & fr).values()), sum((fo | fr).values())
         score = (2.0 * shared / union if union else 0.0) + 1.0 - abs(so - sr) / max(so, sr) + (0.3 if co == cr else 0.0)
+        # A function that names a class's metaclass (a factory: alloc, then init) is a member of that class. The
+        # original's link order differs from ours around the end of a C++ file, where the window is the next
+        # class's (OSSet::withCapacity landed on OSString::withString).
+        if any(key.endswith('10gMetaClassE') and key not in fr for key in fo if key.startswith('d:')):
+            score = min(score, args.threshold - 0.01)
         return score, shared, union
 
     def predict(target, hidden=frozenset(), explain=False):
@@ -228,12 +239,12 @@ def main():
             name_of[starts[a]], name_of[starts[b]], kind)
         if mine and scores[mine][0] >= args.threshold:
             return result(mine[1], scores[mine], 'features')
-        # Too little in the function itself (a thunk, an accessor): its position counts when the nearest strong
-        # pairs on both sides have as many functions between them on one side as on the other.
+        # Too little in the function itself (a thunk, an accessor): its position counts only when it is the one
+        # function between two anchors on both sides. Longer equal runs were wrong one time in six on known pairs.
         x = left.index(i) + 1
         below = max(pair for pair in strong if pair[0] < x)
         above = min(pair for pair in strong if pair[0] > x)
-        if above[0] - below[0] == above[1] - below[1] and above[0] - below[0] <= args.span + 1:
+        if args.position and n == 1 and k == 1:
             y = below[1] + x - below[0]
             return result(y, scores[x, y], 'position')
         if mine:

@@ -47,6 +47,10 @@ PRESENTED_NODE_NAMES = {'defaults'}
 # The roots of the OS profile ([kernel.prelink] roots of PROFILE.toml: the 31 Droid-VM's iPadOS 27.0.1 guest runs with)
 # are kept whatever their personalities, as there. Left out by hand although the rule would keep them:
 FORCE_OUT = {
+    'com.apple.driver.FairPlayIOKit': 'not hardware: its code is obfuscated and reaches kernel functions through computed '
+                                      'tables, so an unpaired target cannot be named from the call site (its start '
+                                      'panics on the stub at 0xfffffe0009be7240). UniXNU keeps it out of its roots as '
+                                      'well; userland disables fairplayd.H2 (docs/agents.md)',
     'com.apple.kec.pthread': 'the kernel links libpthread\'s kernel part (kernel/README.md); a second pthread '
                              'registration from the original kext is refused by pthread_kext_register',
     'com.apple.driver.AppleSEPKeyStore': 'the keystore runs on the SEP, which xnuhost does not present '

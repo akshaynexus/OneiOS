@@ -32,12 +32,21 @@ the same). A new kernel needs a new `kernel.kc`: every native address in it is t
    rewritten code. The record lists every rewrite and every other instruction a process cannot execute.
 4. `fileset_match.py` (XnuPrelink, `external/XnuPrelink`): pairs the functions and data of Apple's kernel that kexts
    reference with ours, by strings, call graphs, vtables and, with `REFERENCE`, names of the RELEASE build.
-5. `align.py`: what the matcher left, by link order (ours inside a source file, then the reference's). Inferred,
-   with the error rate measured on known pairs in its output; `--explain ADDRESS` prints a window.
-6. `emit.py`: XnuPrelink's fileset emitter with our roots, the aligned pairs and the reviewed records
-   (`reviewed-24A446-v54.json`: functions, data, one pointer site, the AMFI initializer; each with evidence and a
-   hash of the original bytes it was read from). Apple's kernel entry is replaced by ours, kexts stay where they
-   are, the collection's header takes our kernel's CPU subtype (the loader compares them).
+5. What the matcher left, inferred (each pair is listed in the report, `reviewed_applied.aligned`):
+   - `align.py`: by link order, ours inside a source file with the reference's function of the same name as the
+     shape (immediates, field offsets, named callees, strings), then the reference's own order. The error rate is
+     measured on known pairs with their pairing hidden and written into the output (2 % today);
+     `--explain ADDRESS` prints a window.
+   - `structors.py`: constructors and base destructors of classes that kexts subclass, by the vtable they store, and
+     factories (`X::withFoo`) by the class they allocate and the init slot they call.
+   - `vtables.py`: every vtable paired by name, slot by slot (the public layouts are ABI). A slot overrides an
+     order-inferred pair; its disagreements with other pairs are listed under `conflicts`.
+6. `emit.py`: XnuPrelink's fileset emitter with our roots, the inferred pairs (slots and structors first) and the
+   reviewed records, which win (`reviewed-24A446-v54.json`: functions, data, one pointer site, the AMFI
+   initializer; each with evidence and a hash of the original bytes it was read from). Apple's kernel entry is
+   replaced by ours, kexts stay where they are, the collection's header takes our kernel's CPU subtype (the loader
+   compares them), and the kernel's `__DATA` becomes a root segment of its own (`__DATA_KERNEL`) at the end when it
+   does not fit in front of the first kept kext's data (it is 10 MB with the virtio-gpu driver's static buffers).
 7. `record.py`.
 
 `port-fixture.py` carried 50 of XnuPrelink's reviewed iPad identities over (functions with the same bytes here);
@@ -47,10 +56,11 @@ rerun it only when that fixture changes. `unmapped.py` names the original functi
 
 Every kext of the collection is a root, except one all of whose IOKit personalities attach to hardware xnuhost
 does not present (an Apple SoC block, I2C/SPI/SPMI part, RTBuddy/AFK/AOP endpoint, SEP endpoint, PCIe, USB,
-Thunderbolt, accessory port), and five decided by hand (`FORCE_OUT`: `kec.pthread`, the SEP keystore and its two
-clients, the ANE HAL). The profile's 31 roots are kept whatever their personalities. A left-out kext that a kept one
-links against returns for its code only, without personalities. Today: 319 in the kernelcache, 134 roots, 154 in the
-closure (20 returned dependencies), 165 absent, 139 fileset entries (15 of the closure are codeless KPIs).
+Thunderbolt, accessory port), and six decided by hand (`FORCE_OUT`: `kec.pthread`, the SEP keystore and its two
+clients, the ANE HAL, FairPlayIOKit). The profile's 31 roots are kept whatever their personalities. A left-out kext that a kept one
+links against returns for its code only, without personalities. FairPlayIOKit is out although it is not hardware
+(obfuscated calls through computed tables; reason in `roots.py`). Today: 319 in the kernelcache, 133 roots, 154 in
+the closure (21 returned dependencies), 165 absent, 139 fileset entries (15 of the closure are codeless KPIs).
 IOGPUFamily and what it links are roots; AGXG18P (the GPU's own driver) is left out, so NativeAdreno's
 `AGXAccelerator` binding for this kernelcache is not staged yet (`docs/gpu.md`).
 
@@ -72,12 +82,30 @@ here yet.
 - Launch constraints are the kernel's: `zzyc-owner-skip-launch-constraints.patch` (boot argument `sheng-no-lc=1`)
   and `/chosen/amfi-only-platform-code`. Nothing in the collection changes for them.
 
+## State (2026-11-10)
+
+Under xnuhost in `qemu-aarch64 -cpu cortex-a710` (1 vCPU, 2 GiB), with a kernel that has
+`0007-prelink-kext-start.patch`: Apple corecrypto's POST, AppleImage4, AMFI (early initializer), the sandbox and
+vnguard policies load, `trust_cache_runtime_init` passes ("no external trust caches found"), IOKit matching starts
+the kept drivers, and `bsd_init` begins ("MAC Framework successfully initialized", buffer headers). It stops two
+seconds later at the next unpaired kernel function (IOTimeSyncFamily).
+
+Pairing: 11,461 functions by the matcher with the reference, 984 inferred (518 by order, 163 structors and
+factories, 327 by slot, less the overlaps), 143 reviewed by hand plus 4 data and one site, 50 carried over from
+XnuPrelink's iPad fixture.
+655 original functions that kexts reference are still on the panic stub (most only through vtables of classes
+whose vtable is not named yet), and 55 data targets are unpaired.
+
 ## What is not done
 
 - **The pairing is incomplete.** A kext call to an original kernel function with no pair goes to
-  `_unixnu_fileset_unmapped`, which panics with the caller; `unmapped.py ADDRESS` names it, and the answer goes into
-  the reviewed file. The record has the counts. Unpaired *data* keeps its collection address, which is some other
-  object of our kernel: a wrong read, not a panic.
+  `_unixnu_fileset_unmapped`, which panics with the caller; `unmapped.py ADDRESS` names it and its paired
+  neighbours, and the answer goes into the reviewed file. When the "from" address is inside our kernel, a kernel
+  function made a virtual call on a kext's object: the slot names the method. Unpaired *data* keeps its
+  collection address, which is some other object of our kernel: a wrong read, not a panic.
+- **Inferred pairs can be wrong** (2 % of the order pairs on known functions; three seen in the boot so far, each
+  now a reviewed record). XnuPrelink's own order rule also made one (`lck_mtx_gate_close`). A strange fault in a
+  kernel function reached from a kext is worth one `unmapped.py --target` look at the caller's pair.
 - The class list (`abi/original-classes.json` of the iPad profile) and the `AGXAccelerator` binding for this
-  kernelcache.
+  kernelcache; `x18` use in kexts is not checked by default (`X18=1 build.sh`, slow).
 - No run on the phone.
