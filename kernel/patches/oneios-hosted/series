@@ -22,3 +22,4 @@
 0010-aes-after-boot-manifest.patch
 0011-chosen-is-not-a-nub.patch
 0012-first-start-diagnosis.patch
+0013-shared-region-size.patch

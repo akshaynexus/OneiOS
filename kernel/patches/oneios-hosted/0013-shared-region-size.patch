@@ -1,0 +1,22 @@
+diff --git a/osfmk/mach/shared_region.h b/osfmk/mach/shared_region.h
+--- a/osfmk/mach/shared_region.h	2026-11-11 02:20:43.759315199 +0530
++++ b/osfmk/mach/shared_region.h	2026-11-11 02:20:43.774192077 +0530
+@@ -88,7 +88,18 @@
+ /* ARM64_TODO: move to higher memory */
+ #endif
+ #define SHARED_REGION_BASE_ARM64                0x180000000ULL
++#if defined(XNU_HOSTED) && XNU_HOSTED
++/*
++ * OneiOS hosted: the dyld shared cache of iOS 27.0.1 for iPhone18,2 (24A446, arm64e) says in its header that it
++ * spans 0x185804000 bytes from 0x180000000 and may be slid by up to 0x20000000: more than the 6 GiB of the public
++ * source (the iPad cache UniXNU's boards run fits). With 6 GiB the first process's shared_region_map_and_slide
++ * failed on the mapping that crosses 0x300000000 (KERN_INVALID_ADDRESS) and dyld aborted. 8 GiB holds the cache at
++ * any slide; a task's own addresses under xnuhost reach 0x7e00000000, far above.
++ */
++#define SHARED_REGION_SIZE_ARM64                0x200000000ULL
++#else
+ #define SHARED_REGION_SIZE_ARM64                0x180000000ULL
++#endif
+ #define SHARED_REGION_NESTING_BASE_ARM64        SHARED_REGION_BASE_ARM64
+ #define SHARED_REGION_NESTING_SIZE_ARM64        SHARED_REGION_SIZE_ARM64
+ #define SHARED_REGION_NESTING_MIN_ARM64         ?
