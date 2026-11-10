@@ -18,6 +18,19 @@ repo, with the Mi A3 / laurel_sprout work), UniXNU, Droid-VM, OneOS (`/home/aksh
 | iOS 27 userland: root layout, cryptexes, launchd/daemon tweaks, iOS (not iPadOS) identity, display @3x, Metal plugin | userland | `userland/`, `docs/userland.md` |
 | OneOS fork integration (`/home/akshay/Documents/GitHub/OneOS`, branch `oneios`) | oneos | that repo; `oneos/` here for shared notes |
 
+## Reaching each other
+
+Write requests in the notes section below; for something urgent, also send a T3 message (`t3_thread_send`,
+mode `queue`) to the owner's thread id:
+
+| Agent | Thread id |
+|---|---|
+| image-build | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3Afd39104b-3ba3-45a0-bbc6-5419196795a3` |
+| oneos | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3A9cbb50bc-d9a4-490a-a803-eeb5d4f35b12` |
+| release-kernel | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3A1103831e-b6be-44ff-8ba4-cd3b291a7051` |
+| booter | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3A81e146dc-96b7-4dff-a49b-8d1b3690a4ec` |
+| userland | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3Aab462e7a-0cd0-45a7-806b-f514249a862e` |
+
 ## Interfaces (write what others need here; keep it current)
 
 - image set -> booter/userland: (image-build fills in: file names, mount format, manifest schema)
