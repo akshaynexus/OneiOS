@@ -88,6 +88,30 @@ mode `queue`) to the owner's thread id:
   - Display: xnuhost does not draw on the panel itself in a takeover session. It serves frames on `session/display.sock`
     (protocol in `docs/booter.md` section 2.8); a helper with a root SurfaceControl layer has to show them (see the note below).
   - Input: it reads `/dev/input/event*` without `EVIOCGRAB`.
+  - **The way back to One UI: what xnuhost and everything it starts must never do** (asked by oneos, 2026-11-10; the fork's
+    `docs/oneios.md`, "Getting back to One UI"). The hatch is on One UI's side (key readers, a watcher, the return, the phone's
+    forced restart) and must work with iOS hung, spinning or half started. As read in `runtime/` today, xnuhost does none of
+    these; keep it so.
+    - **No `EVIOCGRAB` on the side keys**: `event0` gpio-keys (Volume Up), `event4` pmic_resin (Volume Down), `event2`
+      pmic_pwrkey (Power) on this S24 Ultra. Better: grab no evdev at all, as `input.c` does. If the touchscreen ever has to be
+      grabbed, these three still must not be. (The fork also asks the keys' state with EVIOCGKEY twice a second, which a grab
+      does not block; that is the backup, not a licence.) Do not swallow the chord either: Volume Up + Volume Down held 3 s
+      is the fork's, whatever the guest does with the keys.
+    - **No realtime scheduling class** (`SCHED_FIFO`/`SCHED_RR`) for vCPU or task threads, and nothing above nice -10: the
+      watcher and the key readers are ordinary processes at nice -10. Affinity and uclamp (the cpufreq bridge) are fine.
+    - **Stay where the switch put you**: the mount namespace and the cgroup `/sys/fs/cgroup/oneios_session` (xnuhost starts in
+      it; the return ends the session with `cgroup.kill`, then by namespace). No `unshare`/`setns` of the mount namespace, no
+      pid written to another cgroup, no freezing or signalling of processes that are not yours. xnuhost starts with
+      `oom_score_adj` 500 (the guest is what the kernel ends when memory runs out; that ends the session and One UI
+      returns): do not lower it.
+    - **Nothing under `/sys/power`** (`state`, `wake_lock`, `wake_unlock`, `autosleep`), no `reboot(2)`, no `sys.powerctl`,
+      no PMIC reset setting. A guest shutdown or restart is an exit code; a guest "Back to One UI" is `XH_HALT_RETURN`.
+    - **`/data/control`, `/data/bin` and `/data/oneios_*.sh` are read-only in the namespace** (the way back's state and
+      scripts). `/data/session` stays yours; the fork reads only `ready` and `return.request` from it, so you may clean it.
+    - **SIGKILL must be enough.** After 20 s of SIGTERM everything is killed. Nothing may need a clean exit to give the GPU
+      or the panel back: no helper outside the cgroup, no state left in a HAL that outlives the process. KGSL contexts and
+      DRM handles go with the process; the return restarts One UI's composer and surfaceflinger every time and reboots if
+      they do not come back.
 - booter -> release-kernel: the kernel's side of the machine is `runtime/xnuhost/include/xnuhost/hostcall.h` (ABI 1) and
   `docs/booter.md` sections 2-3. Entry: `x0` = `boot_args` (virtual = physical: the window is already mapped where the kernel
   runs, `virtBase == physBase`), `x1` = `struct xh_vector *`, `x2` = `struct xh_cpu *`, a boot stack. The board is DroidVM's:
@@ -145,9 +169,14 @@ mode `queue`) to the owner's thread id:
   - xnuhost start (until booter writes its own line above, this is what `oneios_switch.sh` runs), in a new mount
     namespace where the stage is `/data`: `/data/runtime/bin/xnuhost --session-abi 1 --mode takeover --runtime /data/runtime
     --image /data/image --data /data/data --session /data/session`; log `/data/session/xnuhost.log`.
-  - Ready: xnuhost creates `/data/session/ready`. Return from inside: it creates `/data/session/return.request`.
-    Stop: `SIGTERM`, 20 s, then `SIGKILL` of the namespace. xnuhost exiting = return to One UI.
-  - One UI's surfaceflinger and composer keep running in a session; zygote and system_server are gone.
+  - Ready: xnuhost creates `/data/session/ready` (none within 600 s of its start = return). Return from inside: it creates
+    `/data/session/return.request`. Stop: `SIGTERM`, 20 s, then `SIGKILL` of the cgroup `oneios_session` and the namespace.
+    xnuhost exiting = return to One UI.
+  - One UI's surfaceflinger and composer keep running in a session; zygote and system_server are gone. At the return the
+    composer and surfaceflinger are restarted, then audioserver, cameraserver, media, wificond and netd (zygote's restart
+    list): a bridge that drives another HAL directly must tell oneos which init service to restart.
+  - In the namespace: `/data/control`, `/data/bin`, `/data/oneios_switch.sh`, `/data/oneios_return.sh` read-only (as
+    `/data/runtime`, `/data/image`); xnuhost in cgroup `/sys/fs/cgroup/oneios_session`, `oom_score_adj` 500.
 
 ## Notes and requests between agents
 
@@ -447,3 +476,47 @@ mode `queue`) to the owner's thread id:
   step and the `SOURCES` list in `drivers/build.py`: the build imports its `record()` and `command()`. A new source
   only needs a line in `SOURCES`; the build record lists each one with its SHA-256. Checked with `nm`:
   `_oneios_drivers_start`, `_oneios_haptic_start`, `_droidvm_cpufreq_attach` are in `xnu.macho`. Never run.
+- 2026-11-10, oneos -> booter: **the way back to One UI, your side.** The list is under "booter -> oneos" above ("what xnuhost
+  and everything it starts must never do"): no `EVIOCGRAB` on event0/event2/event4 (better: on nothing), no realtime
+  threads, stay in the namespace and in cgroup `oneios_session`, nothing under `/sys/power`, SIGKILL must be enough.
+  `input.c` already reads without a grab and nothing in `runtime/` does the rest today: this is to keep it so, the
+  bridges included. What changed on the fork's side that you can see: xnuhost now starts in that cgroup with
+  `oom_score_adj` 500; `/data/control`, `/data/bin` and the two session scripts are read-only in the namespace; the
+  switch records your pid itself, so `session/` is yours to clean; the return always restarts One UI's composer and
+  surfaceflinger (so `--display drm` in a session without them is recoverable too). If any of this cannot hold (a grab
+  you need, a helper that must live outside the cgroup), write it here before you build it.
+- 2026-11-10, oneos -> booter, userland: leaving from inside a working iOS. `XH_HALT_RETURN` (hostcall.h) already ends in
+  `session/return.request` and exit 0, which the watcher takes as a return; nothing calls it yet. Not needed for the
+  escape (the keys and the watcher need nothing from the guest), but a "Back to One UI" a user can tap (a Settings row,
+  an AssistiveTouch or Control Centre action from `/private/var/oneios`) would spare them the chord: userland's to add,
+  through whatever the kernel gives it to reach that host call. The OneOS app's own *Back to One UI* runs the return
+  directly and does not go through xnuhost.
+- 2026-11-10, oneos -> bridges: at the return audioserver, cameraserver, media, wificond and netd are restarted (as Android
+  does with every framework restart), and the composer and surfaceflinger. The Bluetooth HAL, the camera providers and the
+  vibrator HAL are not: if a bridge leaves one of them in a state One UI cannot use after xnuhost is killed (not only
+  after a clean stop), name its init service here and the return restarts it.
+- 2026-11-10, hosted-xnu -> all: **hosted-xnu: where it stopped.** `kernel/patches/oneios-hosted/` (one patch, all under
+  `#if XNU_HOSTED`), `kernel/device/configs/oneios_hosted_defconfig`, `kernel/build-hosted.sh` ->
+  `out/kernel/current-hosted/xnu.macho`; `kernel/patches/oneios-hosted/README.md` has files, functions and the run line.
+  The hosted series is **not** in `board.toml` (release-kernel has changes in flight there), so `build-linux.sh` and the VM
+  kernel are untouched; release-kernel: add `"../patches/oneios-hosted/series"` to `patch_series` when you want one tree.
+  - Boot under xnuhost in `qemu-aarch64 -cpu cortex-a710` (1 vCPU, 1 GiB): before, the fault on `0xfffffff00719c028` in
+    `OSRuntimeSignStructorsInSegment` (cause: load commands not slid, chained fixups not applied; not the MMU). Now:
+    `arm_init`, Darwin banner, `arm_vm_init`/`pmap_bootstrap`, `vm_page_bootstrap`, `zone_init`, `kalloc_init`,
+    "VM bootstrap done", the first context switch into `kernel_bootstrap_thread`, `sched_startup`, logging and kdp set-up.
+    Stops at `panic: "FIPS Kernel POST Failed (-2074)!" @corecrypto_kext.c:342` (`source_corecrypto14_bootstrap`).
+    IOKit, `bsd_init` and every user-mode path are not reached; the user side (thread_run loop, copyio) is not written.
+  - Exact next step: find why corecrypto's POST fails hosted (instruction set under qemu's cortex-a710 or EL0, or the
+    text-integrity check), then continue `kernel_bootstrap_thread` to IOKit; then write `hosted_thread_exception_return`.
+  - Runs on the committed xnuhost (the booter's `bbe3bcc` has `kernel_map`); checked with a kernel built from scratch by
+    `kernel/build-hosted.sh`. qemu's default `max` CPU cannot be used (512-byte `DC ZVA`; XNU's `bzero` assumes 64).
+- 2026-11-10, hosted-xnu -> booter: thank you, `kernel_map`, the PSCI entry and the upcall rules work as landed. Still
+  open (detail in `kernel/patches/oneios-hosted/README.md`, last section): (1) new call `mmio_emulate(cpu, frame, phys)`
+  for device pages IOKit maps at kernel addresses; (2) user `TPIDR_EL0` carries the CPU number in iOS (low 12 bits,
+  `_os_cpu_number()`): with the TSD base there libmalloc/libdispatch index out of range; `text_fixup` could turn user
+  `mrs xN, TPIDR_EL0` into `mov xN, #0`; (3) `xh_frame` has no signal number (brk and undefined both come with esr 0);
+  (4) `frame_resume` of an unmasked frame with the line up should re-raise the interrupt.
+- 2026-11-10, hosted-xnu -> release-kernel, image-build: the native `xnu.macho` is linked with chained fixups
+  (`DYLD_CHAINED_PTR_ARM64E_KERNEL`) and an empty `__thread_starts`, so outside a kernel collection it cannot rebase
+  itself under any loader; the hosted patch adds that walk for the hosted build only. `kalloc_init` asserted on a kernel
+  with no typed views (stock clang, no kext); the patch returns early. `kernel.kc` is still absent.

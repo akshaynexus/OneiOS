@@ -1,0 +1,2929 @@
+diff --git a/makedefs/MakeInc.def b/makedefs/MakeInc.def
+index 2496023..79df7d2 100644
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -80,6 +80,11 @@ COMPONENT	= $(if $(word 2,$(subst /, ,$(RELATIVE_SOURCE_PATH))),$(word 2,$(subst
+ COMPONENT_IMPORT_LIST = $(filter-out $(COMPONENT),$(COMPONENT_LIST))
+ 
+ MACHINE_FLAGS_ARM64_BCM2837 = -DARM64_BOARD_CONFIG_BCM2837
++# OneiOS: the hosted machine layer (XNU as a process under xnuhost, osfmk/arm64/hosted). XNU_HOSTED=1 comes from
++# the build's environment (CONFIG_XNU_HOSTED=y of the defconfig); C and assembly both see -DXNU_HOSTED=1.
++ifeq ($(XNU_HOSTED),1)
++MACHINE_FLAGS_ARM64_BCM2837 += -DXNU_HOSTED=1
++endif
+ MACHINE_FLAGS_ARM64_T8101 = -DARM64_BOARD_CONFIG_T8101			-mcpu=apple-a14
+ MACHINE_FLAGS_ARM64_T8103 = -DARM64_BOARD_CONFIG_T8103                  -mcpu=apple-a14
+ MACHINE_FLAGS_ARM64_T6000 = -DARM64_BOARD_CONFIG_T6000			-mcpu=apple-a14
+diff --git a/osfmk/arm/arm_init.c b/osfmk/arm/arm_init.c
+index e8db5d8..cab3371 100644
+--- a/osfmk/arm/arm_init.c
++++ b/osfmk/arm/arm_init.c
+@@ -227,6 +227,105 @@ extern vm_offset_t segLOWESTKC, segHIGHESTKC, segLOWESTROKC, segHIGHESTROKC;
+ extern vm_offset_t segLOWESTAuxKC, segHIGHESTAuxKC, segLOWESTROAuxKC, segHIGHESTROAuxKC;
+ extern vm_offset_t segLOWESTRXAuxKC, segHIGHESTRXAuxKC, segHIGHESTNLEAuxKC;
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted: a standalone kernel (MH_EXECUTE, not inside a kernel collection) linked with chained fixups
++ * (LC_DYLD_CHAINED_FIXUPS, DYLD_CHAINED_PTR_ARM64E_KERNEL) has an empty __thread_starts and nobody to apply its
++ * chains: iBoot and DarwinBoot only ever start such a kernel inside a collection. xnuhost loads it as it is,
++ * so the kernel walks its own chains here: each rebase becomes image base + offset, each authenticated one is
++ * signed in place with this process's keys. Nothing is rebased yet, so no function is called.
++ */
++static inline __attribute__((__always_inline__)) void
++hosted_apply_chained_fixups(kernel_mach_header_t *mh)
++{
++	const struct linkedit_data_command *fixups = NULL;
++	uintptr_t linkedit = 0;
++	uint64_t linkedit_fileoff = 0;
++	struct load_command *lc = (struct load_command *)((uintptr_t)mh + sizeof(*mh));
++
++	for (uint32_t i = 0; i < mh->ncmds; i++) {
++		if (lc->cmd == LC_DYLD_CHAINED_FIXUPS) {
++			fixups = (const struct linkedit_data_command *)lc;
++		} else if (lc->cmd == LC_SEGMENT_KERNEL) {
++			kernel_segment_command_t *sg = (kernel_segment_command_t *)lc;
++			if (strings_are_equal(sg->segname, "__LINKEDIT")) {
++				linkedit = sg->vmaddr;          /* already slid by the caller */
++				linkedit_fileoff = sg->fileoff;
++			}
++		}
++		lc = (struct load_command *)((uintptr_t)lc + lc->cmdsize);
++	}
++	if (fixups == NULL || linkedit == 0) {
++		return;
++	}
++	const struct dyld_chained_fixups_header *header =
++	    (const struct dyld_chained_fixups_header *)(linkedit + (fixups->dataoff - linkedit_fileoff));
++	const struct dyld_chained_starts_in_image *starts =
++	    (const struct dyld_chained_starts_in_image *)((uintptr_t)header + header->starts_offset);
++
++	for (uint32_t seg = 0; seg < starts->seg_count; seg++) {
++		if (starts->seg_info_offset[seg] == 0) {
++			continue;
++		}
++		const struct dyld_chained_starts_in_segment *si =
++		    (const struct dyld_chained_starts_in_segment *)((uintptr_t)starts + starts->seg_info_offset[seg]);
++		if (si->pointer_format != DYLD_CHAINED_PTR_ARM64E_KERNEL) {
++			__builtin_trap();
++		}
++		for (uint32_t page = 0; page < si->page_count; page++) {
++			if (si->page_start[page] == DYLD_CHAINED_PTR_START_NONE) {
++				continue;
++			}
++			uint64_t *loc = (uint64_t *)((uintptr_t)mh + si->segment_offset +
++			    (uint64_t)page * si->page_size + si->page_start[page]);
++			for (;;) {
++				uint64_t raw = *loc;
++				uint64_t next = (raw >> 51) & 0x7ff;
++				uint64_t value;
++
++				if (raw & (1ULL << 62)) {
++					/*
++					 * A bind: a weak import nothing in this image defines for the linker (the board's
++					 * optional entry points). Unresolved, as dyld leaves a missing weak symbol: NULL.
++					 */
++					value = 0;
++				} else if (raw & (1ULL << 63)) {
++					value = (uintptr_t)mh + (raw & 0xffffffffULL);
++#if HAS_APPLE_PAC
++					uint64_t discriminator = (raw >> 32) & 0xffff;
++					if (raw & (1ULL << 48)) {
++						discriminator = discriminator ?
++						    __builtin_ptrauth_blend_discriminator((void *)loc, discriminator) : (uint64_t)(uintptr_t)loc;
++					}
++					switch ((raw >> 49) & 3) {
++					case 0:
++						value = (uint64_t)__builtin_ptrauth_sign_unauthenticated((void *)value, ptrauth_key_asia, discriminator);
++						break;
++					case 1:
++						value = (uint64_t)__builtin_ptrauth_sign_unauthenticated((void *)value, ptrauth_key_asib, discriminator);
++						break;
++					case 2:
++						value = (uint64_t)__builtin_ptrauth_sign_unauthenticated((void *)value, ptrauth_key_asda, discriminator);
++						break;
++					case 3:
++						value = (uint64_t)__builtin_ptrauth_sign_unauthenticated((void *)value, ptrauth_key_asdb, discriminator);
++						break;
++					}
++#endif /* HAS_APPLE_PAC */
++				} else {
++					value = ((uintptr_t)mh + (raw & 0x7ffffffffffULL)) | (((raw >> 43) & 0xff) << 56);
++				}
++				*loc = value;
++				if (next == 0) {
++					break;
++				}
++				loc = (uint64_t *)((uintptr_t)loc + next * 4);
++			}
++		}
++	}
++}
++#endif /* XNU_HOSTED */
++
+ static void
+ arm_slide_rebase_and_sign_image(void)
+ {
+@@ -285,6 +384,29 @@ arm_slide_rebase_and_sign_image(void)
+ 		 */
+ 		slide = (uintptr_t)k_mh - VM_KERNEL_LINK_ADDRESS;
+ 
++#if XNU_HOSTED
++		/*
++		 * OneiOS hosted: xnuhost loads the image at its own address and, unlike iBoot, leaves the load
++		 * commands as linked. Slide the segment and section addresses here, before anything reads them.
++		 * No function may be called yet (nothing is rebased).
++		 */
++		{
++			struct load_command *lc = (struct load_command *)((uintptr_t)k_mh + sizeof(*k_mh));
++			for (uint32_t i = 0; i < k_mh->ncmds; i++) {
++				if (lc->cmd == LC_SEGMENT_KERNEL) {
++					kernel_segment_command_t *sg = (kernel_segment_command_t *)lc;
++					kernel_section_t *sect = (kernel_section_t *)((uintptr_t)sg + sizeof(*sg));
++					sg->vmaddr += slide;
++					for (uint32_t j = 0; j < sg->nsects; j++) {
++						sect[j].addr += slide;
++					}
++				}
++				lc = (struct load_command *)((uintptr_t)lc + lc->cmdsize);
++			}
++		}
++		hosted_apply_chained_fixups(k_mh);
++#endif /* XNU_HOSTED */
++
+ 		/* rebase and sign jops */
+ 		static_kernelcache = &__thread_starts_sect_end[0] != &__thread_starts_sect_start[0];
+ 		if (static_kernelcache) {
+@@ -357,13 +479,18 @@ arm_init(
+ 	DTEntry chosen = NULL;
+ 	unsigned int dt_entry_size = 0;
+ 
+-#if T0SZ_USER != T0SZ_BOOT
++#if T0SZ_USER != T0SZ_BOOT && !XNU_HOSTED
+ 	/* Final TTBR0 size before the first pointer is signed (see TCR_EL1_KVA_ENTRY). */
+ 	set_tcr(TCR_EL1_KVA_ENTRY);
+ 	flush_core_tlb();
+ #endif /* T0SZ_USER != T0SZ_BOOT */
+ 
+ 	arm_slide_rebase_and_sign_image();
++#if XNU_HOSTED
++	/* OneiOS hosted: the host's vector and facts, the upcalls (osfmk/arm64/hosted). */
++	extern void hosted_init(void);
++	hosted_init();
++#endif
+ 
+ 	arm_static_if_init(args);
+ 
+@@ -543,6 +670,14 @@ arm_init(
+ 		if (wdt_disabled || kern_feature_override(KF_PREEMPTION_DISABLED_DEBUG_OVRD)) {
+ 			sched_preemption_disable_debug_mode = SCHED_HYGIENE_MODE_OFF;
+ 		}
++#if XNU_HOSTED
++		/*
++		 * OneiOS hosted: a vCPU is a Linux thread that the host may deschedule at any instruction, and every
++		 * emulated instruction costs a signal. How long interrupts or preemption stayed off says nothing here.
++		 */
++		interrupt_masked_debug_mode = SCHED_HYGIENE_MODE_OFF;
++		sched_preemption_disable_debug_mode = SCHED_HYGIENE_MODE_OFF;
++#endif /* XNU_HOSTED */
+ 	}
+ #endif /* SCHED_HYGIENE_DEBUG */
+ 
+diff --git a/osfmk/arm/cpu_data.h b/osfmk/arm/cpu_data.h
+index 743117b..340107f 100644
+--- a/osfmk/arm/cpu_data.h
++++ b/osfmk/arm/cpu_data.h
+@@ -62,7 +62,11 @@ current_thread_fast(void)
+ 	 * and ignores the "attribute const", so do it the "dumb" way.
+ 	 */
+ 	unsigned long result;
++	#if XNU_HOSTED
++	__asm__ ("mrs %0, TPIDR_EL0" : "=r" (result));  /* OneiOS hosted: the current thread is in TPIDR_EL0 */
++#else
+ 	__asm__ ("mrs %0, TPIDR_EL1" : "=r" (result));
++#endif
+ 	return __unsafe_forge_single(thread_t, result);
+ #else
+ 	// TPIDRPRW
+@@ -101,7 +105,11 @@ current_thread_volatile(void)
+ 	 */
+ #if defined(__arm64__)
+ 	unsigned long result;
++	#if XNU_HOSTED
++	__asm__ volatile ("mrs %0, TPIDR_EL0" : "=r" (result));
++#else
+ 	__asm__ volatile ("mrs %0, TPIDR_EL1" : "=r" (result));
++#endif
+ 	return __unsafe_forge_single(thread_t, result);
+ #else
+ 	// TPIDRPRW
+@@ -115,11 +123,16 @@ static inline vm_offset_t
+ exception_stack_pointer(void)
+ {
+ 	vm_offset_t result = 0;
++#if XNU_HOSTED
++	/* OneiOS hosted: one stack pointer; there is no SP_EL1 to read. */
++	__asm__ volatile ("mov		%0, sp     \n" : "=r" (result));
++#else
+ 	__asm__ volatile (
+                  "msr		SPSel, #1  \n"
+                  "mov		%0, sp     \n"
+                  "msr		SPSel, #0  \n"
+                  : "=r" (result));
++#endif
+ 
+ 	return result;
+ }
+diff --git a/osfmk/arm/io_map.c b/osfmk/arm/io_map.c
+index f81176e..12a0c5c 100644
+--- a/osfmk/arm/io_map.c
++++ b/osfmk/arm/io_map.c
+@@ -76,6 +76,19 @@ io_map(
+ 	vm_offset_t alloc_size   = round_page(size + start_offset);
+ 	vm_offset_t start;
+ 
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted: xnuhost keeps the board's device windows in a trapping aperture and emulates every access
++	 * to it, and memory outside the kernel's window (the boot framebuffer) is mapped by it already. Both have
++	 * an address there; nothing is allocated or entered in the page tables.
++	 */
++	extern vm_offset_t hosted_io_map(vm_map_offset_t phys_addr, vm_size_t size);
++	start = hosted_io_map(phys_addr, size);
++	if (start != 0) {
++		return start;
++	}
++#endif /* XNU_HOSTED */
++
+ 	phys_addr = trunc_page(phys_addr);
+ 	if (startup_phase < STARTUP_SUB_KMEM) {
+ 		/*
+diff --git a/osfmk/arm/machine_routines_common.c b/osfmk/arm/machine_routines_common.c
+index 2254a39..92eaea7 100644
+--- a/osfmk/arm/machine_routines_common.c
++++ b/osfmk/arm/machine_routines_common.c
+@@ -54,6 +54,9 @@
+ #include <pexpert/arm64/apple_arm64_cpu.h>
+ 
+ #include <mach/machine.h>
++#if XNU_HOSTED
++#include <arm64/hosted/hosted.h>
++#endif
+ #include <mach/machine/sdt.h>
+ 
+ #if !HAS_CONTINUOUS_HWCLOCK
+@@ -1094,7 +1097,11 @@ ml_set_interrupts_enabled_with_debug(boolean_t enable, boolean_t __unused debug)
+ 
+ 	thread = current_thread();
+ 
++#if XNU_HOSTED
++	state = hosted_daif_get();      /* OneiOS hosted: the mask is xnuhost's per-CPU flag */
++#else
+ 	state = __builtin_arm_rsr("DAIF");
++#endif
+ 
+ 	if (__improbable(!(state & DAIF_DEBUGF))) {
+ 		panic("%s: debug exceptions enabled in kernel mode", __func__);
+@@ -1123,10 +1130,18 @@ ml_set_interrupts_enabled_with_debug(boolean_t enable, boolean_t __unused debug)
+ #endif
+ 			}
+ 		}
++#if XNU_HOSTED
++		hosted_irq_unmask();
++#else
+ 		__builtin_arm_wsr("DAIFClr", DAIFSC_STANDARD_DISABLE);
++#endif
+ 	} else if (!enable && ((state & DAIF_STANDARD_DISABLE) != DAIF_STANDARD_DISABLE)) {
+ 		assert3u(state & DAIF_STANDARD_DISABLE, ==, 0);
++#if XNU_HOSTED
++		(void)hosted_irq_mask();
++#else
+ 		__builtin_arm_wsr("DAIFSet", DAIFSC_STANDARD_DISABLE);
++#endif
+ 
+ #if SCHED_HYGIENE_DEBUG
+ 		if (__probable(debug && static_if(sched_debug_interrupt_disable))) {
+diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
+index 72bf02f..300f2a9 100644
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -371,6 +371,9 @@ pmap_user_tcr(uint64_t tcr)
+ MARK_AS_PMAP_TEXT void
+ pmap_apply_user_tcr(void)
+ {
++#if XNU_HOSTED
++	return;
++#endif /* XNU_HOSTED */
+ 	const uint64_t tcr = get_tcr();
+ 	if (tcr != pmap_user_tcr(tcr)) {
+ 		set_tcr(pmap_user_tcr(tcr));
+@@ -2331,8 +2334,14 @@ pmap_bootstrap(
+ #endif /* HAS_APPLE_PAC */
+ 	kernel_pmap->tte = cpu_tte;
+ 	kernel_pmap->ttep = cpu_ttep;
++#if XNU_HOSTED
++	/* OneiOS hosted: the kernel's addresses are low (mach/arm/vm_param.h). */
++	kernel_pmap->min = VM_MIN_KERNEL_ADDRESS;
++	kernel_pmap->max = VM_MAX_KERNEL_ADDRESS + 1;
++#else
+ 	kernel_pmap->min = UINT64_MAX - (1ULL << (64 - T1SZ_BOOT)) + 1;
+ 	kernel_pmap->max = UINTPTR_MAX;
++#endif
+ 	os_atomic_init(&kernel_pmap->ref_count, 1);
+ #if XNU_MONITOR
+ 	os_atomic_init(&kernel_pmap->nested_count, 0);
+@@ -2361,9 +2370,11 @@ pmap_bootstrap(
+ 	pmap_max_asids = pmap_compute_max_asids();
+ #if HAS_16BIT_ASID
+ 	/* UniXNU: TCR_EL1.AS is set (TCR_EL1_ASID); on a core with 8-bit ASIDs it is RES0 and the ASIDs above 255 would alias. */
++#if !XNU_HOSTED     /* OneiOS hosted: ASIDs only name pmaps (each one is a Linux process); no hardware width to check */
+ 	if (((__builtin_arm_rsr64("ID_AA64MMFR0_EL1") >> 4) & 0xf) != 2) {
+ 		panic("pmap: HAS_16BIT_ASID, but ID_AA64MMFR0_EL1 0x%llx has no 16-bit ASIDs", __builtin_arm_rsr64("ID_AA64MMFR0_EL1"));
+ 	}
++#endif
+ 	asid_chunk_size = MAX_HW_ASIDS;
+ #else
+ 	pmap_asid_plru = (pmap_max_asids > MAX_HW_ASIDS);
+@@ -3434,6 +3445,9 @@ pmap_destroy_internal(
+ 	pmap_simple_lock(&pmaps_lock);
+ 	queue_remove(&map_pmap_list, pmap, pmap_t, pmaps);
+ 	pmap_simple_unlock(&pmaps_lock);
++#if XNU_HOSTED
++	hosted_pmap_destroy(pmap);      /* OneiOS hosted: the address space's Linux process goes with it */
++#endif /* XNU_HOSTED */
+ 
+ 	pmap_trim_self(pmap);
+ 
+@@ -4668,7 +4682,11 @@ pmap_flush_core_dvp_asid_async(pmap_t pmap)
+ static inline bool
+ pmap_user_ttb_is_clear(void)
+ {
++#if XNU_HOSTED
++	return true;            /* OneiOS hosted: no TTBR0; a user address space is another Linux process */
++#else
+ 	return get_mmu_ttb() == (invalid_ttep & TTBR_BADDR_MASK);
++#endif
+ }
+ 
+ MARK_AS_PMAP_TEXT void
+@@ -6776,6 +6794,15 @@ pmap_enter_options_addr(
+ #if XNU_MONITOR
+ 	pmap_ledger_flush();
+ #endif
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted: the kernel's own entries are mapped in the host as they are made. A kernel stack must be
++	 * there before it is used (xnuhost writes interrupted frames onto it), and a fault per page would be slow.
++	 */
++	if (kr == KERN_SUCCESS && pmap == kernel_pmap) {
++		hosted_kernel_enter(v, PAGE_SIZE);
++	}
++#endif /* XNU_HOSTED */
+ 
+ 	PMAP_TRACE(2, PMAP_CODE(PMAP__ENTER) | DBG_FUNC_END, kr);
+ 
+@@ -8012,6 +8039,9 @@ pmap_switch_user_ttb(pmap_t pmap, pmap_cpu_data_t *cpu_data_ptr)
+ 	}
+ 
+ 
++#if XNU_HOSTED
++	return;                 /* OneiOS hosted: nothing to load; thread_run picks the Linux process */
++#endif /* XNU_HOSTED */
+ #if __ARM_MIXED_PAGE_SIZE__
+ 	if ((pmap != kernel_pmap) && (pmap_get_pt_attr(pmap)->pta_tcr_value != get_tcr())) {
+ 		set_tcr(pmap_get_pt_attr(pmap)->pta_tcr_value);
+@@ -10613,6 +10643,11 @@ flush_mmu_tlb_region_asid_async(
+ 	bool last_level_only __unused,
+ 	bool strong __unused)
+ {
++#if XNU_HOSTED
++	/* OneiOS hosted: the host's mapping is the TLB (arm64/hosted/hosted_pmap.h). */
++	hosted_tlb_flush_region(pmap, va, length);
++	return;
++#endif /* XNU_HOSTED */
+ 	unsigned long pmap_page_shift = pt_attr_leaf_shift(pmap_get_pt_attr(pmap));
+ 	const uint64_t pmap_page_size = 1ULL << pmap_page_shift;
+ 	size_t npages = length >> pmap_page_shift;
+@@ -10661,6 +10696,10 @@ flush_mmu_tlb_region_asid_async(
+ MARK_AS_PMAP_TEXT static void
+ flush_mmu_tlb_full_asid_async(pmap_t pmap)
+ {
++#if XNU_HOSTED
++	hosted_tlb_flush_pmap(pmap);
++	return;
++#endif /* XNU_HOSTED */
+ 	flush_mmu_tlb_asid_async((uint64_t)(pmap->hw_asid) << TLBI_ASID_SHIFT, false);
+ }
+ 
+@@ -15449,3 +15488,8 @@ native_pmap_user_mappings(ppnum_t ppnum, void **first_pmap, uint64_t *first_va,
+ 	pvh_unlock(pai);
+ 	return count;
+ }
++
++#if XNU_HOSTED
++/* OneiOS hosted: the host's mappings as this pmap's TLB, and the walks that fill it. */
++#include <arm64/hosted/hosted_pmap.h>
++#endif /* XNU_HOSTED */
+diff --git a/osfmk/arm/pmap/pmap.h b/osfmk/arm/pmap/pmap.h
+index 9b9da2b..75e9dc9 100644
+--- a/osfmk/arm/pmap/pmap.h
++++ b/osfmk/arm/pmap/pmap.h
+@@ -238,6 +238,9 @@ typedef struct pmap_cpu_data pmap_cpu_data_t;
+ /* Base address for low globals. */
+ #if defined(ARM_LARGE_MEMORY)
+ #define LOW_GLOBAL_BASE_ADDRESS 0xfffffe0000000000ULL
++#elif XNU_HOSTED
++/* OneiOS hosted: no fixed alias of the low globals (no debugger reads memory by address); the heap base. */
++#define LOW_GLOBAL_BASE_ADDRESS VM_MIN_KERNEL_ADDRESS
+ #else /* defined(ARM_LARGE_MEMORY) */
+ #define LOW_GLOBAL_BASE_ADDRESS 0xfffffff000000000ULL
+ #endif /* defined(ARM_LARGE_MEMORY) */
+@@ -491,6 +494,12 @@ struct pmap {
+ #define PMAP_TYPE_COMMPAGE 2 /* commpage pmap */
+ #define PMAP_TYPE_NESTED 3 /* pmap nested within another pmap */
+ 	uint8_t type;
++#if XNU_HOSTED
++	/* OneiOS hosted: the Linux process that is this address space (xnuhost task handle), 0 = not made yet. */
++	uint64_t hosted_task;
++	/* A number no other task ever had: threads use it to tell their Linux twin belongs to this task. */
++	uint64_t hosted_seq;
++#endif /* XNU_HOSTED */
+ };
+ 
+ #define PMAP_VASID(pmap) (((uint32_t)((pmap)->sw_asid) << 16) | pmap->hw_asid)
+diff --git a/osfmk/arm/pmap/pmap_data.h b/osfmk/arm/pmap/pmap_data.h
+index f66dfba..00d16f2 100644
+--- a/osfmk/arm/pmap/pmap_data.h
++++ b/osfmk/arm/pmap/pmap_data.h
+@@ -285,6 +285,16 @@ __enum_closed_decl(pvh_type_t, uint8_t, {
+ #define PVH_HIGH_FLAGS (PVH_FLAG_CPU | PVH_FLAG_LOCK | PVH_FLAG_EXEC | PVH_FLAG_LOCKDOWN_MASK | \
+     PVH_FLAG_HASHED | PVH_FLAG_FLUSH_NEEDED | PVH_FLAG_RETIRED)
+ 
++/**
++ * The pointer stored in a pv_head_table entry, with the flag bits back to what an address has there: ones for
++ * a kernel address on hardware. OneiOS hosted: kernel addresses are low (below 2^38), so zeroes.
++ */
++#if XNU_HOSTED
++#define PVH_POINTER_BITS(value) ((value) & ~PVH_HIGH_FLAGS)
++#else
++#define PVH_POINTER_BITS(value) ((value) | PVH_HIGH_FLAGS)
++#endif
++
+ #endif /* defined(__arm64__) */
+ 
+ /* Mask used to clear out the TYPE bits from a pv_head_table entry/pointer. */
+@@ -362,7 +372,7 @@ pvh_test_type(pv_entry_t **pvh, pvh_type_t type)
+ static inline pt_entry_t*
+ pvh_ptep(pv_entry_t **pvh)
+ {
+-	return (pt_entry_t *)(((*(vm_offset_t *)pvh) & PVH_LIST_MASK) | PVH_HIGH_FLAGS);
++	return (pt_entry_t *)PVH_POINTER_BITS((*(vm_offset_t *)pvh) & PVH_LIST_MASK);
+ }
+ 
+ /**
+@@ -379,7 +389,7 @@ pvh_ptep(pv_entry_t **pvh)
+ static inline pv_entry_t*
+ pvh_pve_list(pv_entry_t **pvh)
+ {
+-	return (pv_entry_t *)(((*(vm_offset_t *)pvh) & PVH_LIST_MASK) | PVH_HIGH_FLAGS);
++	return (pv_entry_t *)PVH_POINTER_BITS((*(vm_offset_t *)pvh) & PVH_LIST_MASK);
+ }
+ 
+ /**
+@@ -930,7 +940,7 @@ typedef struct pt_desc {
+ static inline pt_desc_t*
+ pvh_ptd(pv_entry_t **pvh)
+ {
+-	return (pt_desc_t *)(((*(vm_offset_t *)pvh) & PVH_LIST_MASK) | PVH_HIGH_FLAGS);
++	return (pt_desc_t *)PVH_POINTER_BITS((*(vm_offset_t *)pvh) & PVH_LIST_MASK);
+ }
+ 
+ /**
+diff --git a/osfmk/arm/pmap/pmap_internal.h b/osfmk/arm/pmap/pmap_internal.h
+index 2aa40c1..6154776 100644
+--- a/osfmk/arm/pmap/pmap_internal.h
++++ b/osfmk/arm/pmap/pmap_internal.h
+@@ -45,6 +45,9 @@
+ 
+ #include <arm/cpu_data.h>
+ #include <arm64/proc_reg.h>
++#if XNU_HOSTED
++#include <arm64/hosted/hosted.h>
++#endif
+ 
+ /**
+  * arm/pmap.h and the other /arm/pmap/ internal header files are safe to be
+@@ -436,6 +439,9 @@ pmap_unlock(pmap_t pmap, pmap_lock_mode_t mode)
+ static inline uint64_t __attribute__((warn_unused_result)) __used
+ pmap_interrupts_disable(void)
+ {
++#if XNU_HOSTED
++	return hosted_irq_mask() ? HOSTED_DAIF_MASKED : HOSTED_DAIF_UNMASKED;
++#else
+ 	uint64_t state = __builtin_arm_rsr64("DAIF");
+ 
+ 	/* Ensure that debug exceptions are masked. */
+@@ -446,6 +452,7 @@ pmap_interrupts_disable(void)
+ 	}
+ 
+ 	return state;
++#endif
+ }
+ 
+ /*
+@@ -463,7 +470,11 @@ pmap_interrupts_restore(uint64_t state)
+ 	assert((state & DAIF_DEBUGF) == DAIF_DEBUGF);
+ 
+ 	if (state != DAIF_ALL) {
++#if XNU_HOSTED
++		hosted_daif_set(state);
++#else
+ 		__builtin_arm_wsr64("DAIF", state);
++#endif
+ 	}
+ }
+ 
+@@ -481,7 +492,11 @@ pmap_interrupts_restore(uint64_t state)
+ static inline bool __attribute__((warn_unused_result)) __used
+ pmap_interrupts_enabled(void)
+ {
++#if XNU_HOSTED
++	return !hosted_irq_masked();
++#else
+ 	return (__builtin_arm_rsr64("DAIF") & DAIF_ALL) != DAIF_ALL;
++#endif
+ }
+ #endif /* __arm64__ */
+ 
+diff --git a/osfmk/arm/preemption_disable.c b/osfmk/arm/preemption_disable.c
+index 93fe829..675efc7 100644
+--- a/osfmk/arm/preemption_disable.c
++++ b/osfmk/arm/preemption_disable.c
+@@ -41,6 +41,9 @@
+ #include <os/base.h>
+ #include <stdint.h>
+ #include <sys/kdebug.h>
++#if XNU_HOSTED
++#include <arm64/hosted/hosted.h>
++#endif
+ 
+ #if SCHED_HYGIENE_DEBUG
+ static void
+@@ -69,6 +72,12 @@ kernel_preempt_check(void)
+ 	uint64_t state;
+ 
+ 	/* If interrupts are masked, we can't take an AST here */
++#if XNU_HOSTED
++	if (hosted_irq_mask() != 0) {
++		return;
++	}
++	state = HOSTED_DAIF_UNMASKED;
++#else
+ 	state = __builtin_arm_rsr64("DAIF");
+ 	if (state & DAIF_IRQF) {
+ 		return;
+@@ -76,6 +85,7 @@ kernel_preempt_check(void)
+ 
+ 	/* disable interrupts (IRQ FIQ ASYNCF) */
+ 	__builtin_arm_wsr64("DAIFSet", DAIFSC_STANDARD_DISABLE);
++#endif
+ 
+ 	/*
+ 	 * Reload cpu_pending_ast: a context switch would cause it to change.
+@@ -86,7 +96,11 @@ kernel_preempt_check(void)
+ 	}
+ 
+ 	/* restore the original interrupt mask */
++#if XNU_HOSTED
++	hosted_daif_set(state);
++#else
+ 	__builtin_arm_wsr64("DAIF", state);
++#endif
+ }
+ 
+ static inline void
+diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
+index f2e883b..1bc32f4 100644
+--- a/osfmk/arm64/arm_vm_init.c
++++ b/osfmk/arm64/arm_vm_init.c
+@@ -1636,6 +1636,21 @@ arm_vm_physmap_init(boot_args *args)
+ 
+ #else
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted: the physical aperture is the RAM window itself (phystokv() is the identity there), so there is
++ * nothing to slide and no ptov entries. The page tables still describe the window, for the pmap's own walks.
++ */
++static void
++arm_vm_physmap_init(boot_args *args)
++{
++	arm_vm_page_granular_RWNX(gVirtBase, segLOWEST - gVirtBase, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
++	arm_vm_page_granular_RWNX(end_kern, phystokv(args->topOfKernelData) - end_kern,
++	    ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
++	arm_vm_page_granular_RWNX(phystokv(args->topOfKernelData), real_avail_end - args->topOfKernelData,
++	    ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
++}
++#else /* XNU_HOSTED */
+ static void
+ arm_vm_physmap_init(boot_args *args)
+ {
+@@ -1660,6 +1675,7 @@ arm_vm_physmap_init(boot_args *args)
+ 
+ 	memcpy(ptov_table, temp_ptov_table, sizeof(ptov_table));
+ }
++#endif /* XNU_HOSTED */
+ 
+ #endif // XNU_MONITOR
+ 
+@@ -1879,6 +1895,16 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	assert(physmap_slide < ARM64_PHYSMAP_SLIDE_RANGE);
+ 
+ 	physmap_base += physmap_slide;
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted: xnuhost maps all of RAM once, at its physical address, and that mapping is the kernel
++	 * image and the physical aperture at the same time. Nothing is slid and nothing is mapped twice.
++	 */
++	physmap_base = gVirtBase;
++	if (gVirtBase != gPhysBase) {
++		panic("hosted: virtBase %#lx is not physBase %#lx", gVirtBase, gPhysBase);
++	}
++#endif /* XNU_HOSTED */
+ 
+ #if XNU_MONITOR
+ 	physmap_base = ROUND_TWIG(physmap_base);
+@@ -1903,6 +1929,10 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	physmap_end = physmap_base + real_phys_size + (PTOV_TABLE_SIZE * ARM_TT_TWIG_SIZE);
+ #endif // ARM_LARGE_MEMORY
+ #endif
++#if XNU_HOSTED
++	static_memory_end = physmap_base + mem_size;
++	physmap_end = physmap_base + real_phys_size;
++#endif /* XNU_HOSTED */
+ 
+ #if KASAN && !defined(ARM_LARGE_MEMORY)
+ 	/* add the KASAN stolen memory to the physmap */
+@@ -1910,6 +1940,14 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ #else
+ 	dynamic_memory_begin = static_memory_end;
+ #endif
++#if XNU_HOSTED
++	/* The kernel's own mappings start where xnuhost reserved addresses for them (the kernel_map host call). */
++	extern uint64_t hosted_kva_base;
++	if (hosted_kva_base < static_memory_end || (hosted_kva_base & ARM_TT_L1_OFFMASK)) {
++		panic("hosted: kernel_map range %#llx overlaps the RAM window ending at %#lx", hosted_kva_base, static_memory_end);
++	}
++	dynamic_memory_begin = hosted_kva_base;
++#endif /* XNU_HOSTED */
+ #if XNU_MONITOR
+ 	pmap_stacks_start = (void*)dynamic_memory_begin;
+ 	dynamic_memory_begin += PPL_STACK_REGION_SIZE;
+@@ -1928,7 +1966,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	boot_tte = (tt_entry_t *)&bootstrap_pagetables;
+ 	boot_ttep = kvtophys((vm_offset_t)boot_tte);
+ 
+-#if DEVELOPMENT || DEBUG
++#if (DEVELOPMENT || DEBUG) && !XNU_HOSTED
+ 	/* Sanity check - assert that BOOTSTRAP_TABLE_SIZE is sufficiently-large to
+ 	 * hold our bootstrap mappings for any possible slide */
+ 	size_t bytes_mapped = dynamic_memory_begin - gVirtBase;
+@@ -2136,6 +2174,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 
+ 	arm_vm_prot_init(args);
+ 
++#if !XNU_HOSTED      /* OneiOS hosted: no fixed alias of the low globals */
+ 	/*
+ 	 * Initialize the page tables for the low globals:
+ 	 *   cover this address range:
+@@ -2147,6 +2186,9 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	ptpage_vaddr = alloc_ptpage(TRUE);
+ 	*cpu_l2_tte = (kvtophys(ptpage_vaddr) & ARM_TTE_TABLE_MASK) | ARM_TTE_TYPE_TABLE | ARM_TTE_VALID | ARM_TTE_TABLE_PXN | ARM_TTE_TABLE_XN;
+ 	bzero((void *)ptpage_vaddr, ARM_PGBYTES);
++#else
++	(void)ptpage_vaddr;
++#endif /* !XNU_HOSTED */
+ 
+ 	/*
+ 	 * Initialize l2 page table pages :
+diff --git a/osfmk/arm64/asm.h b/osfmk/arm64/asm.h
+index 84deb3f..c417b08 100644
+--- a/osfmk/arm64/asm.h
++++ b/osfmk/arm64/asm.h
+@@ -57,6 +57,14 @@
+ #ifndef	_ARM_ASM_H_
+ #define	_ARM_ASM_H_
+ 
++#if XNU_HOSTED && defined(__ASSEMBLER__)
++/*
++ * OneiOS hosted: the kernel runs at EL0 under xnuhost. The current thread lives in TPIDR_EL0 (TPIDR_EL1 is
++ * not accessible); x18 holds the vCPU's struct xh_cpu * (arm64/hosted/hosted.h).
++ */
++#define TPIDR_EL1 TPIDR_EL0
++#endif
++
+ #ifdef __arm64__
+ 
+ #include <arm/arch.h>
+diff --git a/osfmk/arm64/cpu.c b/osfmk/arm64/cpu.c
+index 8312c43..e9d6d58 100644
+--- a/osfmk/arm64/cpu.c
++++ b/osfmk/arm64/cpu.c
+@@ -33,6 +33,9 @@
+ 
+ #include <pexpert/arm64/board_config.h>
+ #include <kern/kalloc.h>
++#if XNU_HOSTED
++#include <arm64/hosted/hosted.h>
++#endif
+ #include <kern/machine.h>
+ #include <kern/cpu_number.h>
+ #include <kern/percpu.h>
+@@ -373,9 +376,13 @@ cpu_sleep(void)
+ bool
+ cpu_interrupt_is_pending(void)
+ {
++#if XNU_HOSTED
++	return hosted_irq_pending() != 0;       /* OneiOS hosted: this vCPU's interrupt line */
++#else
+ 	uint64_t isr_value;
+ 	isr_value = __builtin_arm_rsr64("ISR_EL1");
+ 	return isr_value != 0;
++#endif
+ }
+ 
+ static bool
+@@ -419,7 +426,11 @@ wfe_to_deadline_or_interrupt(uint32_t cid, uint64_t wfe_deadline, cpu_data_t *cd
+ 		 * interrupts.
+ 		 */
+ 		irqc = nirqc = os_atomic_load(&cdp->cpu_stat.irq_ex_cnt_wake, relaxed);
++#if XNU_HOSTED
++		hosted_irq_unmask();
++#else
+ 		__builtin_arm_wsr("DAIFClr", DAIFSC_STANDARD_DISABLE);
++#endif
+ 	}
+ 
+ 	while ((ipending = (cpu_interrupt_is_pending())) == false) {
+@@ -466,7 +477,11 @@ wfe_to_deadline_or_interrupt(uint32_t cid, uint64_t wfe_deadline, cpu_data_t *cd
+ 	}
+ 
+ 	if (unmask) {
++#if XNU_HOSTED
++		(void)hosted_irq_mask();
++#else
+ 		__builtin_arm_wsr64("DAIFSet", DAIFSC_STANDARD_DISABLE);
++#endif
+ 		/* Refetch SW interrupt counter with IRQs masked
+ 		 * It is important that this routine accurately flags
+ 		 * any observed interrupts via its return value,
+@@ -626,7 +641,9 @@ cpu_idle(void)
+ 		typhoon_prepare_for_wfi();
+ #endif
+ 		__builtin_arm_dsb(DSB_SY);
+-#if HAS_RETENTION_STATE
++#if XNU_HOSTED
++		hosted_cpu_idle();              /* OneiOS hosted: wait for this vCPU's interrupt line in xnuhost */
++#elif HAS_RETENTION_STATE
+ 		arm64_retention_wfi();
+ #else
+ 		__builtin_arm_wfi();
+diff --git a/osfmk/arm64/cswitch.s b/osfmk/arm64/cswitch.s
+index a191eb3..83a7a45 100644
+--- a/osfmk/arm64/cswitch.s
++++ b/osfmk/arm64/cswitch.s
+@@ -58,7 +58,7 @@
+ 	strb	wzr, [$0, SS64_KERNEL_PC_WAS_IN_USER]
+ 	mov		x$1, sp
+ 	str		x$1, [$0, SS64_KERNEL_SP]
+-#if HAS_ARM_FEAT_SSBS2
++#if HAS_ARM_FEAT_SSBS2 && !XNU_HOSTED
+ #if APPLEVIRTUALPLATFORM
+ 	adrp	x$1, EXT(gARM_FEAT_SSBS)@page
+ 	ldrh	w$1, [x$1, EXT(gARM_FEAT_SSBS)@pageoff]
+@@ -74,12 +74,12 @@
+ 	lsr     x$1, x$1, #0 + PSR64_TCO_SHIFT
+ 	strb	w$1, [$0, SS64_KERNEL_TCO]
+ #endif //HAS_MTE
+-#if __ARM_ARCH_8_4__
++#if __ARM_ARCH_8_4__ && !XNU_HOSTED
+ 	mrs		x$1, DIT
+ 	lsr     x$1, x$1, #0 + PSR64_DIT_SHIFT
+ 	strb	w$1, [$0, SS64_KERNEL_DIT]
+ #endif //__ARM_ARCH_8_4__
+-#if __ARM_ARCH_8_2__
++#if __ARM_ARCH_8_2__ && !XNU_HOSTED
+ 	mrs		x$1, UAO
+ 	lsr     x$1, x$1, #0 + PSR64_UAO_SHIFT
+ 	strb	w$1, [$0, SS64_KERNEL_UAO]
+@@ -125,7 +125,7 @@
+ 	ldp		fp, lr, [$0, SS64_KERNEL_FP]
+ 	ldr		x$1, [$0, SS64_KERNEL_SP]
+ 	mov		sp, x$1
+-#if HAS_ARM_FEAT_SSBS2
++#if HAS_ARM_FEAT_SSBS2 && !XNU_HOSTED
+ #if APPLEVIRTUALPLATFORM
+ 	adrp	x$1, EXT(gARM_FEAT_SSBS)@page
+ 	ldrh	w$1, [x$1, EXT(gARM_FEAT_SSBS)@pageoff]
+@@ -141,12 +141,12 @@
+ 	lsl     x$1, x$1, #0 + PSR64_TCO_SHIFT
+ 	msr		TCO, x$1
+ #endif //HAS_MTE
+-#if __ARM_ARCH_8_2__
++#if __ARM_ARCH_8_2__ && !XNU_HOSTED
+ 	ldrb	w$1, [$0, SS64_KERNEL_UAO]
+ 	lsl     x$1, x$1, #0 + PSR64_UAO_SHIFT
+ 	msr		UAO, x$1
+ #endif //__ARM_ARCH_8_2__
+-#if __ARM_ARCH_8_4__
++#if __ARM_ARCH_8_4__ && !XNU_HOSTED
+ 	ldrb	w$1, [$0, SS64_KERNEL_DIT]
+ 	lsl     x$1, x$1, #0 + PSR64_DIT_SHIFT
+ 	msr		DIT, x$1
+@@ -188,6 +188,11 @@
+ 	msr		TPIDR_EL1, $0						// Write new thread pointer to TPIDR_EL1
+ 	ldr		$1, [$0, ACT_CPUDATAP]
+ 	str		$0, [$1, CPU_ACTIVE_THREAD]
++#if !XNU_HOSTED
++	/*
++	 * OneiOS hosted: the thread pointer above went to TPIDR_EL0 (asm.h). The user-visible registers below belong
++	 * to the thread's Linux twin and are loaded by xnuhost's thread_run (osfmk/arm64/hosted).
++	 */
+ 
+ 	/*
+ 	 * This code *only* sets the lower TPIDR_EL0 bits that indicate
+@@ -222,6 +227,7 @@
+ 
+ 	ldr		$1, [$0, TH_THREAD_ID]				// Save the bottom 32-bits of the thread ID into
+ 	msr		CONTEXTIDR_EL1, $1					// CONTEXTIDR_EL1 (top 32-bits are RES0).
++#endif /* !XNU_HOSTED */
+ .endmacro
+ 
+ #define CSWITCH_ROP_KEYS	(HAS_APPLE_PAC && HAS_PARAVIRTUALIZED_PAC)
+@@ -397,7 +403,12 @@ LEXT(Shutdown_context)
+ 	mrs		x10, TPIDR_EL1							// Get thread pointer
+ 	LOAD_KERN_STACK_TOP	dst=x11, src=x10, tmp=x12	// Get the top of the kernel stack
+ 	save_general_registers	x11, 12
++#if XNU_HOSTED
++	mov		w12, #1
++	str		w12, [x18, #4]						// xh_cpu.irq_masked
++#else
+ 	msr		DAIFSet, #(DAIFSC_STANDARD_DISABLE)	// Disable interrupts
++#endif
+ 	LOAD_INT_STACK_THREAD dst=x12, src=x10, tmp=x11
+ 	mov		sp, x12
+ 	b		EXT(cpu_doshutdown)
+diff --git a/osfmk/arm64/hosted/hostcall.h b/osfmk/arm64/hosted/hostcall.h
+new file mode 100644
+index 0000000..f04f95f
+--- /dev/null
++++ b/osfmk/arm64/hosted/hostcall.h
+@@ -0,0 +1,194 @@
++// SPDX-License-Identifier: MIT
++// xnuhost host-call ABI, version 1: the whole contract between a hosted XNU ("LINUXHOST" machine
++// configuration, kernel/) and xnuhost. This header is freestanding C and is meant to be included by
++// the kernel's machine layer unchanged. docs/booter.md explains the model; the summary:
++//
++//  - The kernel is entered on vCPU 0 at its LC_UNIXTHREAD entry with x0 = boot_args (virtual),
++//    x1 = struct xh_vector *, x2 = struct xh_cpu * of vCPU 0, sp = a 256 KiB boot stack.
++//    The window of RAM is already mapped at boot_args.virtBase; there is no MMU to turn on.
++//    The vector is also in the device tree: /chosen/xnuhost "vector".
++//  - Every host call takes the calling vCPU's struct xh_cpu * first. The host switches to its own
++//    thread register (TPIDR_EL0), x18 and stack for the call, so the kernel may keep anything in
++//    TPIDR_EL0 and x18 while its own code runs. Host calls follow AAPCS64.
++//  - Interrupts are a software flag. The kernel masks them by storing 1 to cpu->irq_masked and
++//    unmasks by storing 0 and then, if cpu->irq_pending is not 0, calling its own interrupt path
++//    (irq_ack until it returns XH_INTID_NONE). While unmasked and running kernel code, an interrupt
++//    arrives as a call of upcalls->irq(cpu, frame) on the interrupted stack with irq_masked = 1;
++//    returning from it resumes the interrupted code. The kernel may block or switch threads inside.
++//  - iOS threads run in other Linux processes. thread_run() gives the vCPU to one until it traps.
++#ifndef XNUHOST_HOSTCALL_H
++#define XNUHOST_HOSTCALL_H
++
++#include <stdint.h>
++
++#define XH_ABI_VERSION 1u
++
++// ---- per-vCPU block (host memory; the kernel reads and writes only the fields marked K) ----------
++struct xh_cpu {
++  uint32_t index;             // 0x00    vCPU number
++  uint32_t irq_masked;        // 0x04 K  1 = interrupts masked (the kernel's DAIF.I)
++  uint32_t irq_pending;       // 0x08    not 0 = the interrupt line is asserted (read by K)
++  uint32_t in_host;           // 0x0c    host only
++  uint64_t kernel_tpidr;      // 0x10    the kernel's TPIDR_EL0 while a host call runs
++  uint64_t kernel_x18;        // 0x18    the kernel's x18 while a host call runs
++  uint64_t host_tpidr;        // 0x20    host only
++  uint64_t host_x18;          // 0x28    host only
++  uint64_t host_sp;           // 0x30    host only
++  uint64_t kernel_data;       // 0x38 K  free for the kernel (its cpu_data pointer)
++  uint64_t tpidr_el1;         // 0x40 K  shadow of TPIDR_EL1 for trapped mrs/msr (current thread)
++  uint64_t reserved[7];       // 0x48
++};                            // 0x80; host-private data follows
++
++// ---- saved register frames ---------------------------------------------------------------------
++struct xh_vreg { uint64_t lo, hi; };
++
++// Kernel context interrupted by an interrupt or exception; lives on the interrupted stack.
++struct xh_frame {
++  uint64_t x[31];
++  uint64_t sp, pc, pstate;    // pstate: NZCV only is meaningful
++  uint32_t fpsr, fpcr;
++  struct xh_vreg v[32];
++  uint32_t irq_masked;        // the mask state to return to
++  uint32_t kind;              // XH_FRAME_*
++  uint64_t far, esr;          // for XH_FRAME_EXCEPTION
++};
++#define XH_FRAME_IRQ        1u
++#define XH_FRAME_EXCEPTION  2u
++
++// User (iOS thread) register state.
++struct xh_user_state {
++  uint64_t x[31];
++  uint64_t sp, pc, pstate;    // pstate: NZCV; the host forces EL0t
++  uint64_t tsd;               // the thread's TSD base. iOS reads it from TPIDRRO_EL0; the host keeps
++                              // it in TPIDR_EL0 and text_fixup() rewrites the reads (docs/booter.md)
++  uint32_t fpsr, fpcr;
++  struct xh_vreg v[32];
++};
++
++// Why a thread stopped running user code.
++struct xh_trap {
++  uint32_t kind;              // XH_TRAP_*
++  uint32_t signo;             // the Linux signal that reported it (diagnostic)
++  uint64_t far;               // fault address (FAULT), instruction address (ILLEGAL, BRK)
++  uint64_t esr;               // ESR_EL1 as Linux reported it, 0 if it did not
++  uint32_t svc;               // SYSCALL: the svc immediate (0x80 for XNU's)
++  uint32_t access;            // FAULT: XH_PROT_* bit of the access that faulted, 0 if unknown
++  uint32_t insn;              // the instruction at the trap, when readable
++  uint32_t exit_status;       // EXITED: the Linux wait status of the task process
++};
++#define XH_TRAP_SYSCALL     1u   // svc: number in x16, as XNU's handle_svc expects
++#define XH_TRAP_FAULT       2u   // data or instruction abort from user mode
++#define XH_TRAP_ILLEGAL     3u   // undefined instruction
++#define XH_TRAP_BRK         4u   // brk / breakpoint / single step
++#define XH_TRAP_FPE         5u
++#define XH_TRAP_INTERRUPT   6u   // an interrupt is pending for this vCPU; state is the interrupted user state
++#define XH_TRAP_EXITED      7u   // the task's Linux process is gone
++#define XH_TRAP_BOOT        8u   // a new thread's first stop, before any user instruction
++
++#define XH_PROT_READ   1u
++#define XH_PROT_WRITE  2u
++#define XH_PROT_EXEC   4u
++
++// ---- interrupts: the board's GICv3 numbering ----------------------------------------------------
++#define XH_INTID_NONE   1023u
++#define XH_INTID_VTIMER 27u      // per-CPU virtual timer (PPI), as ArmCpu takes it
++#define XH_SGI_COUNT    16u
++
++// ---- halt reasons -------------------------------------------------------------------------------
++#define XH_HALT_OFF      0u      // guest shut down: xnuhost exits 0
++#define XH_HALT_RESTART  1u      // guest asked for a reboot: exit 3
++#define XH_HALT_PANIC    2u      // kernel panic: exit 4
++#define XH_HALT_RETURN   3u      // guest asks to return to One UI: session/return.request, exit 0
++
++// ---- static facts about the host ----------------------------------------------------------------
++struct xh_info {
++  uint32_t abi, ncpu;
++  uint32_t host_page_size;     // 4096 on the S24 Ultra; never larger than 16384
++  uint32_t user_va_bits;       // of the host's user address space
++  uint64_t ram_phys, ram_virt, ram_size;      // the kernel's window: physical, where it is mapped, bytes
++  uint64_t io_phys, io_virt, io_size;         // trapped MMIO aperture (the board's devices)
++  uint64_t user_va_min, user_va_limit;        // iOS tasks may use [min, limit)
++  uint64_t timebase_hz;        // CNTFRQ_EL0; CNTVCT_EL0 is readable in the kernel and in tasks
++  uint64_t features;           // XH_FEATURE_*
++  uint64_t video[6];           // boot_args video, repeated
++  uint64_t kva_base, kva_size; // reserved (inaccessible) host addresses for the kernel's own mappings: kernel_map
++};
++#define XH_FEATURE_PAC          (1ull << 0)   // paca/pacg: arm64e runs; one key set for kernel and tasks
++#define XH_FEATURE_TASKS        (1ull << 1)   // the task trap layer works on this host (seccomp, memfd)
++#define XH_FEATURE_PAC_KEYS_OFF (1ull << 2)   // PR_PAC_SET_ENABLED_KEYS: plain arm64 tasks can run
++
++// ---- calls from the host into the kernel --------------------------------------------------------
++struct xh_upcalls {
++  // An interrupt while kernel code ran unmasked. Returning resumes `frame`.
++  void (*irq)(struct xh_cpu *cpu, struct xh_frame *frame);
++  // A fault in kernel code that is not a device access (frame->kind = XH_FRAME_EXCEPTION, far, esr).
++  // The kernel may change frame->pc (copyio recovery) and return, or panic. NULL: xnuhost stops.
++  void (*exception)(struct xh_cpu *cpu, struct xh_frame *frame);
++  // A secondary vCPU's first call, on its boot stack, instead of an entry address (cpu_start with
++  // entry 0). Does not return.
++  void (*cpu_entry)(struct xh_cpu *cpu, uint64_t arg);
++};
++
++// ---- the vector ---------------------------------------------------------------------------------
++// Return values: 0 or a positive count on success, a negative errno otherwise.
++struct xh_vector {
++  uint32_t abi, size;
++  const struct xh_info *info;
++
++  // console, life cycle
++  void     (*console_write)(struct xh_cpu *, const char *text, uint64_t length);
++  void     (*halt)(struct xh_cpu *, uint32_t reason, uint32_t code);           // does not return
++  void     (*ready)(struct xh_cpu *);                 // the guest's first frame is on screen
++  int64_t  (*set_upcalls)(struct xh_cpu *, const struct xh_upcalls *);
++  uint64_t (*wall_time)(struct xh_cpu *);             // seconds since 1970 (armdt_platform_clock_register)
++
++  // CPUs, interrupts, timer
++  int64_t  (*cpu_start)(struct xh_cpu *, uint32_t index, uint64_t entry, uint64_t arg);
++  void     (*cpu_idle)(struct xh_cpu *);              // returns when irq_pending is set
++  uint32_t (*irq_ack)(struct xh_cpu *);               // highest pending INTID, now active; XH_INTID_NONE
++  void     (*irq_eoi)(struct xh_cpu *, uint32_t intid);
++  void     (*irq_enable)(struct xh_cpu *, uint32_t intid, uint32_t enable);
++  void     (*ipi)(struct xh_cpu *, uint32_t target_cpu, uint32_t sgi);
++  void     (*timer_set)(struct xh_cpu *, uint64_t deadline);   // CNTVCT_EL0 value; UINT64_MAX cancels
++  void     (*frame_resume)(struct xh_cpu *, const struct xh_frame *);          // does not return
++
++  // devices
++  uint64_t (*io_map)(struct xh_cpu *, uint64_t phys, uint64_t size);           // kernel VA, 0 if outside
++  uint64_t (*mmio_read)(struct xh_cpu *, uint64_t phys, uint32_t size);
++  void     (*mmio_write)(struct xh_cpu *, uint64_t phys, uint32_t size, uint64_t value);
++
++  // memory
++  int64_t  (*ram_discard)(struct xh_cpu *, uint64_t phys, uint64_t size);      // give free pages back to Linux
++  uint32_t (*text_fixup)(struct xh_cpu *, void *text, uint64_t size);          // rewritten instruction count
++
++  // iOS tasks (Linux processes) and threads
++  int64_t  (*task_create)(struct xh_cpu *, uint64_t *task);
++  int64_t  (*task_destroy)(struct xh_cpu *, uint64_t task);
++  int64_t  (*task_map)(struct xh_cpu *, uint64_t task, uint64_t va, uint64_t size, uint32_t prot, uint64_t phys);
++  int64_t  (*task_unmap)(struct xh_cpu *, uint64_t task, uint64_t va, uint64_t size);
++  int64_t  (*task_protect)(struct xh_cpu *, uint64_t task, uint64_t va, uint64_t size, uint32_t prot);
++  int64_t  (*task_read)(struct xh_cpu *, uint64_t task, uint64_t va, void *buffer, uint64_t size);
++  int64_t  (*task_write)(struct xh_cpu *, uint64_t task, uint64_t va, const void *buffer, uint64_t size);
++  int64_t  (*thread_create)(struct xh_cpu *, uint64_t task, uint64_t *thread);
++  int64_t  (*thread_destroy)(struct xh_cpu *, uint64_t thread);
++  // Runs the thread from *state until it traps; *state is then the trapped state. Blocks the vCPU.
++  int64_t  (*thread_run)(struct xh_cpu *, uint64_t thread, struct xh_user_state *state, struct xh_trap *trap);
++  // Pointer-authentication keys enabled for the thread from its next run (plain arm64 binaries: 0).
++  int64_t  (*thread_set_pac)(struct xh_cpu *, uint64_t thread, uint32_t enabled);
++
++  // The kernel's own address space outside the window: RAM pages at kernel virtual addresses inside
++  // [info->kva_base, +kva_size). Present when size covers them.
++  int64_t  (*kernel_map)(struct xh_cpu *, uint64_t va, uint64_t size, uint32_t prot, uint64_t phys);
++  int64_t  (*kernel_unmap)(struct xh_cpu *, uint64_t va, uint64_t size);
++};
++#define XH_PAC_ALL 0xfu          // APIA, APIB, APDA, APDB
++
++// PSCI function numbers the host answers when the kernel issues `hvc #0` (or `smc #0`) directly,
++// as ArmCpu and ArmDTPlatform do: CPU_ON starts a vCPU at a physical entry address.
++#define XH_PSCI_VERSION       0x84000000u
++#define XH_PSCI_CPU_OFF       0x84000002u
++#define XH_PSCI_CPU_ON        0xc4000003u
++#define XH_PSCI_SYSTEM_OFF    0x84000008u
++#define XH_PSCI_SYSTEM_RESET  0x84000009u
++
++#endif
+diff --git a/osfmk/arm64/hosted/hosted.h b/osfmk/arm64/hosted/hosted.h
+new file mode 100644
+index 0000000..ad2ef50
+--- /dev/null
++++ b/osfmk/arm64/hosted/hosted.h
+@@ -0,0 +1,160 @@
++/*
++ * OneiOS: the hosted machine layer. XNU runs as an ordinary Linux process under xnuhost
++ * (https://github.com/akshaynexus/OneiOS, runtime/xnuhost): no EL1, no MMU. This header is the kernel's
++ * side of the host-call ABI (arm64/hosted/hostcall.h, a copy of xnuhost's header).
++ *
++ * Register conventions while kernel code runs:
++ *   x18        struct xh_cpu * of the vCPU the code is on. The Darwin ABI reserves x18, so no compiled code
++ *              touches it. It is loaded at entry, and reloaded in every saved frame that is resumed, so a
++ *              thread that is preempted and resumed on another vCPU finds that vCPU's block.
++ *   TPIDR_EL0  the current thread (what TPIDR_EL1 is on hardware). xnuhost keeps its own value across host
++ *              calls and signals.
++ *
++ * Interrupts are a flag: cpu->irq_masked (the kernel's DAIF.I). A single load or store through x18 is atomic
++ * with respect to preemption, which is why the flag is never reached through a copied pointer while unmasked.
++ * Every host call is made with the flag set: the vCPU block it is given must still be the caller's when the
++ * call returns.
++ */
++#ifndef _ARM64_HOSTED_HOSTED_H_
++#define _ARM64_HOSTED_HOSTED_H_
++
++#if XNU_HOSTED
++
++/* struct xh_cpu offsets (hostcall.h) for assembly. */
++#define XH_CPU_INDEX            0x00
++#define XH_CPU_IRQ_MASKED       0x04
++#define XH_CPU_IRQ_PENDING      0x08
++#define XH_CPU_KERNEL_DATA      0x38
++
++/*
++ * The hosted kernel's address range: XNU's small-memory layout (-128 GiB .. -16 GiB) modulo 2^38, which is
++ * the span of the T1SZ = 26 kernel page tables, so every table index is what it is on hardware. xnuhost maps
++ * the RAM window at the bottom of it; the rest is reserved for kernel_map (xh_info.kva_base).
++ */
++#define HOSTED_KERNEL_VA_MIN    0x0000002000000000ULL
++#define HOSTED_KERNEL_VA_MAX    0x0000003bffffffffULL
++
++#ifndef __ASSEMBLER__
++
++#include <stdint.h>
++#include <stdbool.h>
++#include <arm64/hosted/hostcall.h>
++
++extern const struct xh_vector *hosted_vector;
++extern struct xh_info          hosted_info;
++
++static inline struct xh_cpu *
++hosted_cpu(void)
++{
++	struct xh_cpu *cpu;
++	__asm__ volatile ("mov %0, x18" : "=r" (cpu));
++	return cpu;
++}
++
++/* 1 if interrupts are masked on this CPU. */
++static inline uint32_t
++hosted_irq_masked(void)
++{
++	uint32_t masked;
++	__asm__ volatile ("ldr %w0, [x18, #4]" : "=r" (masked));
++	return masked;
++}
++
++/* Mask; returns the previous state. */
++static inline uint32_t
++hosted_irq_mask(void)
++{
++	uint32_t old, one;
++	__asm__ volatile ("ldr %w0, [x18, #4]\n\tmov %w1, #1\n\tstr %w1, [x18, #4]" : "=&r" (old), "=&r" (one));
++	return old;
++}
++
++/* The interrupt line of this CPU. Call masked. */
++static inline uint32_t
++hosted_irq_pending(void)
++{
++	uint32_t pending;
++	__asm__ volatile ("ldr %w0, [x18, #8]" : "=r" (pending));
++	return pending;
++}
++
++extern void hosted_irq_poll(void);
++
++/* Unmask, and take what became pending while masked. */
++static inline void
++hosted_irq_unmask(void)
++{
++	uint32_t pending;
++	__asm__ volatile ("str wzr, [x18, #4]\n\tldr %w0, [x18, #8]" : "=&r" (pending));
++	if (__builtin_expect(pending != 0, 0)) {
++		hosted_irq_poll();
++	}
++}
++
++static inline void
++hosted_irq_restore(uint32_t old)
++{
++	if (!old) {
++		hosted_irq_unmask();
++	}
++}
++
++/* The DAIF value kernel code expects to read: debug exceptions always masked. */
++#define HOSTED_DAIF_MASKED      0x3c0ULL        /* DAIF_ALL */
++#define HOSTED_DAIF_UNMASKED    0x200ULL        /* DAIF_DEBUGF */
++
++static inline uint64_t
++hosted_daif_get(void)
++{
++	return hosted_irq_masked() ? HOSTED_DAIF_MASKED : HOSTED_DAIF_UNMASKED;
++}
++
++static inline void
++hosted_daif_set(uint64_t daif)
++{
++	if (daif & 0x80) {
++		(void)hosted_irq_mask();
++	} else {
++		hosted_irq_unmask();
++	}
++}
++
++/*
++ * The address of a host function. The vector holds plain AArch64 addresses, not signed arm64e function
++ * pointers: they are read as integers and reached through hosted_hc(), never called through a C pointer.
++ */
++#define HOSTED_FN(name)         (*(const uintptr_t *)(const void *)&hosted_vector->name)
++
++/*
++ * int64_t hosted_hc(fn, cpu, a1 .. a5): calls a host function. Call it masked: the vCPU block must still be
++ * the caller's when the call returns.
++ */
++extern int64_t hosted_hc(uintptr_t fn, struct xh_cpu *cpu, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5);
++
++/* hosted_machine.c */
++struct arm_saved_state;
++extern void hosted_init(void);
++extern void hosted_console_putc(char c);
++extern void hosted_console_flush(void);
++extern void hosted_halt(uint32_t reason, uint32_t code) __attribute__((noreturn));
++extern void hosted_cpu_idle(void);
++extern void hosted_thread_exception_return(void) __attribute__((noreturn));
++extern uint32_t hosted_text_fixup(void *kva, uint64_t size);
++
++/* hosted_pmap.c */
++struct pmap;
++extern uint64_t hosted_kva_base, hosted_kva_end;
++extern void hosted_tlb_flush_region(struct pmap *pmap, uint64_t va, uint64_t size);
++extern void hosted_tlb_flush_pmap(struct pmap *pmap);
++extern bool hosted_kernel_fill(uint64_t va, uint32_t access);
++extern void hosted_kernel_enter(uint64_t va, uint64_t size);
++extern bool hosted_user_fill(struct pmap *pmap, uint64_t va, uint32_t access);
++extern void hosted_pmap_destroy(struct pmap *pmap);
++extern uint64_t hosted_pmap_task(struct pmap *pmap);
++extern int hosted_copy_user(struct pmap *pmap, uint64_t uaddr, void *kaddr, uint64_t size, bool to_user);
++
++#endif /* !__ASSEMBLER__ */
++
++#endif /* XNU_HOSTED */
++
++#endif /* _ARM64_HOSTED_HOSTED_H_ */
+diff --git a/osfmk/arm64/hosted/hosted_asm.s b/osfmk/arm64/hosted/hosted_asm.s
+new file mode 100644
+index 0000000..37a4aca
+--- /dev/null
++++ b/osfmk/arm64/hosted/hosted_asm.s
+@@ -0,0 +1,162 @@
++/*
++ * OneiOS: the hosted machine layer, assembly (arm64/hosted/hosted.h explains the model).
++ * Entry from xnuhost, stack switches, and the context-switch primitives of a kernel that has no EL1:
++ * what start.s, locore.s and cswitch.s are on hardware.
++ */
++#include <machine/asm.h>
++#include <arm64/machine_machdep.h>
++#include <arm64/machine_routines_asm.h>
++#include <arm64/pac_asm.h>
++#include <arm64/proc_reg.h>
++#include <pexpert/arm64/board_config.h>
++#include "assym.s"
++
++#if XNU_HOSTED
++
++#include <arm64/hosted/hosted.h>
++
++/*
++ * hosted_start: the kernel's entry on vCPU 0 (LC_UNIXTHREAD pc, through _start).
++ *   x0 = boot_args (virtual = physical: the window is mapped where the kernel runs)
++ *   x1 = struct xh_vector *
++ *   x2 = struct xh_cpu * of this vCPU
++ * Nothing is rebased yet: only pc-relative references until arm_init has slid the image.
++ */
++	.text
++	.align 2
++	.globl EXT(hosted_start)
++LEXT(hosted_start)
++	mov		x18, x2								// the vCPU block, for good
++	msr		TPIDR_EL0, xzr						// no current thread yet
++	adrp	x9, EXT(hosted_vector)@page
++	str		x1, [x9, EXT(hosted_vector)@pageoff]
++	adrp	x9, EXT(intstack_top)@page			// the boot CPU's interrupt stack, as on hardware
++	add		x9, x9, EXT(intstack_top)@pageoff
++	mov		sp, x9
++	mov		fp, #0
++	mov		lr, #0
++	bl		EXT(arm_init)
++	b		.
++
++/*
++ * hosted_cpu_start: a secondary vCPU's entry (PSCI CPU_ON from ArmCpu, or the cpu_start host call).
++ *   x0 = the context the starter passed (unused: the CPU is found by its index)
++ *   x1 = struct xh_vector *
++ *   x2 = struct xh_cpu * of this vCPU
++ * The stack is xnuhost's boot stack of the vCPU until arm_init_cpu's thread is loaded.
++ */
++	.text
++	.align 2
++	.globl EXT(hosted_cpu_start)
++LEXT(hosted_cpu_start)
++	mov		x18, x2
++	msr		TPIDR_EL0, xzr
++	mov		fp, #0
++	mov		lr, #0
++	mov		x0, x2
++	bl		EXT(hosted_secondary_entry)
++	b		.
++
++/*
++ * void hosted_call_on_stack(void *arg, vm_offset_t stack_top, void (*fn)(void *))
++ * Calls hosted_stack_call(arg, fn) with sp = stack_top, then comes back to the caller's stack.
++ */
++	.text
++	.align 2
++	.globl EXT(hosted_call_on_stack)
++LEXT(hosted_call_on_stack)
++	ARM64_STACK_PROLOG
++	PUSH_FRAME
++	mov		sp, x1
++	mov		x1, x2
++	bl		EXT(hosted_stack_call)
++	POP_FRAME
++	ARM64_STACK_EPILOG
++
++/*
++ * void hosted_switch_to_stack(void *arg, vm_offset_t stack_top, void (*fn)(void *)) __dead2
++ * As above, but the old stack is abandoned: fn does not return.
++ */
++	.text
++	.align 2
++	.globl EXT(hosted_switch_to_stack)
++LEXT(hosted_switch_to_stack)
++	mov		sp, x1
++	mov		fp, #0
++	mov		lr, #0
++	mov		x1, x2
++	bl		EXT(hosted_stack_call)
++	brk		#0x1
++
++/*
++ * int64_t hosted_hc(uintptr_t fn, struct xh_cpu *cpu, uint64_t a1, ..., uint64_t a5)
++ * Calls a host function (the vector's raw, unsigned address) with (cpu, a1 .. a5).
++ */
++	.text
++	.align 2
++	.globl EXT(hosted_hc)
++LEXT(hosted_hc)
++	ARM64_PROLOG
++	mov		x9, x0
++	mov		x0, x1
++	mov		x1, x2
++	mov		x2, x3
++	mov		x3, x4
++	mov		x4, x5
++	mov		x5, x6
++	br		x9
++
++/*
++ * Upcalls: xnuhost enters these with x0 = struct xh_cpu *, x1 = struct xh_frame * (the interrupted
++ * context, on its own stack) and sp = the frame. They do not return: the C handlers end with frame_resume.
++ * A frame record that points at the interrupted pc and fp keeps backtraces whole.
++ */
++#define XH_FRAME_FP		(29 * 8)
++#define XH_FRAME_PC		(32 * 8)
++
++.macro HOSTED_UPCALL handler
++	mov		x18, x0
++	ldr		x9, [x1, #XH_FRAME_FP]
++	ldr		x10, [x1, #XH_FRAME_PC]
++	stp		x9, x10, [sp, #-16]!
++	mov		fp, sp
++	bl		EXT(\handler)
++	brk		#0x1
++.endmacro
++
++	.text
++	.align 2
++	.globl EXT(hosted_irq_upcall_entry)
++LEXT(hosted_irq_upcall_entry)
++	HOSTED_UPCALL hosted_irq_upcall
++
++	.align 2
++	.globl EXT(hosted_exception_upcall_entry)
++LEXT(hosted_exception_upcall_entry)
++	HOSTED_UPCALL hosted_exception_upcall
++
++	/* cpu_entry(cpu, arg): a secondary vCPU started with the cpu_start host call and no entry address. */
++	.align 2
++	.globl EXT(hosted_cpu_entry_upcall)
++LEXT(hosted_cpu_entry_upcall)
++	mov		x2, x0
++	mov		x0, x1
++	b		EXT(hosted_cpu_start)
++
++/* void hosted_upcall_addresses(uint64_t out[3]): struct xh_upcalls, as raw addresses. */
++	.align 2
++	.globl EXT(hosted_upcall_addresses)
++LEXT(hosted_upcall_addresses)
++	ARM64_PROLOG
++	adrp	x9, EXT(hosted_irq_upcall_entry)@page
++	add		x9, x9, EXT(hosted_irq_upcall_entry)@pageoff
++	str		x9, [x0, #0]
++	adrp	x9, EXT(hosted_exception_upcall_entry)@page
++	add		x9, x9, EXT(hosted_exception_upcall_entry)@pageoff
++	str		x9, [x0, #8]
++	adrp	x9, EXT(hosted_cpu_entry_upcall)@page
++	add		x9, x9, EXT(hosted_cpu_entry_upcall)@pageoff
++	str		x9, [x0, #16]
++	ret
++
++#endif /* XNU_HOSTED */
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+new file mode 100644
+index 0000000..713a562
+--- /dev/null
++++ b/osfmk/arm64/hosted/hosted_machine.c
+@@ -0,0 +1,501 @@
++/*
++ * OneiOS: the hosted machine layer (arm64/hosted/hosted.h explains the model). This file is what the
++ * exception vectors, the interrupt entry and the return to user mode are on hardware:
++ *   - interrupts and kernel faults arrive as calls from xnuhost (upcalls) on the interrupted stack;
++ *   - user mode is a host call: thread_run() runs the thread's Linux twin until it traps, and the trap is
++ *     handed to sleh_synchronous() / sleh_irq() as the vectors would.
++ */
++#include <mach/mach_types.h>
++#include <mach/vm_param.h>
++#include <mach/exception_types.h>
++#include <kern/thread.h>
++#include <kern/task.h>
++#include <kern/ast.h>
++#include <kern/debug.h>
++#include <kern/misc_protos.h>
++#include <kern/processor.h>
++#include <kern/sched_prim.h>
++#include <arm/cpu_data_internal.h>
++#include <arm/cpu_internal.h>
++#include <arm/machine_routines.h>
++#include <arm/misc_protos.h>
++#include <arm/thread.h>
++#include <arm/pmap.h>
++#include <arm64/proc_reg.h>
++#include <arm64/machine_machdep.h>
++#include <arm64/instructions.h>
++#include <vm/pmap.h>
++#include <vm/vm_map_xnu.h>
++#include <libkern/OSAtomic.h>
++#include <pexpert/pexpert.h>
++#include <ptrauth.h>
++#include <stdarg.h>
++#include <string.h>
++
++extern int vsnprintf(char *, size_t, const char *, va_list) __printflike(3, 0);
++
++#if XNU_HOSTED
++
++#include <arm64/hosted/hosted.h>
++
++const struct xh_vector *hosted_vector;
++struct xh_info          hosted_info;
++
++extern void sleh_irq(arm_saved_state_t *state);
++extern void sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, bool did_initiate_panic_lockdown);
++extern void hosted_call_on_stack(void *arg, vm_offset_t stack_top, void (*fn)(void *));
++extern void hosted_switch_to_stack(void *arg, vm_offset_t stack_top, void (*fn)(void *)) __dead2;
++extern void hosted_upcall_addresses(uint64_t out[3]);
++
++void hosted_stack_call(void *arg, void (*fn)(void *));
++void hosted_irq_upcall(struct xh_cpu *cpu, struct xh_frame *frame) __dead2;
++void hosted_exception_upcall(struct xh_cpu *cpu, struct xh_frame *frame) __dead2;
++void hosted_secondary_entry(struct xh_cpu *cpu) __dead2;
++
++/* Counters, for the boot log and the debugger. */
++struct hosted_stats {
++	uint64_t irq_upcalls, irq_polls, irq_user;
++	uint64_t kernel_faults, kernel_fills;
++	uint64_t user_traps, user_syscalls, user_faults, user_fills;
++} hosted_stats;
++
++void
++hosted_stack_call(void *arg, void (*fn)(void *))
++{
++	fn(arg);
++}
++
++/* A host call with up to five arguments after the vCPU block (hosted.h: HOSTED_FN, hosted_hc). */
++#define HC(name, ...)   hosted_hc(HOSTED_FN(name), hosted_cpu(), HC_PAD(__VA_ARGS__ __VA_OPT__(, ) 0, 0, 0, 0, 0))
++#define HC_PAD(a1, a2, a3, a4, a5, ...) (uint64_t)(a1), (uint64_t)(a2), (uint64_t)(a3), (uint64_t)(a4), (uint64_t)(a5)
++
++/* ---- console ------------------------------------------------------------------------------- */
++
++static char     hosted_console_buf[512];
++static uint32_t hosted_console_len;
++static uint32_t hosted_console_lock;
++
++static void
++hosted_console_lock_take(void)
++{
++	while (!__sync_bool_compare_and_swap(&hosted_console_lock, 0, 1)) {
++		__builtin_arm_yield();
++	}
++}
++
++void
++hosted_console_putc(char c)
++{
++	uint32_t old = hosted_irq_mask();
++	hosted_console_lock_take();
++	hosted_console_buf[hosted_console_len++] = c;
++	if (c == '\n' || hosted_console_len == sizeof(hosted_console_buf)) {
++		(void)HC(console_write, hosted_console_buf, hosted_console_len);
++		hosted_console_len = 0;
++	}
++	__sync_lock_release(&hosted_console_lock);
++	hosted_irq_restore(old);
++}
++
++void
++hosted_console_flush(void)
++{
++	uint32_t old = hosted_irq_mask();
++	if (hosted_console_len != 0) {
++		(void)HC(console_write, hosted_console_buf, hosted_console_len);
++		hosted_console_len = 0;
++	}
++	hosted_irq_restore(old);
++}
++
++/* Before the console exists, and where printf must not be trusted: text and a number straight to the host. */
++static void
++hosted_raw_log(const char *text, uint64_t value)
++{
++	char line[160];
++	unsigned n = 0;
++	static const char digits[] = "0123456789abcdef";
++
++	while (*text && n < sizeof(line) - 24) {
++		line[n++] = *text++;
++	}
++	line[n++] = ' ';
++	line[n++] = '0';
++	line[n++] = 'x';
++	for (int shift = 60; shift >= 0; shift -= 4) {
++		line[n++] = digits[(value >> shift) & 0xf];
++	}
++	line[n++] = '\n';
++	uint32_t old = hosted_irq_mask();
++	(void)HC(console_write, line, n);
++	if (!old) {
++		__asm__ volatile ("str wzr, [x18, #4]");
++	}
++}
++
++void
++hosted_halt(uint32_t reason, uint32_t code)
++{
++	(void)hosted_irq_mask();
++	if (hosted_console_len != 0) {
++		(void)HC(console_write, hosted_console_buf, hosted_console_len);
++		hosted_console_len = 0;
++	}
++	(void)HC(halt, reason, code);
++	for (;;) {
++		__builtin_arm_wfi();
++	}
++}
++
++/* panic(): the message and the callers to xnuhost's log, then stop with the panic exit code. */
++void hosted_panic(const char *format, va_list *args, unsigned long caller) __dead2;
++void
++hosted_panic(const char *format, va_list *args, unsigned long caller)
++{
++	static char     message[1024];
++	static uint32_t panicking;
++
++	(void)hosted_irq_mask();
++	if (__sync_lock_test_and_set(&panicking, 1) != 0) {
++		/* a second CPU, or a panic inside this function: the first report stands */
++		hosted_raw_log("hosted: panic while panicking, caller", caller - vm_kernel_slide);
++		hosted_halt(XH_HALT_PANIC, 3);
++	}
++	if (hosted_console_len != 0) {
++		(void)HC(console_write, hosted_console_buf, hosted_console_len);
++		hosted_console_len = 0;
++	}
++	int n = snprintf(message, sizeof(message), "panic(cpu %u caller 0x%lx): ", hosted_cpu()->index, caller - vm_kernel_slide);
++	if (n > 0 && (size_t)n < sizeof(message)) {
++		n += vsnprintf(message + n, sizeof(message) - (size_t)n - 1, format, *args);
++	}
++	if (n < 0 || (size_t)n >= sizeof(message) - 1) {
++		n = (int)sizeof(message) - 2;
++	}
++	message[n++] = '\n';
++	(void)HC(console_write, message, n);
++
++	/* The callers, as link-time addresses (subtract nothing more to look them up in the Mach-O). */
++	uint64_t *fp = (uint64_t *)__builtin_frame_address(0);
++	for (int depth = 0; depth < 24 && fp != NULL; depth++) {
++		uint64_t next = fp[0];
++		uint64_t lr = (uint64_t)ptrauth_strip((void *)fp[1], ptrauth_key_return_address);
++		if (lr == 0) {
++			break;
++		}
++		hosted_raw_log("  frame", lr - vm_kernel_slide);
++		if (next <= (uint64_t)fp || next - (uint64_t)fp > 0x100000) {
++			break;          /* another stack, or the end */
++		}
++		fp = (uint64_t *)next;
++	}
++	hosted_halt(XH_HALT_PANIC, 0);
++}
++
++/* ---- start -------------------------------------------------------------------------------- */
++
++void
++hosted_init(void)
++{
++	if (hosted_vector == NULL || hosted_vector->abi != XH_ABI_VERSION) {
++		for (;;) {
++			__builtin_trap();
++		}
++	}
++	/* The host's facts, copied: the kernel reads them long after it stopped trusting pointers. */
++	memcpy(&hosted_info, hosted_vector->info, sizeof(hosted_info));
++	if (hosted_vector->size < __builtin_offsetof(struct xh_vector, kernel_unmap) + sizeof(void *) ||
++	    hosted_info.kva_size == 0) {
++		hosted_raw_log("hosted: this xnuhost has no kernel_map (vector size)", hosted_vector->size);
++		hosted_halt(XH_HALT_PANIC, 1);
++	}
++	hosted_kva_base = hosted_info.kva_base;
++	hosted_kva_end = hosted_info.kva_base + hosted_info.kva_size;
++	if (hosted_info.ram_virt < HOSTED_KERNEL_VA_MIN || hosted_kva_end > HOSTED_KERNEL_VA_MAX + 1 ||
++	    hosted_info.ram_virt != hosted_info.ram_phys) {
++		hosted_raw_log("hosted: the RAM window is outside the kernel's address range", hosted_info.ram_virt);
++		hosted_halt(XH_HALT_PANIC, 1);
++	}
++
++	uint64_t upcalls[3];
++	hosted_upcall_addresses(upcalls);
++	(void)HC(set_upcalls, upcalls);
++}
++
++/* ---- saved states ----------------------------------------------------------------------------- */
++
++/* The kernel context xnuhost interrupted, as the arm_context_t the exception vectors would have spilled. */
++static void
++hosted_frame_to_context(const struct xh_frame *frame, arm_context_t *context, uint64_t esr)
++{
++	arm_saved_state64_t *ss = &context->ss.ss_64;
++
++	bzero(context, sizeof(*context));
++	context->ss.ash.flavor = ARM_SAVED_STATE64;
++	context->ss.ash.count = ARM_SAVED_STATE64_COUNT;
++	context->ns.nsh.flavor = ARM_NEON_SAVED_STATE64;
++	context->ns.nsh.count = ARM_NEON_SAVED_STATE64_COUNT;
++	for (int i = 0; i < 29; i++) {
++		ss->x[i] = frame->x[i];
++	}
++	ss->fp = frame->x[29];
++	ss->lr = frame->x[30];
++	ss->sp = frame->sp;
++	ss->pc = frame->pc;
++	ss->cpsr = (uint32_t)(frame->pstate & PSR64_NZCV_MASK) | PSR64_MODE_EL1 | PSR64_MODE_SP0 |
++	    (frame->irq_masked ? DAIF_STANDARD_DISABLE : 0);
++	ss->far = frame->far;
++	ss->esr = esr;
++	memcpy(&context->ns.ns_64.v, frame->v, sizeof(frame->v));
++	context->ns.ns_64.fpsr = frame->fpsr;
++	context->ns.ns_64.fpcr = frame->fpcr;
++#if defined(HAS_APPLE_PAC)
++	ml_sign_thread_state(&context->ss, ss->pc, ss->cpsr, ss->lr, ss->x[16], ss->x[17]);
++#endif
++}
++
++/* What a handler changed (the recovery pc of a copyio fault, a debugger's edits) goes back into the frame. */
++static void
++hosted_context_to_frame(const arm_context_t *context, struct xh_frame *frame)
++{
++	const arm_saved_state64_t *ss = &context->ss.ss_64;
++
++	for (int i = 0; i < 29; i++) {
++		frame->x[i] = ss->x[i];
++	}
++	frame->x[29] = ss->fp;
++	frame->x[30] = ss->lr;
++	frame->sp = ss->sp;
++	frame->pc = ss->pc;
++	frame->pstate = (frame->pstate & ~(uint64_t)PSR64_NZCV_MASK) | (ss->cpsr & PSR64_NZCV_MASK);
++}
++
++/* Ends an upcall: the interrupted context continues, on the vCPU this thread is on now. */
++static void __dead2
++hosted_frame_resume(struct xh_frame *frame)
++{
++	(void)hosted_irq_mask();
++	frame->x[18] = (uint64_t)hosted_cpu();
++	(void)HC(frame_resume, frame);
++	__builtin_unreachable();
++}
++
++/* ---- interrupts ------------------------------------------------------------------------------ */
++
++static void
++hosted_irq_run(void *arg)
++{
++	sleh_irq((arm_saved_state_t *)arg);
++}
++
++/* The body of fleh_irq: counts, the interrupt stack, the registered handler. Called masked. */
++static void
++hosted_interrupt(arm_saved_state_t *state)
++{
++	thread_t    thread = current_thread();
++	cpu_data_t *cdp = thread->machine.CpuDatap;
++	vm_offset_t here = (vm_offset_t)__builtin_frame_address(0);
++
++	if (cdp->interrupt_handler == NULL) {
++		return;         /* no interrupt controller yet: the line stays up until there is one */
++	}
++	cdp->cpu_stat.irq_ex_cnt++;
++	cdp->cpu_stat.irq_ex_cnt_wake++;
++	thread->machine.preemption_count++;
++	cdp->cpu_int_state = state;
++	if (here <= cdp->intstack_top && here > cdp->intstack_top - INTSTACK_SIZE) {
++		sleh_irq(state);        /* already on the interrupt stack (the idle path) */
++	} else {
++		hosted_call_on_stack(state, cdp->intstack_top, hosted_irq_run);
++	}
++	cdp->cpu_int_state = NULL;
++	thread->machine.preemption_count--;
++}
++
++/* return_to_kernel: an urgent AST is taken on the way back to an interruptible, preemptible context. */
++static void
++hosted_kernel_ast(void)
++{
++	thread_t thread = current_thread();
++
++	if (thread->machine.preemption_count == 0 &&
++	    (thread->machine.CpuDatap->cpu_pending_ast & AST_URGENT)) {
++		ast_taken_kernel();
++	}
++}
++
++/*
++ * The interrupt line rose while the kernel had interrupts masked, and they were just unmasked: take the
++ * interrupt here, as if it had arrived at the caller's next instruction.
++ */
++void
++hosted_irq_poll(void)
++{
++	arm_context_t context;
++
++	for (int pass = 0; pass < 4; pass++) {
++		if (hosted_irq_mask() != 0) {
++			return;         /* masked again by an interrupt that ran in between */
++		}
++		if (!hosted_irq_pending() || current_thread() == NULL ||
++		    current_thread()->machine.CpuDatap->interrupt_handler == NULL) {
++			__asm__ volatile ("str wzr, [x18, #4]");
++			return;
++		}
++		hosted_stats.irq_polls++;
++		struct xh_frame frame = { .pc = (uint64_t)__builtin_return_address(0),
++			                  .sp = (uint64_t)__builtin_frame_address(0) };
++		frame.pc = (uint64_t)ptrauth_strip((void *)frame.pc, ptrauth_key_return_address);
++		hosted_frame_to_context(&frame, &context, 0);
++		hosted_interrupt(&context.ss);
++		hosted_kernel_ast();
++		__asm__ volatile ("str wzr, [x18, #4]");
++	}
++}
++
++/* xnuhost: an interrupt while kernel code ran unmasked. `frame` is on the interrupted stack. */
++void
++hosted_irq_upcall(struct xh_cpu *cpu __unused, struct xh_frame *frame)
++{
++	arm_context_t context;
++
++	hosted_stats.irq_upcalls++;
++	if (current_thread() != NULL) {
++		hosted_frame_to_context(frame, &context, 0);
++		for (int pass = 0; pass < 4 && hosted_irq_pending(); pass++) {
++			hosted_interrupt(&context.ss);
++		}
++		if (!frame->irq_masked) {
++			hosted_kernel_ast();
++		}
++	}
++	hosted_frame_resume(frame);
++}
++
++/* ---- kernel faults --------------------------------------------------------------------------- */
++
++static uint32_t hosted_fault_depth[MAX_CPUS];
++
++static void __dead2
++hosted_fatal_fault(const struct xh_frame *frame, const char *why)
++{
++	hosted_raw_log(why, frame->far);
++	hosted_raw_log("  pc", frame->pc);
++	hosted_raw_log("  lr", frame->x[30]);
++	hosted_raw_log("  sp", frame->sp);
++	hosted_raw_log("  esr", frame->esr);
++	hosted_raw_log("  kernel slide", vm_kernel_slide);
++	hosted_raw_log("  pc unslid", frame->pc - vm_kernel_slide);
++	hosted_raw_log("  lr unslid", (uint64_t)ptrauth_strip((void *)frame->x[30], ptrauth_key_return_address) - vm_kernel_slide);
++	for (int i = 0; i < 29; i += 1) {
++		hosted_raw_log("  x", frame->x[i]);
++	}
++	hosted_halt(XH_HALT_PANIC, 2);
++}
++
++/*
++ * The exception class the vectors would have read from ESR_EL1. Linux reports the syndrome of a fault as
++ * its own kernel took it (from EL0); a trap that is not a fault comes with no syndrome at all.
++ */
++static uint64_t
++hosted_kernel_esr(const struct xh_frame *frame)
++{
++	uint64_t esr = frame->esr;
++	uint32_t ec = (uint32_t)ESR_EC(esr);
++
++	if (ec == ESR_EC_DABORT_EL0) {
++		return (esr & ~(uint64_t)ESR_EC_MASK) | ((uint64_t)ESR_EC_DABORT_EL1 << ESR_EC_SHIFT);
++	}
++	if (ec == ESR_EC_IABORT_EL0) {
++		return (esr & ~(uint64_t)ESR_EC_MASK) | ((uint64_t)ESR_EC_IABORT_EL1 << ESR_EC_SHIFT);
++	}
++	if (esr != 0) {
++		return esr;
++	}
++	/* No syndrome: a breakpoint or an undefined instruction at pc (which is readable: it was fetched). */
++	uint32_t insn = *(const uint32_t *)frame->pc;
++	if ((insn & 0xffe0001f) == 0xd4200000) {
++		return ((uint64_t)ESR_EC_BRK_AARCH64 << ESR_EC_SHIFT) | ESR_IL | ((insn >> 5) & 0xffff);
++	}
++	return ((uint64_t)ESR_EC_UNCATEGORIZED << ESR_EC_SHIFT) | ESR_IL;
++}
++
++/* xnuhost: a synchronous trap in kernel code that is not a device access. */
++void
++hosted_exception_upcall(struct xh_cpu *cpu, struct xh_frame *frame)
++{
++	arm_context_t context;
++	uint64_t      esr = hosted_kernel_esr(frame);
++	uint32_t      ec = (uint32_t)ESR_EC(esr);
++	unsigned      index = cpu->index < MAX_CPUS ? cpu->index : 0;
++
++	hosted_stats.kernel_faults++;
++	/* The software TLB: the page tables may already allow what the host mapping does not have yet. */
++	if (ec == ESR_EC_DABORT_EL1 || ec == ESR_EC_IABORT_EL1) {
++		uint32_t access = ec == ESR_EC_IABORT_EL1 ? XH_PROT_EXEC : (esr & ISS_DA_WNR) ? XH_PROT_WRITE : XH_PROT_READ;
++		if (hosted_kernel_fill(frame->far, access)) {
++			hosted_stats.kernel_fills++;
++			hosted_frame_resume(frame);
++		}
++	}
++	if (current_thread() == NULL) {
++		hosted_fatal_fault(frame, "hosted: kernel fault before the first thread, address");
++	}
++	if (hosted_fault_depth[index]++ != 0) {
++		hosted_fatal_fault(frame, "hosted: kernel fault inside the fault handler, address");
++	}
++	hosted_frame_to_context(frame, &context, esr);
++	sleh_synchronous(&context, esr, frame->far, false);
++	/* sleh_synchronous may have enabled interrupts and switched CPUs: mask before the frame is touched. */
++	(void)hosted_irq_mask();
++	hosted_fault_depth[hosted_cpu()->index < MAX_CPUS ? hosted_cpu()->index : 0] = 0;
++	hosted_context_to_frame(&context, frame);
++	hosted_frame_resume(frame);
++}
++
++/* ---- idle, CPUs ------------------------------------------------------------------------------- */
++
++/* wfi: returns when this CPU's interrupt line is up. Called masked. */
++void
++hosted_cpu_idle(void)
++{
++	(void)HC(cpu_idle);
++}
++
++void
++hosted_secondary_entry(struct xh_cpu *cpu)
++{
++	hosted_raw_log("hosted: secondary CPUs are not started by the hosted layer yet, cpu", cpu->index);
++	(void)hosted_irq_mask();
++	for (;;) {
++		(void)HC(cpu_idle);
++	}
++}
++
++/* io_map(): where the host has a device window or memory outside the kernel's window; 0 if it has neither. */
++vm_offset_t hosted_io_map(vm_map_offset_t phys_addr, vm_size_t size);
++vm_offset_t
++hosted_io_map(vm_map_offset_t phys_addr, vm_size_t size)
++{
++	uint32_t old = hosted_irq_mask();
++	vm_offset_t va = (vm_offset_t)HC(io_map, phys_addr, size);
++	hosted_irq_restore(old);
++	return va;
++}
++
++uint32_t
++hosted_text_fixup(void *kva, uint64_t size)
++{
++	uint32_t old = hosted_irq_mask();
++	uint32_t count = (uint32_t)HC(text_fixup, kva, size);
++	hosted_irq_restore(old);
++	return count;
++}
++
++void
++hosted_thread_exception_return(void)
++{
++	panic("hosted: return to user mode is not implemented");
++}
++
++#endif /* XNU_HOSTED */
+diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
+new file mode 100644
+index 0000000..80207a3
+--- /dev/null
++++ b/osfmk/arm64/hosted/hosted_pmap.h
+@@ -0,0 +1,417 @@
++/*
++ * OneiOS: the hosted pmap (arm64/hosted/hosted.h explains the model). Included at the end of
++ * osfmk/arm/pmap/pmap.c, so it sees the pmap's own types and helpers; it is not a header for anybody else.
++ *
++ * The arm64 pmap is kept whole: its page tables are the truth about every address space, and they are plain
++ * memory in the RAM window. What is missing under xnuhost is the MMU that would read them. Its place is
++ * taken by the host's mappings, used as a TLB:
++ *
++ *   fill    a fault (user: XH_TRAP_FAULT from thread_run; kernel: the exception upcall) first walks the
++ *           page table. If the entry allows the access, the page is mapped in the host (task_map for an iOS
++ *           task, kernel_map for the kernel's own range) and the faulting instruction runs again. Only a
++ *           fault the tables do not allow reaches XNU's fault handlers.
++ *   flush   every TLB invalidation of the pmap (flush_mmu_tlb_region_asid_async and friends) unmaps the
++ *           range in the host, so the next access faults and is filled from the changed tables.
++ *
++ * One lock orders the two: a fill reads the entry and maps under it, a flush unmaps under it. The pmap
++ * always changes an entry before it flushes, so a fill either runs before the unmap (and is undone by it)
++ * or after the change (and sees it).
++ *
++ * The kernel's own range is also filled eagerly when an entry is made (hosted_kernel_enter): a kernel stack
++ * must be mapped before it is used, because xnuhost writes the interrupted frame onto the interrupted stack.
++ */
++#if XNU_HOSTED
++
++#include <arm64/hosted/hosted.h>
++
++#define HPC(name, a1, a2, a3, a4, a5) \
++	hosted_hc(HOSTED_FN(name), hosted_cpu(), (uint64_t)(a1), (uint64_t)(a2), (uint64_t)(a3), (uint64_t)(a4), (uint64_t)(a5))
++
++uint64_t hosted_kva_base, hosted_kva_end;
++
++static uint32_t hosted_tlb_lock_word;
++static uint64_t hosted_task_sequence;
++
++struct hosted_pmap_stats {
++	uint64_t kernel_maps, kernel_unmaps, user_maps, user_unmaps, tasks_created, tasks_destroyed;
++} hosted_pmap_stats;
++
++static inline uint32_t
++hosted_tlb_lock(void)
++{
++	uint32_t old = hosted_irq_mask();
++	while (!__sync_bool_compare_and_swap(&hosted_tlb_lock_word, 0, 1)) {
++		__builtin_arm_yield();
++	}
++	return old;
++}
++
++static inline void
++hosted_tlb_unlock(uint32_t old)
++{
++	__sync_lock_release(&hosted_tlb_lock_word);
++	hosted_irq_restore(old);
++}
++
++/*
++ * The leaf entry of va, or 0. Lock-free: for the kernel pmap (its tables are never freed) or with the pmap's
++ * lock held. A block entry is returned as a page entry of the block's attributes.
++ */
++static pt_entry_t
++hosted_walk(pmap_t pmap, uint64_t va)
++{
++	const pt_attr_t * const pt_attr = pmap_get_pt_attr(pmap);
++	tt_entry_t *table = pmap->tte;
++	tt_entry_t  tte;
++
++	if (table == NULL || va < pmap->min || va >= pmap->max) {
++		return 0;
++	}
++	for (unsigned int level = pt_attr_root_level(pt_attr); level < pt_attr_leaf_level(pt_attr); level++) {
++		tte = table[ttn_index(pt_attr, va, level)];
++		if (!(tte & ARM_TTE_VALID)) {
++			return 0;
++		}
++		if ((tte & ARM_TTE_TYPE_MASK) == ARM_TTE_TYPE_BLOCK) {
++			uint64_t span = pt_attr_ln_size(pt_attr, level);
++			return ((tte & ARM_TTE_TABLE_MASK & ~(span - 1)) | (va & (span - 1) & ~(uint64_t)ARM_PGMASK)) |
++			       (tte & ~ARM_PTE_PAGE_MASK) | ARM_PTE_TYPE_VALID;
++		}
++		table = (tt_entry_t *)phystokv(tte & ARM_TTE_TABLE_MASK);
++	}
++	return table[ttn_index(pt_attr, va, pt_attr_leaf_level(pt_attr))];
++}
++
++/* What a valid entry lets its address space do, as XH_PROT_* bits; 0 if it lets it do nothing right now. */
++static uint32_t
++hosted_pte_prot(pt_entry_t pte, bool user)
++{
++	uint32_t prot = 0;
++	unsigned ap = (unsigned)((pte & ARM_PTE_APMASK) >> 6);
++
++	if ((pte & ARM_PTE_TYPE_MASK) != ARM_PTE_TYPE_VALID || !(pte & ARM_PTE_AF)) {
++		return 0;       /* invalid, or waiting for its reference fault */
++	}
++	if (user) {
++		if (ap == AP_RWRW) {
++			prot = XH_PROT_READ | XH_PROT_WRITE;
++		} else if (ap == AP_RORO) {
++			prot = XH_PROT_READ;
++		}
++		if (!(pte & ARM_PTE_NX)) {
++			prot |= XH_PROT_EXEC;
++		}
++	} else {
++		prot = XH_PROT_READ;
++		if (ap == AP_RWNA || ap == AP_RWRW) {
++			prot |= XH_PROT_WRITE;
++		}
++		if (!(pte & ARM_PTE_PNX)) {
++			prot |= XH_PROT_EXEC;
++		}
++	}
++	return prot;
++}
++
++static inline bool
++hosted_pa_in_window(pmap_paddr_t pa)
++{
++	return pa >= hosted_info.ram_phys && pa - hosted_info.ram_phys < hosted_info.ram_size;
++}
++
++/* mmu_kvtop: what the address translation instruction would say, for the part that needs no page table. */
++uint64_t hosted_mmu_kvtop(uint64_t va);
++uint64_t
++hosted_mmu_kvtop(uint64_t va)
++{
++	va = VM_KERNEL_STRIP_PTR(va);
++	if (va >= gVirtBase && va - gVirtBase < gPhysSize) {
++		return va;                      /* the window is its own physical address */
++	}
++	if (va >= hosted_info.io_virt && va - hosted_info.io_virt < hosted_info.io_size) {
++		return hosted_info.io_phys + (va - hosted_info.io_virt);
++	}
++	return 0;                               /* the caller walks the kernel's page tables */
++}
++
++/* ---- the kernel's own range ---------------------------------------------------------------- */
++
++/* Maps what the tables say about [va, va + size) of the kernel's range. TLB lock held. Returns pages mapped. */
++static unsigned
++hosted_kernel_map_locked(uint64_t va, uint64_t size, uint32_t need)
++{
++	unsigned mapped = 0;
++	uint64_t run_va = 0, run_pa = 0, run_size = 0;
++	uint32_t run_prot = 0;
++
++	for (uint64_t at = va; at < va + size; at += ARM_PGBYTES) {
++		pt_entry_t pte = hosted_walk(kernel_pmap, at);
++		uint32_t prot = hosted_pte_prot(pte, false);
++		pmap_paddr_t pa = pte_to_pa(pte);
++
++		if (prot == 0 || (need & ~prot) || !hosted_pa_in_window(pa)) {
++			prot = 0;
++		}
++		if (prot != 0 && run_size != 0 && prot == run_prot && pa == run_pa + run_size) {
++			run_size += ARM_PGBYTES;
++			continue;
++		}
++		if (run_size != 0) {
++			if (HPC(kernel_map, run_va, run_size, run_prot, run_pa, 0) == 0) {
++				mapped += (unsigned)(run_size >> ARM_PGSHIFT);
++			}
++			run_size = 0;
++		}
++		if (prot != 0) {
++			run_va = at;
++			run_pa = pa;
++			run_size = ARM_PGBYTES;
++			run_prot = prot;
++		}
++	}
++	if (run_size != 0 && HPC(kernel_map, run_va, run_size, run_prot, run_pa, 0) == 0) {
++		mapped += (unsigned)(run_size >> ARM_PGSHIFT);
++	}
++	hosted_pmap_stats.kernel_maps += mapped;
++	return mapped;
++}
++
++/* A kernel fault at va: fill it from the tables if they allow `access`. Any context; called masked. */
++bool
++hosted_kernel_fill(uint64_t va, uint32_t access)
++{
++	bool filled;
++
++	va = VM_KERNEL_STRIP_PTR(va) & ~(uint64_t)ARM_PGMASK;
++	if (va < hosted_kva_base || va >= hosted_kva_end || kernel_pmap->tte == NULL) {
++		return false;
++	}
++	uint32_t old = hosted_tlb_lock();
++	filled = hosted_kernel_map_locked(va, ARM_PGBYTES, access) != 0;
++	hosted_tlb_unlock(old);
++	return filled;
++}
++
++/* The kernel pmap just made entries for [va, va + size): map them now. */
++void
++hosted_kernel_enter(uint64_t va, uint64_t size)
++{
++	uint64_t end = va + size;
++
++	va &= ~(uint64_t)ARM_PGMASK;
++	end = (end + ARM_PGMASK) & ~(uint64_t)ARM_PGMASK;
++	if (va < hosted_kva_base) {
++		va = hosted_kva_base;
++	}
++	if (end > hosted_kva_end) {
++		end = hosted_kva_end;
++	}
++	if (va >= end) {
++		return;
++	}
++	uint32_t old = hosted_tlb_lock();
++	(void)hosted_kernel_map_locked(va, end - va, 0);
++	hosted_tlb_unlock(old);
++}
++
++/* ---- iOS tasks ------------------------------------------------------------------------------ */
++
++/* The Linux process that is this pmap's address space; made at the first need. 0 if it cannot be made. */
++uint64_t
++hosted_pmap_task(pmap_t pmap)
++{
++	uint64_t task = os_atomic_load(&pmap->hosted_task, relaxed);
++
++	if (task != 0 || pmap == kernel_pmap || pmap->type != PMAP_TYPE_USER) {
++		return task;
++	}
++	uint32_t old = hosted_irq_mask();
++	int64_t rc = HPC(task_create, &task, 0, 0, 0, 0);
++	if (rc != 0 || task == 0) {
++		hosted_irq_restore(old);
++		printf("hosted: task_create failed (%lld)\n", rc);
++		return 0;
++	}
++	uint32_t locked = hosted_tlb_lock();
++	if (pmap->hosted_task == 0) {
++		pmap->hosted_seq = ++hosted_task_sequence;
++		os_atomic_store(&pmap->hosted_task, task, relaxed);
++		hosted_pmap_stats.tasks_created++;
++		task = 0;
++	}
++	hosted_tlb_unlock(locked);
++	if (task != 0) {
++		(void)HPC(task_destroy, task, 0, 0, 0, 0);     /* another thread made it first */
++	}
++	hosted_irq_restore(old);
++	return pmap->hosted_task;
++}
++
++void
++hosted_pmap_destroy(pmap_t pmap)
++{
++	uint32_t old = hosted_tlb_lock();
++	uint64_t task = pmap->hosted_task;
++	pmap->hosted_task = 0;
++	pmap->hosted_seq = 0;
++	hosted_tlb_unlock(old);
++	if (task != 0) {
++		old = hosted_irq_mask();
++		(void)HPC(task_destroy, task, 0, 0, 0, 0);
++		hosted_pmap_stats.tasks_destroyed++;
++		hosted_irq_restore(old);
++	}
++}
++
++/*
++ * A user fault at va in pmap: fill it from the tables if they allow `access`. Thread context, no locks held.
++ * The pmap's lock keeps its table pages while they are walked.
++ */
++bool
++hosted_user_fill(pmap_t pmap, uint64_t va, uint32_t access)
++{
++	bool filled = false;
++
++	if (pmap == NULL || pmap == kernel_pmap || pmap->hosted_task == 0) {
++		return false;
++	}
++	va &= ~(uint64_t)ARM_PGMASK;
++	pmap_lock(pmap, PMAP_LOCK_SHARED);
++	uint32_t old = hosted_tlb_lock();
++	pt_entry_t pte = hosted_walk(pmap, va);
++	uint32_t prot = hosted_pte_prot(pte, true);
++	if (prot != 0 && !(access & ~prot) && hosted_pa_in_window(pte_to_pa(pte)) && pmap->hosted_task != 0) {
++		filled = HPC(task_map, pmap->hosted_task, va, ARM_PGBYTES, prot, pte_to_pa(pte)) == 0;
++		hosted_pmap_stats.user_maps += filled;
++	}
++	hosted_tlb_unlock(old);
++	pmap_unlock(pmap, PMAP_LOCK_SHARED);
++	return filled;
++}
++
++/* ---- flushes -------------------------------------------------------------------------------- */
++
++static void
++hosted_task_unmap_locked(pmap_t pmap, uint64_t va, uint64_t size)
++{
++	if (pmap->hosted_task != 0) {
++		(void)HPC(task_unmap, pmap->hosted_task, va, size, 0, 0);
++		hosted_pmap_stats.user_unmaps++;
++	}
++}
++
++/* The pmap changed entries in [va, va + size) and invalidates them. */
++void
++hosted_tlb_flush_region(pmap_t pmap, uint64_t va, uint64_t size)
++{
++	uint64_t end = (va + size + ARM_PGMASK) & ~(uint64_t)ARM_PGMASK;
++
++	va &= ~(uint64_t)ARM_PGMASK;
++	if (pmap == kernel_pmap) {
++		if (va < hosted_kva_base) {
++			va = hosted_kva_base;
++		}
++		if (end > hosted_kva_end) {
++			end = hosted_kva_end;
++		}
++		if (va >= end) {
++			return;         /* the window: always mapped, nothing cached */
++		}
++		uint32_t old = hosted_tlb_lock();
++		(void)HPC(kernel_unmap, va, end - va, 0, 0, 0);
++		hosted_pmap_stats.kernel_unmaps++;
++		/* Entries that are still valid (a changed protection) are wanted again at once. */
++		(void)hosted_kernel_map_locked(va, end - va, 0);
++		hosted_tlb_unlock(old);
++		return;
++	}
++	if (end > hosted_info.user_va_limit) {
++		end = hosted_info.user_va_limit;
++	}
++	if (va >= end) {
++		return;
++	}
++	if (pmap->type == PMAP_TYPE_USER) {
++		uint32_t old = hosted_tlb_lock();
++		hosted_task_unmap_locked(pmap, va, end - va);
++		hosted_tlb_unlock(old);
++		return;
++	}
++	/* A nested pmap (the shared region) or the commpage: its tables are part of every task that uses them. */
++	pmap_simple_lock(&pmaps_lock);
++	uint32_t old = hosted_tlb_lock();
++	pmap_t user;
++	queue_iterate(&map_pmap_list, user, pmap_t, pmaps) {
++		if (user->type == PMAP_TYPE_USER && user->hosted_task != 0 &&
++		    (pmap->type != PMAP_TYPE_NESTED || user->nested_pmap == pmap)) {
++			hosted_task_unmap_locked(user, va, end - va);
++		}
++	}
++	hosted_tlb_unlock(old);
++	pmap_simple_unlock(&pmaps_lock);
++}
++
++/* Everything the pmap ever mapped is invalid (its ASID is flushed). */
++void
++hosted_tlb_flush_pmap(pmap_t pmap)
++{
++	if (pmap == kernel_pmap) {
++		return;
++	}
++	hosted_tlb_flush_region(pmap, 0, hosted_info.user_va_limit);
++}
++
++/* ---- copyin / copyout ------------------------------------------------------------------------ */
++
++/*
++ * Copies between kernel memory and a user address space through the RAM window: the user page's physical
++ * address is its kernel address. Returns 0, or the number of bytes left when the tables do not allow the
++ * access at the address reached (the caller resolves the fault and calls again).
++ */
++uint64_t hosted_copy_user_pages(pmap_t pmap, uint64_t uaddr, void *kaddr, uint64_t size, bool to_user, uint64_t *fault_va);
++uint64_t
++hosted_copy_user_pages(pmap_t pmap, uint64_t uaddr, void *kaddr, uint64_t size, bool to_user, uint64_t *fault_va)
++{
++	uint8_t *kernel = kaddr;
++	uint32_t need = to_user ? XH_PROT_WRITE : XH_PROT_READ;
++
++	while (size != 0) {
++		uint64_t chunk = ARM_PGBYTES - (uaddr & ARM_PGMASK);
++		if (chunk > size) {
++			chunk = size;
++		}
++		/*
++		 * The TLB lock is what a TLB shootdown is on hardware: whoever takes this page away from the
++		 * address space flushes after changing the entry, and so waits for the copy to end.
++		 */
++		pmap_lock(pmap, PMAP_LOCK_SHARED);
++		uint32_t old = hosted_tlb_lock();
++		pt_entry_t pte = hosted_walk(pmap, uaddr);
++		uint32_t prot = hosted_pte_prot(pte, true);
++		bool ok = prot != 0 && !(need & ~prot) && hosted_pa_in_window(pte_to_pa(pte));
++		if (ok) {
++			uint8_t *user = (uint8_t *)phystokv(pte_to_pa(pte)) + (uaddr & ARM_PGMASK);
++			if (kernel != NULL) {
++				if (to_user) {
++					memcpy(user, kernel, chunk);
++				} else {
++					memcpy(kernel, user, chunk);
++				}
++			}
++		}
++		hosted_tlb_unlock(old);
++		pmap_unlock(pmap, PMAP_LOCK_SHARED);
++		if (!ok) {
++			*fault_va = uaddr;
++			return size;
++		}
++		uaddr += chunk;
++		size -= chunk;
++		if (kernel != NULL) {
++			kernel += chunk;
++		}
++	}
++	return 0;
++}
++
++#endif /* XNU_HOSTED */
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+index 3e5e26b..12d4131 100644
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -42,6 +42,9 @@
+ #include <arm/cpu_capabilities.h>
+ #include <console/serial_protos.h>
+ #include <kern/machine.h>
++#if XNU_HOSTED
++#include <arm64/hosted/hosted.h>
++#endif
+ #include <kern/misc_protos.h>
+ #include <prng/random.h>
+ #include <kern/startup.h>
+@@ -378,7 +381,11 @@ machine_idle(void)
+ 	/* Interrupts are expected to be masked on entry or re-entry via
+ 	 * Idle_load_context()
+ 	 */
++#if XNU_HOSTED
++	assert(hosted_irq_masked());
++#else
+ 	assert((__builtin_arm_rsr("DAIF") & DAIF_STANDARD_DISABLE) == DAIF_STANDARD_DISABLE);
++#endif
+ 	/* Check for, and act on, a WFE recommendation.
+ 	 * Bypasses context spill/fill for a minor perf. increment.
+ 	 * May unmask and restore IRQ+FIQ mask.
+@@ -390,7 +397,11 @@ machine_idle(void)
+ 		 */
+ 		Idle_context();
+ 	}
++#if XNU_HOSTED
++	hosted_irq_unmask();
++#else
+ 	__builtin_arm_wsr("DAIFClr", DAIFSC_STANDARD_DISABLE);
++#endif
+ }
+ 
+ void
+@@ -431,7 +442,11 @@ ml_get_interrupts_enabled(void)
+ {
+ 	uint64_t        value;
+ 
++#if XNU_HOSTED
++	value = hosted_daif_get();
++#else
+ 	MRS(value, "DAIF");
++#endif
+ 	if ((value & DAIF_STANDARD_DISABLE) == DAIF_STANDARD_DISABLE) {
+ 		return FALSE;
+ 	}
+diff --git a/osfmk/arm64/machine_routines_asm.s b/osfmk/arm64/machine_routines_asm.s
+index 671dc50..101fc66 100644
+--- a/osfmk/arm64/machine_routines_asm.s
++++ b/osfmk/arm64/machine_routines_asm.s
+@@ -252,6 +252,9 @@ LEXT(set_fpscr)
+ 	.globl EXT(update_mdscr)
+ LEXT(update_mdscr)
+ 	ARM64_PROLOG
++#if XNU_HOSTED
++	ret												// OneiOS hosted: no translation or debug registers at EL0
++#endif
+ 	mov	x17, #0
+ 	mrs	x16, MDSCR_EL1
+ 	bic	x16, x16, x0
+@@ -291,6 +294,9 @@ Lupdate_mdscr_panic_str:
+ 	.globl EXT(set_mmu_ttb_alternate)
+ LEXT(set_mmu_ttb_alternate)
+ 	ARM64_PROLOG
++#if XNU_HOSTED
++	ret												// OneiOS hosted: no translation or debug registers at EL0
++#endif
+ 	dsb		sy
+ #if defined(KERNEL_INTEGRITY_KTRR)
+ 	mov		x1, lr
+@@ -311,6 +317,9 @@ LEXT(set_mmu_ttb_alternate)
+ 	.globl EXT(set_mmu_ttb)
+ LEXT(set_mmu_ttb)
+ 	ARM64_PROLOG
++#if XNU_HOSTED
++	ret												// OneiOS hosted: no translation or debug registers at EL0
++#endif
+ #if __ARM_KERNEL_PROTECT__
+ 	/* All EL1-mode ASIDs are odd. */
+ 	orr		x0, x0, #(1 << TTBR_ASID_SHIFT)
+@@ -339,6 +348,9 @@ LEXT(ml_get_ppl_cpu_data)
+ 	.globl EXT(set_aux_control)
+ LEXT(set_aux_control)
+ 	ARM64_PROLOG
++#if XNU_HOSTED
++	ret												// OneiOS hosted: no translation or debug registers at EL0
++#endif
+ 	msr		ACTLR_EL1, x0
+ 	// Synchronize system
+ 	isb		sy
+@@ -367,6 +379,9 @@ LEXT(set_vbar_el1)
+ 	.globl EXT(set_tcr)
+ LEXT(set_tcr)
+ 	ARM64_PROLOG
++#if XNU_HOSTED
++	ret												// OneiOS hosted: no translation or debug registers at EL0
++#endif
+ #if defined(APPLE_ARM64_ARCH_FAMILY)
+ #if DEBUG || DEVELOPMENT
+ 	// Assert that T0Z is always equal to T1Z
+@@ -417,6 +432,10 @@ L_set_locked_reg_panic_str:
+ 	.globl EXT(mmu_kvtop)
+ LEXT(mmu_kvtop)
+ 	ARM64_PROLOG
++#if XNU_HOSTED
++	/* OneiOS hosted: no MMU to ask. The window is its own physical address; the rest is the page tables'. */
++	b		EXT(hosted_mmu_kvtop)
++#endif
+ 	mrs		x2, DAIF									// Load current DAIF
+ 	msr		DAIFSet, #(DAIFSC_STANDARD_DISABLE)		// Disable all asynchronous exceptions
+ 	at		s1e1r, x0									// Translation Stage 1 EL1
+@@ -439,6 +458,10 @@ L_mmu_kvtop_invalid:
+ 	.globl EXT(mmu_uvtop)
+ LEXT(mmu_uvtop)
+ 	ARM64_PROLOG
++#if XNU_HOSTED
++	mov		x0, #0										// user addresses: the pmap's walk
++	ret
++#endif
+ 	lsr		x8, x0, #56									// Extract top byte
+ 	cbnz	x8, L_mmu_uvtop_invalid						// Tagged pointers are invalid
+ 	mrs		x2, DAIF									// Load current DAIF
+@@ -463,6 +486,9 @@ L_mmu_uvtop_invalid:
+ 	.globl EXT(mmu_kvtop_wpreflight)
+ LEXT(mmu_kvtop_wpreflight)
+ 	ARM64_PROLOG
++#if XNU_HOSTED
++	b		EXT(hosted_mmu_kvtop)
++#endif
+ 	mrs		x2, DAIF									// Load current DAIF
+ 	msr		DAIFSet, #(DAIFSC_STANDARD_DISABLE)		// Disable all asynchronous exceptions
+ 	at		s1e1w, x0									// Translation Stage 1 EL1
+@@ -1753,6 +1779,9 @@ LEXT(arm64_force_wfi_clock_gate)
+ 	.align 2
+ 	.globl EXT(arm64_replace_bootstack)
+ LEXT(arm64_replace_bootstack)
++#if XNU_HOSTED
++	ret												// OneiOS hosted: there is no SP_EL1
++#endif
+ 	ARM64_STACK_PROLOG
+ 	PUSH_FRAME
+ 	// Set the exception stack pointer
+@@ -1857,9 +1886,16 @@ LEXT(monitor_call)
+  * Branches to Lintr_enabled_panic if interrupts are in an unexpected state.
+  */
+ .macro CHECK_THREAD_STATE_INTERRUPTS tmp
++#if XNU_HOSTED
++	/* OneiOS hosted: the mask is xnuhost's per-CPU flag (the high half of the first word of the vCPU block). */
++	ldr		\tmp, [x18]
++	lsr		\tmp, \tmp, #32
++	cbz		\tmp, Lintr_enabled_panic
++#else
+ 	mrs		\tmp, DAIF
+ 	tbz		\tmp, #DAIF_IRQF_SHIFT, Lintr_enabled_panic
+-#if !CONFIG_SPTM
++#endif
++#if !CONFIG_SPTM && !XNU_HOSTED
+ 	/*
+ 	 * SPTM kernels do not need to switch to SP1 as they have Panic Lockdown to
+ 	 * protect them. As such, we only should check on non-SPTM kernels.
+@@ -1977,6 +2013,13 @@ Linvalid_cpsr_str:
+ 	.globl EXT(ml_pac_safe_interrupts_disable)
+ LEXT(ml_pac_safe_interrupts_disable)
+ 	ARM64_PROLOG
++#if XNU_HOSTED
++	ldr		w16, [x18, #4]						// xh_cpu.irq_masked: the previous state is the return value
++	mov		w17, #1
++	str		w17, [x18, #4]
++	mov		x0, x16
++	ret
++#endif
+ 	mrs		x16, DAIF
+ 	and		x17, x16, DAIF_STANDARD_DISABLE
+ 	cmp		x17, DAIF_STANDARD_DISABLE
+@@ -1998,6 +2041,16 @@ Lalready_disabled:
+ 	.globl EXT(ml_pac_safe_interrupts_restore)
+ LEXT(ml_pac_safe_interrupts_restore)
+ 	ARM64_PROLOG
++#if XNU_HOSTED
++	cbnz	x0, 1f								// was masked: stays masked
++	str		wzr, [x18, #4]
++	ldr		w16, [x18, #8]						// xh_cpu.irq_pending: take what arrived meanwhile
++	cbnz	w16, 2f
++1:
++	ret
++2:
++	b		EXT(hosted_irq_poll)
++#endif
+ 	msr		DAIF, x0
+ 	ret
+ 
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
+index 827236a..dc7212c 100644
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -232,7 +232,12 @@ LEXT(ResetHandlerData)
+ 	.globl EXT(_start)
+ LEXT(_start)
+ 	ARM64_PROLOG
++#if XNU_HOSTED
++	/* OneiOS hosted: xnuhost enters with x0 = boot_args, x1 = its vector, x2 = the vCPU block; no MMU to set up. */
++	b	EXT(hosted_start)
++#else
+ 	b	EXT(start_first_cpu)
++#endif
+ 
+ 
+ /*
+diff --git a/osfmk/arm64/tlb.h b/osfmk/arm64/tlb.h
+index c0154ab..a84f67d 100644
+--- a/osfmk/arm64/tlb.h
++++ b/osfmk/arm64/tlb.h
+@@ -92,6 +92,10 @@ arm64_sync_tlb(bool strong __unused)
+ static inline void
+ flush_mmu_tlb_async(void)
+ {
++#if XNU_HOSTED
++	/* OneiOS hosted: no TLB of ours; the pmap's flush entry points unmap in the host (arm64/hosted). */
++	return;
++#endif
+ 	asm volatile ("tlbi vmalle1is");
+ }
+ 
+@@ -111,6 +115,10 @@ flush_mmu_tlb(void)
+ static inline void
+ flush_core_tlb_async(void)
+ {
++#if XNU_HOSTED
++	/* OneiOS hosted: no TLB of ours; the pmap's flush entry points unmap in the host (arm64/hosted). */
++	return;
++#endif
+ #if HAS_FEAT_XS
+ 	asm volatile ("tlbi vmalle1nxs");
+ #else
+@@ -131,6 +139,10 @@ static inline void
+ flush_mmu_tlb_allentries_async(uint64_t start, uint64_t end, uint64_t pmap_page_size,
+     bool last_level_only, bool strong __unused)
+ {
++#if XNU_HOSTED
++	/* OneiOS hosted: no TLB of ours; the pmap's flush entry points unmap in the host (arm64/hosted). */
++	return;
++#endif
+ #if __ARM_16K_PG__
+ 	if (pmap_page_size == 16384) {
+ 		start = start & ~0x3ULL;
+@@ -192,6 +204,10 @@ static inline void
+ flush_mmu_tlb_entries_async(uint64_t start, uint64_t end, uint64_t pmap_page_size,
+     bool last_level_only, bool strong __unused)
+ {
++#if XNU_HOSTED
++	/* OneiOS hosted: no TLB of ours; the pmap's flush entry points unmap in the host (arm64/hosted). */
++	return;
++#endif
+ #if __ARM_16K_PG__
+ 	if (pmap_page_size == 16384) {
+ 		start = start & ~0x3ULL;
+@@ -289,6 +305,10 @@ flush_mmu_tlb_entries(uint64_t start, uint64_t end, uint64_t pmap_page_size, boo
+ static inline void
+ flush_mmu_tlb_asid_async(uint64_t val, bool strong __unused)
+ {
++#if XNU_HOSTED
++	/* OneiOS hosted: no TLB of ours; the pmap's flush entry points unmap in the host (arm64/hosted). */
++	return;
++#endif
+ #if __ARM_KERNEL_PROTECT__
+ 	/*
+ 	 * If we are flushing ASID 0, this is a kernel operation.  With this
+@@ -326,6 +346,10 @@ flush_mmu_tlb_asid(uint64_t val, bool strong)
+ static inline void
+ flush_core_tlb_asid_async(uint64_t val)
+ {
++#if XNU_HOSTED
++	/* OneiOS hosted: no TLB of ours; the pmap's flush entry points unmap in the host (arm64/hosted). */
++	return;
++#endif
+ #if __ARM_KERNEL_PROTECT__
+ 	/*
+ 	 * If we are flushing ASID 0, this is a kernel operation.  With this
+@@ -390,6 +414,10 @@ generate_rtlbi_param(ppnum_t npages, uint32_t asid, vm_offset_t va, uint64_t pma
+ static inline void
+ flush_mmu_tlb_range_async(uint64_t val, bool last_level_only, bool strong __unused)
+ {
++#if XNU_HOSTED
++	/* OneiOS hosted: no TLB of ours; the pmap's flush entry points unmap in the host (arm64/hosted). */
++	return;
++#endif
+ 	if (last_level_only) {
+ #if HAS_FEAT_XS
+ 		if (__probable(!strong)) {
+@@ -424,6 +452,10 @@ flush_mmu_tlb_range(uint64_t val, bool last_level_only, bool strong)
+ static inline void
+ flush_mmu_tlb_allrange_async(uint64_t val, bool last_level_only, bool strong __unused)
+ {
++#if XNU_HOSTED
++	/* OneiOS hosted: no TLB of ours; the pmap's flush entry points unmap in the host (arm64/hosted). */
++	return;
++#endif
+ 	if (last_level_only) {
+ #if HAS_FEAT_XS
+ 		if (__probable(!strong)) {
+@@ -458,6 +490,10 @@ flush_mmu_tlb_allrange(uint64_t val, bool last_level_only, bool strong)
+ static inline void
+ flush_core_tlb_allrange_async(uint64_t val)
+ {
++#if XNU_HOSTED
++	/* OneiOS hosted: no TLB of ours; the pmap's flush entry points unmap in the host (arm64/hosted). */
++	return;
++#endif
+ #if HAS_FEAT_XS
+ 	asm volatile ("tlbi rvaae1nxs, %0" : : "r"(val));
+ #else
+diff --git a/osfmk/conf/files.arm64 b/osfmk/conf/files.arm64
+index ae0880e..6483679 100644
+--- a/osfmk/conf/files.arm64
++++ b/osfmk/conf/files.arm64
+@@ -63,6 +63,8 @@ osfmk/arm64/gxf_exceptions.s	optional nos_arm_asm
+ osfmk/arm64/lowmem_vectors.c	standard
+ osfmk/arm64/sleh.c			standard
+ osfmk/arm64/start.s	optional nos_arm_asm config_pmap_ppl
++osfmk/arm64/hosted/hosted_asm.s	optional nos_arm_asm
++osfmk/arm64/hosted/hosted_machine.c	optional nos_arm_asm
+ osfmk/arm64/pinst.s	optional nos_arm_asm
+ osfmk/arm64/cswitch.s	optional nos_arm_asm
+ osfmk/arm/machine_cpuid.c	standard
+diff --git a/osfmk/kern/debug.c b/osfmk/kern/debug.c
+index c3b6ac2..bbc35af 100644
+--- a/osfmk/kern/debug.c
++++ b/osfmk/kern/debug.c
+@@ -1257,6 +1257,15 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
+ 	read_lbr();
+ #endif
+ 
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted: the panic goes to xnuhost's log (message, backtrace) and the machine stops with its panic
++	 * exit code. There is no debugger to trap into and no other CPU to quiesce by hand: xnuhost stops them.
++	 */
++	extern void hosted_panic(const char *format, va_list *args, unsigned long caller) __dead2;
++	hosted_panic(panic_format_str, panic_args, panic_caller);
++#endif /* XNU_HOSTED */
++
+ 	/* For very early panics before XNU serial initialization. */
+ 	if (PE_kputc == NULL) {
+ 		char buf[EARLY_PANIC_BUFLEN];
+diff --git a/osfmk/kern/kalloc.c b/osfmk/kern/kalloc.c
+index 74b028f..d3c0e00 100644
+--- a/osfmk/kern/kalloc.c
++++ b/osfmk/kern/kalloc.c
+@@ -1869,6 +1869,14 @@ kalloc_type_view_init_fixed(void)
+ 	 */
+ 	kt_count = kalloc_type_view_parse(KTV_FIXED);
+ 	assert(kt_count < KALLOC_TYPE_SIZE_MASK);
++	if (kt_count == 0) {
++		/*
++		 * OneiOS: a kernel with no kext and no __builtin_xnu_type_* (the stock-clang build, booted without a
++		 * kernel collection) has only data views, which were assigned their zones as they were parsed. There
++		 * is nothing to sort and no signature zone to create.
++		 */
++		return;
++	}
+ 
+ #if MACH_ASSERT
+ 	vm_size_t sig_slist_size = (size_t) kt_count * sizeof(uint16_t);
+@@ -1989,6 +1997,9 @@ kalloc_type_view_init_var(void)
+ 	 */
+ 	kt_count = kalloc_type_view_parse(KTV_VAR);
+ 	assert(kt_count < UINT32_MAX);
++	if (kt_count == 0) {
++		return;         /* OneiOS: only data views (see kalloc_type_view_init_fixed) */
++	}
+ 
+ #if MACH_ASSERT
+ 	vm_size_t sig_slist_size = (size_t) kt_count * sizeof(uint32_t);
+diff --git a/osfmk/kern/smr_hash.h b/osfmk/kern/smr_hash.h
+index aabac62..006284c 100644
+--- a/osfmk/kern/smr_hash.h
++++ b/osfmk/kern/smr_hash.h
+@@ -501,7 +501,7 @@ smr_hash_array_decode(const struct smr_hash *smrh)
+ 	uintptr_t ptr = os_atomic_load(&smrh->smrh_array, relaxed);
+ 
+ 	array.smrh_order = (uint8_t)(ptr >> SMRH_ARRAY_ORDER_SHIFT);
+-#ifndef __BUILDING_XNU_LIBRARY__
++#if !defined(__BUILDING_XNU_LIBRARY__) && !XNU_HOSTED    /* OneiOS hosted: kernel addresses are low */
+ 	/* when running in kernel space, top bits are supposed to be 0xff*/
+ 	ptr |= SMRH_ARRAY_ORDER_MASK;
+ #else
+diff --git a/osfmk/kern/zalloc.c b/osfmk/kern/zalloc.c
+index 9edf8c5..b42ed50 100644
+--- a/osfmk/kern/zalloc.c
++++ b/osfmk/kern/zalloc.c
+@@ -900,6 +900,25 @@ zone_queue_encode(zone_pva_t *headp)
+ 	return (zone_pva_t){ (uint32_t)(headp - zone_pageq_base()) };
+ }
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted: kernel addresses are low (below 2^38), so a page number has no top bit to tell it from a
++ * queue head. The bit is put there by hand and taken off again.
++ */
++#define ZONE_PVA_HOSTED_PAGE    0x80000000u
++
++__header_always_inline zone_pva_t
++zone_pva_from_addr(vm_address_t addr)
++{
++	return (zone_pva_t){ (uint32_t)(addr >> PAGE_SHIFT) | ZONE_PVA_HOSTED_PAGE };
++}
++
++__header_always_inline vm_address_t
++zone_pva_to_addr(zone_pva_t page)
++{
++	return (vm_offset_t)(page.packed_address & ~ZONE_PVA_HOSTED_PAGE) << PAGE_SHIFT;
++}
++#else /* XNU_HOSTED */
+ __header_always_inline zone_pva_t
+ zone_pva_from_addr(vm_address_t addr)
+ {
+@@ -913,6 +932,7 @@ zone_pva_to_addr(zone_pva_t page)
+ 	// cause sign extension so that we end up with the right address
+ 	return (vm_offset_t)(int32_t)page.packed_address << PAGE_SHIFT;
+ }
++#endif /* XNU_HOSTED */
+ 
+ __header_always_inline struct zone_page_metadata *
+ zone_pva_to_meta(zone_pva_t page)
+@@ -942,7 +962,11 @@ zone_index_from_ptr(const void *ptr)
+ __header_always_inline vm_offset_t
+ zone_meta_to_addr(struct zone_page_metadata *meta)
+ {
++#if XNU_HOSTED
++	return ptoa((vm_offset_t)((uint32_t)(meta - zone_info.zi_meta_base) & ~ZONE_PVA_HOSTED_PAGE));
++#else
+ 	return ptoa((int32_t)(meta - zone_info.zi_meta_base));
++#endif
+ }
+ 
+ __attribute__((overloadable))
+@@ -9550,7 +9574,7 @@ zone_bootstrap(void)
+ #endif /* DEBUG || DEVELOPMENT */
+ 
+ 	/* Validate struct zone_packed_virtual_address expectations */
+-#ifndef __BUILDING_XNU_LIBRARY__ /* user-mode addresses are low*/
++#if !defined(__BUILDING_XNU_LIBRARY__) && !XNU_HOSTED /* user-mode addresses are low*/
+ 	static_assert((intptr_t)VM_MIN_KERNEL_ADDRESS < 0, "the top bit must be 1");
+ #endif /* __BUILDING_XNU_LIBRARY__ */
+ 	if (VM_KERNEL_POINTER_SIGNIFICANT_BITS - PAGE_SHIFT > 31) {
+diff --git a/osfmk/mach/arm/vm_param.h b/osfmk/mach/arm/vm_param.h
+index 6b12ab1..81dcb76 100644
+--- a/osfmk/mach/arm/vm_param.h
++++ b/osfmk/mach/arm/vm_param.h
+@@ -233,6 +233,25 @@ extern int PAGE_SHIFT_CONST;
+ #define VM_MAX_KERNEL_ADDRESS \
+ 	((vm_address_t) (VM_MIN_KERNEL_ADDRESS + GiB(64) + GiB(768) - 1))
+ 
++#elif XNU_HOSTED
++/*
++ * OneiOS hosted: XNU is a Linux process under xnuhost and its addresses are that process's, below 2^39.
++ * The range is the small-memory layout below (-128 GiB .. -16 GiB) modulo 2^38, the span of the T1SZ = 26
++ * kernel page tables, so every table index is what it is on hardware:
++ * +-----------------------+--------+------------------------------------------------------+
++ * | 0x0000_003b_ffff_ffff |  240GB | VM_MAX_KERNEL_ADDRESS                                |
++ * |                       |        | kernel_map: mapped page by page (kernel_map host call)|
++ * | xh_info.kva_base      |        | the first GiB boundary after the window              |
++ * | 0x0000_0020_0000_4000 |        | the RAM window: the kernel image, then all of RAM,    |
++ * |                       |        | at its physical addresses (physical aperture = itself)|
++ * | 0x0000_0020_0000_0000 |  128GB | VM_MIN_KERNEL_ADDRESS                                |
++ * +-----------------------+--------+------------------------------------------------------+
++ * User addresses stay below it (xh_info.user_va_limit caps them further).
++ */
++#define VM_KERNEL_POINTER_SIGNIFICANT_BITS  37
++#define VM_MIN_KERNEL_ADDRESS   ((vm_address_t) 0x0000002000000000ULL)
++#define VM_MAX_KERNEL_ADDRESS   ((vm_address_t) 0x0000003bffffffffULL)
++
+ #else // ARM_LARGE_MEMORY
+ /*
+  * +-----------------------+--------+--------+------------------------+
+@@ -294,7 +313,12 @@ extern int PAGE_SHIFT_CONST;
+ #if XNU_KERNEL_PRIVATE
+ #define VM_KERNEL_STRIP_MASK            (-1ULL << (64 - T1SZ_BOOT))
+ #define VM_USER_STRIP_MASK              (-1ULL >> (T0SZ_USER))
++#if XNU_HOSTED
++/* OneiOS hosted: kernel and user addresses are both low, below 2^38; everything above is PAC or tag. */
++#define _VM_KERNEL_STRIP_PTR(_va)       ((_va) & ((1ULL << 38) - 1))
++#else
+ #define _VM_KERNEL_STRIP_PTR(_va)       ({((_va) & 1ULL << 55) ? ((_va) | VM_KERNEL_STRIP_MASK) : ((_va) & VM_USER_STRIP_MASK);})
++#endif
+ #else /* XNU_KERNEL_PRIVATE */
+ 
+ #if __has_feature(ptrauth_calls)
+diff --git a/osfmk/mach/vm_param.h b/osfmk/mach/vm_param.h
+index 7164c49..eac4181 100644
+--- a/osfmk/mach/vm_param.h
++++ b/osfmk/mach/vm_param.h
+@@ -605,10 +605,19 @@ static inline vm_offset_t
+ vm_unpack_pointer(vm_offset_t packed, vm_packing_params_t params)
+ {
+ 	if (!params.vmpp_base_relative) {
++#if XNU_HOSTED
++		/*
++		 * OneiOS hosted: kernel addresses are low (below 2^38): nothing to sign-extend, and the top stored
++		 * bit is an address bit.
++		 */
++		vm_offset_t low = (packed << (__WORDSIZE - params.vmpp_bits)) >> (__WORDSIZE - params.vmpp_bits - params.vmpp_shift);
++		return low ? vm_memtag_load_tag(low) : 0;
++#else
+ 		intptr_t addr = (intptr_t)packed;
+ 		addr <<= __WORDSIZE - params.vmpp_bits;
+ 		addr >>= __WORDSIZE - params.vmpp_bits - params.vmpp_shift;
+ 		return addr ? vm_memtag_load_tag((vm_offset_t)addr) : 0;
++#endif
+ 	}
+ 	if (packed) {
+ 		return vm_memtag_load_tag((packed << params.vmpp_shift) + params.vmpp_base);
+diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
+index 032d9e0..09a0092 100644
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -872,6 +872,54 @@ get_serial_device_phandle(uint32_t * const phandle)
+ 	return serial_device_phandle_specified;
+ }
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted: the console is xnuhost's log (the console_write host call, osfmk/arm64/hosted). It needs no
++ * device tree node and no mapping, so it works from the first instruction of arm_init.
++ */
++extern void hosted_console_putc(char c);
++
++static void
++hosted_serial_init(void)
++{
++}
++
++static unsigned int
++hosted_serial_transmit_ready(void)
++{
++	return 1;
++}
++
++static void
++hosted_serial_transmit_data(uint8_t c)
++{
++	hosted_console_putc((char)c);
++}
++
++static unsigned int
++hosted_serial_receive_ready(void)
++{
++	return 0;
++}
++
++static uint8_t
++hosted_serial_receive_data(void)
++{
++	return 0;
++}
++
++static struct pe_serial_functions hosted_serial_functions =
++{
++	.init = hosted_serial_init,
++	.transmit_ready = hosted_serial_transmit_ready,
++	.transmit_data = hosted_serial_transmit_data,
++	.receive_ready = hosted_serial_receive_ready,
++	.receive_data = hosted_serial_receive_data,
++	.has_irq = false,
++	.device = SERIAL_UNKNOWN,
++};
++#endif /* XNU_HOSTED */
++
+ int
+ serial_init(void)
+ {
+@@ -879,6 +927,14 @@ serial_init(void)
+ 
+ 	struct pe_serial_functions *fns = gPESF;
+ 
++#if XNU_HOSTED
++	if (!uart_initted) {
++		register_serial_functions(&hosted_serial_functions);
++		uart_initted = true;
++	}
++	return 1;
++#endif /* XNU_HOSTED */
++
+ 	/**
+ 	 * Even if the serial devices have already been initialized on cold boot,
+ 	 * when coming out of a sleep/wake, they'll need to be re-initialized. Since
