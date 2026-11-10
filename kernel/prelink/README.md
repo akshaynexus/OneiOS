@@ -56,8 +56,8 @@ rerun it only when that fixture changes. `unmapped.py` names the original functi
 
 Every kext of the collection is a root, except one all of whose IOKit personalities attach to hardware xnuhost
 does not present (an Apple SoC block, I2C/SPI/SPMI part, RTBuddy/AFK/AOP endpoint, SEP endpoint, PCIe, USB,
-Thunderbolt, accessory port), and six decided by hand (`FORCE_OUT`: `kec.pthread`, the SEP keystore and its two
-clients, the ANE HAL, FairPlayIOKit). The profile's 31 roots are kept whatever their personalities. A left-out kext that a kept one
+Thunderbolt, accessory port), and seven decided by hand (`FORCE_OUT`: `kec.pthread`, the SEP keystore and its two
+clients, the ANE HAL, FairPlayIOKit, and IOAudioCodecs, whose start waits for FairPlayIOKit). The profile's 31 roots are kept whatever their personalities. A left-out kext that a kept one
 links against returns for its code only, without personalities. FairPlayIOKit is out although it is not hardware
 (obfuscated calls through computed tables; reason in `roots.py`). Today: 319 in the kernelcache, 133 roots, 154 in
 the closure (21 returned dependencies), 165 absent, 139 fileset entries (15 of the closure are codeless KPIs).
@@ -71,6 +71,17 @@ the kernel build (`0005-gpu-3d` is in; storage and HID are `kernel/patches/oneio
 board). The prelink takes whatever kernel it is given; a driver that subclasses an original class
 (`IOMobileFramebufferLegacy`, `IOHIDDevice`) needs that class's addresses in this kernelcache, which are not derived
 here yet.
+
+A driver that subclasses an original class needs that class's addresses in this kernelcache: `classes.py` reads
+them from the kexts' code (metaclass, size, parent, vtable and slots, constructors, destructors), and
+`classes-24A446-v54.json` has them for IOAESAccelerator, IOCryptoAccelerator, IOMobileFramebufferLegacy,
+IOHIDDevice, IOSurface, IOGPUDevice, IOGPU and AGXAccelerator (AGXG18P itself is left out of the collection).
+The archive reaches an original function through a native stub `bti c; b` with an N_ABS symbol
+`<stub>.original` at the linked address; an absolute address in a literal is wrong under xnuhost's slide.
+
+**The boot needs two of them now**: `IOAESAccelerator` (Droid-VM's SoftwareAES/NativeAES: AppleImage4's start waits
+for it and holds IOResources' matching, so no disk gets its BSD client and the root volume never appears) and the
+keystore (`AppleKeyStoreState`: AMFI and the Data volume).
 
 ## AMFI and launch constraints
 

@@ -47,6 +47,8 @@ PRESENTED_NODE_NAMES = {'defaults'}
 # The roots of the OS profile ([kernel.prelink] roots of PROFILE.toml: the 31 Droid-VM's iPadOS 27.0.1 guest runs with)
 # are kept whatever their personalities, as there. Left out by hand although the rule would keep them:
 FORCE_OUT = {
+    'com.apple.driver.IOAudioCodecs': 'not hardware: its start waits for the service com_apple_driver_FairPlayIOKit, which is '
+                                      'left out (below), and holds an IOKit configuration thread forever',
     'com.apple.driver.FairPlayIOKit': 'not hardware: its code is obfuscated and reaches kernel functions through computed '
                                       'tables, so an unpaired target cannot be named from the call site (its start '
                                       'panics on the stub at 0xfffffe0009be7240). UniXNU keeps it out of its roots as '
