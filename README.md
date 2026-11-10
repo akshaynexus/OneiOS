@@ -19,16 +19,18 @@ iPhone18,2 kexts), the boot gets through:
 
 - corecrypto's POST, AppleImage4, AMFI, Seatbelt, the trust caches, IOKit matching, `bsd_init`;
 - the root mount from the image set (verified by xnuhost), swap, pid 1;
-- the first user process (`newfs_apfs`, the Data volume's first start) running in user mode, the dyld shared
-  cache's 4K code signatures, the shared cache mapped and slid (8 GiB shared region), Mach messaging.
+- the Data volume's first start: `newfs_apfs` (the first user process), the dyld shared cache's 4K code signatures
+  (5.8 GiB hashed once per boot, about 3 minutes under qemu), the cache mapped and slid, the volume mounted, the
+  seed unpacked and verified by the kernel;
+- **launchd**: all of its early boot tasks ("Early boot complete. Continuing system boot."), then about 125
+  processes, among them `SpringBoard`, which starts and exits (signal 5) again and again.
 
-- `newfs_apfs` formats the Data volume, the kernel mounts it at `/private/var`, unpacks and verifies the seed
-  (6024 files), mounts the App cryptex, and execs `/sbin/launchd`, which runs in user mode (fable-prelink's run,
-  1 vCPU, series `0001`-`0013`, 2026-11-11).
-
-It stops at launchd's first `workq_open`: `sched_clutch.c:6589 Assertion failed: low_node != high_node` in
-`sched_edge_qos_max_parallelism` (one processor set node under xnuhost, and the topology counts as standard). Not
-reached: launchd's daemons, backboardd, SpringBoard. Detail: [kernel/patches/oneios-hosted/README.md](kernel/patches/oneios-hosted/README.md)
+Not reached: a SpringBoard that stays up, a frame on the display, `session/ready`. What is missing for that, as
+seen in the log: the guest has no IOMobileFramebuffer and no touch digitizer yet (backboardd has nothing to draw on),
+no AppleKeyStore stand-in (`keybagd`: "failed to load system bag"), and some processes die with "Text page
+corruption detected". With one vCPU (one processor set node) launchd's first `workq_open` asserts in
+`sched_edge_qos_max_parallelism` (`sched_clutch.c:6589`, fable-prelink's run); the 8-vCPU runs with two cluster
+types do not. Detail: [kernel/patches/oneios-hosted/README.md](kernel/patches/oneios-hosted/README.md)
 and the board, [docs/agents.md](docs/agents.md).
 
 Built and tested on the PC, not yet on the phone: xnuhost and its loader, the GPU path (drm2kgsl on KGSL), the

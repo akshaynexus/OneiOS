@@ -35,26 +35,40 @@ armcpu-self-ipi=1 armcpu-spi-ipi=1 use_contiguous_hint=0 interrupt-masked-debug-
 `-cpu cortex-a710`, not qemu's default `max`: `max` has a 512-byte `DC ZVA` block and XNU's `bzero` assumes
 the 64 bytes every Arm core (and the S24 Ultra's) has; with `max` the first large `bzero` wipes its own stack.
 
-## How far it boots (qemu-aarch64, 1 vCPU, 1 GiB)
+## How far it boots (qemu-aarch64 -cpu cortex-a710, 8 vCPUs, 4 GiB, `kernel.kc`, the real image set)
 
-Before: the EL1 kernel faulted in `OSRuntimeSignStructorsInSegment` on the link-time address
-`0xfffffff00719c028` (the booter's finding; the cause was not the MMU: nobody had slid the Mach-O load
-commands or applied the image's chained fixups).
+Seen on 2026-11-11 with series 0001-0015 and a collection from `kernel/prelink` (277 original kernel functions still
+on the panic stub). In order, with the console in xnuhost's log:
 
-Now, in order, with the console in xnuhost's log:
+1. `arm_init` to `kernel_bootstrap_thread`, corecrypto's POST (the sealed kernel), IOKit, 8 CPUs through PSCI.
+2. The collection's kexts: AppleImage4 (with the software IOAESAccelerator of 0008), AMFI, Seatbelt, the trust caches,
+   APFS; the root mount from xnuhost's verified disks; `bsd_init` complete; the SystemCryptex mount.
+3. The Data volume's first start (0004): `/sbin/newfs_apfs` runs as pid 2. It is the first user process of the boot,
+   so its dyld registers the signature of every shared cache file and `cs_native4k_prepare` reads and hashes all of
+   them (5.8 GiB; 0014 does it on 8 threads: about 3 minutes here). The cache maps and slides (0013: 8 GiB region).
+   Then `OneiOS Data: /dev/disk8s3 on /dev/disk4 (new)`, the mount, `seed verified: 6024 files (1216961847 bytes),
+   14813 folders` (61 s). On a second start of the same store the volume is mounted as it is and launchd is the
+   process that pays for the hashing.
+4. `/sbin/launchd`: `hello, launchd`, every early boot task (fsck, mount-phase-1/2, data-protection, keybag,
+   usermanagerd, MobileAssetEarlyBootTask, the user-space FIPS POST: all tests PASSED, tzinit, launchd_cache_loader,
+   ...), `Early boot complete. Continuing system boot.`, then the daemons: about 125 processes in 5 minutes.
+5. `SpringBoard` is started and exits with signal 5 each time (7 times in that run); `liveactivitiesd` traps (`brk`).
 
-1. `arm_init`: load commands slid, chained fixups applied and signed, `Darwin Kernel Version 25.5.0 ...`.
-2. `arm_vm_init`, `pmap_bootstrap`, `vm_page_bootstrap: 251517 free pages`, the kmem ranges, `zone_init`,
-   `kalloc_init`, `VM bootstrap done` (the kernel's own mappings go through `kernel_map`).
-3. `kernel_bootstrap` loads the first thread (`machine_load_context`, `Call_continuation`):
-   `kernel_bootstrap_thread`, `sched_startup`, the log and firehose set-up, `kdp_core`, serial debugging.
-4. **Stops**: `panic: "FIPS Kernel POST Failed (-2074)!" @corecrypto_kext.c:342`, from
-   `source_corecrypto14_bootstrap` in `kernel_bootstrap_thread` (a `STARTUP` entry). Cause not looked at yet.
-   First things to check: an instruction corecrypto's self-test uses that qemu's cortex-a710 or EL0 lacks, and
-   the integrity (HMAC of `__TEXT`) part of the POST against a kernel whose text was patched by `static_if`.
+What that run showed is wrong or missing (none of it fixed yet unless a later line says so):
 
-Not reached: IOKit start, `bsd_init`, root mount, any user process. 25 instructions were emulated by xnuhost's
-SIGILL path in the whole run, no interrupt was taken (the timer is not armed that early).
+- `hosted: kernel fault inside the fault handler` ended the run during a daemon's copyout of the loaded-kext list.
+  Fixed by 0015 (the count was per CPU; the handler sleeps).
+- No IOMobileFramebuffer and no digitizer in the guest: only the 2D virtio-gpu console. backboardd cannot bring up
+  a display, which is the likely reason SpringBoard does not stay (not proven: no user-space log was read yet).
+- `MKB_INIT: FATAL KEYBAG ERROR: failed to load system bag` and launchd's `failed to find AppleKeyStore service`:
+  UniXNU's AppleKeyStoreState stand-in is not built for this kernel.
+- `Text page corruption detected for pid N` (3 processes), one `dyld` assertion (`!sMemoryManagerInitialized`), one
+  `xpcproxy` fatal exception: user pages that fail their code-signature check or change under a process.
+- mount-phase-2: `failed to create overprovisioning volume` (ignored by the task); `DT_get_fstab_entries: failed to
+  get filesystem entry at: /filesystems/fstab`.
+- `OneiOS launch policy: no /private/var/oneios/bin/oneios-init in this seed: no service manager`.
+
+Not reached: a frame from SpringBoard, `session/ready`. Nothing here has run on the phone.
 
 ## What the patch does (files, functions)
 

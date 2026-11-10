@@ -644,6 +644,50 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   `kernelcache.release.v54` (`legacy-display-24A446.json`, `hid-device-24A446.json` are iPad17,3). Expected: backboardd gets
   an IOMobileFramebuffer and a digitizer; first frame -> `session/ready`.
 
+### Queue of 2026-11-11 (lead): launchd runs, SpringBoard starts and dies; what is between that and a frame
+
+State: series 0001-0015 + the collection boot to launchd, its early boot tasks, about 125 processes; `SpringBoard`
+exits with signal 5 each time it is started. How to get there in 5 minutes: `kernel/patches/oneios-hosted/README.md`
+"How far it boots"; boot with `oneios-data-wait=3000` on the PC and **keep the `--data` directory between runs** (the
+first start then happens once). Every job below is independent of the others. The pattern for a kernel-side stand-in
+that subclasses a class of the collection is `kernel/patches/oneios-hosted/aes/` + `0008` (bindings generated from
+the v54 kernelcache's addresses, stubs `bti c; b <name>.original`, the parent metaclass's link address slid at start,
+a start call from `oneios_drivers_start` or the board start; one archive hooked into `kernel/build-hosted.sh`).
+
+- **Q4a (free): the display.** UniXNU's `NativeMobileDisplay` / legacy display (`external/NativeMobileDisplay`,
+  `external/UniXNU-droidvm/ipados27/scripts/build-droidvm-legacy-display.py`, `legacy-display-24A446.json` is the
+  iPad's) under the collection's original IOMobileFramebuffer class, scanning out through the virtio-gpu driver of
+  `0005` (2D scanout first; 3D stays fable-gpu's). Files: `kernel/patches/oneios-hosted/display/` (new), one patch
+  if the kernel needs a hook. First check that the IOMobileFramebuffer kext you subclass is in the collection's
+  closure (`out/.../kernel.kc.prelink.json` "closure"); if it is not, say which root to add (fable-prelink).
+  Expected: `backboardd` finds an IOMobileFramebuffer, xnuhost's display gets frames that are not the console.
+- **Q4b (free): touch and buttons.** `external/NativeHidInput` + `build-droidvm-hid-input.py` with the
+  IOHIDDevice layout redone for v54 (`hid-device-24A446.json` is the iPad's), fed by xnuhost's virtio-input.
+  Files: `kernel/patches/oneios-hosted/hid/` (new). The same layout header is what fable-brightness's
+  `drivers/brightness/OneiOSALSDevice.cpp` waits for: write it where both can include it. Expected: a
+  Digitizer/Touch Screen HID service in the registry; `backboardd` logs it.
+- **Q5 (free): the key store.** launchd: `failed to find AppleKeyStore service`; `MKB_INIT: FATAL KEYBAG ERROR:
+  failed to load system bag`. UniXNU's `AppleKeyStoreState` (no passcode, wrap/unwrap) for this kernel; say whether
+  the collection's AppleKeyStore kext must leave the roots. Files: `kernel/patches/oneios-hosted/keystore/` (new).
+  Expected: keybagd and `MKB_INIT` get a bag state without "FATAL", securityd starts.
+- **Q6 (fable-user's area: user memory): "Text page corruption detected for pid N"** (3 of about 125 processes),
+  `dyld[31]: Assertion failed: (!sMemoryManagerInitialized)`, `xpcproxy:62 FATAL exception type=0x1 reason=0x1c
+  code=0x105`, and xnuhost's `tasks: ... order N took long: answered after 1 s` lines (dozens). Suspects, not
+  checked: a page of a task changed or mapped stale while another thread of it runs (SMP), the 4K hashes of a
+  16K-signed file read through a hole, the 1 s answers being a lost wakeup. Expected: none of the three in a run.
+- **Q7 (fable-prelink): pairing.** 277 originals on the stub. `kernel/prelink/lead/imports.py` lists every pair that
+  breaks a kext's import-table order; I fixed the ones on the boot path (rootdev, the two notification symbols,
+  vnode_isfifo/isblk/ischr, psignal_sigkill*, cs_blob_reset_cache, getMapperOptions/setMapperOptions,
+  task_is_app_suspended). Left in its output for you: ifnet_set_metric/ifnet_metric, mbuf_*, SHA1Final/MD5Update,
+  IOFilterInterruptEventSource, OSAction::SetAbortedHandler, IOBufferMemoryDescriptor's constructor, snprintf/printf
+  before PE_read_socd_client_buffer, lck_ticket_lock/init, task_find_region_details, and the pure-leaf pairs (same
+  bytes, so harmless unless the names differ in meaning). One import has no counterpart in our source:
+  0xfffffe000b0dbf28 (sandbox; VREG and v_tag 25, then a registered hook) stays on the stub.
+- **Q8 (userland): the seed and the device tree.** `OneiOS launch policy: no /private/var/oneios/bin/oneios-init in
+  this seed: no service manager` (so launchd runs Apple's whole plist set, no daemon policy); `DT_get_fstab_entries:
+  failed to get filesystem entry at: /filesystems/fstab`; mount-phase-2's overprovisioning volume fails (ignored);
+  `tzinit: Unable to locate data`. Say which of these the image or the tree should answer.
+
 ### Rules for the parallel kernel work (lead, 2026-11-10)
 
 - **One work tree per agent.** `out/kernel-hosted` and `out/kernel/current-hosted` are the lead's. Build with
