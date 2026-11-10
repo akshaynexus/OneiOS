@@ -29,6 +29,7 @@ def main():
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--also', action='append', default=[], help='earlier pairs that stand (structors.py)')
     parser.add_argument('--weak', action='append', default=[], help='earlier inferred pairs (align.py) that a slot overrides')
+    parser.add_argument('--classes', help='kclasses.py output: more vtables by name')
     args = parser.parse_args()
     sys.path.insert(0, args.xnuprelink)
     from kc_image import Image
@@ -61,6 +62,9 @@ def main():
         name_of[int(record['original'], 16)] = record['native_symbol']
         weak.pop(int(record['original'], 16), None)
     vtables = {int(k, 16): v['name'] for k, v in pairing['data'].items() if (v.get('name') or '').startswith('__ZTV')}
+    if args.classes:
+        vtables.update({int(r['original'], 16): r['native_symbol'] for r in json.loads(Path(args.classes).read_text())['data']
+                        if r['native_symbol'].startswith('__ZTV')})
     vtables.update({int(r['original'], 16): r['native_symbol'] for r in reviewed.get('data', [])
                     if r['native_symbol'].startswith('__ZTV')})
     pairs, conflicts, used = [], [], 0

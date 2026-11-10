@@ -76,12 +76,12 @@ A driver that subclasses an original class needs that class's addresses in this 
 them from the kexts' code (metaclass, size, parent, vtable and slots, constructors, destructors), and
 `classes-24A446-v54.json` has them for IOAESAccelerator, IOCryptoAccelerator, IOMobileFramebufferLegacy,
 IOHIDDevice, IOSurface, IOGPUDevice, IOGPU and AGXAccelerator (AGXG18P itself is left out of the collection).
-The archive reaches an original function through a native stub `bti c; b` with an N_ABS symbol
-`<stub>.original` at the linked address; an absolute address in a literal is wrong under xnuhost's slide.
+The lead's hosted AES archive (`kernel/patches/oneios-hosted/aes`, `0008-software-aes.patch`) is the worked
+example: stubs `bti c; b` with an N_ABS `<stub>.original` at the linked address, which XnuPrelink's emitter
+retargets when it places the kernel; an absolute address in a literal is wrong under xnuhost's slide.
 
-**The boot needs two of them now**: `IOAESAccelerator` (Droid-VM's SoftwareAES/NativeAES: AppleImage4's start waits
-for it and holds IOResources' matching, so no disk gets its BSD client and the root volume never appears) and the
-keystore (`AppleKeyStoreState`: AMFI and the Data volume).
+`IOAESAccelerator` is in (AppleImage4's start waits for it). Still missing: the keystore (`AppleKeyStoreState`:
+AMFI's AKS calls and the Data volume).
 
 ## AMFI and launch constraints
 

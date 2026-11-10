@@ -26,6 +26,726 @@
  ],
  "functions": [
   {
+   "original": "0xfffffe000b0f3d5c",
+   "native_symbol": "_proc_selfppid",
+   "check": {
+    "address": "0xfffffe000b0f3d5c",
+    "size": 48,
+    "sha256": "d1661ecb8ce9ba791a2450fcf2a1e8ba06f9ba6ed20bb06f6bb36b48bf28d3d8"
+   },
+   "evidence": "Takes the current process (the same callee as proc_selfpid, 16 instructions before) and returns the 32-bit field at +32 of its parent-linked structure: proc_selfppid, the function after proc_selfpid in bsd/kern/kern_proc.c. APFS calls it when a mount fails."
+  },
+  {
+   "original": "0xfffffe000b130318",
+   "native_symbol": "_nanouptime",
+   "check": {
+    "address": "0xfffffe000b130318",
+    "size": 92,
+    "sha256": "cb708754a84f8bbaa4cce931e85242d805b6cace29df07891caadcdad3ee46dd"
+   },
+   "evidence": "bsd/kern/kern_time.c between itimerdecr and ratecheck (both paired), in our kernel's order: timevalfix normalizes tv_usec against 1,000,000; nanotime calls the calendar clock with two stack slots and stores seconds and nanoseconds (two 64-bit words) to the timespec; nanouptime does the same from the uptime read inline. APFS calls nanotime while it mounts."
+  },
+  {
+   "original": "0xfffffe000b1302d8",
+   "native_symbol": "_nanotime",
+   "check": {
+    "address": "0xfffffe000b1302d8",
+    "size": 64,
+    "sha256": "6f0bcc8ebcfaf333959196fec0cbfe23fe08d465e084bcff285a5189ac903f7d"
+   },
+   "evidence": "bsd/kern/kern_time.c between itimerdecr and ratecheck (both paired), in our kernel's order: timevalfix normalizes tv_usec against 1,000,000; nanotime calls the calendar clock with two stack slots and stores seconds and nanoseconds (two 64-bit words) to the timespec; nanouptime does the same from the uptime read inline. APFS calls nanotime while it mounts."
+  },
+  {
+   "original": "0xfffffe000b13028c",
+   "native_symbol": "_timevalfix",
+   "check": {
+    "address": "0xfffffe000b13028c",
+    "size": 76,
+    "sha256": "ee7b4f424850daeb490cdda432cb7a7ab077790d6922ee6710b4085e305dfc23"
+   },
+   "evidence": "bsd/kern/kern_time.c between itimerdecr and ratecheck (both paired), in our kernel's order: timevalfix normalizes tv_usec against 1,000,000; nanotime calls the calendar clock with two stack slots and stores seconds and nanoseconds (two 64-bit words) to the timespec; nanouptime does the same from the uptime read inline. APFS calls nanotime while it mounts."
+  },
+  {
+   "original": "0xfffffe000ad8fa18",
+   "native_symbol": "_buf_proc",
+   "check": {
+    "address": "0xfffffe000ad8fa18",
+    "size": 12,
+    "sha256": "3e526bf25973ebb6aaff8ffe0eafcc421898fe174aee1904542f48fb8a37d6ac"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8f9f4",
+   "native_symbol": "_buf_wcred",
+   "check": {
+    "address": "0xfffffe000ad8f9f4",
+    "size": 12,
+    "sha256": "f1580c9e50484b63fbe819055db26037ca3206311f5bc89a7e39c5206a814cc5"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8f9e8",
+   "native_symbol": "_buf_rcred",
+   "check": {
+    "address": "0xfffffe000ad8f9e8",
+    "size": 12,
+    "sha256": "20208acbcb3107e3c43ca7ff4653970c2ea708690b5cbbecd499a92a1304eef1"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8f9d0",
+   "native_symbol": "_buf_fsprivate",
+   "check": {
+    "address": "0xfffffe000ad8f9d0",
+    "size": 12,
+    "sha256": "29a3b1dba6a7a22fd0acdc063fbbf990a499d160a49575f69d379576b62c4b90"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8f978",
+   "native_symbol": "_buf_setdevice",
+   "check": {
+    "address": "0xfffffe000ad8f978",
+    "size": 64,
+    "sha256": "801c04ec50e3797483089928bdeaa512a5a55a5c94ce120ec446df7666610f43"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8f954",
+   "native_symbol": "_buf_setlblksize",
+   "check": {
+    "address": "0xfffffe000ad8f954",
+    "size": 24,
+    "sha256": "1f77622c00a53c8f5c810e8199ddc3d258ad0358d09170ead6416ccb87f296d8"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8f920",
+   "native_symbol": "_buf_lblksize",
+   "check": {
+    "address": "0xfffffe000ad8f920",
+    "size": 28,
+    "sha256": "411385de5d577949eb6167303d0bc0edddf681e25188dbe031c82475ebc834c2"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8f8b8",
+   "native_symbol": "_buf_create_shadow",
+   "check": {
+    "address": "0xfffffe000ad8f8b8",
+    "size": 12,
+    "sha256": "9a89c5458308418ca32cb9ccc0584deff1d071e37e0d77db874eddd1a3f20d87"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8ec70",
+   "native_symbol": "_buf_create_shadow_priv",
+   "check": {
+    "address": "0xfffffe000ad8ec70",
+    "size": 12,
+    "sha256": "32b32aa4e5838176917229394d5b05a4bb51d3cf140f55e4934c86520dfa38f2"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8ec60",
+   "native_symbol": "_buf_shadow",
+   "check": {
+    "address": "0xfffffe000ad8ec60",
+    "size": 16,
+    "sha256": "6eba708fd2d088888b0806b6e17e20e0a344407437d285d56d2642846c146628"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e778",
+   "native_symbol": "_buf_clone",
+   "check": {
+    "address": "0xfffffe000ad8e778",
+    "size": 284,
+    "sha256": "1bb78a350712bb04a5272ee2d4eb09d2b42f07e1ebeffeaa610898903767c1cf"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e734",
+   "native_symbol": "_buf_setupl",
+   "check": {
+    "address": "0xfffffe000ad8e734",
+    "size": 68,
+    "sha256": "eb5cd1ecf2966eb1c5fd0ac788d09d50aa3e55ff64963114eb254b488c54d486"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e700",
+   "native_symbol": "_buf_setcallback",
+   "check": {
+    "address": "0xfffffe000ad8e700",
+    "size": 52,
+    "sha256": "d9e03b0ae855081d4afd3de15b197a2943bc76f434e010f77609244af11af0de"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e6d0",
+   "native_symbol": "_buf_callback",
+   "check": {
+    "address": "0xfffffe000ad8e6d0",
+    "size": 48,
+    "sha256": "f6736d933dce0b5440ea7afefcbd6eaa323f8f6d993fcf1740683c807b30d8fe"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e6c4",
+   "native_symbol": "_buf_setvnode",
+   "check": {
+    "address": "0xfffffe000ad8e6c4",
+    "size": 12,
+    "sha256": "74ad53b16f0184671672e78fd9cce98ff2b7621434b468da324416322f29c506"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e6ac",
+   "native_symbol": "_buf_setdataptr",
+   "check": {
+    "address": "0xfffffe000ad8e6ac",
+    "size": 12,
+    "sha256": "5e430353a6d89e66891d7f2d003a947ad99dcce7cb1382f06f96da3e32f2c10f"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e694",
+   "native_symbol": "_buf_setdirtyend",
+   "check": {
+    "address": "0xfffffe000ad8e694",
+    "size": 12,
+    "sha256": "360659b8020461e8f303798d403144ddfb689db49f9540337219b26e3f249ed5"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e688",
+   "native_symbol": "_buf_setdirtyoff",
+   "check": {
+    "address": "0xfffffe000ad8e688",
+    "size": 12,
+    "sha256": "a1021562eb064a998872eb8a9879f6663bf7faaf1ee0a797a975e98c2eebbf3f"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e67c",
+   "native_symbol": "_buf_dirtyend",
+   "check": {
+    "address": "0xfffffe000ad8e67c",
+    "size": 12,
+    "sha256": "ac1c240d5702ca3ffd7acf20e924131c9cdefc507298faa5c0c78f8fec06a624"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e670",
+   "native_symbol": "_buf_dirtyoff",
+   "check": {
+    "address": "0xfffffe000ad8e670",
+    "size": 12,
+    "sha256": "63c085a238abdb8787355271b2f0ca28ea3dc92399bda7cb9a11c6e8b976987c"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e64c",
+   "native_symbol": "_buf_setsize",
+   "check": {
+    "address": "0xfffffe000ad8e64c",
+    "size": 12,
+    "sha256": "6766d08aa56a028f86aa6adcd49b7231d69d08ae19f76955cffb6d8154b1ce44"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e640",
+   "native_symbol": "_buf_size",
+   "check": {
+    "address": "0xfffffe000ad8e640",
+    "size": 12,
+    "sha256": "3999152b0eb3ac29653ec993c13aa9b25687382d41b31ac9552711129d258c92"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e634",
+   "native_symbol": "_buf_setcount",
+   "check": {
+    "address": "0xfffffe000ad8e634",
+    "size": 12,
+    "sha256": "78c95e89583f32f8ad9d9713e6eef02807adee6a51d815f5c2bff248cfd6edc4"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e5c8",
+   "native_symbol": "_buf_clearflags",
+   "check": {
+    "address": "0xfffffe000ad8e5c8",
+    "size": 28,
+    "sha256": "c43f2d079c2936c93d4d08f922c56071662b82e17a381a455dc54ad678cb48b5"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e334",
+   "native_symbol": "_buf_verify_enable",
+   "check": {
+    "address": "0xfffffe000ad8e334",
+    "size": 344,
+    "sha256": "d026828f1f0c1c509cd3b4d50f88246036278bc83bb6f8b262f377d0861ae43c"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e320",
+   "native_symbol": "_bufattr_verifyptr",
+   "check": {
+    "address": "0xfffffe000ad8e320",
+    "size": 20,
+    "sha256": "003d347aae5be51012a73c4a35f94e497da40d37d25f88d220d60e674b387793"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e310",
+   "native_symbol": "_buf_verifyptr",
+   "check": {
+    "address": "0xfffffe000ad8e310",
+    "size": 16,
+    "sha256": "c4d2dd569ec35d629080cb1c0196005702e0d2b5e59f94d32ec8553fc61fc8a2"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e1a0",
+   "native_symbol": "_buf_verifyptr_with_size",
+   "check": {
+    "address": "0xfffffe000ad8e1a0",
+    "size": 368,
+    "sha256": "a23aae274859698079f3db3f21e485ab43f7d213ccba70fb4ffd587f2de79736"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e18c",
+   "native_symbol": "_bufattr_setverifyvalid",
+   "check": {
+    "address": "0xfffffe000ad8e18c",
+    "size": 20,
+    "sha256": "c77d02b10387962edbb1647e62a584dcd203eaaf3aa52521357d3cebcb32a725"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e160",
+   "native_symbol": "_bufattr_expeditedmeta",
+   "check": {
+    "address": "0xfffffe000ad8e160",
+    "size": 16,
+    "sha256": "a37f52da10d7c27d736b81552fe7c23963b4b158192c5fd4f76e21e41b97f74c"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e13c",
+   "native_symbol": "_bufattr_ioscheduled",
+   "check": {
+    "address": "0xfffffe000ad8e13c",
+    "size": 16,
+    "sha256": "7d3e74e9eb152dca225a1ff1c33a1ca987928c92661ffbe5c72b5c0b6a4f843b"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e104",
+   "native_symbol": "_bufattr_markquickcomplete",
+   "check": {
+    "address": "0xfffffe000ad8e104",
+    "size": 20,
+    "sha256": "9f30c25006239dd00bf733b3303300a415cef29801e564a5bf6ec62d94a10324"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8e0d0",
+   "native_symbol": "_bufattr_greedymode",
+   "check": {
+    "address": "0xfffffe000ad8e0d0",
+    "size": 16,
+    "sha256": "c0ee79665bd7c5a9e3cfe9be6d0e6942ef90ad71f06f417553fa1154b8d82438"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8dfc4",
+   "native_symbol": "_bufattr_setcpoff",
+   "check": {
+    "address": "0xfffffe000ad8dfc4",
+    "size": 12,
+    "sha256": "74526db3f2f991b070bcdbd3a8543bb836f8ea3c33b66da1fb9689b4d0e40609"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8dfb8",
+   "native_symbol": "_bufattr_cpoff",
+   "check": {
+    "address": "0xfffffe000ad8dfb8",
+    "size": 12,
+    "sha256": "91fe54c083eb0b9168494a7cca1b46d068b795c7ba94ea2e14d0c8f9d165b9d5"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8dfac",
+   "native_symbol": "_bufattr_setcpx",
+   "check": {
+    "address": "0xfffffe000ad8dfac",
+    "size": 12,
+    "sha256": "098eaedc005e3035dc4889826d8ab47dce01fc29661fd810127429e385054925"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8dfa0",
+   "native_symbol": "_bufattr_cpx",
+   "check": {
+    "address": "0xfffffe000ad8dfa0",
+    "size": 12,
+    "sha256": "b6097f63592b59ee64929c6a3d22c4fec17e20813d81e216b075edf8eb0280d1"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8df8c",
+   "native_symbol": "_buf_markfua",
+   "check": {
+    "address": "0xfffffe000ad8df8c",
+    "size": 20,
+    "sha256": "bc4de57300ab01d02479d032941a4bea21798dcdc47af959ae2cb3444150b96a"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8df7c",
+   "native_symbol": "_buf_fua",
+   "check": {
+    "address": "0xfffffe000ad8df7c",
+    "size": 16,
+    "sha256": "39a6491d145d7da2240f2ce7d52821928b6f598f52a9b9b550483dedb390d167"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8df68",
+   "native_symbol": "_buf_markaged",
+   "check": {
+    "address": "0xfffffe000ad8df68",
+    "size": 20,
+    "sha256": "94f63fe7e4e11a58fead11627c4af1397d927173d2c65ce940f880758cd61943"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8df54",
+   "native_symbol": "_buf_markeintr",
+   "check": {
+    "address": "0xfffffe000ad8df54",
+    "size": 20,
+    "sha256": "647b80ce330a1eb27abd91d21f0f7be325bcf2860ab502556771b1cb930b034e"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000ad8df20",
+   "native_symbol": "_buf_markclean",
+   "check": {
+    "address": "0xfffffe000ad8df20",
+    "size": 52,
+    "sha256": "35a4bca1e123b4a5979857587f738ef152ccb9554dd35c45d1d245e0148b4a34"
+   },
+   "evidence": "The buffer accessors of bsd/vfs/vfs_bio.c, from buf_reassign to buf_map_range: about ninety one-field functions in source order, of which the matcher and the order alignment pair two thirds; each of these lies between two paired ones in our kernel's order and its body is the field operation of that name (the flag bit it tests or sets in b_flags at +76 or in the attribute word at +16, or the field it loads or stores: b_error +84, b_bcount +92, b_bufsize +88, b_resid +96, dirty offsets +216/+220, b_datap +104, b_vp +136, b_blkno +120, b_lblkno +112, b_dev +100, b_drvdata +192, b_fsprivate +200, credentials +144/+152, b_upl +160, b_proc +240). buf_setcpoff, buf_static and buf_vnop_vnode of the source have no function here. APFS and IOStorageFamily call them on every I/O."
+  },
+  {
+   "original": "0xfffffe000b34f4b8",
+   "native_symbol": "__ZN18IOMemoryDescriptor6getTagEv",
+   "check": {
+    "address": "0xfffffe000b34f4b8",
+    "size": 12,
+    "sha256": "2e06bda738ff93c0b332bb8e94d761c0de490fb72f0705aaa773b3f1b9653a10"
+   },
+   "evidence": "The last two functions of IOMemoryDescriptor.cpp before IOMultiMemoryDescriptor.cpp: a setter and a getter of one field, setTag and getTag in the source. Note the layout: the original keeps the tag as 16 bits at +0x40 of the object, our kernel as 32 bits at +0x58 (public header): the pair is by meaning, and each side's methods use its own layout, so an object must not be read by one side's inline code and the other's methods. IOStorageFamily calls getTag for each request."
+  },
+  {
+   "original": "0xfffffe000b34f4ac",
+   "native_symbol": "__ZN18IOMemoryDescriptor6setTagEj",
+   "check": {
+    "address": "0xfffffe000b34f4ac",
+    "size": 12,
+    "sha256": "30a0e2412a771c2aa6b8d5a638bd655640028516d30a4d62e4c49d46ca32f8df"
+   },
+   "evidence": "The last two functions of IOMemoryDescriptor.cpp before IOMultiMemoryDescriptor.cpp: a setter and a getter of one field, setTag and getTag in the source. Note the layout: the original keeps the tag as 16 bits at +0x40 of the object, our kernel as 32 bits at +0x58 (public header): the pair is by meaning, and each side's methods use its own layout, so an object must not be read by one side's inline code and the other's methods. IOStorageFamily calls getTag for each request."
+  },
+  {
+   "original": "0xfffffe000adec710",
+   "native_symbol": "_VNOP_BWRITE",
+   "check": {
+    "address": "0xfffffe000adec710",
+    "size": 96,
+    "sha256": "4148d61b556fbc48213df352f666c22ba0f7180733f491019c5c3bcf80298197"
+   },
+   "evidence": "The two buffer wrappers after VNOP_SETXATTR in bsd/vfs/kpi_vfs.c: each takes the buffer, builds {a_desc, a_bp} on the stack and calls the operation of the buffer's vnode (bp +136) at the descriptor's offset. The first passes vnop_strategy_desc (paired by its own name string): VNOP_STRATEGY; the second, with the same frame, is VNOP_BWRITE, which follows it in the source. APFS calls VNOP_STRATEGY at the root mount."
+  },
+  {
+   "original": "0xfffffe000adec6b0",
+   "native_symbol": "_VNOP_STRATEGY",
+   "check": {
+    "address": "0xfffffe000adec6b0",
+    "size": 96,
+    "sha256": "733d2b2d55bcb24b492e54ca89a05108d40e69ebe107a0266fb9d10dce2af435"
+   },
+   "evidence": "The two buffer wrappers after VNOP_SETXATTR in bsd/vfs/kpi_vfs.c: each takes the buffer, builds {a_desc, a_bp} on the stack and calls the operation of the buffer's vnode (bp +136) at the descriptor's offset. The first passes vnop_strategy_desc (paired by its own name string): VNOP_STRATEGY; the second, with the same frame, is VNOP_BWRITE, which follows it in the source. APFS calls VNOP_STRATEGY at the root mount."
+  },
+  {
+   "original": "0xfffffe000ac05418",
+   "native_symbol": "_smr_hash_is_empty_initialized",
+   "check": {
+    "address": "0xfffffe000ac05418",
+    "size": 40,
+    "sha256": "960db26c940f3b3f68dabb4b801db4cf7add408f46975bfb8074ff50413c7380"
+   },
+   "evidence": "osfmk/kern/smr.c: smr_hash_init_empty stores a packed pointer to the shared empty bucket array (low three bits cleared, byte 6 set to 0x3f) and a zero into the two words at x0, instruction for instruction what our kernel's function of that name does; smr_hash_is_empty_initialized is the function between it and smr_hash_init, as in our kernel. APFS calls the first for each container."
+  },
+  {
+   "original": "0xfffffe000ac053f8",
+   "native_symbol": "_smr_hash_init_empty",
+   "check": {
+    "address": "0xfffffe000ac053f8",
+    "size": 32,
+    "sha256": "0427b428bb79e60be5de0546380838ac6cd4c4669651de4e5e75f78a65a44000"
+   },
+   "evidence": "osfmk/kern/smr.c: smr_hash_init_empty stores a packed pointer to the shared empty bucket array (low three bits cleared, byte 6 set to 0x3f) and a zero into the two words at x0, instruction for instruction what our kernel's function of that name does; smr_hash_is_empty_initialized is the function between it and smr_hash_init, as in our kernel. APFS calls the first for each container."
+  },
+  {
+   "original": "0xfffffe000abd56b4",
+   "native_symbol": "_lck_rw_lock_shared_to_exclusive",
+   "check": {
+    "address": "0xfffffe000abd56b4",
+    "size": 724,
+    "sha256": "eecda20afdc81e434cba7db28af9d1cdd555a780f7121379dad62085a3cc46ee"
+   },
+   "evidence": "One argument (the lock), returns a boolean that APFS tests (cbz w0): first decrements the shared count in the lock word (mask 0x3ffff) with the want-upgrade bit, then, when other readers remain, waits with assert_wait and thread_block and clears the promotion: lck_rw_lock_shared_to_exclusive, the only rw-lock function that drops a read hold and returns whether the upgrade succeeded. It is directly before lck_rw_lock_exclusive_to_shared; the matcher's order rule had given the name to the function before it (0xfffffe000abd548c). APFS and the sandbox call it."
+  },
+  {
+   "original": "0xfffffe000ad95a88",
+   "native_symbol": "_fs_buffer_cache_gc_unregister",
+   "check": {
+    "address": "0xfffffe000ad95a88",
+    "size": 224,
+    "sha256": "39db64431e11e4a5672b5140cfb2b565ee27f64db859e20fadbc1303f78357af"
+   },
+   "evidence": "The last two exported functions of bsd/vfs/vfs_bio.c before vnode_issubdir (vfs_cache.c), in our kernel's order: fs_buffer_cache_gc_register takes a global mutex and stores the callout and its context (x0, x1) in a table; fs_buffer_cache_gc_unregister follows with the same frame. APFS registers its buffer cache collector with the first at container start (x0 a signed function pointer, x1 an object)."
+  },
+  {
+   "original": "0xfffffe000ad958dc",
+   "native_symbol": "_fs_buffer_cache_gc_register",
+   "check": {
+    "address": "0xfffffe000ad958dc",
+    "size": 428,
+    "sha256": "c1837f1af6c3caac40bbe56a5e2c4229f4c3295281405108c1b07c0f2fae943f"
+   },
+   "evidence": "The last two exported functions of bsd/vfs/vfs_bio.c before vnode_issubdir (vfs_cache.c), in our kernel's order: fs_buffer_cache_gc_register takes a global mutex and stores the callout and its context (x0, x1) in a table; fs_buffer_cache_gc_unregister follows with the same frame. APFS registers its buffer cache collector with the first at container start (x0 a signed function pointer, x1 an object)."
+  },
+  {
+   "original": "0xfffffe000ac47cf4",
+   "native_symbol": "_zalloc_noblock",
+   "check": {
+    "address": "0xfffffe000ac47cf4",
+    "size": 20,
+    "sha256": "12fe83fa4d7a18075283eb01a030c47d783bb3acbb53f2d40defac573be3749e"
+   },
+   "evidence": "The zone-view entry points of osfmk/kern/zalloc.c, three consecutive five-instruction functions before zalloc_ro: each loads the zone and its statistics from the view in x0 and tail-calls the allocator with flags 0 (zalloc), 1 = Z_NOWAIT (zalloc_noblock), or the caller's flags (zalloc_flags, paired by order alignment). APFS calls zalloc at mount."
+  },
+  {
+   "original": "0xfffffe000ac47ce0",
+   "native_symbol": "_zalloc",
+   "check": {
+    "address": "0xfffffe000ac47ce0",
+    "size": 20,
+    "sha256": "9736f18118f8633c3b4025e5bdc7694cba710da97d224975db75b9120d6e34d9"
+   },
+   "evidence": "The zone-view entry points of osfmk/kern/zalloc.c, three consecutive five-instruction functions before zalloc_ro: each loads the zone and its statistics from the view in x0 and tail-calls the allocator with flags 0 (zalloc), 1 = Z_NOWAIT (zalloc_noblock), or the caller's flags (zalloc_flags, paired by order alignment). APFS calls zalloc at mount."
+  },
+  {
+   "original": "0xfffffe000ad65468",
+   "native_symbol": "__get_commpage_priv_address",
+   "check": {
+    "address": "0xfffffe000ad65468",
+    "size": 16,
+    "sha256": "fb3263a46651eb2ad6f2d7d9904e7d14fc046130d482f3b3e02c2e29ae66fd08"
+   },
+   "evidence": "Returns a pointer global that is zero in the file (set at boot); APFS reads byte 0x13 of what it points to and tests bit 2, which is bit 26 (kHasARMv8Crc32, 0x04000000) of the 64-bit capabilities word at offset 0x10 of the commpage, to choose its CRC-32C routine: _get_commpage_priv_address. (First recorded as _get_cpu_capabilities; that returns the word, and APFS faulted reading through it.)"
+  },
+  {
+   "original": "0xfffffe000b12f50c",
+   "native_symbol": "_microuptime",
+   "check": {
+    "address": "0xfffffe000b12f50c",
+    "size": 80,
+    "sha256": "2eecec14605533c5a63f0f5b05d22781e780f7cf00c94f75e8868a234b06cd08"
+   },
+   "evidence": "bsd/kern/kern_time.c and its clock callee. 0xfffffe000b12f2d0 calls a function of the calendar clock code (0xfffffe000ab82804, in clock.c's address range) with two stack slots and stores seconds and microseconds to the timeval: microtime; the matcher's reference rule had named it microuptime, whose source has the same shape with the other callee. 0xfffffe000b12f50c reads the uptime inline (the Apple counter plus the per-CPU base), divides by the timebase and stores seconds and microseconds: microuptime, directly before timevalsub and setitimer as in our kernel. APFS calls microuptime at mount."
+  },
+  {
+   "original": "0xfffffe000b12f2d0",
+   "native_symbol": "_microtime",
+   "check": {
+    "address": "0xfffffe000b12f2d0",
+    "size": 68,
+    "sha256": "e6b8b5017a931e535619e96f710f0ef40ed7bef8e5e712d4f149c68772addfd9"
+   },
+   "evidence": "bsd/kern/kern_time.c and its clock callee. 0xfffffe000b12f2d0 calls a function of the calendar clock code (0xfffffe000ab82804, in clock.c's address range) with two stack slots and stores seconds and microseconds to the timeval: microtime; the matcher's reference rule had named it microuptime, whose source has the same shape with the other callee. 0xfffffe000b12f50c reads the uptime inline (the Apple counter plus the per-CPU base), divides by the timebase and stores seconds and microseconds: microuptime, directly before timevalsub and setitimer as in our kernel. APFS calls microuptime at mount."
+  },
+  {
+   "original": "0xfffffe000abd3188",
+   "native_symbol": "_lck_attr_setdebug",
+   "check": {
+    "address": "0xfffffe000abd3188",
+    "size": 16,
+    "sha256": "83765d81ff6a3dac5c003f4647a0acf139ebacd1dc682a309c2401a1d98305d3"
+   },
+   "evidence": "The lock attribute functions of osfmk/kern/lock_group.c around lck_attr_alloc_init (paired by the matcher): lck_attr_setdefault copies the default attribute word (a global) to *x0, directly before it; lck_attr_setdebug sets bit 0 of *x0 atomically, directly after it. The ppp network extension calls the first at start."
+  },
+  {
+   "original": "0xfffffe000abd3144",
+   "native_symbol": "_lck_attr_setdefault",
+   "check": {
+    "address": "0xfffffe000abd3144",
+    "size": 20,
+    "sha256": "46e0483c71f6f1b0e06c0ba1ed8da224e6807a19348ceb1639def5986472face"
+   },
+   "evidence": "The lock attribute functions of osfmk/kern/lock_group.c around lck_attr_alloc_init (paired by the matcher): lck_attr_setdefault copies the default attribute word (a global) to *x0, directly before it; lck_attr_setdebug sets bit 0 of *x0 atomically, directly after it. The ppp network extension calls the first at start."
+  },
+  {
+   "original": "0xfffffe000abd2fc4",
+   "native_symbol": "_lck_grp_attr_setdefault",
+   "check": {
+    "address": "0xfffffe000abd2fc4",
+    "size": 20,
+    "sha256": "918d01c290bf141b3fedcd7641af5ae94d1a09f1011de2939dbbffeb7ec5a60d"
+   },
+   "evidence": "Copies the default attribute word (a global) to *x0: lck_grp_attr_setdefault (osfmk/kern/lock_group.c), the function between lck_grp_attr_alloc_init and lck_grp_attr_setstat. The ppp network extension calls it at start."
+  },
+  {
+   "original": "0xfffffe000abe0918",
+   "native_symbol": "_text_crypter_create_hook_set",
+   "check": {
+    "address": "0xfffffe000abe0918",
+    "size": 16,
+    "sha256": "b18d27944766c9b6d827495f3d0437bdf921eec2785481bada978b4c02bb037a"
+   },
+   "evidence": "Stores x0 in one global and returns: text_crypter_create_hook_set (osfmk/kern/page_decrypt.c), the file linked before printf.c (__doprnt follows at +4 instructions). IOTextEncryptionFamily, the text crypter, registers its create hook with it at start."
+  },
+  {
+   "original": "0xfffffe000b34e6a8",
+   "native_symbol": "__ZN18IOMemoryDescriptor12setOwnershipEP4taskij",
+   "check": {
+    "address": "0xfffffe000b34e6a8",
+    "size": 60,
+    "sha256": "59cde4c3d8a33f414b51be9e3db2a03c199f6f8fe817b95ba8a2868740cabc2d"
+   },
+   "evidence": "Returns kIOReturnNotAttached (0xe00002d9) when bit 18 of the flags at +32 (kIOMemoryRemote) is set, kIOReturnUnsupported (0xe00002c7) when a global enable byte is clear or the reserved pointer at +40 is NULL, else continues in the function that follows: IOMemoryDescriptor::setOwnership(task_t, int, IOOptionBits), the two tests of the source in that order. IOSurface calls it."
+  },
+  {
+   "original": "0xfffffe000ac2a224",
+   "native_symbol": "_thread_call_allocate_with_priority",
+   "check": {
+    "address": "0xfffffe000ac2a224",
+    "size": 12,
+    "sha256": "fc6f7c0c2557b2070883206fc4291d2d57d292153d374f211ba35b96c4fa8b16"
+   },
+   "evidence": "Sets the fourth argument to 0 and falls into thread_call_allocate_with_options, paired at the next address: thread_call_allocate_with_priority(func, param0, pri) of osfmk/kern/thread_call.c. IOSurface calls it."
+  },
+  {
+   "original": "0xfffffe000b2a016c",
+   "native_symbol": "__ZN12OSSerializer9forTargetEPvPFbS0_S0_P11OSSerializeES0_",
+   "check": {
+    "address": "0xfffffe000b2a016c",
+    "size": 176,
+    "sha256": "e9db201fb58d92f128e4dc9995f5e835b906a314d51bf176f93c6c8a98ca748c"
+   },
+   "evidence": "Three arguments (target, callback, ref), allocates from OSSerializer::gMetaClass (the object its static initializer registers under that name) and stores them: OSSerializer::forTarget; the other factory, withBlock, takes one argument. IOHIDPowerSource calls it."
+  },
+  {
+   "original": "0xfffffe000b2e3f38",
+   "native_symbol": "__ZN15IORegistryEntry15getRegistryRootEv",
+   "check": {
+    "address": "0xfffffe000b2e3f38",
+    "size": 16,
+    "sha256": "74073e12a039687b397d01b0f702cdae247a6fe86f234b4a235f1c92a230c646"
+   },
+   "evidence": "Returns one global pointer: IORegistryEntry::getRegistryRoot, the function between initialize and makePlane (8 instructions later) in IORegistryEntry.cpp, as in the source. AppleFirmwareKit calls it."
+  },
+  {
+   "original": "0xfffffe000ae04a38",
+   "native_symbol": "_unregister_decmpfs_decompressor",
+   "check": {
+    "address": "0xfffffe000ae04a38",
+    "size": 372,
+    "sha256": "2e8f7ef40393992b1f336674234b23bc1ce2e98a27815f53dd208fb790c2d0f5"
+   },
+   "evidence": "The function after register_decmpfs_decompressor with the same frame and the same two arguments: unregister_decmpfs_decompressor (bsd/kern/decmpfs.c, the pair in source order). AppleFSCompressionTypeZlib calls it at stop."
+  },
+  {
+   "original": "0xfffffe000ae048e8",
+   "native_symbol": "_register_decmpfs_decompressor",
+   "check": {
+    "address": "0xfffffe000ae048e8",
+    "size": 336,
+    "sha256": "bdf058c9fc7446d4182b524fd1edc56be3a6e2a1ce72b2bedbce806e754ffac5"
+   },
+   "evidence": "(type, registration): EINVAL (22) for a type over 254 or a NULL registration, then the registration is stored in the decompressor table under the write lock and a resource named with the format \"com.apple.AppleFSCompression.Type%u\" is published: register_decmpfs_decompressor (bsd/kern/decmpfs.c), after decmpfs_update_attributes. AppleFSCompressionTypeZlib calls it with type 3 at start."
+  },
+  {
+   "original": "0xfffffe000b332888",
+   "native_symbol": "__ZN13IOCommandGate14runActionBlockEU13block_pointerFivE",
+   "check": {
+    "address": "0xfffffe000b332888",
+    "size": 80,
+    "sha256": "0d3be09ba4a73f14e479136ef48e1c62156352977f8dba445fdd4b8217170ab5"
+   },
+   "evidence": "Moves the block to the second argument, passes a signed pointer to the local block-calling thunk as the action and calls the object's virtual runAction (vtable +232) with the other arguments 0: IOCommandGate::runActionBlock(ActionBlock), after IOCommandGate.cpp's static initializer. IOUSBHostFamily calls it."
+  },
+  {
+   "original": "0xfffffe000b305e90",
+   "native_symbol": "__ZN9IOService23registryEntryIDMatchingEyP12OSDictionary",
+   "check": {
+    "address": "0xfffffe000b305e90",
+    "size": 344,
+    "sha256": "a63535223f786d50fe510d74681d8fac21c6387b6c0515889c4fadc95f8a5d4b"
+   },
+   "evidence": "(entryID, table): allocates an object from a metaclass (OSNumber) for the 64-bit id in x0 and sets it in the table under the registry-entry-id key: IOService::registryEntryIDMatching(uint64_t, OSDictionary *), the function after propertyMatching in IOService.cpp. IOUSBHostFamily calls it with a registry entry id (0x100000147)."
+  },
+  {
    "original": "0xfffffe000ab8d024",
    "native_symbol": "_io_rate_update",
    "check": {

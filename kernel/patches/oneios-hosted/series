@@ -15,3 +15,5 @@
 # the early start of original corecrypto, and the overflow check of AMFI's early security initializer.
 0007-prelink-kext-start.patch
 0008-software-aes.patch
+# fable-prelink: boot argument hosted_dump_threads=1: the kernel stack of every blocked thread at each root-device wait.
+0009-debug-blocked-threads.patch

@@ -46,7 +46,8 @@ fi
 # 5. What the matcher left unpaired, by link order: the kernel's own order (source order inside a file), then the
 #    reference's. Inferred pairs, each listed in the report with the error rate measured on known pairs. Then the
 #    constructors and base destructors of classes kexts subclass, by the vtable they store, and the virtual methods
-#    of every vtable paired by name, slot by slot.
+#    of every vtable paired by name, slot by slot; before both, the kernel's class objects by the names their static
+#    initializers register (metaclass, metaClass and superClass pointers, vtable).
 ALIGNED=()
 python3 "$HERE/align.py" --xnuprelink "$XNUPRELINK" --kernelcache "$INPUT" --native "$WORK/native.macho" \
   --map "$WORK/match.map.json" --reference "$WORK/native.macho" ${REFERENCE:+--features "$REFERENCE"} \
@@ -57,14 +58,17 @@ if [ -n "$REFERENCE" ]; then
     --map "$WORK/match.map.json" --reference "$REFERENCE" --position --also "$REVIEWED" --also "$WORK/aligned-native.json" --out "$WORK/aligned-reference.json"
   ALIGNED+=(--aligned "$WORK/aligned-reference.json")
 fi
+python3 "$HERE/kclasses.py" --xnuprelink "$XNUPRELINK" --kernelcache "$INPUT" --native "$WORK/native.macho" \
+  --map "$WORK/match.map.json" --reviewed "$REVIEWED" --out "$WORK/kclasses.json"
 python3 "$HERE/structors.py" --xnuprelink "$XNUPRELINK" --kernelcache "$INPUT" --native "$WORK/native.macho" \
-  --map "$WORK/match.map.json" --reviewed "$REVIEWED" --out "$WORK/structors.json"
+  --map "$WORK/match.map.json" --reviewed "$REVIEWED" --classes "$WORK/kclasses.json" --out "$WORK/structors.json"
 WEAK=(); for f in "$WORK/aligned-native.json" "$WORK/aligned-reference.json"; do [ -f "$f" ] && WEAK+=(--weak "$f"); done
 [ -n "$REFERENCE" ] || rm -f "$WORK/aligned-reference.json"
 python3 "$HERE/vtables.py" --xnuprelink "$XNUPRELINK" --kernelcache "$INPUT" --native "$WORK/native.macho" \
-  --map "$WORK/match.map.json" --reviewed "$REVIEWED" --also "$WORK/structors.json" "${WEAK[@]}" --out "$WORK/vtables.json"
+  --map "$WORK/match.map.json" --reviewed "$REVIEWED" --classes "$WORK/kclasses.json" --also "$WORK/structors.json" "${WEAK[@]}" \
+  --out "$WORK/vtables.json"
 # emit.py takes the first pair it is given for a function: slots and structors before the order-inferred ones.
-ALIGNED=(--aligned "$WORK/vtables.json" --aligned "$WORK/structors.json" "${ALIGNED[@]}")
+ALIGNED=(--aligned "$WORK/kclasses.json" --aligned "$WORK/vtables.json" --aligned "$WORK/structors.json" "${ALIGNED[@]}")
 # 6. The collection.
 python3 "$HERE/emit.py" --xnuprelink "$XNUPRELINK" --kernelcache "$INPUT" --original-kernelcache "$CACHE" \
   --native "$WORK/native.macho" --map "$WORK/match.map.json" --roots "$WORK/select.json" --reviewed "$REVIEWED" \

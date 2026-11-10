@@ -57,9 +57,15 @@ def main():
     for address, symbols in Image(native_data).symbols().items():
         for name in symbols:
             names.setdefault(name, address)
-    applied = {'functions': [], 'functions_absent': [], 'data': [], 'sites': [], 'aligned': []}
+    applied = {'functions': [], 'functions_absent': [], 'data': [], 'data_inferred': [], 'sites': [], 'aligned': []}
     for path in args.aligned:
-        for pair in json.loads(Path(path).read_text())['pairs']:
+        for pair in json.loads(Path(path).read_text()).get('data', []):      # kclasses.py: class objects by name
+            if pair['original'] in payload['data'] or pair['native_symbol'] not in names:
+                continue
+            payload['data'][pair['original']] = {'native': hex(names[pair['native_symbol']]), 'name': pair['native_symbol'],
+                                                  'how': 'class', 'sections': ['?', '?']}
+            applied['data_inferred'].append({'original': pair['original'], 'native_symbol': pair['native_symbol']})
+        for pair in json.loads(Path(path).read_text()).get('pairs', []):
             if pair['original'] in payload['functions'] or pair['native_symbol'] not in names:
                 continue
             payload['functions'][pair['original']] = {'native': hex(names[pair['native_symbol']]),

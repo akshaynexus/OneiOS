@@ -28,6 +28,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('xnuprelink', 'kernelcache', 'native', 'map', 'reviewed', 'out'):
         parser.add_argument('--' + name, required=True)
+    parser.add_argument('--classes', help='kclasses.py output: more vtables by name')
     args = parser.parse_args()
     sys.path.insert(0, args.xnuprelink)
     from kc_image import Image, scan
@@ -39,6 +40,9 @@ def main():
     starts = sorted(kernel.function_starts())
     paired = {int(k, 16) for k in pairing['functions']} | {int(r['original'], 16) for r in reviewed.get('functions', [])}
     vtables = {int(k, 16): v['name'] for k, v in pairing['data'].items() if (v.get('name') or '').startswith('__ZTV')}
+    if args.classes:
+        vtables.update({int(r['original'], 16): r['native_symbol'] for r in json.loads(Path(args.classes).read_text())['data']
+                        if r['native_symbol'].startswith('__ZTV')})
     vtables.update({int(r['original'], 16): r['native_symbol'] for r in reviewed.get('data', [])
                     if r['native_symbol'].startswith('__ZTV')})
     native = {}
@@ -96,6 +100,9 @@ def main():
     # the factory is the same name without "init" ("initWithCapacity" -> "withCapacity"), when our kernel has it.
     metaclasses = {int(k, 16): v['name'] for k, v in pairing['data'].items()
                    if (v.get('name') or '').endswith('10gMetaClassE')}
+    if args.classes:
+        metaclasses.update({int(r['original'], 16): r['native_symbol'] for r in json.loads(Path(args.classes).read_text())['data']
+                            if r['native_symbol'].endswith('10gMetaClassE')})
     native_image = Image(Path(args.native).read_bytes())
     native_symbols, native_fixups = native_image.symbols(), native_image.fixups()
     address_of = {name: address for address, names in native_symbols.items() for name in names}
@@ -141,10 +148,42 @@ def main():
             before = len(pairs)
             add(found[0][0], factory, found[0][1], found[0][2])
             factories += len(pairs) - before
+    # VNOP wrappers. VNOP_FOO(...) of bsd/vfs/kpi_vfs.c builds its argument structure with a_desc = &vnop_foo_desc and
+    # calls the vnode's operation at that descriptor's offset; the descriptors are paired by name (the matcher, and
+    # reviewed records from their vdesc_name strings). An unpaired function whose only named data is one such
+    # descriptor is that wrapper, when exactly one function qualifies.
+    descriptors = {int(k, 16): v['name'] for k, v in pairing['data'].items()
+                   if (v.get('name') or '').startswith('_vnop_') and v['name'].endswith('_desc')}
+    descriptors.update({int(r['original'], 16): r['native_symbol'] for r in reviewed.get('data', [])
+                        if r['native_symbol'].startswith('_vnop_') and r['native_symbol'].endswith('_desc')})
+    # Other functions inline a wrapper (vn_close has VNOP_CLOSE's body): only inside kpi_vfs.c's address range, which
+    # the wrappers the matcher did pair mark out, and only for a name no function has yet.
+    paired_wrappers = sorted(int(k, 16) for k, v in pairing['functions'].items() if (v.get('name') or '').startswith('_VNOP_'))
+    wrapper_names = {v['name'] for v in pairing['functions'].values() if (v.get('name') or '').startswith('_VNOP_')}
+    wrapper_names |= {r['native_symbol'] for r in reviewed.get('functions', [])}
+    low, high = (paired_wrappers[0], paired_wrappers[-1]) if paired_wrappers else (0, 0)
+    wrappers, vnops = {}, 0
+    for i, start in enumerate(starts[:-1]):
+        if start in paired or not low - 0x1000 <= start <= high + 0x1000:
+            continue
+        size = starts[i + 1] - start
+        if not 40 <= size <= 1200:
+            continue
+        _, refs, _ = scan(kernel.read(start, min(size, 160)), start)
+        named = {descriptors[ref] for _, ref, kind in refs if ref in descriptors}
+        if len(named) == 1:
+            wrappers.setdefault(next(iter(named)), []).append(start)
+    for descriptor, found in sorted(wrappers.items()):
+        name = '_VNOP_' + descriptor[len('_vnop_'):-len('_desc')].upper()
+        if len(found) == 1 and name not in wrapper_names:
+            before = len(pairs)
+            add(found[0], name, descriptor, 'the one unpaired function in kpi_vfs.c\'s range that passes this operation descriptor')
+            vnops += len(pairs) - before
     record = {'kernelcache_sha256': hashlib.sha256(raw).hexdigest(), 'vtables_named': len(vtables), 'factories': factories,
+              'vnop_wrappers': vnops,
               'classes_with_constructors': len(constructors), 'pairs': pairs}
     Path(args.out).write_text(json.dumps(record, indent=1) + '\n')
-    print(f'structors: {len(pairs) - factories} constructors and destructors of {len(constructors)} classes paired by their vtable, {factories} factories by their init slot '
+    print(f'structors: {len(pairs) - factories - vnops} constructors and destructors of {len(constructors)} classes paired by their vtable, {factories} factories by their init slot, {vnops} VNOP wrappers by their descriptor '
           f'({len(vtables)} vtables named)')
 
 

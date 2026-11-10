@@ -47,6 +47,12 @@ PRESENTED_NODE_NAMES = {'defaults'}
 # The roots of the OS profile ([kernel.prelink] roots of PROFILE.toml: the 31 Droid-VM's iPadOS 27.0.1 guest runs with)
 # are kept whatever their personalities, as there. Left out by hand although the rule would keep them:
 FORCE_OUT = {
+    'com.apple.IOTextEncryptionFamily': 'not hardware: the FairPlay text crypter. Its start waits 30 s for the service '
+                                        'com_apple_driver_FairPlayIOKit (left out, below) inside IOResources\' matching, '
+                                        'which holds back every driver that waits for the IOBSD resource (the disks\' BSD '
+                                        'clients, so the root device) for those 30 s',
+    'com.apple.audio.TrustedClockingKEXT': 'the exclave audio clock: its start calls exclaves_coreaudio_register_orchestration_callbacks, '
+                                           'a kernel function the public XNU source does not have (no native function to pair it with)',
     'com.apple.driver.IOAudioCodecs': 'not hardware: its start waits for the service com_apple_driver_FairPlayIOKit, which is '
                                       'left out (below), and holds an IOKit configuration thread forever',
     'com.apple.driver.FairPlayIOKit': 'not hardware: its code is obfuscated and reaches kernel functions through computed '

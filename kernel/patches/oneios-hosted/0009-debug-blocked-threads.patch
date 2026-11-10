@@ -1,0 +1,70 @@
+diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
+index 2b49e3c..964dfc0 100644
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -36,6 +36,9 @@
+ #include <IOKit/IOUserClient.h>
+ #include <libkern/c++/OSAllocation.h>
+ 
++#if XNU_HOSTED
++extern "C" void hosted_dump_blocked_threads(void);
++#endif
+ extern "C" {
+ #include <libkern/amfi/amfi.h>
+ #include <sys/codesign.h>
+@@ -957,6 +960,14 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
+ 
+ 		if (matching->serialize( s )) {
+ 			IOLog( "Waiting on %s\n", s->text());
++#if XNU_HOSTED
++			{
++				uint32_t dump = 0;
++				if (PE_parse_boot_argn("hosted_dump_threads", &dump, sizeof(dump)) && dump) {
++					hosted_dump_blocked_threads();
++				}
++			}
++#endif /* XNU_HOSTED */
+ 		}
+ 		s->release();
+ 	}
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+index 106e549..b164bdc 100644
+--- a/osfmk/arm64/hosted/hosted_machine.c
++++ b/osfmk/arm64/hosted/hosted_machine.c
+@@ -522,3 +522,36 @@ hosted_wall_time(void)
+ }
+ 
+ #endif /* XNU_HOSTED */
++
++/*
++ * A debugging aid for a boot that waits: the kernel stack of every blocked thread, as link addresses of the image
++ * (subtract nothing: they are what kernel/prelink/unmapped.py and a symbol table take). Printed at each "Waiting on"
++ * of the root device search when the boot argument hosted_dump_threads=1 is given, and callable from anywhere.
++ * A thread with a continuation has no stack to walk and is left out.
++ */
++#include <kern/processor.h>
++void hosted_dump_blocked_threads(void);
++void
++hosted_dump_blocked_threads(void)
++{
++	thread_t t;
++	extern vm_offset_t vm_kernel_slide;
++
++	queue_iterate(&threads, t, thread_t, threads) {
++		if (t == current_thread() || t->kernel_stack == 0 || t->continuation != NULL) {
++			continue;
++		}
++		thread_kernel_state_t ks = thread_get_kernel_state(t);
++		uint64_t fp = ks->machine.ss.fp, lr = ks->machine.ss.lr;
++		printf("THR %p ev %p:", t, (void *)(uintptr_t)t->wait_event);
++		for (int i = 0; i < 16; i++) {
++			printf(" %llx", (unsigned long long)((uintptr_t)ptrauth_strip((void *)lr, ptrauth_key_return_address) - vm_kernel_slide));
++			if (fp < t->kernel_stack || fp >= t->kernel_stack + KERNEL_STACK_SIZE - 16) {
++				break;
++			}
++			lr = ((uint64_t *)fp)[1];
++			fp = ((uint64_t *)fp)[0];
++		}
++		printf("\n");
++	}
++}
