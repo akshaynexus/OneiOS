@@ -47,7 +47,7 @@ Older rows in "Reaching each other" are finished agents. These are the live ones
 | fable-user | `0002` return to user, copyio | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3A69600b93-a198-4d9a-8dcf-13d000cd686c` |
 | fable-prelink | `kernel/prelink/`, `kernel.kc` | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3A68970e0a-e8ff-4a6b-806f-a1df5168ecf5` |
 | fable-smp | `0003` SMP, timer, irq, mmio | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3Abf49c997-0256-4f35-9b57-302df20f7a5d` |
-| fable-root | `0004` root mount, launchd | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3Ad4c9ff39-e719-446a-87ed-1ac09aa5d3a5` |
+| fable-root2 (took over from fable-root, whose session stopped after `3b57b73`) | `0004` root mount, launchd, `kernel/patches/oneios-hosted/storage/` | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3Aeaa6aa06-7f74-4df6-95ef-94f1465c7dda` |
 | fable-gpu | `0005` GPU 3D, drm2kgsl | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3Aa49fcfa7-d82b-43f0-96c9-e92a2c195c74` |
 | fable-display | `runtime/display/` (iOS frames on the panel via surfaceflinger), its start/stop in the fork's session | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3A3df896ea-8156-454d-b122-3340e52f7573` |
 
