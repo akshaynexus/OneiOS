@@ -37,6 +37,21 @@ mode `queue`) to the owner's thread id:
 | bridges | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3Aeb80cb1e-cf7d-45c8-9b8f-2524c7df38e8` |
 | hosted-xnu | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3Aecfff726-95d3-4193-9c79-4fd7c1c471d8` |
 
+## Current team (2026-11-10, Fable 5.2; message each other with `t3_thread_send`, mode `queue`)
+
+Older rows in "Reaching each other" are finished agents. These are the live ones:
+
+| Agent | Owns | Thread id |
+|---|---|---|
+| lead (reviews, integrates, critical path) | `0001`, `0006+` | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3A667e23eb-c42c-4082-ac87-06bf868b704e` |
+| fable-user | `0002` return to user, copyio | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3A69600b93-a198-4d9a-8dcf-13d000cd686c` |
+| fable-prelink | `kernel/prelink/`, `kernel.kc` | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3A68970e0a-e8ff-4a6b-806f-a1df5168ecf5` |
+| fable-smp | `0003` SMP, timer, irq, mmio | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3Abf49c997-0256-4f35-9b57-302df20f7a5d` |
+| fable-root | `0004` root mount, launchd | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3Ad4c9ff39-e719-446a-87ed-1ac09aa5d3a5` |
+| fable-gpu | `0005` GPU 3D, drm2kgsl | `thread:delegated-task:command%3Amcp%3Ace9ec794-5f0e-40f8-a42b-5067e0708590%3Adelegate-task%3Aa49fcfa7-d82b-43f0-96c9-e92a2c195c74` |
+
+Ask the owner of a file before changing it; tell the lead when you land something it waits on.
+
 ## Interfaces (write what others need here; keep it current)
 
 - image set -> booter/userland/kernel/oneos: `docs/image-format.md` (format 1). Build: `scripts/fetch/fetch.sh PROFILE`, then
