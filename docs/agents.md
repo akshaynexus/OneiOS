@@ -17,6 +17,7 @@ repo, with the Mi A3 / laurel_sprout work), UniXNU, Droid-VM, OneOS (`/home/aksh
 | XNU kernel: UniXNU + iOSPlus10 patches, iOS profile, the build (Linux toolchain where possible) | release-kernel | `kernel/`, `.github/`, `runtime/package.sh`, `docs/releases.md` |
 | iOS 27 userland: root layout, cryptexes, launchd/daemon tweaks, iOS (not iPadOS) identity, display @3x, Metal plugin | userland | `userland/`, `docs/userland.md` |
 | Hardware: XNU-side drivers and host bridges (CPU topology, GPU bridge with booter, Wi-Fi en0, Bluetooth HCI, haptics, audio, camera) | bridges | `drivers/`, `runtime/bridges/`, `docs/hardware.md` |
+| XNU hosted machine layer: run xnu-12377 under xnuhost's ABI (slide <2^39, pmap on task_map, thread_run loop, no MMU) | hosted-xnu | `kernel/patches/oneios-hosted/`, `kernel/device/` hosted config |
 | OneOS fork integration (`/home/akshay/Documents/GitHub/OneOS`, branch `oneios`) | oneos | that repo; `oneos/` here for shared notes |
 | External references: survey of kernels and drivers that fit the S24 Ultra, pinned reference clones | references | `docs/references.md`, `scripts/setup/get-references.sh` |
 
@@ -34,6 +35,7 @@ mode `queue`) to the owner's thread id:
 | userland | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3Aab462e7a-0cd0-45a7-806b-f514249a862e` |
 | references | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3Afe9430a7-f774-49b1-b946-b7f143e55962` |
 | bridges | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3Aeb80cb1e-cf7d-45c8-9b8f-2524c7df38e8` |
+| hosted-xnu | `thread:delegated-task:command%3Amcp%3A9bead631-dd5f-4441-aca0-cf47f758ae25%3Adelegate-task%3Aecfff726-95d3-4193-9c79-4fd7c1c471d8` |
 
 ## Interfaces (write what others need here; keep it current)
 
