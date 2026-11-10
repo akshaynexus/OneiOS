@@ -7,30 +7,53 @@ the image lives in a folder, One UI's kernel keeps running.
 OneOS's guests are Android systems that run unchanged on One UI's Linux kernel. iOS's userland needs
 Apple's kernel (XNU), so OneiOS runs a source-built XNU **as a process on One UI's kernel**
 (`runtime/xnuhost`): iOS's processes are Linux processes whose system calls and faults go to it. The
-image, the switch and the return stay OneOS-shaped. Design, milestones and open questions:
-[docs/plan.md](docs/plan.md).
+image, the switch and the return stay OneOS-shaped. How it fits together: [docs/architecture.md](docs/architecture.md).
+How to build and test it: [docs/building.md](docs/building.md).
 
-Status: **design and first probes**. Nothing boots yet.
+## Status
+
+**Experimental. iOS does not boot to the home screen yet. Nothing has run on the phone yet.**
+
+On the PC (xnuhost under `qemu-aarch64`, 8 vCPUs, the real iOS 27.0.1 `24A446` image set, `kernel.kc` with the
+iPhone18,2 kexts), the boot gets through:
+
+- corecrypto's POST, AppleImage4, AMFI, Seatbelt, the trust caches, IOKit matching, `bsd_init`;
+- the root mount from the image set (verified by xnuhost), swap, pid 1;
+- the first user process (`newfs_apfs`, the Data volume's first start) running in user mode, the dyld shared
+  cache's 4K code signatures, the shared cache mapped and slid (8 GiB shared region), Mach messaging.
+
+It stops on the next kernel function the prelink has not paired yet. Not reached: the Data mount, launchd,
+backboardd, SpringBoard. Detail: [kernel/patches/oneios-hosted/README.md](kernel/patches/oneios-hosted/README.md)
+and the board, [docs/agents.md](docs/agents.md).
+
+Built and tested on the PC, not yet on the phone: xnuhost and its loader, the GPU path (drm2kgsl on KGSL), the
+display helper, the hardware bridges (CPU, network, Bluetooth, haptics, audio, brightness and the light sensor,
+camera), the image pipeline, the runtime package and releases, and the OneOS fork's iOS 27 card, session scripts and
+Hardware checks. Not done: the camera's iOS-side capture device, auto-brightness's last link into CoreBrightness,
+the Metal plug-in build for the iPhone cache. Never: passcode, Face ID, Wallet, calls, SMS.
 
 ## Layout
 
 ```
-docs/plan.md        the plan: approach, milestones M0-M7, risks, questions
-scripts/fetch/      download Apple's IPSW parts for a pinned build (from Apple's servers, never from here)
-scripts/image/      turn them into the OneiOS image set (out/image/), MysticGSI-style manifest + SHA-256
-runtime/            xnuhost (XNU as a process) and the M0 phone probes (Android NDK, arm64)
-kernel/             scripts and patches for the source-built XNU (UniXNU-based, iOS profile)
-oneos/              integration with the OneOS fork (akshaynexus/OneOS): the iOS system entry and session scripts
-tools/              host tools
+docs/architecture.md  how the parts fit; docs/building.md  how to build and test; docs/*.md  each part in detail
+profiles/             the pinned IPSW profile (iPhone18,2 iOS 27.0.1 24A446)
+scripts/fetch/        fetch only the needed IPSW members from Apple's CDN (never from here)
+scripts/image/        build the image set (MysticGSI-style manifest, SHA-256, .tar.zst)
+userland/             iOS 27 root and Data tweaks (the image hook), guest helpers, the camera plug-in
+kernel/               XNU 12377 (UniXNU / Droid-VM fork) built on Linux; oneios-hosted/ patches; prelink/ (kernel.kc)
+runtime/              xnuhost and its loader, the display helper, the hardware bridges, the runtime package
+drivers/              iOS-side drivers for the bridges (CPU, network, Bluetooth, haptics, audio, brightness, camera)
+oneos/                the contract with the OneOS fork (akshaynexus/OneOS, branch oneios)
 ```
 
 ## Rules
 
-- **No Apple files in git or in releases.** IPSWs, cryptexes, kernelcaches, kexts and every image built
-  from them stay in `out/`, `inputs/` or `firmware/` (git-ignored). Scripts fetch them from Apple and
-  build them on the owner's machine. Releases carry only this project's own code and builds
-  (scripts, runtime binaries, the XNU built from Apple's open source under the APSL, the OneOS patches).
+- **No Apple files in git or in releases.** IPSWs, cryptexes, kernelcaches, kexts, `kernel.kc` and every image built
+  from them stay in `out/` and `inputs/` (git-ignored). Scripts fetch them from Apple and build them on the owner's
+  machine. Releases carry only this project's own code (scripts, runtime binaries, the OneOS patches); the kernel is
+  built locally (it links Apple's corecrypto).
 - Long jobs run in tmux: `scripts/bg.sh NAME COMMAND...`.
+- Every change updates the docs that describe it: [CLAUDE.md](CLAUDE.md).
 
 ## Credits
 
@@ -38,5 +61,5 @@ tools/              host tools
 [OneLineage](https://github.com/WeWaffles/OneLineage) (WeWaffles): the container hot-switch.
 [MysticGSI](https://github.com/MysticGSI/mysticgsi): the image build model.
 [UniXNU](https://github.com/UniXNU/UniXNU) and [Droid-VM](https://github.com/Droid-VM): XNU on non-Apple
-ARM64. [iOSPlus10](https://github.com/akshaynexus/iOSPlus10): XNU and iOS userland on Qualcomm phones.
-[Darling](https://github.com/darlinghq/darling): Mach and XNU on Linux.
+ARM64, drm2kgsl, the guest drivers. [iOSPlus10](https://github.com/akshaynexus/iOSPlus10): XNU and iOS userland on
+Qualcomm phones, haptics and brightness. [Darling](https://github.com/darlinghq/darling): Mach and XNU on Linux.

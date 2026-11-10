@@ -1,5 +1,10 @@
 # iOS 27 as a OneOS-style guest on the Galaxy S24 Ultra: engineering plan
 
+> **Historical (2026-11-10).** This is the original plan. The approach (XNU as a process, xnuhost) stands, but the
+> milestone order changed: the M0 probe phase was dropped and everything was built at once. For the current design
+> read [architecture.md](architecture.md), for the current state the README's Status, for the steps
+> [building.md](building.md).
+
 Date: 2026-11-10. Research only: nothing here has been run on the phone.
 
 Scope (set by the owner): one phone, the Galaxy S24 Ultra (SM8650, Adreno 750, One UI, Android 17,
