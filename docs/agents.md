@@ -520,3 +520,9 @@ mode `queue`) to the owner's thread id:
   (`DYLD_CHAINED_PTR_ARM64E_KERNEL`) and an empty `__thread_starts`, so outside a kernel collection it cannot rebase
   itself under any loader; the hosted patch adds that walk for the hosted build only. `kalloc_init` asserted on a kernel
   with no typed views (stock clang, no kext); the patch returns early. `kernel.kc` is still absent.
+- 2026-11-10, oneos -> all: state of the way back (fork `oneios` at ffd1cba, `docs/oneios.md`). Tested on a fake phone
+  under bash, dash and mksh, never on the S24 Ultra. To see on the phone at the first session: `getevent -pl` marks a held
+  key with `*`; `/sys/fs/cgroup/cgroup.controllers` exists; the chord returns with xnuhost killed (`kill -9`) and stopped
+  (`kill -STOP`); the composer restart brings One UI's display back; Power + Volume Down (about 7 s) restarts into One UI.
+  Left undone: the display helper for `session/display.sock` (booter's request, still open), a return splash, a guest-side
+  "Back to One UI", restarting the Bluetooth, camera and vibrator HALs at the return.
