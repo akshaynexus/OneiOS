@@ -26,6 +26,566 @@
  ],
  "functions": [
   {
+   "original": "0xfffffe000b33c5d8",
+   "native_symbol": "__ZN12IODMACommandD2Ev",
+   "check": {
+    "address": "0xfffffe000b33c5d8",
+    "size": 152,
+    "sha256": "d8502b486440669f1b5779655db91ce5f4d821b1435209063b5dde4cd01cad2f"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py) and the code. ml_at_interrupt_context: returns false when interrupts are unmasked and otherwise whether the CPU's interrupt state pointer is set; imported after memset and before the next one. ml_get_interrupts_enabled: reads DAIF and returns whether interrupts are unmasked; imported after ml_at_interrupt_context and before ml_get_topology_info (15 kexts). IOWorkLoop::runActionBlock: the one IOWorkLoop export between _Block_release and OSMetaClass's constructor in 15 tables; it moves the block to the fourth argument and calls the virtual runAction with a static invoker. IOBufferMemoryDescriptor's and IODMACommand's base destructors: each imported directly after the class's constructor from a metaclass (C2EPK11OSMetaClass) and before the next class, the place D2Ev sorts."
+  },
+  {
+   "original": "0xfffffe000b338d38",
+   "native_symbol": "__ZN24IOBufferMemoryDescriptorD2Ev",
+   "check": {
+    "address": "0xfffffe000b338d38",
+    "size": 180,
+    "sha256": "99a5eae0185c7aacaaf8acf19f7f8674340ab10751c62c9e880f758ffc253618"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py) and the code. ml_at_interrupt_context: returns false when interrupts are unmasked and otherwise whether the CPU's interrupt state pointer is set; imported after memset and before the next one. ml_get_interrupts_enabled: reads DAIF and returns whether interrupts are unmasked; imported after ml_at_interrupt_context and before ml_get_topology_info (15 kexts). IOWorkLoop::runActionBlock: the one IOWorkLoop export between _Block_release and OSMetaClass's constructor in 15 tables; it moves the block to the fourth argument and calls the virtual runAction with a static invoker. IOBufferMemoryDescriptor's and IODMACommand's base destructors: each imported directly after the class's constructor from a metaclass (C2EPK11OSMetaClass) and before the next class, the place D2Ev sorts."
+  },
+  {
+   "original": "0xfffffe000b32f360",
+   "native_symbol": "__ZN10IOWorkLoop14runActionBlockEU13block_pointerFivE",
+   "check": {
+    "address": "0xfffffe000b32f360",
+    "size": 92,
+    "sha256": "19e8520f775d06f956f03c6898eecaa09e61f3eb3eb2cf2ba5d061502ee3ca2d"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py) and the code. ml_at_interrupt_context: returns false when interrupts are unmasked and otherwise whether the CPU's interrupt state pointer is set; imported after memset and before the next one. ml_get_interrupts_enabled: reads DAIF and returns whether interrupts are unmasked; imported after ml_at_interrupt_context and before ml_get_topology_info (15 kexts). IOWorkLoop::runActionBlock: the one IOWorkLoop export between _Block_release and OSMetaClass's constructor in 15 tables; it moves the block to the fourth argument and calls the virtual runAction with a static invoker. IOBufferMemoryDescriptor's and IODMACommand's base destructors: each imported directly after the class's constructor from a metaclass (C2EPK11OSMetaClass) and before the next class, the place D2Ev sorts."
+  },
+  {
+   "original": "0xfffffe000ad577f8",
+   "native_symbol": "_ml_get_interrupts_enabled",
+   "check": {
+    "address": "0xfffffe000ad577f8",
+    "size": 24,
+    "sha256": "a7543740c94166bc88ccc6b6b61f1227187394dafff33f27760b62b4a173b1f2"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py) and the code. ml_at_interrupt_context: returns false when interrupts are unmasked and otherwise whether the CPU's interrupt state pointer is set; imported after memset and before the next one. ml_get_interrupts_enabled: reads DAIF and returns whether interrupts are unmasked; imported after ml_at_interrupt_context and before ml_get_topology_info (15 kexts). IOWorkLoop::runActionBlock: the one IOWorkLoop export between _Block_release and OSMetaClass's constructor in 15 tables; it moves the block to the fourth argument and calls the virtual runAction with a static invoker. IOBufferMemoryDescriptor's and IODMACommand's base destructors: each imported directly after the class's constructor from a metaclass (C2EPK11OSMetaClass) and before the next class, the place D2Ev sorts."
+  },
+  {
+   "original": "0xfffffe000ad56ea8",
+   "native_symbol": "_ml_at_interrupt_context",
+   "check": {
+    "address": "0xfffffe000ad56ea8",
+    "size": 52,
+    "sha256": "392c95f5d1bfc12d57b6fbd680d3630e803ff30d70dcc69e9ea12f0be46fb53b"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py) and the code. ml_at_interrupt_context: returns false when interrupts are unmasked and otherwise whether the CPU's interrupt state pointer is set; imported after memset and before the next one. ml_get_interrupts_enabled: reads DAIF and returns whether interrupts are unmasked; imported after ml_at_interrupt_context and before ml_get_topology_info (15 kexts). IOWorkLoop::runActionBlock: the one IOWorkLoop export between _Block_release and OSMetaClass's constructor in 15 tables; it moves the block to the fourth argument and calls the virtual runAction with a static invoker. IOBufferMemoryDescriptor's and IODMACommand's base destructors: each imported directly after the class's constructor from a metaclass (C2EPK11OSMetaClass) and before the next class, the place D2Ev sorts."
+  },
+  {
+   "original": "0xfffffe000b0d74fc",
+   "native_symbol": "_ctl_name_by_id",
+   "check": {
+    "address": "0xfffffe000b0d74fc",
+    "size": 244,
+    "sha256": "6228375edf2db673a69015e93168571f67ec8a3a7f67764cde27da038b1d4fbe"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py) and the code. mig_strncpy and mig_strncpy_zerofill: two (dest, src, len) loops imported in this order between microuptime and msleep (lifs) and before os_log_create (AMFI); the second is the longer one, which also clears the rest of the buffer. fifo_close and fifo_read: APFS imports two names between doc_tombstone_should_save and fifo_write; the first takes the vnode, fflag and context out of the vnop arguments and branches to the internal close with a 0, the second is the 288-byte function directly before fifo_write. kauth_proc_label_update: between kauth_cred_unref and lck_grp_alloc_init in the sandbox's table, and directly before its own block in the kernel. proc_getcdhash_with_length: between proc_find_ident and proc_getexecutablevnode in AMFI's table; three arguments (proc, buffer, optional length pointer), after proc_uniqueid_task as in the source. ctl_name_by_id: between csvnode_get_blob and current_cached_proc_cred in the sandbox's table; takes the control list lock and compares each entry's id (+120) with its first argument; the third function after ctl_deregister as in the source."
+  },
+  {
+   "original": "0xfffffe000b0f4da0",
+   "native_symbol": "_proc_getcdhash_with_length",
+   "check": {
+    "address": "0xfffffe000b0f4da0",
+    "size": 248,
+    "sha256": "54dbe64d2ba8469c17fc3a39354593c98dc6b3277ebcdad8d58489a41e947dfc"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py) and the code. mig_strncpy and mig_strncpy_zerofill: two (dest, src, len) loops imported in this order between microuptime and msleep (lifs) and before os_log_create (AMFI); the second is the longer one, which also clears the rest of the buffer. fifo_close and fifo_read: APFS imports two names between doc_tombstone_should_save and fifo_write; the first takes the vnode, fflag and context out of the vnop arguments and branches to the internal close with a 0, the second is the 288-byte function directly before fifo_write. kauth_proc_label_update: between kauth_cred_unref and lck_grp_alloc_init in the sandbox's table, and directly before its own block in the kernel. proc_getcdhash_with_length: between proc_find_ident and proc_getexecutablevnode in AMFI's table; three arguments (proc, buffer, optional length pointer), after proc_uniqueid_task as in the source. ctl_name_by_id: between csvnode_get_blob and current_cached_proc_cred in the sandbox's table; takes the control list lock and compares each entry's id (+120) with its first argument; the third function after ctl_deregister as in the source."
+  },
+  {
+   "original": "0xfffffe000b0b749c",
+   "native_symbol": "_kauth_proc_label_update",
+   "check": {
+    "address": "0xfffffe000b0b749c",
+    "size": 132,
+    "sha256": "3dc3eaa30da939847d2c0464c05812f0e11c1add2251878781716d102dd6379d"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py) and the code. mig_strncpy and mig_strncpy_zerofill: two (dest, src, len) loops imported in this order between microuptime and msleep (lifs) and before os_log_create (AMFI); the second is the longer one, which also clears the rest of the buffer. fifo_close and fifo_read: APFS imports two names between doc_tombstone_should_save and fifo_write; the first takes the vnode, fflag and context out of the vnop arguments and branches to the internal close with a 0, the second is the 288-byte function directly before fifo_write. kauth_proc_label_update: between kauth_cred_unref and lck_grp_alloc_init in the sandbox's table, and directly before its own block in the kernel. proc_getcdhash_with_length: between proc_find_ident and proc_getexecutablevnode in AMFI's table; three arguments (proc, buffer, optional length pointer), after proc_uniqueid_task as in the source. ctl_name_by_id: between csvnode_get_blob and current_cached_proc_cred in the sandbox's table; takes the control list lock and compares each entry's id (+120) with its first argument; the third function after ctl_deregister as in the source."
+  },
+  {
+   "original": "0xfffffe000adf7f64",
+   "native_symbol": "_fifo_read",
+   "check": {
+    "address": "0xfffffe000adf7f64",
+    "size": 288,
+    "sha256": "6cb03e4881bc0d42c25feb3e9f965efb59a3290ea7d5a14704d96e8b27bd91bc"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py) and the code. mig_strncpy and mig_strncpy_zerofill: two (dest, src, len) loops imported in this order between microuptime and msleep (lifs) and before os_log_create (AMFI); the second is the longer one, which also clears the rest of the buffer. fifo_close and fifo_read: APFS imports two names between doc_tombstone_should_save and fifo_write; the first takes the vnode, fflag and context out of the vnop arguments and branches to the internal close with a 0, the second is the 288-byte function directly before fifo_write. kauth_proc_label_update: between kauth_cred_unref and lck_grp_alloc_init in the sandbox's table, and directly before its own block in the kernel. proc_getcdhash_with_length: between proc_find_ident and proc_getexecutablevnode in AMFI's table; three arguments (proc, buffer, optional length pointer), after proc_uniqueid_task as in the source. ctl_name_by_id: between csvnode_get_blob and current_cached_proc_cred in the sandbox's table; takes the control list lock and compares each entry's id (+120) with its first argument; the third function after ctl_deregister as in the source."
+  },
+  {
+   "original": "0xfffffe000adf8090",
+   "native_symbol": "_fifo_close",
+   "check": {
+    "address": "0xfffffe000adf8090",
+    "size": 24,
+    "sha256": "46cde01ad3be418fc252c48e8c7433a513204c0cfd906c9b990b09bdbd0289cd"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py) and the code. mig_strncpy and mig_strncpy_zerofill: two (dest, src, len) loops imported in this order between microuptime and msleep (lifs) and before os_log_create (AMFI); the second is the longer one, which also clears the rest of the buffer. fifo_close and fifo_read: APFS imports two names between doc_tombstone_should_save and fifo_write; the first takes the vnode, fflag and context out of the vnop arguments and branches to the internal close with a 0, the second is the 288-byte function directly before fifo_write. kauth_proc_label_update: between kauth_cred_unref and lck_grp_alloc_init in the sandbox's table, and directly before its own block in the kernel. proc_getcdhash_with_length: between proc_find_ident and proc_getexecutablevnode in AMFI's table; three arguments (proc, buffer, optional length pointer), after proc_uniqueid_task as in the source. ctl_name_by_id: between csvnode_get_blob and current_cached_proc_cred in the sandbox's table; takes the control list lock and compares each entry's id (+120) with its first argument; the third function after ctl_deregister as in the source."
+  },
+  {
+   "original": "0xfffffe000abc631c",
+   "native_symbol": "_mig_strncpy_zerofill",
+   "check": {
+    "address": "0xfffffe000abc631c",
+    "size": 120,
+    "sha256": "77ddf65264d65fe65919b4a76b2798aa02ee056c43a42d6d8f0b079e5050224b"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py) and the code. mig_strncpy and mig_strncpy_zerofill: two (dest, src, len) loops imported in this order between microuptime and msleep (lifs) and before os_log_create (AMFI); the second is the longer one, which also clears the rest of the buffer. fifo_close and fifo_read: APFS imports two names between doc_tombstone_should_save and fifo_write; the first takes the vnode, fflag and context out of the vnop arguments and branches to the internal close with a 0, the second is the 288-byte function directly before fifo_write. kauth_proc_label_update: between kauth_cred_unref and lck_grp_alloc_init in the sandbox's table, and directly before its own block in the kernel. proc_getcdhash_with_length: between proc_find_ident and proc_getexecutablevnode in AMFI's table; three arguments (proc, buffer, optional length pointer), after proc_uniqueid_task as in the source. ctl_name_by_id: between csvnode_get_blob and current_cached_proc_cred in the sandbox's table; takes the control list lock and compares each entry's id (+120) with its first argument; the third function after ctl_deregister as in the source."
+  },
+  {
+   "original": "0xfffffe000abc62c0",
+   "native_symbol": "_mig_strncpy",
+   "check": {
+    "address": "0xfffffe000abc62c0",
+    "size": 92,
+    "sha256": "90f2606e0bedd1bade033ff6bd207777862ec0f21cf9405d09830698d3b2d7ff"
+   },
+   "evidence": "By the kexts' name-sorted import tables (kernel/prelink/lead/imports.py) and the code. mig_strncpy and mig_strncpy_zerofill: two (dest, src, len) loops imported in this order between microuptime and msleep (lifs) and before os_log_create (AMFI); the second is the longer one, which also clears the rest of the buffer. fifo_close and fifo_read: APFS imports two names between doc_tombstone_should_save and fifo_write; the first takes the vnode, fflag and context out of the vnop arguments and branches to the internal close with a 0, the second is the 288-byte function directly before fifo_write. kauth_proc_label_update: between kauth_cred_unref and lck_grp_alloc_init in the sandbox's table, and directly before its own block in the kernel. proc_getcdhash_with_length: between proc_find_ident and proc_getexecutablevnode in AMFI's table; three arguments (proc, buffer, optional length pointer), after proc_uniqueid_task as in the source. ctl_name_by_id: between csvnode_get_blob and current_cached_proc_cred in the sandbox's table; takes the control list lock and compares each entry's id (+120) with its first argument; the third function after ctl_deregister as in the source."
+  },
+  {
+   "original": "0xfffffe000b1038c4",
+   "native_symbol": "_get_system_inshutdown",
+   "check": {
+    "address": "0xfffffe000b1038c4",
+    "size": 16,
+    "sha256": "6616d42647c600766868ce1786db5fee9244ea0a10d4c850f0a10d3191b777c4"
+   },
+   "evidence": "bsd/kern/kern_shutdown.c: between thread_selfusage and reboot_kernel; returns a 32-bit global. APFS imports it directly after generate_file_permissions_guard_exception in its name-sorted import table, where get_system_inshutdown sorts, and calls it while newfs_apfs creates the Data volume."
+  },
+  {
+   "original": "0xfffffe000b2be4bc",
+   "native_symbol": "_MD5Init",
+   "check": {
+    "address": "0xfffffe000b2be4bc",
+    "size": 320,
+    "sha256": "7571aadb53ab70ea40d93a805291d97fcf00ac9894db4d295eba787d90c99e76"
+   },
+   "evidence": "Found by the import-table order check (a kext's __auth_got is sorted by symbol name; the name each of these had sat out of order between two ordered neighbours) and confirmed by the code. lck_ticket_destroy: checks the lock's type byte (68) and clears it; it is imported directly before lck_ticket_init, which stores the initial pattern (the lead's record had it as lck_ticket_lock). psignal_sigkill_try_thread_with_reason (p, thread, reason) and psignal_sigkill_with_reason (p, reason): both pass signal 9 to the internal function, the first with the try-thread flag 8; imported in that order between proc_uniqueid and the ptrauth functions (the order rule had named them psignal_try_thread and psignal_locked). cs_blob_reset_cache: adds 2 to a global generation counter and returns; between copyoutstr and cs_entitlement_flags (was cs_text_fixup_page). socd_client_trace: between snprintf and strcmp (the matcher's string rule had PE_read_socd_client_buffer). MD5Init: the one export between MD5Final and MD5Update (the matcher's order rule had SHA1Final)."
+  },
+  {
+   "original": "0xfffffe000ac4e9e0",
+   "native_symbol": "_socd_client_trace",
+   "check": {
+    "address": "0xfffffe000ac4e9e0",
+    "size": 396,
+    "sha256": "67fec5ca067242d15279b5e08dde40432d1f6b99b3dc1c4e5af07ef5cfbb8366"
+   },
+   "evidence": "Found by the import-table order check (a kext's __auth_got is sorted by symbol name; the name each of these had sat out of order between two ordered neighbours) and confirmed by the code. lck_ticket_destroy: checks the lock's type byte (68) and clears it; it is imported directly before lck_ticket_init, which stores the initial pattern (the lead's record had it as lck_ticket_lock). psignal_sigkill_try_thread_with_reason (p, thread, reason) and psignal_sigkill_with_reason (p, reason): both pass signal 9 to the internal function, the first with the try-thread flag 8; imported in that order between proc_uniqueid and the ptrauth functions (the order rule had named them psignal_try_thread and psignal_locked). cs_blob_reset_cache: adds 2 to a global generation counter and returns; between copyoutstr and cs_entitlement_flags (was cs_text_fixup_page). socd_client_trace: between snprintf and strcmp (the matcher's string rule had PE_read_socd_client_buffer). MD5Init: the one export between MD5Final and MD5Update (the matcher's order rule had SHA1Final)."
+  },
+  {
+   "original": "0xfffffe000b1591ec",
+   "native_symbol": "_cs_blob_reset_cache",
+   "check": {
+    "address": "0xfffffe000b1591ec",
+    "size": 24,
+    "sha256": "d494aa8df1ab4f4539e349c1ceac4cb27af68fada457840c8684505ebcf982e1"
+   },
+   "evidence": "Found by the import-table order check (a kext's __auth_got is sorted by symbol name; the name each of these had sat out of order between two ordered neighbours) and confirmed by the code. lck_ticket_destroy: checks the lock's type byte (68) and clears it; it is imported directly before lck_ticket_init, which stores the initial pattern (the lead's record had it as lck_ticket_lock). psignal_sigkill_try_thread_with_reason (p, thread, reason) and psignal_sigkill_with_reason (p, reason): both pass signal 9 to the internal function, the first with the try-thread flag 8; imported in that order between proc_uniqueid and the ptrauth functions (the order rule had named them psignal_try_thread and psignal_locked). cs_blob_reset_cache: adds 2 to a global generation counter and returns; between copyoutstr and cs_entitlement_flags (was cs_text_fixup_page). socd_client_trace: between snprintf and strcmp (the matcher's string rule had PE_read_socd_client_buffer). MD5Init: the one export between MD5Final and MD5Update (the matcher's order rule had SHA1Final)."
+  },
+  {
+   "original": "0xfffffe000b10886c",
+   "native_symbol": "_psignal_sigkill_with_reason",
+   "check": {
+    "address": "0xfffffe000b10886c",
+    "size": 28,
+    "sha256": "8625e5e9b7ddcc488eac3b305c4c9d96ce7c92884a272a61442f70c27c9e8911"
+   },
+   "evidence": "Found by the import-table order check (a kext's __auth_got is sorted by symbol name; the name each of these had sat out of order between two ordered neighbours) and confirmed by the code. lck_ticket_destroy: checks the lock's type byte (68) and clears it; it is imported directly before lck_ticket_init, which stores the initial pattern (the lead's record had it as lck_ticket_lock). psignal_sigkill_try_thread_with_reason (p, thread, reason) and psignal_sigkill_with_reason (p, reason): both pass signal 9 to the internal function, the first with the try-thread flag 8; imported in that order between proc_uniqueid and the ptrauth functions (the order rule had named them psignal_try_thread and psignal_locked). cs_blob_reset_cache: adds 2 to a global generation counter and returns; between copyoutstr and cs_entitlement_flags (was cs_text_fixup_page). socd_client_trace: between snprintf and strcmp (the matcher's string rule had PE_read_socd_client_buffer). MD5Init: the one export between MD5Final and MD5Update (the matcher's order rule had SHA1Final)."
+  },
+  {
+   "original": "0xfffffe000b108888",
+   "native_symbol": "_psignal_sigkill_try_thread_with_reason",
+   "check": {
+    "address": "0xfffffe000b108888",
+    "size": 28,
+    "sha256": "ae1499c24ae275c7b966fcb9edfa1686cb618d71dea98ca46fea4304145bbe93"
+   },
+   "evidence": "Found by the import-table order check (a kext's __auth_got is sorted by symbol name; the name each of these had sat out of order between two ordered neighbours) and confirmed by the code. lck_ticket_destroy: checks the lock's type byte (68) and clears it; it is imported directly before lck_ticket_init, which stores the initial pattern (the lead's record had it as lck_ticket_lock). psignal_sigkill_try_thread_with_reason (p, thread, reason) and psignal_sigkill_with_reason (p, reason): both pass signal 9 to the internal function, the first with the try-thread flag 8; imported in that order between proc_uniqueid and the ptrauth functions (the order rule had named them psignal_try_thread and psignal_locked). cs_blob_reset_cache: adds 2 to a global generation counter and returns; between copyoutstr and cs_entitlement_flags (was cs_text_fixup_page). socd_client_trace: between snprintf and strcmp (the matcher's string rule had PE_read_socd_client_buffer). MD5Init: the one export between MD5Final and MD5Update (the matcher's order rule had SHA1Final)."
+  },
+  {
+   "original": "0xfffffe000abd8788",
+   "native_symbol": "_lck_ticket_destroy",
+   "check": {
+    "address": "0xfffffe000abd8788",
+    "size": 56,
+    "sha256": "dca2430c0e1431892d2271852a71b76d7b18173e42d7e129c4a3351235131664"
+   },
+   "evidence": "Found by the import-table order check (a kext's __auth_got is sorted by symbol name; the name each of these had sat out of order between two ordered neighbours) and confirmed by the code. lck_ticket_destroy: checks the lock's type byte (68) and clears it; it is imported directly before lck_ticket_init, which stores the initial pattern (the lead's record had it as lck_ticket_lock). psignal_sigkill_try_thread_with_reason (p, thread, reason) and psignal_sigkill_with_reason (p, reason): both pass signal 9 to the internal function, the first with the try-thread flag 8; imported in that order between proc_uniqueid and the ptrauth functions (the order rule had named them psignal_try_thread and psignal_locked). cs_blob_reset_cache: adds 2 to a global generation counter and returns; between copyoutstr and cs_entitlement_flags (was cs_text_fixup_page). socd_client_trace: between snprintf and strcmp (the matcher's string rule had PE_read_socd_client_buffer). MD5Init: the one export between MD5Final and MD5Update (the matcher's order rule had SHA1Final)."
+  },
+  {
+   "original": "0xfffffe000ade8134",
+   "native_symbol": "_vnode_ischr",
+   "check": {
+    "address": "0xfffffe000ade8134",
+    "size": 20,
+    "sha256": "e9d00ff3dd3270726b71ed1e510476b472ec869e4025d6f839c1b04512230fa0"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c, the vnode type tests, each named by the v_type value it compares with (VREG 1, VDIR 2, VBLK 3, VCHR 4, VLNK 5, VSOCK 6, VFIFO 7): 5 is vnode_islnk, 7 vnode_isfifo, 3 vnode_isblk, 4 vnode_ischr. The order rule had named the last three isblk, isspec and issock; those names also broke the alphabetical order of the kexts' import tables (kernel/prelink/lead/imports.py), which these fit."
+  },
+  {
+   "original": "0xfffffe000ade8120",
+   "native_symbol": "_vnode_isblk",
+   "check": {
+    "address": "0xfffffe000ade8120",
+    "size": 20,
+    "sha256": "7e78c8dcebf9adbc0ba1c02af4eb50496bccd3823e4cecf2c9fb3fde8802d1b5"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c, the vnode type tests, each named by the v_type value it compares with (VREG 1, VDIR 2, VBLK 3, VCHR 4, VLNK 5, VSOCK 6, VFIFO 7): 5 is vnode_islnk, 7 vnode_isfifo, 3 vnode_isblk, 4 vnode_ischr. The order rule had named the last three isblk, isspec and issock; those names also broke the alphabetical order of the kexts' import tables (kernel/prelink/lead/imports.py), which these fit."
+  },
+  {
+   "original": "0xfffffe000ade810c",
+   "native_symbol": "_vnode_isfifo",
+   "check": {
+    "address": "0xfffffe000ade810c",
+    "size": 20,
+    "sha256": "16b2dce77e669892fe2a735490b521b91b3604ff3b41b966eb0fa35ca8710fdf"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c, the vnode type tests, each named by the v_type value it compares with (VREG 1, VDIR 2, VBLK 3, VCHR 4, VLNK 5, VSOCK 6, VFIFO 7): 5 is vnode_islnk, 7 vnode_isfifo, 3 vnode_isblk, 4 vnode_ischr. The order rule had named the last three isblk, isspec and issock; those names also broke the alphabetical order of the kexts' import tables (kernel/prelink/lead/imports.py), which these fit."
+  },
+  {
+   "original": "0xfffffe000ade805c",
+   "native_symbol": "_vnode_islnk",
+   "check": {
+    "address": "0xfffffe000ade805c",
+    "size": 20,
+    "sha256": "0c6f1b892cfcc6a86c074ebc7405791e906f1dcfb04c0f38e4f1a646e84e128f"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c, the vnode type tests, each named by the v_type value it compares with (VREG 1, VDIR 2, VBLK 3, VCHR 4, VLNK 5, VSOCK 6, VFIFO 7): 5 is vnode_islnk, 7 vnode_isfifo, 3 vnode_isblk, 4 vnode_ischr. The order rule had named the last three isblk, isspec and issock; those names also broke the alphabetical order of the kexts' import tables (kernel/prelink/lead/imports.py), which these fit."
+  },
+  {
+   "original": "0xfffffe000b153d00",
+   "native_symbol": "_csblob_register_profile",
+   "check": {
+    "address": "0xfffffe000b153d00",
+    "size": 152,
+    "sha256": "affb989a66fb91f9f01a121f5554984be1add298d6ab537b0ed71dd5e55bd34e"
+   },
+   "evidence": "By the order of the kexts' import tables (each kext's __auth_got is sorted by imported symbol name; the lead's kernel/prelink/lead/imports.py gives the bounds) and, among the kernel's exported names between those bounds, by what the code does. sendAsyncResult64 (between sendAsyncResult and setAsyncReference, 25 kexts): mov w4, #0 and a branch to the five-argument internal function. OSArray::setObject(OSSharedPtr const &) (24 kexts): loads the count and the pointer inside the shared pointer and calls the virtual setObject(index, object) at slot 240; the overload with an index passes its own index to the same slot. IOCommandPool's destructor (10 kexts): stores the class's vtable and then tears down its fields. IOReporter::updateReport (11 kexts): the only member function of the three candidates; it takes the reporter's lock at +128 first. IOService::publishResource(const OSSymbol *, OSObject *): a NULL value becomes kOSBooleanTrue, then setProperty on the resources service. IOService::registerInterest with a block: passes a static handler and the block to the virtual registerInterest at slot 1080. mbuf_next returns the first field. IOMemoryDescriptor::getDescriptorID returns a 64-bit field of the reserved data after making sure it is set. IOFreeAligned shifts (address, size) up and passes a heap to the internal free. csblob_register_profile has two arguments (blob, profile record with data at +32 and size at +40); csblob_register_profile_uuid has four."
+  },
+  {
+   "original": "0xfffffe000b2d371c",
+   "native_symbol": "_IOFreeAligned",
+   "check": {
+    "address": "0xfffffe000b2d371c",
+    "size": 24,
+    "sha256": "05486b53065bad0a70255f13481b2f9302bec2663c870397f454cf2f6fd2c8bd"
+   },
+   "evidence": "By the order of the kexts' import tables (each kext's __auth_got is sorted by imported symbol name; the lead's kernel/prelink/lead/imports.py gives the bounds) and, among the kernel's exported names between those bounds, by what the code does. sendAsyncResult64 (between sendAsyncResult and setAsyncReference, 25 kexts): mov w4, #0 and a branch to the five-argument internal function. OSArray::setObject(OSSharedPtr const &) (24 kexts): loads the count and the pointer inside the shared pointer and calls the virtual setObject(index, object) at slot 240; the overload with an index passes its own index to the same slot. IOCommandPool's destructor (10 kexts): stores the class's vtable and then tears down its fields. IOReporter::updateReport (11 kexts): the only member function of the three candidates; it takes the reporter's lock at +128 first. IOService::publishResource(const OSSymbol *, OSObject *): a NULL value becomes kOSBooleanTrue, then setProperty on the resources service. IOService::registerInterest with a block: passes a static handler and the block to the virtual registerInterest at slot 1080. mbuf_next returns the first field. IOMemoryDescriptor::getDescriptorID returns a 64-bit field of the reserved data after making sure it is set. IOFreeAligned shifts (address, size) up and passes a heap to the internal free. csblob_register_profile has two arguments (blob, profile record with data at +32 and size at +40); csblob_register_profile_uuid has four."
+  },
+  {
+   "original": "0xfffffe000b34e660",
+   "native_symbol": "__ZN18IOMemoryDescriptor15getDescriptorIDEv",
+   "check": {
+    "address": "0xfffffe000b34e660",
+    "size": 56,
+    "sha256": "2968da96271dcc4566b15bc1dc43f703bd6249d2ff0df56c38de631d6f948a7f"
+   },
+   "evidence": "By the order of the kexts' import tables (each kext's __auth_got is sorted by imported symbol name; the lead's kernel/prelink/lead/imports.py gives the bounds) and, among the kernel's exported names between those bounds, by what the code does. sendAsyncResult64 (between sendAsyncResult and setAsyncReference, 25 kexts): mov w4, #0 and a branch to the five-argument internal function. OSArray::setObject(OSSharedPtr const &) (24 kexts): loads the count and the pointer inside the shared pointer and calls the virtual setObject(index, object) at slot 240; the overload with an index passes its own index to the same slot. IOCommandPool's destructor (10 kexts): stores the class's vtable and then tears down its fields. IOReporter::updateReport (11 kexts): the only member function of the three candidates; it takes the reporter's lock at +128 first. IOService::publishResource(const OSSymbol *, OSObject *): a NULL value becomes kOSBooleanTrue, then setProperty on the resources service. IOService::registerInterest with a block: passes a static handler and the block to the virtual registerInterest at slot 1080. mbuf_next returns the first field. IOMemoryDescriptor::getDescriptorID returns a 64-bit field of the reserved data after making sure it is set. IOFreeAligned shifts (address, size) up and passes a heap to the internal free. csblob_register_profile has two arguments (blob, profile record with data at +32 and size at +40); csblob_register_profile_uuid has four."
+  },
+  {
+   "original": "0xfffffe000b12ce8c",
+   "native_symbol": "_mbuf_next",
+   "check": {
+    "address": "0xfffffe000b12ce8c",
+    "size": 12,
+    "sha256": "b6097f63592b59ee64929c6a3d22c4fec17e20813d81e216b075edf8eb0280d1"
+   },
+   "evidence": "By the order of the kexts' import tables (each kext's __auth_got is sorted by imported symbol name; the lead's kernel/prelink/lead/imports.py gives the bounds) and, among the kernel's exported names between those bounds, by what the code does. sendAsyncResult64 (between sendAsyncResult and setAsyncReference, 25 kexts): mov w4, #0 and a branch to the five-argument internal function. OSArray::setObject(OSSharedPtr const &) (24 kexts): loads the count and the pointer inside the shared pointer and calls the virtual setObject(index, object) at slot 240; the overload with an index passes its own index to the same slot. IOCommandPool's destructor (10 kexts): stores the class's vtable and then tears down its fields. IOReporter::updateReport (11 kexts): the only member function of the three candidates; it takes the reporter's lock at +128 first. IOService::publishResource(const OSSymbol *, OSObject *): a NULL value becomes kOSBooleanTrue, then setProperty on the resources service. IOService::registerInterest with a block: passes a static handler and the block to the virtual registerInterest at slot 1080. mbuf_next returns the first field. IOMemoryDescriptor::getDescriptorID returns a 64-bit field of the reserved data after making sure it is set. IOFreeAligned shifts (address, size) up and passes a heap to the internal free. csblob_register_profile has two arguments (blob, profile record with data at +32 and size at +40); csblob_register_profile_uuid has four."
+  },
+  {
+   "original": "0xfffffe000b302a5c",
+   "native_symbol": "__ZN9IOService16registerInterestEPK8OSSymbolU13block_pointerFijPS_PvmE",
+   "check": {
+    "address": "0xfffffe000b302a5c",
+    "size": 80,
+    "sha256": "cf871cffa43e2a8cc2218f569e0afdbf36f9b494556e8ac6808d8127cd9cdf26"
+   },
+   "evidence": "By the order of the kexts' import tables (each kext's __auth_got is sorted by imported symbol name; the lead's kernel/prelink/lead/imports.py gives the bounds) and, among the kernel's exported names between those bounds, by what the code does. sendAsyncResult64 (between sendAsyncResult and setAsyncReference, 25 kexts): mov w4, #0 and a branch to the five-argument internal function. OSArray::setObject(OSSharedPtr const &) (24 kexts): loads the count and the pointer inside the shared pointer and calls the virtual setObject(index, object) at slot 240; the overload with an index passes its own index to the same slot. IOCommandPool's destructor (10 kexts): stores the class's vtable and then tears down its fields. IOReporter::updateReport (11 kexts): the only member function of the three candidates; it takes the reporter's lock at +128 first. IOService::publishResource(const OSSymbol *, OSObject *): a NULL value becomes kOSBooleanTrue, then setProperty on the resources service. IOService::registerInterest with a block: passes a static handler and the block to the virtual registerInterest at slot 1080. mbuf_next returns the first field. IOMemoryDescriptor::getDescriptorID returns a 64-bit field of the reserved data after making sure it is set. IOFreeAligned shifts (address, size) up and passes a heap to the internal free. csblob_register_profile has two arguments (blob, profile record with data at +32 and size at +40); csblob_register_profile_uuid has four."
+  },
+  {
+   "original": "0xfffffe000b3028e4",
+   "native_symbol": "__ZN9IOService15publishResourceEPK8OSSymbolP8OSObject",
+   "check": {
+    "address": "0xfffffe000b3028e4",
+    "size": 196,
+    "sha256": "7df3bd54849a4002547c2aefb63203fbb42c6a1c9b5606f9f96438314747ab40"
+   },
+   "evidence": "By the order of the kexts' import tables (each kext's __auth_got is sorted by imported symbol name; the lead's kernel/prelink/lead/imports.py gives the bounds) and, among the kernel's exported names between those bounds, by what the code does. sendAsyncResult64 (between sendAsyncResult and setAsyncReference, 25 kexts): mov w4, #0 and a branch to the five-argument internal function. OSArray::setObject(OSSharedPtr const &) (24 kexts): loads the count and the pointer inside the shared pointer and calls the virtual setObject(index, object) at slot 240; the overload with an index passes its own index to the same slot. IOCommandPool's destructor (10 kexts): stores the class's vtable and then tears down its fields. IOReporter::updateReport (11 kexts): the only member function of the three candidates; it takes the reporter's lock at +128 first. IOService::publishResource(const OSSymbol *, OSObject *): a NULL value becomes kOSBooleanTrue, then setProperty on the resources service. IOService::registerInterest with a block: passes a static handler and the block to the virtual registerInterest at slot 1080. mbuf_next returns the first field. IOMemoryDescriptor::getDescriptorID returns a 64-bit field of the reserved data after making sure it is set. IOFreeAligned shifts (address, size) up and passes a heap to the internal free. csblob_register_profile has two arguments (blob, profile record with data at +32 and size at +40); csblob_register_profile_uuid has four."
+  },
+  {
+   "original": "0xfffffe000b38b3dc",
+   "native_symbol": "__ZN10IOReporter12updateReportEP19IOReportChannelListjPvS2_",
+   "check": {
+    "address": "0xfffffe000b38b3dc",
+    "size": 304,
+    "sha256": "6db25a63e6e1533bbf4c4a1f9e7b24141df02bea751b26c9b53f37c81a837f60"
+   },
+   "evidence": "By the order of the kexts' import tables (each kext's __auth_got is sorted by imported symbol name; the lead's kernel/prelink/lead/imports.py gives the bounds) and, among the kernel's exported names between those bounds, by what the code does. sendAsyncResult64 (between sendAsyncResult and setAsyncReference, 25 kexts): mov w4, #0 and a branch to the five-argument internal function. OSArray::setObject(OSSharedPtr const &) (24 kexts): loads the count and the pointer inside the shared pointer and calls the virtual setObject(index, object) at slot 240; the overload with an index passes its own index to the same slot. IOCommandPool's destructor (10 kexts): stores the class's vtable and then tears down its fields. IOReporter::updateReport (11 kexts): the only member function of the three candidates; it takes the reporter's lock at +128 first. IOService::publishResource(const OSSymbol *, OSObject *): a NULL value becomes kOSBooleanTrue, then setProperty on the resources service. IOService::registerInterest with a block: passes a static handler and the block to the virtual registerInterest at slot 1080. mbuf_next returns the first field. IOMemoryDescriptor::getDescriptorID returns a 64-bit field of the reserved data after making sure it is set. IOFreeAligned shifts (address, size) up and passes a heap to the internal free. csblob_register_profile has two arguments (blob, profile record with data at +32 and size at +40); csblob_register_profile_uuid has four."
+  },
+  {
+   "original": "0xfffffe000b333cc8",
+   "native_symbol": "__ZN13IOCommandPoolD2Ev",
+   "check": {
+    "address": "0xfffffe000b333cc8",
+    "size": 124,
+    "sha256": "86a25d45cde6a7252d1b0f3cc9234015679beb68a082681d812f1d5e264929a0"
+   },
+   "evidence": "By the order of the kexts' import tables (each kext's __auth_got is sorted by imported symbol name; the lead's kernel/prelink/lead/imports.py gives the bounds) and, among the kernel's exported names between those bounds, by what the code does. sendAsyncResult64 (between sendAsyncResult and setAsyncReference, 25 kexts): mov w4, #0 and a branch to the five-argument internal function. OSArray::setObject(OSSharedPtr const &) (24 kexts): loads the count and the pointer inside the shared pointer and calls the virtual setObject(index, object) at slot 240; the overload with an index passes its own index to the same slot. IOCommandPool's destructor (10 kexts): stores the class's vtable and then tears down its fields. IOReporter::updateReport (11 kexts): the only member function of the three candidates; it takes the reporter's lock at +128 first. IOService::publishResource(const OSSymbol *, OSObject *): a NULL value becomes kOSBooleanTrue, then setProperty on the resources service. IOService::registerInterest with a block: passes a static handler and the block to the virtual registerInterest at slot 1080. mbuf_next returns the first field. IOMemoryDescriptor::getDescriptorID returns a 64-bit field of the reserved data after making sure it is set. IOFreeAligned shifts (address, size) up and passes a heap to the internal free. csblob_register_profile has two arguments (blob, profile record with data at +32 and size at +40); csblob_register_profile_uuid has four."
+  },
+  {
+   "original": "0xfffffe000b26adc4",
+   "native_symbol": "__ZN7OSArray9setObjectEjRK11OSSharedPtrIK15OSMetaClassBaseE",
+   "check": {
+    "address": "0xfffffe000b26adc4",
+    "size": 48,
+    "sha256": "ca06ec7f6936be80f94e3d0b034e07f66fe0df26addc9699a0cb86bef072d8b0"
+   },
+   "evidence": "By the order of the kexts' import tables (each kext's __auth_got is sorted by imported symbol name; the lead's kernel/prelink/lead/imports.py gives the bounds) and, among the kernel's exported names between those bounds, by what the code does. sendAsyncResult64 (between sendAsyncResult and setAsyncReference, 25 kexts): mov w4, #0 and a branch to the five-argument internal function. OSArray::setObject(OSSharedPtr const &) (24 kexts): loads the count and the pointer inside the shared pointer and calls the virtual setObject(index, object) at slot 240; the overload with an index passes its own index to the same slot. IOCommandPool's destructor (10 kexts): stores the class's vtable and then tears down its fields. IOReporter::updateReport (11 kexts): the only member function of the three candidates; it takes the reporter's lock at +128 first. IOService::publishResource(const OSSymbol *, OSObject *): a NULL value becomes kOSBooleanTrue, then setProperty on the resources service. IOService::registerInterest with a block: passes a static handler and the block to the virtual registerInterest at slot 1080. mbuf_next returns the first field. IOMemoryDescriptor::getDescriptorID returns a 64-bit field of the reserved data after making sure it is set. IOFreeAligned shifts (address, size) up and passes a heap to the internal free. csblob_register_profile has two arguments (blob, profile record with data at +32 and size at +40); csblob_register_profile_uuid has four."
+  },
+  {
+   "original": "0xfffffe000b26ad8c",
+   "native_symbol": "__ZN7OSArray9setObjectERK11OSSharedPtrIK15OSMetaClassBaseE",
+   "check": {
+    "address": "0xfffffe000b26ad8c",
+    "size": 56,
+    "sha256": "4ecc4331bb043940e04edcb1de18d9062c596ed90cee4b1aa609a91a63d06848"
+   },
+   "evidence": "By the order of the kexts' import tables (each kext's __auth_got is sorted by imported symbol name; the lead's kernel/prelink/lead/imports.py gives the bounds) and, among the kernel's exported names between those bounds, by what the code does. sendAsyncResult64 (between sendAsyncResult and setAsyncReference, 25 kexts): mov w4, #0 and a branch to the five-argument internal function. OSArray::setObject(OSSharedPtr const &) (24 kexts): loads the count and the pointer inside the shared pointer and calls the virtual setObject(index, object) at slot 240; the overload with an index passes its own index to the same slot. IOCommandPool's destructor (10 kexts): stores the class's vtable and then tears down its fields. IOReporter::updateReport (11 kexts): the only member function of the three candidates; it takes the reporter's lock at +128 first. IOService::publishResource(const OSSymbol *, OSObject *): a NULL value becomes kOSBooleanTrue, then setProperty on the resources service. IOService::registerInterest with a block: passes a static handler and the block to the virtual registerInterest at slot 1080. mbuf_next returns the first field. IOMemoryDescriptor::getDescriptorID returns a 64-bit field of the reserved data after making sure it is set. IOFreeAligned shifts (address, size) up and passes a heap to the internal free. csblob_register_profile has two arguments (blob, profile record with data at +32 and size at +40); csblob_register_profile_uuid has four."
+  },
+  {
+   "original": "0xfffffe000b37b0dc",
+   "native_symbol": "__ZN12IOUserClient17sendAsyncResult64EPyiS0_j",
+   "check": {
+    "address": "0xfffffe000b37b0dc",
+    "size": 12,
+    "sha256": "b20fdba4f15a2e0232e5f32caff4c9c534283a61c222a70cd4f735b7b0d3ef19"
+   },
+   "evidence": "By the order of the kexts' import tables (each kext's __auth_got is sorted by imported symbol name; the lead's kernel/prelink/lead/imports.py gives the bounds) and, among the kernel's exported names between those bounds, by what the code does. sendAsyncResult64 (between sendAsyncResult and setAsyncReference, 25 kexts): mov w4, #0 and a branch to the five-argument internal function. OSArray::setObject(OSSharedPtr const &) (24 kexts): loads the count and the pointer inside the shared pointer and calls the virtual setObject(index, object) at slot 240; the overload with an index passes its own index to the same slot. IOCommandPool's destructor (10 kexts): stores the class's vtable and then tears down its fields. IOReporter::updateReport (11 kexts): the only member function of the three candidates; it takes the reporter's lock at +128 first. IOService::publishResource(const OSSymbol *, OSObject *): a NULL value becomes kOSBooleanTrue, then setProperty on the resources service. IOService::registerInterest with a block: passes a static handler and the block to the virtual registerInterest at slot 1080. mbuf_next returns the first field. IOMemoryDescriptor::getDescriptorID returns a 64-bit field of the reserved data after making sure it is set. IOFreeAligned shifts (address, size) up and passes a heap to the internal free. csblob_register_profile has two arguments (blob, profile record with data at +32 and size at +40); csblob_register_profile_uuid has four."
+  },
+  {
+   "original": "0xfffffe000ac914d8",
+   "native_symbol": "_vm_kernel_unslide_or_perm_external",
+   "check": {
+    "address": "0xfffffe000ac914d8",
+    "size": 144,
+    "sha256": "1cf4a49bb7f326e8fe5674cc91cee8be5ca748776959478cdf981c611b6af1c3"
+   },
+   "evidence": "osfmk/kern/task_ref.c: task_reference between task_deallocate_grp and task_deallocate: NULL check, the task zone check, then an atomic increment of the reference count at +16 with the overflow check. osfmk/vm/vm_resident.c: kern_allocation_name_release directly before kern_allocation_update_subtotal: decrements the 16-bit reference count at +16 and frees the name with its computed size when it was the last. osfmk/vm/vm_kern.c: vm_kernel_unslide_or_perm_external after the vm_kernel_addrhash group: two arguments; an address inside the kernel or kext ranges is unslid, 0 stays 0, anything else goes through the address permutation, and the result is stored through the second argument. IOGPUFamily, IOSurface and IOHIDFamily reference them."
+  },
+  {
+   "original": "0xfffffe000ace93f4",
+   "native_symbol": "_kern_allocation_name_release",
+   "check": {
+    "address": "0xfffffe000ace93f4",
+    "size": 64,
+    "sha256": "e87ecd7c91b4985dca903f5e4faa9246e915f4ba851a440cfa10dc5b7ce0a156"
+   },
+   "evidence": "osfmk/kern/task_ref.c: task_reference between task_deallocate_grp and task_deallocate: NULL check, the task zone check, then an atomic increment of the reference count at +16 with the overflow check. osfmk/vm/vm_resident.c: kern_allocation_name_release directly before kern_allocation_update_subtotal: decrements the 16-bit reference count at +16 and frees the name with its computed size when it was the last. osfmk/vm/vm_kern.c: vm_kernel_unslide_or_perm_external after the vm_kernel_addrhash group: two arguments; an address inside the kernel or kext ranges is unslid, 0 stays 0, anything else goes through the address permutation, and the result is stored through the second argument. IOGPUFamily, IOSurface and IOHIDFamily reference them."
+  },
+  {
+   "original": "0xfffffe000ac1f668",
+   "native_symbol": "_task_reference",
+   "check": {
+    "address": "0xfffffe000ac1f668",
+    "size": 144,
+    "sha256": "60c66b3bc6b437ab789c78350faa2444d65885dd1e17951a0ff32425d26368b5"
+   },
+   "evidence": "osfmk/kern/task_ref.c: task_reference between task_deallocate_grp and task_deallocate: NULL check, the task zone check, then an atomic increment of the reference count at +16 with the overflow check. osfmk/vm/vm_resident.c: kern_allocation_name_release directly before kern_allocation_update_subtotal: decrements the 16-bit reference count at +16 and frees the name with its computed size when it was the last. osfmk/vm/vm_kern.c: vm_kernel_unslide_or_perm_external after the vm_kernel_addrhash group: two arguments; an address inside the kernel or kext ranges is unslid, 0 stays 0, anything else goes through the address permutation, and the result is stored through the second argument. IOGPUFamily, IOSurface and IOHIDFamily reference them."
+  },
+  {
+   "original": "0xfffffe000b34de68",
+   "native_symbol": "__ZN18IOMemoryDescriptor30withPersistentMemoryDescriptorEPS_",
+   "check": {
+    "address": "0xfffffe000b34de68",
+    "size": 112,
+    "sha256": "8455fd3894874f1197d03adb1fa8a4d8ede54fea43962435d08bc4a3417a4fba"
+   },
+   "evidence": "iokit/Kernel/IODMACommand.cpp: OutputLittle64 is the third of the three 64-bit output functions (Host64, Big64, Little64 in the source); it stores the segment's address and length into the 16-byte element at the index, as OutputHost64 two functions before it does. iokit/Kernel/IOMemoryDescriptor.cpp: withPersistentMemoryDescriptor directly after withOptions, as in the source; it starts with a NULL check of its only argument."
+  },
+  {
+   "original": "0xfffffe000b33ccb0",
+   "native_symbol": "__ZN12IODMACommand14OutputLittle64EPS_NS_9Segment64EPvj",
+   "check": {
+    "address": "0xfffffe000b33ccb0",
+    "size": 28,
+    "sha256": "4c5fe01a78569382f515637064de1a32e785ab0e78e8e82b01415152e2b2b0fe"
+   },
+   "evidence": "iokit/Kernel/IODMACommand.cpp: OutputLittle64 is the third of the three 64-bit output functions (Host64, Big64, Little64 in the source); it stores the segment's address and length into the 16-byte element at the index, as OutputHost64 two functions before it does. iokit/Kernel/IOMemoryDescriptor.cpp: withPersistentMemoryDescriptor directly after withOptions, as in the source; it starts with a NULL check of its only argument."
+  },
+  {
+   "original": "0xfffffe000b32ffcc",
+   "native_symbol": "__ZNK13IOEventSource9getRefconEv",
+   "check": {
+    "address": "0xfffffe000b32ffcc",
+    "size": 12,
+    "sha256": "399f9d74fb06425d2d289e0a8ddc992f822070048907b09ad5836fccfec10f14"
+   },
+   "evidence": "iokit/Kernel/IOEventSource.cpp: the seven wrappers that load the work loop (+48) and call one of its virtual methods, in source order and with rising vtable offsets (208, 216, 224, 232, ...): signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate(event, type), sleepGate(event, deadline, type), wakeupGate; then setRefcon (stores +56) and getRefcon (loads +56), directly before the paired setActionBlock's neighbours. IOHIDFamily uses the gate wrappers."
+  },
+  {
+   "original": "0xfffffe000b32ffc0",
+   "native_symbol": "__ZN13IOEventSource9setRefconEPv",
+   "check": {
+    "address": "0xfffffe000b32ffc0",
+    "size": 12,
+    "sha256": "20767e3db2b79c38e6c603525ba2fc67488e9dc1ff7eebf1c8307ea4dc22143e"
+   },
+   "evidence": "iokit/Kernel/IOEventSource.cpp: the seven wrappers that load the work loop (+48) and call one of its virtual methods, in source order and with rising vtable offsets (208, 216, 224, 232, ...): signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate(event, type), sleepGate(event, deadline, type), wakeupGate; then setRefcon (stores +56) and getRefcon (loads +56), directly before the paired setActionBlock's neighbours. IOHIDFamily uses the gate wrappers."
+  },
+  {
+   "original": "0xfffffe000b32ff90",
+   "native_symbol": "__ZN13IOEventSource10wakeupGateEPvb",
+   "check": {
+    "address": "0xfffffe000b32ff90",
+    "size": 48,
+    "sha256": "5e9145707080690ccdb14890a8049a31621db020ee8b6e8c2903ade11dfaf03d"
+   },
+   "evidence": "iokit/Kernel/IOEventSource.cpp: the seven wrappers that load the work loop (+48) and call one of its virtual methods, in source order and with rising vtable offsets (208, 216, 224, 232, ...): signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate(event, type), sleepGate(event, deadline, type), wakeupGate; then setRefcon (stores +56) and getRefcon (loads +56), directly before the paired setActionBlock's neighbours. IOHIDFamily uses the gate wrappers."
+  },
+  {
+   "original": "0xfffffe000b32ff58",
+   "native_symbol": "__ZN13IOEventSource9sleepGateEPvyj",
+   "check": {
+    "address": "0xfffffe000b32ff58",
+    "size": 56,
+    "sha256": "443e3ec44e8ce09c6d2e5d387450bb0a4d716086c5fc8b9a40f6559f10dc0d92"
+   },
+   "evidence": "iokit/Kernel/IOEventSource.cpp: the seven wrappers that load the work loop (+48) and call one of its virtual methods, in source order and with rising vtable offsets (208, 216, 224, 232, ...): signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate(event, type), sleepGate(event, deadline, type), wakeupGate; then setRefcon (stores +56) and getRefcon (loads +56), directly before the paired setActionBlock's neighbours. IOHIDFamily uses the gate wrappers."
+  },
+  {
+   "original": "0xfffffe000b32ff28",
+   "native_symbol": "__ZN13IOEventSource9sleepGateEPvj",
+   "check": {
+    "address": "0xfffffe000b32ff28",
+    "size": 48,
+    "sha256": "63a687427b58980f7eb4d726f7bee81852c72c9d08a06a8dfc72dfec1975ae77"
+   },
+   "evidence": "iokit/Kernel/IOEventSource.cpp: the seven wrappers that load the work loop (+48) and call one of its virtual methods, in source order and with rising vtable offsets (208, 216, 224, 232, ...): signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate(event, type), sleepGate(event, deadline, type), wakeupGate; then setRefcon (stores +56) and getRefcon (loads +56), directly before the paired setActionBlock's neighbours. IOHIDFamily uses the gate wrappers."
+  },
+  {
+   "original": "0xfffffe000b32fef8",
+   "native_symbol": "__ZN13IOEventSource12tryCloseGateEv",
+   "check": {
+    "address": "0xfffffe000b32fef8",
+    "size": 48,
+    "sha256": "1c1665135b2339de1e901d6d68c5994ba9c984198fff6d108ad3bbfb6c3cd104"
+   },
+   "evidence": "iokit/Kernel/IOEventSource.cpp: the seven wrappers that load the work loop (+48) and call one of its virtual methods, in source order and with rising vtable offsets (208, 216, 224, 232, ...): signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate(event, type), sleepGate(event, deadline, type), wakeupGate; then setRefcon (stores +56) and getRefcon (loads +56), directly before the paired setActionBlock's neighbours. IOHIDFamily uses the gate wrappers."
+  },
+  {
+   "original": "0xfffffe000b32fec8",
+   "native_symbol": "__ZN13IOEventSource9closeGateEv",
+   "check": {
+    "address": "0xfffffe000b32fec8",
+    "size": 48,
+    "sha256": "a7042fe5b7282abf79f42e87c3d3288de9a06d9a40fb9210f46115b2c0a069d3"
+   },
+   "evidence": "iokit/Kernel/IOEventSource.cpp: the seven wrappers that load the work loop (+48) and call one of its virtual methods, in source order and with rising vtable offsets (208, 216, 224, 232, ...): signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate(event, type), sleepGate(event, deadline, type), wakeupGate; then setRefcon (stores +56) and getRefcon (loads +56), directly before the paired setActionBlock's neighbours. IOHIDFamily uses the gate wrappers."
+  },
+  {
+   "original": "0xfffffe000b32fe98",
+   "native_symbol": "__ZN13IOEventSource8openGateEv",
+   "check": {
+    "address": "0xfffffe000b32fe98",
+    "size": 48,
+    "sha256": "b6c15e222ca5e80e69c7d768df2d4d1dbaedce98c0dcd2dc5c07a9f3dfa7ec1d"
+   },
+   "evidence": "iokit/Kernel/IOEventSource.cpp: the seven wrappers that load the work loop (+48) and call one of its virtual methods, in source order and with rising vtable offsets (208, 216, 224, 232, ...): signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate(event, type), sleepGate(event, deadline, type), wakeupGate; then setRefcon (stores +56) and getRefcon (loads +56), directly before the paired setActionBlock's neighbours. IOHIDFamily uses the gate wrappers."
+  },
+  {
+   "original": "0xfffffe000b32fe68",
+   "native_symbol": "__ZN13IOEventSource19signalWorkAvailableEv",
+   "check": {
+    "address": "0xfffffe000b32fe68",
+    "size": 48,
+    "sha256": "f5fbbbcb875bdd46fb9bcf6055594f5a78cd110c15926b1e22905a7567aafd96"
+   },
+   "evidence": "iokit/Kernel/IOEventSource.cpp: the seven wrappers that load the work loop (+48) and call one of its virtual methods, in source order and with rising vtable offsets (208, 216, 224, 232, ...): signalWorkAvailable, openGate, closeGate, tryCloseGate, sleepGate(event, type), sleepGate(event, deadline, type), wakeupGate; then setRefcon (stores +56) and getRefcon (loads +56), directly before the paired setActionBlock's neighbours. IOHIDFamily uses the gate wrappers."
+  },
+  {
+   "original": "0xfffffe000ac9e90c",
+   "native_symbol": "_vm_map_unwire",
+   "check": {
+    "address": "0xfffffe000ac9e90c",
+    "size": 16,
+    "sha256": "b7ea8d0f9c7ac7e3a1e6b37cd422141076e71a46b443676d66eddb9226e74a76"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c: vfs_context_create_with_proc between vfs_context_create and vfs_context_kernel: allocates a context, copies the current thread's when the proc is the current one and otherwise locks the given proc and takes a reference on its main thread. bsd/kern/kern_proc.c: proc_find_ident is the wrapper that calls the 412-byte function before it with (ident, &proc) and returns the proc on 0; that function, which starts by returning EINVAL for a bad ident, is proc_find_ident_validated, directly before it in the source. bsd/vfs/vfs_subr.c: vnode_authorize returns 0 for a vnode of type 8 (VBAD) and otherwise calls the kauth vnode scope with (credential of the context, action, vp, dvp, &error), turning a missing error into EACCES. security/mac_base.c: mac_schedule_userret after __mac_get_mount sets the MACF AST (0x200) on the current thread and returns 0. osfmk/vm/vm_map.c: vm_map_unwire is the wrapper after vm_map_unwire_impl that adds a constant fifth argument and branches to it."
+  },
+  {
+   "original": "0xfffffe000b3f3f50",
+   "native_symbol": "_mac_schedule_userret",
+   "check": {
+    "address": "0xfffffe000b3f3f50",
+    "size": 36,
+    "sha256": "49f31d83ed45c59500a5f4af6f15c9f5797ba01d33998ed4de2f2a0afcc031b9"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c: vfs_context_create_with_proc between vfs_context_create and vfs_context_kernel: allocates a context, copies the current thread's when the proc is the current one and otherwise locks the given proc and takes a reference on its main thread. bsd/kern/kern_proc.c: proc_find_ident is the wrapper that calls the 412-byte function before it with (ident, &proc) and returns the proc on 0; that function, which starts by returning EINVAL for a bad ident, is proc_find_ident_validated, directly before it in the source. bsd/vfs/vfs_subr.c: vnode_authorize returns 0 for a vnode of type 8 (VBAD) and otherwise calls the kauth vnode scope with (credential of the context, action, vp, dvp, &error), turning a missing error into EACCES. security/mac_base.c: mac_schedule_userret after __mac_get_mount sets the MACF AST (0x200) on the current thread and returns 0. osfmk/vm/vm_map.c: vm_map_unwire is the wrapper after vm_map_unwire_impl that adds a constant fifth argument and branches to it."
+  },
+  {
+   "original": "0xfffffe000adbd294",
+   "native_symbol": "_vnode_authorize",
+   "check": {
+    "address": "0xfffffe000adbd294",
+    "size": 112,
+    "sha256": "da33098f668bcc33fdd33354ac8ba38e81186ed911abea3318a08699b64fd504"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c: vfs_context_create_with_proc between vfs_context_create and vfs_context_kernel: allocates a context, copies the current thread's when the proc is the current one and otherwise locks the given proc and takes a reference on its main thread. bsd/kern/kern_proc.c: proc_find_ident is the wrapper that calls the 412-byte function before it with (ident, &proc) and returns the proc on 0; that function, which starts by returning EINVAL for a bad ident, is proc_find_ident_validated, directly before it in the source. bsd/vfs/vfs_subr.c: vnode_authorize returns 0 for a vnode of type 8 (VBAD) and otherwise calls the kauth vnode scope with (credential of the context, action, vp, dvp, &error), turning a missing error into EACCES. security/mac_base.c: mac_schedule_userret after __mac_get_mount sets the MACF AST (0x200) on the current thread and returns 0. osfmk/vm/vm_map.c: vm_map_unwire is the wrapper after vm_map_unwire_impl that adds a constant fifth argument and branches to it."
+  },
+  {
+   "original": "0xfffffe000b0f2b64",
+   "native_symbol": "_proc_find_ident",
+   "check": {
+    "address": "0xfffffe000b0f2b64",
+    "size": 52,
+    "sha256": "2a1f2a2bb6f749ce175c3c3b7c67736716eb451bd5133015c20bfac1bdf7ca62"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c: vfs_context_create_with_proc between vfs_context_create and vfs_context_kernel: allocates a context, copies the current thread's when the proc is the current one and otherwise locks the given proc and takes a reference on its main thread. bsd/kern/kern_proc.c: proc_find_ident is the wrapper that calls the 412-byte function before it with (ident, &proc) and returns the proc on 0; that function, which starts by returning EINVAL for a bad ident, is proc_find_ident_validated, directly before it in the source. bsd/vfs/vfs_subr.c: vnode_authorize returns 0 for a vnode of type 8 (VBAD) and otherwise calls the kauth vnode scope with (credential of the context, action, vp, dvp, &error), turning a missing error into EACCES. security/mac_base.c: mac_schedule_userret after __mac_get_mount sets the MACF AST (0x200) on the current thread and returns 0. osfmk/vm/vm_map.c: vm_map_unwire is the wrapper after vm_map_unwire_impl that adds a constant fifth argument and branches to it."
+  },
+  {
+   "original": "0xfffffe000b0f27e8",
+   "native_symbol": "_proc_find_ident_validated",
+   "check": {
+    "address": "0xfffffe000b0f27e8",
+    "size": 412,
+    "sha256": "7609da2a80269bf185a1a432e0c37f32c320fb56fb84939625e7e63f1b8081e3"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c: vfs_context_create_with_proc between vfs_context_create and vfs_context_kernel: allocates a context, copies the current thread's when the proc is the current one and otherwise locks the given proc and takes a reference on its main thread. bsd/kern/kern_proc.c: proc_find_ident is the wrapper that calls the 412-byte function before it with (ident, &proc) and returns the proc on 0; that function, which starts by returning EINVAL for a bad ident, is proc_find_ident_validated, directly before it in the source. bsd/vfs/vfs_subr.c: vnode_authorize returns 0 for a vnode of type 8 (VBAD) and otherwise calls the kauth vnode scope with (credential of the context, action, vp, dvp, &error), turning a missing error into EACCES. security/mac_base.c: mac_schedule_userret after __mac_get_mount sets the MACF AST (0x200) on the current thread and returns 0. osfmk/vm/vm_map.c: vm_map_unwire is the wrapper after vm_map_unwire_impl that adds a constant fifth argument and branches to it."
+  },
+  {
+   "original": "0xfffffe000ade78fc",
+   "native_symbol": "_vfs_context_create_with_proc",
+   "check": {
+    "address": "0xfffffe000ade78fc",
+    "size": 324,
+    "sha256": "4b7bb636d8d4aa15d88d9d81cb6fd9aaf00265a774a214eb7e83a77f49cd3342"
+   },
+   "evidence": "bsd/vfs/kpi_vfs.c: vfs_context_create_with_proc between vfs_context_create and vfs_context_kernel: allocates a context, copies the current thread's when the proc is the current one and otherwise locks the given proc and takes a reference on its main thread. bsd/kern/kern_proc.c: proc_find_ident is the wrapper that calls the 412-byte function before it with (ident, &proc) and returns the proc on 0; that function, which starts by returning EINVAL for a bad ident, is proc_find_ident_validated, directly before it in the source. bsd/vfs/vfs_subr.c: vnode_authorize returns 0 for a vnode of type 8 (VBAD) and otherwise calls the kauth vnode scope with (credential of the context, action, vp, dvp, &error), turning a missing error into EACCES. security/mac_base.c: mac_schedule_userret after __mac_get_mount sets the MACF AST (0x200) on the current thread and returns 0. osfmk/vm/vm_map.c: vm_map_unwire is the wrapper after vm_map_unwire_impl that adds a constant fifth argument and branches to it."
+  },
+  {
+   "original": "0xfffffe000abd4b6c",
+   "native_symbol": "_lck_rw_assert",
+   "check": {
+    "address": "0xfffffe000abd4b6c",
+    "size": 264,
+    "sha256": "a21792c78ed2bede3c17ceac9bc964cc4e636e393ac79de03b44add49870c3ba"
+   },
+   "evidence": "osfmk/kern/lock_rw.c, in this kernel's own link order (lck_rw_alloc_init, lck_rw_init, lck_rw_free, lck_rw_destroy, lck_rw_assert): lck_rw_free is between the paired lck_rw_init and lck_rw_destroy; it checks the lock's type byte, marks it destroyed and tail-calls the zone free. lck_rw_assert follows lck_rw_destroy and dispatches on its second argument, the assertion type."
+  },
+  {
+   "original": "0xfffffe000abd49d0",
+   "native_symbol": "_lck_rw_free",
+   "check": {
+    "address": "0xfffffe000abd49d0",
+    "size": 220,
+    "sha256": "b94324e91ff27789899080c4092c751a82f1d167d7ce7f5f04a89fcab01b0f56"
+   },
+   "evidence": "osfmk/kern/lock_rw.c, in this kernel's own link order (lck_rw_alloc_init, lck_rw_init, lck_rw_free, lck_rw_destroy, lck_rw_assert): lck_rw_free is between the paired lck_rw_init and lck_rw_destroy; it checks the lock's type byte, marks it destroyed and tail-calls the zone free. lck_rw_assert follows lck_rw_destroy and dispatches on its second argument, the assertion type."
+  },
+  {
    "original": "0xfffffe000b2640d8",
    "native_symbol": "_bdevsw_remove",
    "check": {
@@ -476,16 +1036,6 @@
    "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/vfs/vfs_subr.c: vnode_getwithref between vnode_getwithvid_drainok and vnode_getalways. bsd/vfs/kpi_vfs.c: vfs_fsremove between vfs_fsadd and vfs_setowner; after vfs_context_copy_audit_token: vfs_context_suser (the context's credential, its uid at +24, returns 1 = EPERM when it is not 0), vfs_context_issignal (two arguments), vfs_context_can_resolve_triggers (true when policy bit 0x10 TRIGGER_RESOLVE_DISABLE is clear); vfs_set_thread_fs_private and vfs_get_thread_fs_private accept only tag 1 and store or load one 64-bit field of the current thread; vfs_ctx_skipatime directly after vnode_israge. bsd/vfs/vfs_fsevents.c: need_fsevent (a table lookup for a type up to 15) before add_fsevent. bsd/vfs/vfs_syscalls.c: vfs_context_orig_dataless_materialization_is_prevented between vfs_context_dataless_materialization_is_prevented and vfs_context_is_dataless_manipulator."
   },
   {
-   "original": "0xfffffe000adb98b4",
-   "native_symbol": "_vnode_getwithref",
-   "check": {
-    "address": "0xfffffe000adb98b4",
-    "size": 228,
-    "sha256": "f0946c5cf7edbc617896e223ab204554e2efded1342631062f8fc26e31348ae5"
-   },
-   "evidence": "Each takes the place the named function has in the source between paired neighbours. bsd/vfs/vfs_subr.c: vnode_getwithref between vnode_getwithvid_drainok and vnode_getalways. bsd/vfs/kpi_vfs.c: vfs_fsremove between vfs_fsadd and vfs_setowner; after vfs_context_copy_audit_token: vfs_context_suser (the context's credential, its uid at +24, returns 1 = EPERM when it is not 0), vfs_context_issignal (two arguments), vfs_context_can_resolve_triggers (true when policy bit 0x10 TRIGGER_RESOLVE_DISABLE is clear); vfs_set_thread_fs_private and vfs_get_thread_fs_private accept only tag 1 and store or load one 64-bit field of the current thread; vfs_ctx_skipatime directly after vnode_israge. bsd/vfs/vfs_fsevents.c: need_fsevent (a table lookup for a type up to 15) before add_fsevent. bsd/vfs/vfs_syscalls.c: vfs_context_orig_dataless_materialization_is_prevented between vfs_context_dataless_materialization_is_prevented and vfs_context_is_dataless_manipulator."
-  },
-  {
    "original": "0xfffffe000ad9de20",
    "native_symbol": "_cluster_write_ext",
    "check": {
@@ -812,16 +1362,6 @@
     "address": "0xfffffe000b0faecc",
     "size": 48,
     "sha256": "1443c68322ea27f9325a53897e3c3db33ca7c3cc13163df3c7064c2dfd1f36ca"
-   },
-   "evidence": "bsd/kern/kern_cs.c: csproc_get_platform_identifier directly before cs_entitlement_flags (the csproc shape: the proc's signed text vnode at +1336, then its blob). bsd/kern/kern_persona.c: persona_get_id directly after persona_put_and_unlock (returns the 32-bit id at +8, or -1 for NULL); persona_get_type between persona_proc_drop and persona_get_uid. bsd/kern/kern_proc.c: proc_csflags after proc_getcsflags (EINVAL unless both the proc and the output pointer are given); proc_best_name after proc_name (returns the long name at +1389 unless it is empty, then the short one at +1372); proc_is_driver before proc_is_third_party_debuggable_driver (NULL check, bit 17 of p_flag); proc_selfpgrpid after proc_pgrpid and proc_sessionid (starts from the current process)."
-  },
-  {
-   "original": "0xfffffe000b0f8414",
-   "native_symbol": "_proc_is_driver",
-   "check": {
-    "address": "0xfffffe000b0f8414",
-    "size": 20,
-    "sha256": "cd5df1ddbf7d62221f6bdaabcd1830c0b12a713b3e86ab975f89e0c5b3e7815f"
    },
    "evidence": "bsd/kern/kern_cs.c: csproc_get_platform_identifier directly before cs_entitlement_flags (the csproc shape: the proc's signed text vnode at +1336, then its blob). bsd/kern/kern_persona.c: persona_get_id directly after persona_put_and_unlock (returns the 32-bit id at +8, or -1 for NULL); persona_get_type between persona_proc_drop and persona_get_uid. bsd/kern/kern_proc.c: proc_csflags after proc_getcsflags (EINVAL unless both the proc and the output pointer are given); proc_best_name after proc_name (returns the long name at +1389 unless it is empty, then the short one at +1372); proc_is_driver before proc_is_third_party_debuggable_driver (NULL check, bit 17 of p_flag); proc_selfpgrpid after proc_pgrpid and proc_sessionid (starts from the current process)."
   },
@@ -1764,16 +2304,6 @@
     "sha256": "8d877e5d7e92b4f63eab04b995f1402d5dee02975a6ea41d960f61ea4c1a0b67"
    },
    "evidence": "bsd/kern/decmpfs.c, the cnode functions in source order around the ones already paired (decmpfs_cnode_destroy, lock/unlock_compressed_data, set_vnode_state, the three cached getters): alloc takes no argument and allocates from a static type view (ldp x0, x1 of the view; mov w2, #0; b), free and init follow it before destroy, get_vnode_state is the byte load between unlock and set_vnode_state, the three 32-byte compare-and-swap setters on +24, +32 and +40 follow the getters of the same fields, and cmp_type is the 32-bit load of +4 after them. APFS calls decmpfs_cnode_alloc when it makes the vnode of launchd's executable."
-  },
-  {
-   "original": "0xfffffe000b1329e8",
-   "native_symbol": "_xnu_image4_monitor_trap",
-   "check": {
-    "address": "0xfffffe000b1329e8",
-    "size": 120,
-    "sha256": "69c79bbdc700d2f455f9d929843b25f8c0833633985a4f2d6ec2bccea2a5125c"
-   },
-   "evidence": "The function directly after kernel_image4_monitor_trap (0xfffffe000b132828, named by its strings): the first function of the code signing monitor's file, a TXM call with selector 52 and three arguments that returns the errno of the reply or 0xffff. Image4's start calls it once per nonce slot with (the slot's selector, a 56-byte record, its length) and does not read the result: the monitor's image4 trap, CSM_PREFIX(image4_monitor_trap). This kernel has no monitor; its xnu_image4_monitor_trap returns ENOTSUP when hosted (0007-prelink-kext-start.patch) instead of panicking."
   },
   {
    "original": "0xfffffe000b0f4bf4",
@@ -2897,23 +3427,23 @@
   },
   {
    "original": "0xfffffe000b34f4b8",
-   "native_symbol": "__ZN18IOMemoryDescriptor16getMapperOptionsEv",
+   "native_symbol": "__ZN18IOMemoryDescriptor6getTagEv",
    "check": {
     "address": "0xfffffe000b34f4b8",
     "size": 12,
     "sha256": "2e06bda738ff93c0b332bb8e94d761c0de490fb72f0705aaa773b3f1b9653a10"
    },
-   "evidence": "Lead review, by the order of the kexts' import tables: in IOStorageFamily's the slots run withOptions (11...), 0x...f4b8, 0x...f4ac, withAddressRange (16...), the constructor, so both names sort between '11withOptions' and '16withAddressRange'; getTag/setTag ('6...') sort after every two-digit name and cannot be there. The two are a 16-bit getter and setter of one field (ldrh/strh at +0x40): getMapperOptions() and setMapperOptions(uint16_t), which follow setTag/getTag in the source. The layout note stands: the original keeps the field at +0x40, our kernel at its own offset; each side's methods use its own layout."
+   "evidence": "The last two functions of IOMemoryDescriptor.cpp before IOMultiMemoryDescriptor.cpp: a setter and a getter of one field, setTag and getTag in the source. Note the layout: the original keeps the tag as 16 bits at +0x40 of the object, our kernel as 32 bits at +0x58 (public header): the pair is by meaning, and each side's methods use its own layout, so an object must not be read by one side's inline code and the other's methods. IOStorageFamily calls getTag for each request."
   },
   {
    "original": "0xfffffe000b34f4ac",
-   "native_symbol": "__ZN18IOMemoryDescriptor16setMapperOptionsEt",
+   "native_symbol": "__ZN18IOMemoryDescriptor6setTagEj",
    "check": {
     "address": "0xfffffe000b34f4ac",
     "size": 12,
     "sha256": "30a0e2412a771c2aa6b8d5a638bd655640028516d30a4d62e4c49d46ca32f8df"
    },
-   "evidence": "Lead review, by the order of the kexts' import tables: in IOStorageFamily's the slots run withOptions (11...), 0x...f4b8, 0x...f4ac, withAddressRange (16...), the constructor, so both names sort between '11withOptions' and '16withAddressRange'; getTag/setTag ('6...') sort after every two-digit name and cannot be there. The two are a 16-bit getter and setter of one field (ldrh/strh at +0x40): getMapperOptions() and setMapperOptions(uint16_t), which follow setTag/getTag in the source. The layout note stands: the original keeps the field at +0x40, our kernel at its own offset; each side's methods use its own layout."
+   "evidence": "The last two functions of IOMemoryDescriptor.cpp before IOMultiMemoryDescriptor.cpp: a setter and a getter of one field, setTag and getTag in the source. Note the layout: the original keeps the tag as 16 bits at +0x40 of the object, our kernel as 32 bits at +0x58 (public header): the pair is by meaning, and each side's methods use its own layout, so an object must not be read by one side's inline code and the other's methods. IOStorageFamily calls getTag for each request."
   },
   {
    "original": "0xfffffe000adec710",
@@ -4827,7 +5357,7 @@
   },
   {
    "original": "0xfffffe000ac4bd40",
-   "native_symbol": "_task_is_app_suspended",
+   "native_symbol": "_get_task_pidsuspended",
    "ported": true,
    "optional": true,
    "check": {
@@ -4835,7 +5365,7 @@
     "size": 16,
     "sha256": "8d9d5229bb16beb4bde6c314115f5f8b3200d9140c9c9eb729fa5f5159dbd1e9"
    },
-   "evidence": "Lead review, by import order: IOHIDFamily's slots run task_deallocate, this one, task_reference, thread_call_allocate_with_options, so the imported name sorts between task_deallocate and task_reference; get_task_pidsuspended does not. The body returns bit 0 of one task byte (pidsuspended): task_is_app_suspended, the same read as get_task_pidsuspended in our kernel. Was: Byte-identical (16 bytes) to 0xfffffe000adbbc24 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Between get_threadtask_early and current_thread_aborted as in bsd_kern.c: returns the bool at task+0x412, the byte task_pidsuspend sets and clears in the 27 kernel (task->pidsuspended). No symbol in the original image; IOHIDFamily calls it."
+   "evidence": "Byte-identical (16 bytes) to 0xfffffe000adbbc24 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Between get_threadtask_early and current_thread_aborted as in bsd_kern.c: returns the bool at task+0x412, the byte task_pidsuspend sets and clears in the 27 kernel (task->pidsuspended). No symbol in the original image; IOHIDFamily calls it."
   },
   {
    "original": "0xfffffe000ac9afdc",
@@ -5472,19 +6002,14 @@
    "evidence": "Kexts store its address, signed with the block isa discriminator 0x6ae1 (pacda), as the first word of a block literal built on the stack; 0x108 bytes before _NSConcreteGlobalBlock (paired by name). 47 kexts name it; unpaired, every stack block of a kext had a wrong isa."
   },
   {
-   "original": "0xfffffe000b7b2448",
+   "original": "0xfffffe000b7b2440",
    "native_symbol": "_gIOPublishNotification",
-   "evidence": "Lead review, by the order of the kexts' data import tables (__got is in the alphabetical order of the imported names): in IOUSBHostFamily's table the slots run gIODTPlane, 0x...2458, 0x...2450, gIOGeneralInterest, gIOPowerPlane, gIOPropertyMatchKey, 0x...2448, gIOServicePlane, gIOTerminatedNotification; the sandbox's run 0x...2458, 0x...2710 (gIOMatchedNotification by the matcher), 0x...2448, gIOServicePlane. So 0x...2458 is gIOFirstMatchNotification, 0x...2450 gIOFirstPublishNotification and 0x...2448 gIOPublishNotification: this kernel does not keep the six symbols in the declaration order of the public source (gIOMatchedNotification is at 0x...2710). The earlier records, by position, were one off for these two, and the one for 0x...2440 (which no kext imports) is dropped."
-  },
-  {
-   "original": "0xfffffe000b7b2450",
-   "native_symbol": "_gIOFirstPublishNotification",
-   "evidence": "Lead review, by the order of the kexts' data import tables (__got is in the alphabetical order of the imported names): in IOUSBHostFamily's table the slots run gIODTPlane, 0x...2458, 0x...2450, gIOGeneralInterest, gIOPowerPlane, gIOPropertyMatchKey, 0x...2448, gIOServicePlane, gIOTerminatedNotification; the sandbox's run 0x...2458, 0x...2710 (gIOMatchedNotification by the matcher), 0x...2448, gIOServicePlane. So 0x...2458 is gIOFirstMatchNotification, 0x...2450 gIOFirstPublishNotification and 0x...2448 gIOPublishNotification: this kernel does not keep the six symbols in the declaration order of the public source (gIOMatchedNotification is at 0x...2710). The earlier records, by position, were one off for these two, and the one for 0x...2440 (which no kext imports) is dropped."
+   "evidence": "IOService.cpp's notification type symbols, six consecutive pointers in declaration order: publish, first publish, matched, first match, terminated, will terminate. The last two are paired by name at 0xfffffe000b7b2460 and 0xfffffe000b7b2468 (8 apart, as in our kernel), and kexts pass the four slots before them as the first argument of addMatchingNotification (apfs 0x...2448, the sandbox 0x...2458). By position before the two named ones."
   },
   {
    "original": "0xfffffe000b7b2458",
    "native_symbol": "_gIOFirstMatchNotification",
-   "evidence": "Lead review, by the order of the kexts' data import tables (__got is in the alphabetical order of the imported names): in IOUSBHostFamily's table the slots run gIODTPlane, 0x...2458, 0x...2450, gIOGeneralInterest, gIOPowerPlane, gIOPropertyMatchKey, 0x...2448, gIOServicePlane, gIOTerminatedNotification; the sandbox's run 0x...2458, 0x...2710 (gIOMatchedNotification by the matcher), 0x...2448, gIOServicePlane. So 0x...2458 is gIOFirstMatchNotification, 0x...2450 gIOFirstPublishNotification and 0x...2448 gIOPublishNotification: this kernel does not keep the six symbols in the declaration order of the public source (gIOMatchedNotification is at 0x...2710). The earlier records, by position, were one off for these two, and the one for 0x...2440 (which no kext imports) is dropped."
+   "evidence": "IOService.cpp's notification type symbols, six consecutive pointers in declaration order: publish, first publish, matched, first match, terminated, will terminate. The last two are paired by name at 0xfffffe000b7b2460 and 0xfffffe000b7b2468 (8 apart, as in our kernel), and kexts pass the four slots before them as the first argument of addMatchingNotification (apfs 0x...2448, the sandbox 0x...2458). By position before the two named ones."
   },
   {
    "original": "0xfffffe000b718680",
@@ -5492,13 +6017,19 @@
    "evidence": "The SMR domain APFS passes to smr_enter and smr_leave around its lookups (through a GOT slot): config/Private.exports gives the kext symbol apfs_smr the kernel's _vfs_smr. In the original kernel the same object is used by nchinit, resize_namecache, vntblinit, vfs_mountroot, mount_common, mount_dropcrossref and dounmount, the users of VFS_SMR(). Unpaired, the slot pointed into this kernel's zone_array and smr_enter asserted old_seq == SMR_SEQ_INVALID."
   },
   {
-   "original": "0xfffffe000b7af70c",
-   "native_symbol": "_rootdev",
-   "sections": [
-    "__DATA,__common",
-    "__DATA,__common"
-   ],
-   "evidence": "Lead review. The matcher paired this 32-bit variable with __stack_chk_guard (reference-data), but apfs and the sandbox import it in a slot after kernel_task/kernproc and before rootvp, where the guard (imported by both at 0xfffffe000b738000, in its right place) cannot be. apfs's mountroot stores rootvp and then stores vnode_specrdev's 32-bit result here (0xfffffe000a9c2d74..d88): rootdev = vnode_specrdev(rootvp). With the wrong pair that store went into the kernel's stack guard."
+   "original": "0xfffffe000b7b2448",
+   "native_symbol": "_gIOPublishNotification",
+   "evidence": "iokit/Kernel/IOService.cpp: gIOPublishNotification and gIOFirstPublishNotification are adjacent globals (this one and the next 8 bytes on). In the kexts' import tables, which are sorted by symbol name, this target comes after the other and directly before gIOServicePlane, as 'Publish' sorts after 'FirstPublish'. My earlier record had it as gIOFirstPublishNotification, one name too early."
+  },
+  {
+   "original": "0xfffffe000b7b2450",
+   "native_symbol": "_gIOFirstPublishNotification",
+   "evidence": "See 0xfffffe000b7b2448: imported before it and after gIOFirstMatchNotification in 27 tables. My earlier record had gIOMatchedNotification here; that one is 0xfffffe000b7b2710 (the matcher's pair, in order in 22 tables)."
+  },
+  {
+   "original": "0xfffffe0007ec7ed8",
+   "native_symbol": "__ZN8OSObject9metaClassE",
+   "evidence": "In 20 import tables this target sits between OSObject::gMetaClass and OSString::metaClass, where OSObject::metaClass sorts; the matcher's data rule had OSCollection::superClass, which holds the same value (the address of OSObject's metaclass object) and sorts elsewhere."
   }
  ]
 }

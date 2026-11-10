@@ -30,6 +30,12 @@ mkdir -p "$WORK"
 # 1. The kernel as the emitter's native input (its one weak bind resolved).
 cp "$KERNEL" "$WORK/xnu.macho"
 python3 "$HERE/native-input.py" "$WORK/xnu.macho" "$WORK/native.macho" "$WORK/native-input.json"
+# 1b. The lead's and fable-user's reviewed records (lead/, user/) merged into ours for this build: ours win, a
+# disagreement is printed and recorded (merge-reviewed.py).
+OWN_REVIEWED=$REVIEWED
+REVIEWED=$WORK/reviewed.merged.json
+python3 "$HERE/merge-reviewed.py" --reviewed "$OWN_REVIEWED" --native "$WORK/native.macho" --out "$REVIEWED" \
+  $(ls "$HERE"/lead/reviewed-*-"$BUILD"-*.json "$HERE"/user/reviewed-*-"$BUILD"-*.json 2>/dev/null)
 # 2. Which kexts.
 python3 "$HERE/roots.py" "$CACHE" "$WORK/select.json" "$PROFILE"
 # 3. The kexts for the hosted kernel: TPIDR_EL1 -> TPIDR_EL0, and what else a process cannot execute.

@@ -1,25 +1,3 @@
-diff --git a/bsd/kern/code_signing/xnu.c b/bsd/kern/code_signing/xnu.c
-index 716d7a4..00d8de7 100644
---- a/bsd/kern/code_signing/xnu.c
-+++ b/bsd/kern/code_signing/xnu.c
-@@ -383,7 +383,17 @@ xnu_image4_monitor_trap(
- 	__unused const void *input_data,
- 	__unused size_t input_size)
- {
-+#if XNU_HOSTED
-+	/*
-+	 * OneiOS hosted (0007-prelink-kext-start.patch): the collection's Image4 is built for a phone with a code
-+	 * signing monitor and sends each nonce slot to it from its start, without asking whether there is one and
-+	 * without reading the result. kernel.kc binds that call here: there is no monitor to tell.
-+	 */
-+	(void)selector;
-+	return ENOTSUP;
-+#else
- 	panic("image4 dispatch: trap without code signing monitor: %llu", selector);
-+#endif /* XNU_HOSTED */
- }
- 
- #endif /* !CODE_SIGNING_MONITOR */
 diff --git a/libkern/c++/OSKext.cpp b/libkern/c++/OSKext.cpp
 index b921bd8..06f606b 100644
 --- a/libkern/c++/OSKext.cpp

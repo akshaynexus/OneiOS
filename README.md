@@ -22,8 +22,13 @@ iPhone18,2 kexts), the boot gets through:
 - the first user process (`newfs_apfs`, the Data volume's first start) running in user mode, the dyld shared
   cache's 4K code signatures, the shared cache mapped and slid (8 GiB shared region), Mach messaging.
 
-It stops on the next kernel function the prelink has not paired yet. Not reached: the Data mount, launchd,
-backboardd, SpringBoard. Detail: [kernel/patches/oneios-hosted/README.md](kernel/patches/oneios-hosted/README.md)
+- `newfs_apfs` formats the Data volume, the kernel mounts it at `/private/var`, unpacks and verifies the seed
+  (6024 files), mounts the App cryptex, and execs `/sbin/launchd`, which runs in user mode (fable-prelink's run,
+  1 vCPU, series `0001`-`0013`, 2026-11-11).
+
+It stops at launchd's first `workq_open`: `sched_clutch.c:6589 Assertion failed: low_node != high_node` in
+`sched_edge_qos_max_parallelism` (one processor set node under xnuhost, and the topology counts as standard). Not
+reached: launchd's daemons, backboardd, SpringBoard. Detail: [kernel/patches/oneios-hosted/README.md](kernel/patches/oneios-hosted/README.md)
 and the board, [docs/agents.md](docs/agents.md).
 
 Built and tested on the PC, not yet on the phone: xnuhost and its loader, the GPU path (drm2kgsl on KGSL), the

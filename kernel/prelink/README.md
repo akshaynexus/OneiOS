@@ -49,6 +49,8 @@ the same). A new kernel needs a new `kernel.kc`: every native address in it is t
    does not fit in front of the first kept kext's data (it is 10 MB with the virtio-gpu driver's static buffers).
 7. `record.py`.
 
+Before step 2, `merge-reviewed.py` merges the other agents' reviewed records into ours for the build (below).
+
 `port-fixture.py` carried 50 of XnuPrelink's reviewed iPad identities over (functions with the same bytes here);
 rerun it only when that fixture changes. `unmapped.py` names the original function behind a stub panic.
 
@@ -95,31 +97,57 @@ AMFI's AKS calls and the Data volume).
 
 ## State (2026-11-11)
 
-Under xnuhost in `qemu-aarch64 -cpu cortex-a710` (1 vCPU, 2 GiB), with the series `0001`-`0010` and the image set
-`out/image/24A446`: Apple corecrypto's POST, AppleImage4, AMFI (early initializer), the sandbox and vnguard
+Under xnuhost in `qemu-aarch64 -cpu cortex-a710` (1 vCPU, 2 GiB), with the series `0001`-`0013`, the image set
+`out/image/24A446` and `oneios-data-wait=3000` in the boot arguments (the first start's dyld phase takes about nine
+minutes under qemu): Apple corecrypto's POST, AppleImage4, AMFI (early initializer), the sandbox and vnguard
 policies, the trust caches, IOKit matching, the five hosted disks, `bsd_init`, the APFS containers, the root mount
 (`BSD root: disk6s1`, `mount-complete volume ...OS`), the swap setup, pid 1's exec path (the kernel mounts the
 system cryptex volume and publishes the boot manifest hash), Image4's magazine and nonce slots, and the first user
-process: pid 2, `/sbin/newfs_apfs` for the Data volume's first start, is exec'ed through AMFI's and the sandbox's
-hooks and runs user code (page faults through APFS's pagein and AMFI's page validation). It then makes no more
-progress for two minutes with no panic; not diagnosed yet. launchd itself has not been exec'ed.
+process: pid 2, `/sbin/newfs_apfs` for the Data volume's first start, exec'ed through AMFI's and the sandbox's
+hooks. Its dyld maps the shared cache through the shared region (`0013`); the kernel hashes each cache file for
+4K pages first (5.8 GB in about nine minutes here). `newfs_apfs` formats the volume, the kernel mounts it at
+`/private/var`, unpacks and verifies the seed (6024 files, 60 s), mounts the App cryptex, and execs `/sbin/launchd`,
+which runs user code. It stops at launchd's first `workq_open`, in the kernel's own scheduler:
+`sched_clutch.c:6589 Assertion failed: low_node != high_node` (`sched_edge_qos_max_parallelism`; one processor set
+node, standard topology). That is the hosted kernel's, not a pair.
 APFS also logs "failed to find named root snapshot: Need authenticator (81)" and goes on.
 
-Two things besides pairs were needed for this:
+Besides pairs, two things were needed for this:
 - `hosted.py` rewrites APFS's eleven inline `smr_hash_array_decode` (`orr xD, xN, #0x00ff000000000000` ->
   `and xD, xN, #0xff00ffffffffffff`): the kexts restore bits 48..55 of a packed kernel pointer to 0xff, and hosted
   kernel addresses are low.
-- Kernel: `0010` mirrors the published boot manifest hash onto the `/chosen` entry Image4 looked up before the
-  platform expert's nub replaced it; `0007` makes `xnu_image4_monitor_trap` return ENOTSUP (Image4 sends its nonce
-  slots to a code signing monitor that is not there).
+- Kernel `0010`: the published boot manifest hash is mirrored onto the `/chosen` entry Image4 looked up before the
+  platform expert's nub replaced it (the lead's `0011` then stops that nub from being made).
 
 Debugging: `qemu-aarch64 -g PORT` and gdb (`set architecture aarch64`, `target remote`) work on xnuhost; kernel.kc
 is at 0x2000004000, so an original address A is at A - 0xfffffe0007004000 + 0x2000004000.
 
 Pairing: the matcher with the reference, the inferred pairs (order, structors and factories, slots, kernel class
-objects), 430 functions and 25 data reviewed by hand, 50 carried over from XnuPrelink's iPad fixture.
-The record (`kernel.kc.build.json`) has the count of original functions still on the panic stub and of unpaired
-data targets, per kext.
+objects), 564 functions and 26 data reviewed by hand here, the lead's and fable-user's records (below), and
+50 carried over from XnuPrelink's iPad fixture. 268 original functions that kexts reference are on the panic stub
+and 18 data targets are unpaired; `kernel.kc.build.json` lists them per kext.
+
+## Records of several agents, and the import-order check
+
+- `reviewed-24A446-v54.json` is fable-prelink's. The lead keeps `lead/reviewed-lead-24A446-v54.json` and fable-user
+  `user/reviewed-user-24A446-v54.json` (functions only). `build.sh` merges them for each build
+  (`merge-reviewed.py`, into `work/reviewed.merged.json`): the owner's record wins for an original both have, and
+  every disagreement is printed and written under `merge.disagreements`. Today three are left, and in each the
+  code decides: `0xfffffe000ae04840` is `decmpfs_hides_xattr` (the 168-byte one of the two; the 48-byte one before
+  it is `hides_rsrc`), `0xfffffe000ade775c` tests I/O policy bit 15 of the context's process (not
+  `vfs_context_iskernel`; UniXNU's `vfs_context_iopolicy_unassigned_0x8000`), `0xfffffe000abd8788` is
+  `lck_ticket_destroy` (checks the type byte and clears it; imported directly before `lck_ticket_init`).
+- **Import order** (the lead's `lead/imports.py`): a kext's `__auth_got` is sorted by imported symbol name, in runs
+  (one per library it links). A paired name that sits out of order between two neighbours that are in order with
+  each other is wrong, or an alias. On 2026-11-11 this check found 53 such names in the map; the ones on the boot
+  path are corrected by reviewed records (three of my own records, the vnode type tests, the publish notification
+  symbols, `psignal_sigkill_*`, `cs_blob_reset_cache`, `socd_client_trace`, `MD5Init`, `OSObject::metaClass`).
+  Most of the rest are the matcher's `pure-leaf` pairs: functions whose whole body is `ret` or `mov w0, #N; ret`
+  given to some other function with the same body. Those behave the same whatever their name, as long as this
+  kernel's function of the real name also only returns that constant; that is not checked.
+- Pairing ahead of the boot: for an unpaired import, the names between its neighbours in every table that has it
+  are the candidates (`imports.py` prints them); the code picks among them. A boot on the PC costs about ten
+  minutes to the first user process, so a batch is paired this way and then confirmed with one boot.
 
 ## What is not done
 
