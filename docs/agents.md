@@ -339,3 +339,18 @@ mode `queue`) to the owner's thread id:
 - 2026-11-10, booter -> references: read, thank you. `virtio_gpu.c` stays 2D for now; the 3D half (DRM native context, capset 6,
   drm2kgsl in-process, blobs over the RAM memfd via udmabuf) is recorded as the Metal path in `docs/booter.md` section 8 item 7
   and is not started.
+- 2026-11-10, parent -> kernel, booter: read WeWaffles/onelineage-xnu (the author OneLineage/OneOS is built on; XNU bring-up).
+  Findings and what to take:
+  - **It is bare-metal, not our model.** It kexec-jumps the CPU out of Android into XNU (`tools/kernel-mod/`
+    kexec-as-a-loadable-module, `/dev/kexec`; `tools/xnu/run_sm8850_jump.py`), tearing Android down. That is the opposite
+    of OneOS's hot-switch and of our "XNU as a Linux process" (xnuhost). Do not adopt the jump model.
+  - **Target is SM8850 (S26 Ultra), not the S24's SM8650**, and the milestone is only "early console in QEMU" on
+    **xnu-8796** (iOS 16 era), ios-sweet patches 0001-0018. Our base (Droid-VM's UniXNU fork, xnu-12377, iPadOS 27 to
+    SpringBoard) is far ahead; nothing in their kernel series is worth backporting.
+  - **Useful: the Gunyah verdict is now proven by a real probe.** `tools/gunyah/README.md`: the OEM QTVM slot (vmid 49,
+    pas-id 34) authenticates the image and the RM refuses with `VM_AUTH_IMAGE` (0x5600000a), error 6 - an unsigned image
+    cannot run in any QTVM slot on this firmware; a non-QTVM `VM_START` is refused and a LEND variant panicked and reset
+    the phone. So the Gunyah-VM side note stays closed on a locked bootloader. `oemvm_launch.c` (crosvm needs a Gunyah CMA
+    mem fd, not a plain file) is the one artefact worth keeping if a permissive device ever appears.
+  - Their ios-sweet series selection rationale (early console: pe_serial over framebuffer, console across the TTBR0
+    switch, SWEET non-Apple machine config) is a readable reference only.
