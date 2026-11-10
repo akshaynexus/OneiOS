@@ -251,8 +251,12 @@ xl_adt_node *xl_machine_tree(const xl_machine *m, const char **error)
   uint64_t seed = m->have_chip_id && m->unique_chip_id ? m->unique_chip_id : 0x4f6e6569;
   uint8_t mac[6] = { 0x02, 0xd7, (uint8_t)(seed >> 24), (uint8_t)(seed >> 16), (uint8_t)(seed >> 8), (uint8_t)seed };
   xl_adt_set(bt, "local-mac-address", mac, 6);
+  // The three addresses the userland's boot contract requires, each stable for one unique chip ID.
+  xl_adt_set(chosen, "mac-address-bluetooth0", mac, 6);
   mac[2] ^= 0x5a;
   xl_adt_set(chosen, "mac-address-wifi0", mac, 6);
+  mac[2] ^= 0x33;
+  xl_adt_set(chosen, "mac-address-ethernet0", mac, 6);
 
   xl_adt_node *buttons = xl_adt_add(root, "buttons");
   xl_adt_set_str(buttons, "compatible", "buttons");

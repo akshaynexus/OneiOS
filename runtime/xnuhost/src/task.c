@@ -6,9 +6,10 @@
 //   task      a fork of the factory that runs only the stub (stub/stub.c): empty address space, a
 //             service thread that carries out map/unmap/protect/clone orders, and one Linux thread
 //             per iOS thread whose system calls and faults arrive as signals.
-// How Darling's darlingserver serves the same calls from Linux was the reference for what a trap
-// must carry (https://github.com/darlinghq/darlingserver ca9236e: per-thread RPC with the caller's
-// full register state); the transport here is a shared page and two futex words instead of a socket.
+// Darling (https://github.com/darlinghq/darling) serves the same calls another way: its own
+// libsystem_kernel calls darlingserver over a socket. iOS's libsystem_kernel is Apple's and issues
+// `svc #0x80` itself, so here the call is trapped (seccomp, SIGSYS) and the transport is a shared
+// page and two futex words.
 #define _GNU_SOURCE
 #include "xnuhost.h"
 #include "../stub/stub_abi.h"

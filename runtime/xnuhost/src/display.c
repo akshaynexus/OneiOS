@@ -156,9 +156,10 @@ int xh_display_init(const xh_config *c, unsigned *width, unsigned *height)
 {
   backend = !strcmp(c->display, "drm") ? BACK_DRM : !strcmp(c->display, "shm") ? BACK_SHM : BACK_NONE;
   if (backend == BACK_DRM && drm_init()) return -1;
-  // The guest's frame: what was asked for, else the panel's mode, else the S24 Ultra's panel.
-  display.width = c->width ? c->width : backend == BACK_DRM ? drm_w : 1440;
-  display.height = c->height ? c->height : backend == BACK_DRM ? drm_h : 3120;
+  // The guest's frame: what was asked for, else the panel's mode, else the iPhone18,2 frame the
+  // userland's boot contract names (1320x2868, @3x portrait).
+  display.width = c->width ? c->width : backend == BACK_DRM ? drm_w : 1320;
+  display.height = c->height ? c->height : backend == BACK_DRM ? drm_h : 2868;
   display.stride = display.width * 4;
   if (backend == BACK_SHM) {
     if (shm_init(c)) { LOGE("display: shared frame: %s", strerror(errno)); return -1; }

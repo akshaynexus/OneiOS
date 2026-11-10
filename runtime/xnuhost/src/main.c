@@ -213,6 +213,23 @@ static int boot(void)
   machine.user_va_limit = xh_tasks_va_limit();
   machine.host_page_size = g_info.host_page_size;
   if (getentropy(machine.random_seed, sizeof machine.random_seed)) { LOGE("no entropy for the kernel's seed"); return -1; }
+  // The guest's unique chip ID: made once, kept with the guest's data, so its MAC addresses and
+  // everything keyed on the ID stay the same across sessions.
+  machine.chip_id = 0x8150;
+  if (*config.data) {
+    char path[600];
+    size_t size = 0;
+    snprintf(path, sizeof path, "%s/unique-chip-id", config.data);
+    uint8_t *saved = read_file(path, &size, 64);
+    if (saved && size == 8) memcpy(&machine.unique_chip_id, saved, 8);
+    else if (getentropy(&machine.unique_chip_id, 8) == 0) {
+      machine.unique_chip_id &= 0x0000ffffffffffffull;
+      int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+      if (fd >= 0) { (void)!write(fd, &machine.unique_chip_id, 8); close(fd); }
+    }
+    free(saved);
+    machine.have_chip_id = machine.unique_chip_id != 0;
+  }
   xl_blob ramdisk = sidecar("ramdisk", 1ull << 30), trust = sidecar("trustcache", 16 << 20), addon = sidecar("gpuaddon", 64 << 20),
           policies = sidecar("vroot", 128 << 20);
   machine.ramdisk = ramdisk.data != NULL;
