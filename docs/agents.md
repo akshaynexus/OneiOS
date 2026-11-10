@@ -1235,3 +1235,33 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
     `NativeAdrenoMetal.clients` names (roottweak's default: `WidgetRenderer_Default`, `*Poster*`, `iconservicesagent`,
     `SBRendererService`; `contract.metal.clients`).
   - Not verified: anything at run time. No guest has exec'ed or mapped a binary built here.
+- 2026-11-11, native-display -> lead, q4a-framebuffer, fable-display, userland, oneos: **the guest renders the panel's
+  native mode, 1440x3120 at 120 Hz, at a UI scale of 3 or 2** (`28ca677`). No kernel change and no new collection:
+  the mode is the boot video's, and the scale and the rate reach the display driver as boot arguments xnuhost adds.
+  - xnuhost: the frame is the panel's largest mode at its highest rate (in a session, read from `/dev/dri/card0`'s
+    connector, not the current mode; 1440x3120 at 120 Hz in a bench run and where that fails; `--width/--height/--hz`
+    override). `scale` 3 or 2 (`--set scale=2`, or the image's `overlay/userland/xnuhost.conf`): `/chosen
+    display-scale`, `/product artwork-scale-factor`, `/chosen/xnuhost display-*`, `offline-legacy-unit-scale=N
+    sheng-vsync=HZ`. `docs/booter.md` 2.8.
+  - QuartzCore's `-[CADisplayMode preferredScale]` was read in 24A446's cache (it is the iPad's code at the same
+    offset): a mode with no preferred scale is @2x. So 2 is its own answer; for 3 xnuhost puts two fixups in
+    `/chosen text-fixups` (build 24A446 only, `--set scale-fixup=0` to leave them out). **Not seen applied.**
+  - userland: the profile's screen is 1440x3120; `roottweak apply --scale 2` / `ONEIOS_SCALE=2` carries one value to
+    the contract, `identity.expect` and `xnuhost.conf`. **`out/image/24A446` was not rebuilt**: its seed still expects
+    1320x2868, so `oneios-mg` will report the width and height until the image is built again. `docs/userland.md` 5.1
+    has what iOS 27 reads and the layout risks of each scale.
+  - fable-display: your helper now puts the panel in its native mode under `--takeover`
+    (`setDesiredDisplayModeSpecs` by reflection, logged when refused) and shows a frame of the panel's size with no
+    matrix and no background layer; the scaling path is kept for another size. `displayctl`'s default frame is
+    1440x3120. Unproven on the phone like the rest.
+  - Run on the PC (q4a's kind of collection, `out/rtu-kc/work/kernel.kc` copied; `--display shm`, no size given,
+    25 minutes): `guest frame 1440x3120 at 120 Hz, @3x (480x1040 points)`; `default surface status 0 valid 1
+    1440x3120 stride 5760`; `late probe: stage 10 ... scale status 0 (/chosen display-scale 3)`; `panel 1440x3120`;
+    the framebuffer opened by thermalmonitord, backboardd and MobileGestaltHelper, each status 0;
+    `display-capture.py`: `hello 1440x3120 stride 5760`, 1798 flushes, one 1440x3120 PNG (a single colour: the
+    boot video, nothing drew into it). A second, 50 s boot with `--set scale=2 --hz 90`: `@2x (720x1560 points)`,
+    `scale status 0 (/chosen display-scale 2)`, `offline-legacy-unit-scale=2 sheng-vsync=90`, no fixups.
+  - **Not verified:** backboardd submitted no swap and `session/ready` was not created (as before; Q6), so nothing
+    shows the mode, scale or refresh rate *as backboardd reads them*: the 120 Hz tick never had a client, the
+    refresh properties were not read back, the fixups were not seen applied, and no layout exists to look at.
+    Nothing ran on the phone (the DRM mode read, the helper's mode switch).
