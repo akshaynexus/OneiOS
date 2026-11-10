@@ -1,3 +1,24 @@
+diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
+index 1efcd87..42f3c7b 100644
+--- a/bsd/kern/ubc_subr.c
++++ b/bsd/kern/ubc_subr.c
+@@ -6449,6 +6449,16 @@ cs_text_fixup_page(struct vnode *vp, memory_object_offset_t page_offset, void *k
+ 			printf("text-fixup: %s+0x%llx (%u bytes) applied\n", f->name, f->offset, f->length);
+ 		}
+ 	}
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted: the host rewrites what iOS text cannot do in a Linux task (the TSD base read from
++	 * TPIDRRO_EL0, the CPU number in TPIDR_EL0; docs/booter.md). Both callers come here once per page of
++	 * original text: after its hash was checked, before any mapping. A second pass over a fixed page would
++	 * rewrite the rewritten reads, and there is none: a page changed after validation fails its hash.
++	 */
++	extern uint32_t hosted_text_fixup(void *text, uint64_t size);
++	written += hosted_text_fixup(kva, PAGE_SIZE);
++#endif
+ 	return written;
+ }
+ 
 diff --git a/osfmk/arm/thread.h b/osfmk/arm/thread.h
 index 29ea6d8..784ff95 100644
 --- a/osfmk/arm/thread.h
@@ -51,7 +72,7 @@ index 29ea6d8..784ff95 100644
  #if HAS_MTE
  	bool                      in_unprivileged_access;
 diff --git a/osfmk/arm64/copyio.c b/osfmk/arm64/copyio.c
-index 506754c..88bf9b7 100644
+index 506754c..e5133b0 100644
 --- a/osfmk/arm64/copyio.c
 +++ b/osfmk/arm64/copyio.c
 @@ -41,6 +41,23 @@
@@ -127,11 +148,11 @@ index 506754c..88bf9b7 100644
 +#if XNU_HOSTED
 +	/*
 +	 * OneiOS hosted: a user address is below the kernel's range and below what the host gives tasks
-+	 * (xh_info.user_va_limit), whatever the map's own bounds say: a kernel address passed as a user
++	 * (xh_info.user_va_limit; 0 when the host has no task layer), whatever the map's own bounds say: a kernel address passed as a user
 +	 * pointer is refused here.
 +	 */
 +	if (!is_kernel_to_kernel && __improbable(user_addr_last > VM_MIN_KERNEL_ADDRESS ||
-+	    user_addr_last > hosted_info.user_va_limit)) {
++	    (hosted_info.user_va_limit != 0 && user_addr_last > hosted_info.user_va_limit))) {
 +		return EFAULT;
 +	}
 +#endif /* XNU_HOSTED */
@@ -636,10 +657,10 @@ index 6fd42e3..b3905d3 100644
  #endif /* XNU_HOSTED */
 diff --git a/osfmk/arm64/hosted/hosted_user.c b/osfmk/arm64/hosted/hosted_user.c
 new file mode 100644
-index 0000000..218742e
+index 0000000..8709afc
 --- /dev/null
 +++ b/osfmk/arm64/hosted/hosted_user.c
-@@ -0,0 +1,752 @@
+@@ -0,0 +1,753 @@
 +/*
 + * OneiOS: user mode of the hosted kernel (arm64/hosted/hosted.h explains the model).
 + *
@@ -1365,7 +1386,8 @@ index 0000000..218742e
 +	    "a kernel address as a user pointer is refused (EFAULT)");
 +	hosted_selftest_check(copyout(out, (user_addr_t)(uintptr_t)in, 64) == EFAULT,
 +	    "a kernel address as a user destination is refused (EFAULT)");
-+	hosted_selftest_check(copyin(hosted_info.user_va_limit - 64, in, 128) != 0, "a range across user_va_limit is refused");
++	hosted_selftest_check(copyin((hosted_info.user_va_limit != 0 ? hosted_info.user_va_limit : VM_MIN_KERNEL_ADDRESS) - 64, in, 128) == EFAULT,
++	    "a range across the end of user addresses (user_va_limit) is refused");
 +	disable_preemption();
 +	err = copyin(base + 5, in, 64);
 +	int err2 = copyin(base + size + 16 * PAGE_SIZE, in, 64);
