@@ -115,10 +115,27 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
 
 ## 6. On the phone
 
-**The checks (One UI running, nothing switched):** in the OneOS fork app, iOS 27 (OneiOS) card → Hardware checks →
-Run all, then Share all. Or by hand, from `STAGE/bin` pushed to `/data/local/tmp`, as root: `gpuctl`,
-`displayctl test`, `bridgectl cpu|haptic|haptic-pattern|bt|audio`, `brightctl info|levels|als`,
-`camctl --backend ndk list|capture`. Each tool's README has its exact commands and what a pass looks like.
+**The checks (One UI running, nothing switched):** in the OneOS fork app (0.4.75 or newer), Choose a system →
+iOS 27 (OneiOS) → Open → **Hardware checks**. The screen uses the tools of the staged runtime (0.1.0 or newer has
+them all); with none staged it offers *Download from OneiOS's releases* first. Then:
+
+1. Turn Bluetooth and adaptive brightness off in One UI and close the Camera app (with either setting on, that
+   row is skipped and says why).
+2. **Run all**: one dialog says what will happen (colour bars for 5 s, two buzzes, a tone, the screen stepping dim
+   to full, the camera used briefly), then twelve checks run in order, about two minutes: CPU layout, GPU, display
+   layer, haptics, haptics pattern, audio, Bluetooth, brightness, brightness steps, light sensor (cover the back,
+   then point it at a light), cameras, camera. Each row ends as Pass, Fail or Skipped with the tool's line; every
+   row also has its own **Run**.
+3. Tap a row for the full output (and, for the camera, the picture). **Share all** sends every log as one text.
+4. The two rows under "Experimental" (the camera through Samsung's HAL directly) are not part of Run all.
+
+Every check has a time limit (10 to 45 s); a tool that has not finished is ended and the backlight, the light
+sensor's enable file and the display test's layer are put back. The checks start no session and stop nothing of
+One UI's. How the screen runs them and what it tests: the fork's `docs/oneios.md`, "Hardware checks".
+
+Or by hand, from `STAGE/bin` pushed to `/data/local/tmp`, as root: `gpuctl`, `displayctl test`,
+`bridgectl cpu|haptic|haptic-pattern|bt|audio`, `brightctl info|levels|als`, `camctl --backend ndk list|capture`.
+Each tool's README has its exact commands and what a pass looks like. **None of this has run on the phone yet.**
 
 **Getting the image set onto the phone:** it is about 11 GB and never published. Serve it from the PC privately
 over several Cloudflare quick tunnels at once, so a download manager fetches it in parallel parts from all of them
@@ -137,10 +154,11 @@ URLs are also in `logs/serve-urls.txt`; each tunnel's log is `logs/serve-tN.log`
 
 Repo `akshaynexus/OneOS`, branch `oneios`. A push to `oneios` runs `.github/workflows/oneios-apk.yml`: it builds
 the full debug APK (the workflow's own `GITHUB_TOKEN` reads the SESL packages), runs the unit tests and publishes
-the prerelease `oneios-<version>`. Locally: a `read:packages` token in `~/.config/twidget/github.properties`
+the prerelease `oneios-<version>` (0.4.75 is the first with the Hardware checks screen). Locally: a `read:packages` token in `~/.config/twidget/github.properties`
 (`ghUsername`, `ghAccessToken`), then `cd app-android && ./gradlew test assembleFullDebug`.
 
 ## 8. Releases
 
 A tag `vN.N.N` on `main` runs `.github/workflows/release.yml`, which builds the runtime package with the pinned NDK
 and attaches it and its `.sha256` to the release. No kernel, no image. See [releases.md](releases.md).
+The first release is [`v0.1.0`](https://github.com/akshaynexus/OneiOS/releases/tag/v0.1.0) (2026-11-10).

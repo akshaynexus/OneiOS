@@ -40,6 +40,25 @@ Anything below that the booter, release-kernel or image-build cannot meet: chang
   `format` values this runtime boots; the switch refuses an image set whose format is not listed.
 - Only OneiOS's own code. Nothing of Apple's: the kernel collection with Apple's kexts is part of the image set.
 
+### Phone checks in the package
+
+`bin/gpuctl`, `bin/bridgectl`, `bin/brightctl`, `bin/displayctl` and `bin/camctl` are tools the fork's Hardware
+checks screen runs as root beside One UI, never in a session (`oneios_root.sh check <id>`; the fork's
+`docs/oneios.md`, "Hardware checks", has the command and the time limit of each). What the fork relies on, so
+change these only together with the fork's `OneiosChecks.kt`:
+
+- the file names above, and `bin/oneios-audio` as `bridgectl audio`'s argument, `bin/oneios-display` beside
+  `displayctl`;
+- exit code 0 for a pass; and the last line `ok` (bridgectl, gpuctl), `displayctl: ok`, `brightctl: ok`;
+  `FAILED at: ...` (gpuctl); `brightctl info`'s `panel: ...` line and `levels`' `restored N`; camctl's
+  `back end: NAME, N cameras`, `frames: N read, M missed`, `picture: ...`, `wrote FILE.png`, and the failure
+  lines of its README's table;
+- `displayctl` makes its folder under `$TMPDIR`; `camctl --out FILE.png`;
+- SIGTERM ends a tool (brightctl and displayctl put back what they changed on it). At its time limit the fork
+  sends SIGTERM, 2 s later SIGKILL, and then writes the backlight level and the light sensor's `enable` back itself.
+
+A tool the package lacks is shown as "Not in this runtime", not as a failure.
+
 ## 2. Image set (image-build)
 
 - One `.tar.zst` the owner builds locally and imports in the app. Never downloaded. Same tar rules as above,

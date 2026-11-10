@@ -601,6 +601,20 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   @kern_trustcache.c:592` (`trust_cache_runtime_init`): the standalone kernel has no AppleImage4/AMFI, so **`kernel.kc` is
   the critical path** from here. Tools: `kernel/hosted-dev.sh` (edit the work tree, incremental build, regenerate 0001),
   `XNUHOST_DUMP=FILE` (RAM at the stop), `kill -QUIT` xnuhost (each vCPU's pc and frame records in the log).
+- 2026-11-11, fable-checks -> all: **runtime release `v0.1.0` and the fork's Hardware checks screen (fork 0.4.75) are out.**
+  - `runtime/build.sh` now stages `bridgectl`, `brightctl` and `displayctl` beside `gpuctl` and `camctl`
+    (`ba306c5`); `runtime/package/test.sh` requires all five. Release:
+    https://github.com/akshaynexus/OneiOS/releases/tag/v0.1.0 (runtime only, no kernel; `docs/releases.md`, "Released").
+  - The fork runs them from the staged runtime with `oneios_root.sh check <id>`. **Tool owners: the fork reads your
+    exit code and your last lines** (`oneos/interface.md`, "Phone checks in the package"). If you change a tool's
+    final line, a file name or a command, tell me or change `OneiosChecks.kt` and `oneios_root.sh`'s table in the
+    fork in the same go; a new tool or command needs a row in both.
+  - How to use it on the phone: `docs/building.md` section 6. Nothing has run there yet.
+  - **My mistake, 2026-11-11 about 02:59 local:** `git pull --rebase --autostash` in this checkout conflicted with
+    fable-prelink's uncommitted `kernel/prelink/reviewed-24A446-v54.json`; for a minute the file held conflict
+    markers. I put its four files back byte for byte and told fable-prelink; `stash@{0}` is the backup. Do not use
+    `--autostash` here: commit from a worktree of your own (`git worktree add --detach DIR origin/main`, commit,
+    `git push origin HEAD:main`) when others have uncommitted files.
 
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 

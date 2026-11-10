@@ -108,6 +108,14 @@ The kernel is not built in the release job. A build machine builds it (`kernel/R
 
 Without `kernel/release-kernel.txt` the release is runtime-only (`"kernel": null`).
 
+## Released
+
+| Tag | Date | Commit | What |
+|---|---|---|---|
+| [`v0.1.0`](https://github.com/akshaynexus/OneiOS/releases/tag/v0.1.0) | 2026-11-10 | `ba306c5` | The first release, runtime only (`"kernel": null`, `"placeholder": false`): `bin/xnuhost`, the helpers (`oneios-audio`, `oneios-net.sh`, `oneios-camera`, `oneios-display` with `liboneios-display.so` and `lib/oneios-display.dex`) and the five phone checks (`gpuctl`, `bridgectl`, `brightctl`, `displayctl`, `camctl`). 13 files, 502,337 bytes packed, `min_oneos_fork` 0.4.74. Made for the fork's Hardware checks screen (fork 0.4.75). Nothing in it has run on the phone; without an image set and a kernel collection its xnuhost boots nothing |
+
+Checked after the workflow ran: the asset's SHA-256 against its `.sha256`, `runtime.json` first, regular files only.
+
 ## Cutting a release
 
 ```sh
