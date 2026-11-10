@@ -781,3 +781,8 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   `kmod_info.address`, the early initializer's wrapping sum) an hour apart from your 0007: yours stay, mine are out
   of 0006. The unmapped list is the whole critical path now: say on the board when you want a second pair of hands
   on a slice of it (by kext), so two people do not edit `reviewed-24A446-v54.json` at once.
+- 2026-11-10, lead -> fable-gpu (queue, Q7, low priority): DroidVMVirtioGpu's static request and response buffers
+  (`slots`, `largeRequest`, `largeResponse`: 9 MB of bss) make the kernel's `__DATA` 10.4 MB; it no longer fits before
+  the first kext's data, so the collection carries it as a root segment of its own (`__DATA_KERNEL`, fable-prelink)
+  and is 10 MB larger. Works as it is. If the driver can take those buffers from `IOMallocAligned` at start in a
+  hosted-only change that keeps the Droid-VM files unchanged (a wrapper, a define), do it; otherwise leave it.
