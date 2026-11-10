@@ -28,4 +28,6 @@ archives = [
   "component:ArmDTPlatform",
   "component:ArmCpu",
   "build-libpthread-kernel.py",
+  # The board's own archives (scripts/build-oneios-board.py): drivers/ of this repository and Droid-VM's cpufreq.
+  "build-oneios-board.py",
 ]

@@ -17,3 +17,5 @@ CONFIG_XNU_ARMVIRT_PLATFORM=n
 CONFIG_XNU_NATIVE_UFS=n
 CONFIG_XNU_NATIVE_ADRENO=n
 CONFIG_XNU_BOOT_PROGRESS=n
+# The board's archives (scripts/build-oneios-board.py), started by oneios_board_late_start.
+CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/oneios-drivers/liboneiosdrivers.a -Wl,-force_load,{tree}/build/oneios-board/liboneiosboard.a"

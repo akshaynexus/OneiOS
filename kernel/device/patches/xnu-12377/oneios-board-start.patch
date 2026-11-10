@@ -1,12 +1,27 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index 3907c55..3e67fed 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -791,6 +791,9 @@ bsd_init(void)
+ 	extern void native_source_storage_start(void) __attribute__((weak_import));
+ 	if (&native_source_storage_start)
+ 		native_source_storage_start();
++	/* OneiOS: the board's drivers that are not storage (osfmk/arm64/oneios_host.c). */
++	extern void oneios_board_late_start(void);
++	oneios_board_late_start();
+ #if DEVELOPMENT || DEBUG
+ 	native_apfs_load_probe();
+ 	native_mobile_graphics_load_probe();
 diff --git a/osfmk/arm64/oneios_host.c b/osfmk/arm64/oneios_host.c
 new file mode 100644
-index 0000000..bf3a2f8
+index 0000000..9823554
 --- /dev/null
 +++ b/osfmk/arm64/oneios_host.c
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,69 @@
 +/*
-+ * OneiOS (https://github.com/akshaynexus/OneiOS, kernel/): defaults for symbols that a board or a toolchain
-+ * supplies, so the kernel links without them. Every definition is weak: the real one wins when it is linked.
++ * OneiOS (https://github.com/akshaynexus/OneiOS, kernel/): the board's late start, and defaults for symbols that
++ * a board archive or a toolchain supplies, so the kernel links without them. Every default is weak: the real
++ * definition wins when it is linked.
 + */
 +#include <stdint.h>
 +#include <sys/cdefs.h>
@@ -18,6 +33,32 @@ index 0000000..bf3a2f8
 +__attribute__((weak)) void
 +native_source_storage_start(void)
 +{
++}
++
++/*
++ * The board's late start, called from bsd_init after the IOKit bootstrap and the storage hook. Each part is in
++ * an archive linked with CONFIG_XNU_EXTRA_LD_ARCHIVES (kernel/device/scripts/build-oneios-board.py); the weak
++ * defaults below stand in for a part that is not linked.
++ *   oneios_drivers_start     drivers/ of the OneiOS repository: the bridge transport, haptics, Bluetooth
++ *   droidvm_cpufreq_attach   UniXNU-droidvm package/DroidVMCpufreq.c: preferred clusters, frequency requests
++ */
++__attribute__((weak)) void
++oneios_drivers_start(void)
++{
++}
++
++__attribute__((weak)) void
++droidvm_cpufreq_attach(void)
++{
++}
++
++void oneios_board_late_start(void);
++
++void
++oneios_board_late_start(void)
++{
++	droidvm_cpufreq_attach();
++	oneios_drivers_start();
 +}
 +
 +/*

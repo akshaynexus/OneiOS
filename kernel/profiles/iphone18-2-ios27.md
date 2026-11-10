@@ -116,6 +116,7 @@ kexts) is made there.
 | `zzw-native-sandbox-grant-patterns`, `droidvm-gpu-grant-apps`, `droidvm-gpu-sandbox-first`, `droidvm-surface-gpu-wait` | sandbox grants for the GPU clients, IOSurface lock waits for GPU work | the Metal plugin and the kext families are the same [I] |
 | `droidvm-osmetaclass-adopt-superclass` | a source class adopts an original superclass | needed by every host driver under an original family |
 | `source-storage-start`, `native-board-launch-policy` | weak hooks: start source-built storage after the IOKit bootstrap; a launch policy before launchd | the hooks `HostBlock` and the userland's daemon policy use |
+| `droidvm-amp` | `__ARM_AMP__`: processor sets per cluster type, the Edge scheduler, `hw.nperflevels` = 2 | placement is the host's, but XNU and userland need P and E clusters to report and prefer (`drivers/cpu/README.md`). Every cpu node needs `cluster-type` |
 | `zzx-pmap-sync-flush` | write-combined pages written back before reuse | harmless under a host pmap, kept to stay on Droid-VM's tested text |
 | `portable-kalloc-type-builtins` (xnu-linux-toolchain) | data-only fallbacks for `__builtin_xnu_type_*` | stock clang; compiled out under Apple clang |
 | `oneios-*.patch` (ours) | section 6 | |
@@ -125,7 +126,6 @@ kexts) is made there.
 | Patch | Why |
 |---|---|
 | `non-apple-vcpu-park`, `non-apple-vcpu-start-flush`, `non-apple-idle-wfi`, `non-apple-sigp-recover` | Gunyah vCPU behaviour (WFE, start-up caches, lost IPIs). xnuhost's vCPUs are Linux threads |
-| `droidvm-amp` | big.LITTLE placement of pinned vCPUs. xnuhost places threads with the host scheduler |
 | `droidvm-sched-trace`, `droidvm-early-panic` | the rig's readers through guest RAM. xnuhost has the host hooks |
 | Mi A3 (laurel_sprout) series of iOSPlus10 | makes iOS 26 run on ARMv8.0 cores without PAC (instruction emulation, shared-cache rewrite). The S24 Ultra has PAC; not ported (owner's decision, `docs/agents.md`) |
 | iOSPlus10 `patches/xnu-12377/0001`-`0004` (NEGRONI machine config and drivers) | the OnePlus 10 Pro's SoC layer on darwin-xnu-build's tree. Same role as UniXNU's `BCM2837` layer, which the Apple kexts are prelinked against |
@@ -150,7 +150,7 @@ kexts) is made there.
 |---|---|
 | `oneios-stock-clang-ptrauth.patch` | `__ptrauth(..., "authenticates-null-values")` is Apple clang's: with another compiler the same key and discriminator without the option. An ABI difference for null values of `ucred.cr_label` and `IOCircularDataQueue` against kexts built with Apple clang; none under Apple clang |
 | `oneios-no-apple-iig.patch` | without Apple's `iig`: `IOUserClient::CreateActionKernelCompletion` answers unsupported, and the test dext (`TestDextRematch`) is not built, on both hosts |
-| `oneios-weak-defaults.patch` | weak defaults for `native_source_storage_start` and the two `__llvm_profile_*_internal` calls of OSKext's PGO export |
+| `oneios-board-start.patch` | `oneios_board_late_start()` from `bsd_init`: starts the board archives (`drivers/`, cpufreq); weak defaults for them, for `native_source_storage_start` and for the two `__llvm_profile_*_internal` calls of OSKext's PGO export |
 
 Not written yet: the hosted machine layer (`LINUXHOST`, `runtime/xnuhost/include/xnuhost/hostcall.h`). `kernel/README.md`, "Not done".
 

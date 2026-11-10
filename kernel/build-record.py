@@ -11,7 +11,7 @@
 The record is what runtime/package/pack.py reads before it lets a Mach-O into a release (docs/releases.md):
 builder, sha256, prelinked, kernelcache_kexts_added, apple_binary_inputs, restricted_sources.
 The build id names the inputs, not the machine: xnu-<version>-<profile>-<12 hex>, the hex being a hash of the XNU
-commit, every patch's SHA-256 in order, the configuration and the UniXNU commit.
+commit, every patch's SHA-256 in order, the configuration, the UniXNU commit and the board archives' sources.
 """
 import argparse
 import hashlib
@@ -88,10 +88,11 @@ def relative_patch(path):
         return str(path)
 
 
-def build_id(xnu_version, profile, xnu_commit, patches, config, unixnu_commit, unixnu_patches):
+def build_id(xnu_version, profile, xnu_commit, patches, config, unixnu_commit, unixnu_patches, board_sources=()):
     digest = hashlib.sha256()
     digest.update(json.dumps({'xnu': xnu_commit, 'patches': [p['sha256'] for p in patches], 'config': sorted(config.items()),
-                              'unixnu': unixnu_commit, 'unixnu_patches': unixnu_patches}, sort_keys=True).encode())
+                              'unixnu': unixnu_commit, 'unixnu_patches': unixnu_patches,
+                              'board': [s['sha256'] for s in board_sources]}, sort_keys=True).encode())
     return f'xnu-{xnu_version}-{profile}-{digest.hexdigest()[:12]}'
 
 
@@ -103,7 +104,7 @@ def tool_version(command):
         return None
 
 
-def make_record(kernel, inputs, config, profile, host, config_name, unixnu, native_record=None):
+def make_record(kernel, inputs, config, profile, host, config_name, unixnu, native_record=None, board_sources=()):
     facts = macho_facts(kernel)
     if facts['filetype'] != 2:
         raise SystemExit(f'{kernel}: Mach-O type {facts["filetype"]}, not MH_EXECUTE: this is not the native kernel')
@@ -117,7 +118,7 @@ def make_record(kernel, inputs, config, profile, host, config_name, unixnu, nati
     return {
         'builder': BUILDER,
         'build_id': build_id(xnu_version, profile, inputs['commit'], patches, {k: v for k, v in config.items() if not k.startswith('_')},
-                             unixnu_commit, [p['sha256'] for p in unixnu_patches]),
+                             unixnu_commit, [p['sha256'] for p in unixnu_patches], board_sources),
         'sha256': sha256(kernel),
         'bytes': os.path.getsize(kernel),
         'xnu': f'xnu-{xnu_version}',
@@ -140,6 +141,7 @@ def make_record(kernel, inputs, config, profile, host, config_name, unixnu, nati
                     'xnu_linux_toolchain': git_head(ROOT / 'external/xnu-linux-toolchain') if host == 'linux' else None,
                     'oneios': git_head(ROOT)},
         'unixnu_patches': unixnu_patches,
+        'board_sources': list(board_sources),
         'patches': patches,
         'host': {'os': host, 'compiler': tool_version(['clang', '--version']),
                  'linker': tool_version([str(ROOT / 'out/toolchain/cctools/bin/ld'), '-v']) if host == 'linux' else tool_version(['ld', '-v'])},
@@ -155,7 +157,12 @@ def finish(args):
     inputs = json.loads((work / 'xnu-inputs.json').read_text())
     config = parse_config((work / '.config').read_text())
     native = json.loads((work / 'kernel/kernel.json').read_text()) if (work / 'kernel/kernel.json').is_file() else None
-    record = make_record(kernel, inputs, config, work.parent.name, args.host, args.config, ROOT / 'external/Droid-VM-UniXNU', native)
+    # The board's archives (kernel/device/scripts/build-oneios-board.py): every source that was compiled into them.
+    board_sources = []
+    for listing in sorted((work / 'tree/build').glob('oneios-*/objects.json')):
+        board_sources += [{'path': s['path'], 'sha256': s['sha256']} for s in json.loads(listing.read_text())['sources']]
+    record = make_record(kernel, inputs, config, work.parent.name, args.host, args.config, ROOT / 'external/Droid-VM-UniXNU', native,
+                         board_sources)
     target = Path(args.out) / 'builds' / record['build_id']
     target.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(kernel, target / 'xnu.macho')
@@ -167,6 +174,7 @@ def finish(args):
     current.symlink_to(Path('builds') / record['build_id'])
     print(f'kernel: {target / "xnu.macho"}')
     print(f'kernel: build id {record["build_id"]}, {record["arch"]}, {record["bytes"]} bytes, sha256 {record["sha256"]}')
+    print(f'kernel: {len(record["board_sources"])} board sources linked (drivers/, cpufreq)')
     print(f'kernel: entry {record["macho"]["entry"]}, __TEXT at {record["macho"]["segments"].get("__TEXT", {}).get("vmaddr")}, '
           f'{len(record["patches"])} patches')
     if record['restricted_sources']:

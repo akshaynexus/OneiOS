@@ -36,5 +36,6 @@ stage_sources() {
 
 # unixnu ARGS...: UniXNU's driver for the OneiOS device repository and output root.
 unixnu() {
-  ( cd "$UNIXNU" && python3 ./unixnu "$@" -D "$DEVICE" --out "$UNIXNU_OUT_DIR" )
+  # UNIXNU_DEVICE: the board's archive scripts find this repository through it (the fork's driver does not pass it on).
+  ( cd "$UNIXNU" && UNIXNU_DEVICE=$DEVICE python3 ./unixnu "$@" -D "$DEVICE" --out "$UNIXNU_OUT_DIR" )
 }

@@ -3,7 +3,7 @@
 Owner: release-kernel. The XNU that xnuhost runs: **xnu-12377.121.6, arm64e with PAC, 4 KiB pages, iOS 27.0.1 /
 iPhone18,2 profile**, built from Apple's open source with UniXNU's and Droid-VM's patches.
 
-State (2026-11-10): **it compiles and links on this Linux PC in 91 s (clean, 20 cores). It has never run.**
+State (2026-11-10): **it compiles and links on this Linux PC in 91 s (clean, 20 cores), with the board's drivers of `drivers/` inside. It has never run.**
 
 ## Build
 
@@ -16,11 +16,12 @@ scripts/bg.sh -s kernel                          # state; log in logs/kernel.log
 |---|---|
 | `out/kernel/builds/<build id>/xnu.macho` | the native kernel: arm64e `MH_EXECUTE`, PIE, chained fixups, no Apple kext |
 | `.../xnu.macho.build.json` | the build record: sources, every patch with its SHA-256, configuration, host, whether it may be released |
-| `.../series.txt` | the 93 patches in order |
+| `.../series.txt` | the 94 patches in order |
 | `out/kernel/current` | link to the last build |
 
-Last build: `xnu-12377.121.6-ios-27.0.1-24A446-b41b5b1d4a8e`, 23,613,752 bytes, clang 23.1.4 + ld64-956.6.
-The build id is a hash of the inputs (XNU commit, patches, configuration, UniXNU commit), not of the machine.
+Last build: `xnu-12377.121.6-ios-27.0.1-24A446-62c8ff7800cd`, 23,735,992 bytes, clang 23.1.4 + ld64-956.6.
+The build id is a hash of the inputs (XNU commit, patches, configuration, UniXNU commit, the board archives'
+sources), not of the machine. The kernel's bytes are not reproducible: two builds of the same id differ.
 
 Other entry points: `kernel/fetch.sh` (sources at the pins of `pins.sh`, 40 MB), `kernel/series-tree.sh` (the
 patched tree with one commit per patch, for writing patches), `kernel/tests/host.sh` (CI), `kernel/publish.sh`.
@@ -31,11 +32,16 @@ patched tree with one commit per patch, for writing patches), `kernel/tests/host
    patches (4). Why this fork and not upstream: `profiles/iphone18-2-ios27.md` section 1.
 2. `kernel/unixnu/profiles/os/ios-27.0.1-24A446/`: the OS profile, copied into that checkout at each build.
 3. `kernel/device/`: OneiOS as a UniXNU device repository: `board.toml`, `configs/oneios_defconfig`,
-   `socs/linuxhost`, and the board series `patches/xnu-12377/series`: 17 of Droid-VM's iPadOS 27 patches, one of
+   `socs/linuxhost`, and the board series `patches/xnu-12377/series`: 18 of Droid-VM's iPadOS 27 patches, one of
    xnu-linux-toolchain, three of ours.
 4. `kernel/patches/unixnu/`: our changes to the driver itself (one: keep the submodules we checked out).
 5. Driver archives linked in: ArmDTPlatform, ArmCpu, libpthread's kernel part, libfirehose, and UniXNU's source
    corecrypto (see "Releases").
+6. The board's own archives, built between the two kernel passes by `device/scripts/build-oneios-board.py` and
+   force-loaded through `CONFIG_XNU_EXTRA_LD_ARCHIVES`: `liboneiosdrivers.a` (`drivers/build.py`: the bridge
+   transport, haptics, Bluetooth; 9 sources) and `liboneiosboard.a` (Droid-VM's `DroidVMCpufreq.c`, unchanged).
+   `oneios_board_late_start()` (`oneios-board-start.patch`), called from `bsd_init` after the storage hook, runs
+   `droidvm_cpufreq_attach()` and `oneios_drivers_start()`. The build record lists the ten sources.
 
 The driver stops before the prelink (`--skip-prelink`): no kernelcache is read.
 
@@ -83,8 +89,8 @@ those headers with public ones. Same series, configuration, record and output pl
 |---|---|
 | File | `out/kernel/current/xnu.macho` (native), later `kernel.kc` in the image set (the same kernel prelinked with the original kexts) |
 | Format | Mach-O 64, `CPU_TYPE_ARM64` / `CPU_SUBTYPE_ARM64E` (caps PAC00), `MH_EXECUTE`, `MH_PIE`, `LC_DYLD_CHAINED_FIXUPS` |
-| Link addresses | `__TEXT` `0xfffffff007004000`, `__PRELINK_TEXT` `0xfffffff004004000`; segments 16 KiB aligned; last address `0xfffffff008794000` |
-| Entry | `LC_UNIXTHREAD` pc `0xfffffff007539488` (`_start`, `osfmk/arm64/start.s`) |
+| Link addresses | `__TEXT` `0xfffffff007004000`, `__PRELINK_TEXT` `0xfffffff004004000`; segments 16 KiB aligned; last address `0xfffffff0087c4000` in the last build |
+| Entry | `LC_UNIXTHREAD` pc `0xfffffff007545488` in the last build (`_start`, `osfmk/arm64/start.s`); it moves with every change, read it from the file or the record |
 | Entry state the kernel expects **today** | as DarwinBoot gives it: EL1, MMU and caches off, at the **physical** address of `_start`, `x0` = physical address of `boot_args`, interrupts masked |
 | `boot_args` | revision 2, version 2: `virtBase`, `physBase`, `memSize`, `topOfKernelData`, `Video` (six 64-bit values), `machineType`, `deviceTreeP`, `deviceTreeLength`, `CommandLine[1024]`, `bootFlags`, `memSizeActual` (UniXNU boot chain, "DarwinBoot to XNU": offsets 0x00 to 0x478) |
 | Self-relocation | built with chained fixups (`CONFIG_XNU_KERNEL_CHAINED_FIXUPS=y`): the kernel rebases itself for the slide it is loaded at |
@@ -94,10 +100,12 @@ those headers with public ones. Same series, configuration, record and output pl
 | PAC | `HAS_NATIVE_PAC`: at each CPU's start the kernel writes ten key registers (`AP{IA,IB,DA,DB,GA}Key{Lo,Hi}_EL1`) from one stored key set. A host must ignore these writes and let the kernel and every task use the process's own keys |
 | Timebase | `droidvm-timebase-24mhz`: userland sees 24 MHz; the boot argument `droidvm-timebase-hz` gives the target |
 | Boot arguments to start from | Droid-VM's `ipados27/board.toml` `kernel_args`, with its `sheng-`/`droidvm-` display values replaced as in `kernel/profiles/iphone18-2-ios27.md` section 4. For the GPU: `vgpu-3d=1 droidvm-gpu-metal=1` |
-| Board drivers | **none yet** beyond ArmDTPlatform and ArmCpu: no storage, display, input or GPU driver is linked. See "Not done" |
-| Linking a board archive | `CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/.../lib.a"` in the defconfig; `native_source_storage_start()` (weak) is called after the IOKit bootstrap |
+| CPU topology | `__ARM_AMP__` (`droidvm-amp.patch`): **every `/cpus` node must carry `cluster-type`** (`"E"` or `"P"`), or the kernel panics in `cluster_type_to_pset_type()`. `/arm-io/cpufreq` is DroidVMCpufreq's window (`drivers/cpu/README.md`) |
+| Board drivers | ArmDTPlatform, ArmCpu, the bridge transport, haptics, Bluetooth and cpufreq. **No storage, display, input or GPU driver yet.** See "Not done" |
+| Linking a board archive | build it in `device/scripts/build-oneios-board.py` into `{tree}/build/oneios-NAME/` with an `objects.json` (path and SHA-256 of each source), add it to `CONFIG_XNU_EXTRA_LD_ARCHIVES` in the defconfig, and start it from `oneios_board_late_start()`; storage starts from `native_source_storage_start()` (weak), just before |
 
-Privileged instructions in this kernel, for the trap layer (`llvm-objdump -d` of the build above): 875 `mrs`/`msr`
+Privileged instructions, for the trap layer (`llvm-objdump -d` of the first build, `b41b5b1d4a8e`, before the board
+archives and AMP): 875 `mrs`/`msr`
 of 85 distinct registers, 127 `wfe`, 101 `tlbi`, 85 `dc`, 4 `ic`, 4 `at`, 4 `wfi`, 6 `smc`, 1 `hvc`.
 
 ## Not done

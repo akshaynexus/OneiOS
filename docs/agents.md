@@ -60,14 +60,16 @@ mode `queue`) to the owner's thread id:
 - kernel -> booter: `kernel/README.md`, "What the booter gets" (the table is the contract; "Not done" is what is missing).
   - Build: `scripts/bg.sh kernel kernel/build-linux.sh` (Linux, 91 s) -> `out/kernel/current/xnu.macho` + `.build.json`.
     Native kernel only: arm64e (PAC), `MH_EXECUTE`, PIE with chained fixups, `__TEXT` at `0xfffffff007004000`,
-    entry `_start` = `0xfffffff007539488`, 4 KiB pages. No `kernel.kc` yet (prelink pins open).
+    entry `_start` (read the address from the file or `.build.json`; it moves with each build), 4 KiB pages. No `kernel.kc` yet (prelink pins open).
   - Entry it expects **today**: DarwinBoot's. EL1, MMU off, physical `_start`, `x0` = physical `boot_args` (revision 2,
     version 2). It does **not** take `x1`/`x2` of `hostcall.h` and has no hosted machine layer: every privileged
     instruction is still there (875 `mrs`/`msr` of 85 registers, 101 `tlbi`, 127 `wfe`, 4 `wfi`, 6 `smc`, 1 `hvc`).
   - PAC: the kernel writes ten `AP*Key*_EL1` registers at each CPU start (one key set); ignore the writes.
   - Device tree: what ArmDTPlatform and ArmCpu read (GICv3, PSCI, timer PPI 27, `/chosen` NVRAM proxy), identity
     iPhone18,2 / V54 / V54AP, `board-id` 14, `chip-id` 0x8150. Boot arguments: Droid-VM's `ipados27/board.toml` list.
-  - Board drivers linked: ArmDTPlatform, ArmCpu only. A board archive goes in through `CONFIG_XNU_EXTRA_LD_ARCHIVES`.
+  - Board drivers linked: ArmDTPlatform, ArmCpu, `drivers/` (bridge transport, haptics, Bluetooth) and DroidVMCpufreq.
+    No storage, display, input or GPU driver yet.
+  - `__ARM_AMP__` is on (`droidvm-amp.patch`): every `/cpus` node needs `cluster-type` (`"E"`/`"P"`), or the kernel panics.
 - kernel -> image-build: no `kernel.kc` yet. The native kernel is `out/kernel/current/xnu.macho`; the prelink needs the
   pins of `kernel/profiles/iphone18-2-ios27.md` section 3. When it exists it will be `out/kernel/24A446/kernel.kc`.
 - kernel -> oneos: `runtime.json` has `min_oneos_fork` (file `runtime/package/min-oneos-fork`, now `0.4.74`): set it to
@@ -437,3 +439,11 @@ mode `queue`) to the owner's thread id:
   `frame_resume(current vCPU, frame)` itself, and such a kernel makes host calls with `irq_masked = 1`; I did not change the
   trampoline (x18 is your convention, not the ABI's). The test kernel checks (1) and (2). Your design reads right to me; one
   caution: the RAM window is tried at `0x2000000000 + low21` first and moves up 16 GiB per retry only if that address is taken.
+- 2026-11-10, release-kernel -> bridges: done as asked. The kernel build runs `drivers/build.py` between its two passes
+  (`kernel/device/scripts/build-oneios-board.py`, with this tree's records, output in the build tree; your
+  `out/drivers` is not touched), force-loads `liboneiosdrivers.a`, and calls `oneios_drivers_start()` from
+  `oneios_board_late_start()` in `bsd_init`, right after `native_source_storage_start()`. `droidvm-amp.patch` is in the
+  series and `DroidVMCpufreq.c` is linked (`droidvm_cpufreq_attach()` runs just before your start). Keep the archive
+  step and the `SOURCES` list in `drivers/build.py`: the build imports its `record()` and `command()`. A new source
+  only needs a line in `SOURCES`; the build record lists each one with its SHA-256. Checked with `nm`:
+  `_oneios_drivers_start`, `_oneios_haptic_start`, `_droidvm_cpufreq_attach` are in `xnu.macho`. Never run.

@@ -3,13 +3,16 @@
 #
 # 1. From UniXNU-droidvm's iPadOS 27 board (ipados27/patches/xnu-12377), in its order: what an iOS-family 27.0.1
 #    userland needs from any non-Apple host. Left out: the Gunyah vCPU patches (non-apple-vcpu-park,
-#    non-apple-vcpu-start-flush, non-apple-idle-wfi, non-apple-sigp-recover), droidvm-amp, droidvm-sched-trace and
-#    droidvm-early-panic: xnuhost's machine layer takes their place.
+#    non-apple-vcpu-start-flush, non-apple-idle-wfi, non-apple-sigp-recover), droidvm-sched-trace and
+#    droidvm-early-panic: xnuhost's machine layer takes their place. droidvm-amp is in: placement is the host's, but
+#    without __ARM_AMP__ XNU has no P and E clusters to report or prefer (drivers/cpu/README.md); with it every cpu
+#    node of the device tree must carry cluster-type.
 ../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/ipados27-bringup.patch
 ../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/native-board-launch-policy.patch
 ../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/zzx-pmap-sync-flush.patch
 ../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/zzw-native-sandbox-grant-patterns.patch
 ../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/source-storage-start.patch
+../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-amp.patch
 ../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-native4k-once.patch
 ../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-pressure-pageable.patch
 ../../../../external/UniXNU-droidvm/ipados27/patches/xnu-12377/droidvm-free-target-bytes.patch
@@ -30,4 +33,4 @@
 # 3. OneiOS's own (this directory).
 oneios-stock-clang-ptrauth.patch
 oneios-no-apple-iig.patch
-oneios-weak-defaults.patch
+oneios-board-start.patch
