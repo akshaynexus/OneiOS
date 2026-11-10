@@ -1,0 +1,168 @@
+# iOS 27 launchd jobs on the OneiOS host (Galaxy S24 Ultra, XNU as a process): keep, idle, replace or disable.
+#
+#   keep     must run; never disabled, whatever a group below names
+#   idle     runs with nothing to drive: its hardware is absent and it must come to rest, not crash-loop
+#   replace  disabled in the guest because the host or a OneiOS helper does its job
+#   disable  not needed here; disabled in groups, each with where its list was measured
+#
+# A group is applied when it is `default = true` or named with --group; --keep LABEL takes one label out.
+# A label the root's launchd cache does not have is reported and not written.
+#
+# Where a list was measured matters: only vphone's is from iOS 27 on an iPhone identity. The iPad lists
+# (UniXNU) and the iOS 16/26 lists (iOSPlus10) are named as such and are off unless stated.
+
+# ---- keep -------------------------------------------------------------------------------------------------
+[keep]
+# vphone-cli 2.14.2 VPhoneDaemon/Daemon/GuestServiceProfile.swift `neverDisable`, measured on an iPhone
+# guest of iOS 27.0 (Research/Guest/service_trimming.md "Never disabled").
+labels = [
+  # the boot chain to the home screen
+  "com.apple.SpringBoard", "com.apple.backboardd", "com.apple.runningboardd",
+  "com.apple.lsd", "com.apple.lsd.system",
+  "com.apple.containermanagerd", "com.apple.containermanagerd.system",
+  "com.apple.cfprefsd.xpc.daemon", "com.apple.cfprefsd.xpc.daemon.system",
+  "com.apple.notifyd", "com.apple.configd", "com.apple.powerd", "com.apple.securityd",
+  "com.apple.MobileFileIntegrity", "com.apple.mobile.keybagd", "com.apple.mobileactivationd",
+  "com.apple.logd", "com.apple.logd_helper", "com.apple.diagnosticd",
+  "com.apple.timed", "com.apple.tzlinkd",
+  "com.apple.mDNSResponder.reloaded", "com.apple.mDNSResponderHelper.reloaded",
+  "com.apple.managedconfiguration.profiled", "com.apple.security.cryptexd",
+  # worse when off (each measured)
+  "com.apple.sleepd",
+  "com.apple.CommCenter", "com.apple.CommCenterMobileHelper", "com.apple.CommCenterRootHelper",
+  "com.apple.cloudd",
+  "com.apple.nanoregistryd", "com.apple.nanoregistrylaunchd",
+  "com.apple.siriactionsd", "com.apple.passd", "com.apple.financed",
+  "com.apple.generativeexperiencesd",
+  # apps, installs, debugging
+  "com.apple.mobile.installd", "com.apple.misagent", "com.apple.mobile.lockdown", "com.apple.remoted",
+  "com.apple.dt.remotepairingdeviced", "com.apple.diskimagesiod", "com.apple.diskimagesiod.ram",
+  "com.apple.mobileassetd", "com.apple.storekitd", "com.apple.pasteboard.pasted",
+  "com.apple.ReportCrash", "com.apple.osanalytics.osanalyticshelper",
+  # media and location paths other daemons call synchronously
+  "com.apple.locationd", "com.apple.bluetoothd",
+  "com.apple.audiomxd", "com.apple.mediaplaybackd", "com.apple.mediaremoted", "com.apple.cameracaptured",
+  "com.apple.avconferenced",
+]
+
+[keep.reasons]
+"com.apple.sleepd" = "without it SpringBoard and mobiletimerd reconnect with no back-off: 5000 log lines in 3 s, launchd 115 s of CPU in two minutes (vphone, iOS 27.0)"
+"com.apple.CommCenter" = "without it SpringBoard's SBTelephonyManager reconnects every second and resets the idle timer (vphone, iOS 27.0). See [idle]"
+"com.apple.cloudd" = "without it transparencyd and ScreenTimeSettingsAgent retry CloudKit and write more than an untrimmed guest (vphone)"
+"com.apple.nanoregistryd" = "locationd waits on it synchronously (vphone)"
+"com.apple.siriactionsd" = "every Control Center control and App Intents widget serializes its intent through it; without it the controls draw blank (vphone, list version 2)"
+"com.apple.passd" = "Wallet's first screen waits on it, and it on financed (vphone, list version 3)"
+"com.apple.generativeexperiencesd" = "in vphone-cli's list, but vphone-android keeps it: without it an idle iOS 27 guest spins launchd (android/vphone-native/src/services.rs KEEP)"
+"com.apple.bluetoothd" = "locationd calls it synchronously (vphone). iOSPlus10 dropped it on iOS 16 for a relaunch loop; on iOS 27 it stays and idles"
+"com.apple.security.cryptexd" = "needs /chosen/manifest-properties in the device tree, or it restarts every 10 s (iOSPlus10 notes 5167-5175)"
+
+# ---- idle -------------------------------------------------------------------------------------------------
+# Kept running; what each needs from the kernel or the device tree to rest instead of crash-looping.
+[idle]
+"com.apple.CommCenter" = "the two references disagree. UniXNU-droidvm disables it on the (Wi-Fi) iPad: it 'waits for hardware there is none of'. vphone keeps it on the iPhone: without it SpringBoard loops. Kept, as the iPhone measurement says; if it crash-loops on the first boot, --disable com.apple.CommCenter and its two helpers. Needs no `baseband` node in the device tree: its job has _LimitLoadToDeviceTree baseband and CommCenter-noncellular _LimitLoadFromDeviceTree baseband (iOSPlus10 cellular.md 40-62, read on 26.5.2; [U] on 27.0.1). vphone's guest runs it with no modem. No calls, SMS or cellular data"
+"com.apple.CommCenterMobileHelper" = "follows CommCenter"
+"com.apple.CommCenterRootHelper" = "follows CommCenter"
+"com.apple.bluetoothd" = "no controller. Kept: with it disabled audiomxd's BTAudioHALPlugin looked its service up 1900 times a second and launchd used 90 % of a CPU (UniXNU-droidvm DroidVMBootArgs27.c); locationd calls it too. The device tree gives it /bluetooth transport-encoding 10 (the virtual transport)"
+"com.apple.cameracaptured" = "no camera sensors published: Camera opens to a black preview. Kept: other media daemons wait on it"
+"com.apple.locationd" = "no GPS; 27.0's locationd also hangs or crashes with EXC_ARM_PAC_FAIL on vphone's guest (service_trimming.md). Location Services stay off"
+"com.apple.mobile.keybagd" = "no SEP: answered by the kernel's key-store stand-in (UniXNU AppleKeyStoreState); a keybag load failure is a reboot loop (iOSPlus10 notes 2747-2777)"
+"com.apple.biometrickitd" = "no Face ID sensor: its IOKit match never comes, it waits. Not disabled: Settings and SpringBoard ask it whether biometrics exist"
+"com.apple.thermalmonitord" = "no Apple thermal sensors: reports nominal. Kept (iOSPlus10 KEEP_FOR_PARITY)"
+"com.apple.wifid" = "no Apple Wi-Fi chip: the guest's network is the host's interface (HostNet); wifid sees no device"
+"com.apple.audiomxd" = "sound goes to the host driver (HostAudio); without it there is no route and it idles"
+
+# ---- replace ----------------------------------------------------------------------------------------------
+# Disabled in the guest; the right column is who does the job instead.
+[replace]
+default = true
+[replace.labels]
+"com.apple.watchdogd" = "no watchdog timer device here (UniXNU docs/guide/skip-setup.md: 'watchdogd has no watchdog backend'). The host's switch has its own dead-man timer (oneos/interface.md section 5)"
+"com.apple.mobile.softwareupdated" = "updates are a new image set built by image-build; an OTA would write a root the host cannot boot"
+"com.apple.softwareupdateservicesd" = "as softwareupdated"
+"com.apple.OTATaskingAgent" = "as softwareupdated"
+"com.apple.OTACrashCopier" = "as softwareupdated"
+
+# ---- disable groups ---------------------------------------------------------------------------------------
+[group.base]
+default = true
+source = "vphone-cli 2.14.2 GuestServiceProfile.swift base27 (list version 3): measured on an iPhone guest, iOS 27.0 24A435; memory -29 %, idle CPU -26 %, idle writes -60 %, no feature of the guest lost. Less generativeexperiencesd (kept) and the OTA jobs (under replace)"
+labels = [
+  "com.apple.CallHistorySyncHelper", "com.apple.Maps.mapspushd", "com.apple.Maps.mapssyncd",
+  "com.apple.PerfPowerServicesExtended", "com.apple.PowerUIAgent", "com.apple.SafariBookmarksSyncAgent",
+  "com.apple.SensorKitALSHelper", "com.apple.SiriTTSTrainingAgent", "com.apple.StatusKitAgent",
+  "com.apple.ThreadCommissionerService", "com.apple.WirelessRadioManager", "com.apple.absd",
+  "com.apple.accessibility.heard", "com.apple.accessoryupdaterd", "com.apple.adid", "com.apple.amsengagementd",
+  "com.apple.analyticsagent", "com.apple.analyticsd", "com.apple.ap.adprivacyd", "com.apple.ap.promotedcontentd",
+  "com.apple.appstorecomponentsd", "com.apple.askpermissiond", "com.apple.assistant_cdmd",
+  "com.apple.assistant_service", "com.apple.assistantd", "com.apple.audioanalyticsd",
+  "com.apple.batteryintelligenced", "com.apple.biomesyncd", "com.apple.bookassetd", "com.apple.callintelligenced",
+  "com.apple.carkitd", "com.apple.cdpd", "com.apple.cloudtelemetryd", "com.apple.cmfsyncagent", "com.apple.coreidvd",
+  "com.apple.corespeechd", "com.apple.diagnosticextensionsd", "com.apple.diagnosticspushd", "com.apple.duetexpertd",
+  "com.apple.ecosystemanalyticsd", "com.apple.email.maild", "com.apple.eyereliefd", "com.apple.familycircled",
+  "com.apple.findmy.findmybeaconingd", "com.apple.findmy.findmylocated", "com.apple.finhealthd",
+  "com.apple.fitnesscoachingd", "com.apple.fitnessintelligenced", "com.apple.gamed", "com.apple.geoanalyticsd",
+  "com.apple.hangtelemetryd", "com.apple.homed", "com.apple.homeeventsd", "com.apple.hybridsearchd",
+  "com.apple.icloud.findmydeviced", "com.apple.icloud.fmflocatord", "com.apple.icloud.searchpartyd",
+  "com.apple.icloudmailagent", "com.apple.identityservicesd", "com.apple.imagent",
+  "com.apple.imcore.imtransferagent", "com.apple.ind", "com.apple.inputanalyticsd",
+  "com.apple.intelligencecontextd", "com.apple.intelligenceflowd", "com.apple.intelligenceplatformd",
+  "com.apple.intelligencetasksd", "com.apple.itunescloudd", "com.apple.jetpackassetd",
+  "com.apple.knowledgeconstructiond", "com.apple.libsqlite3.dbtelemetryd", "com.apple.maps.destinationd",
+  "com.apple.mediaanalysisd", "com.apple.mediaanalysisd.service", "com.apple.milod", "com.apple.modelmanagerd",
+  "com.apple.nanobackupd", "com.apple.nanoprefsyncd.2", "com.apple.nanotimekitcompaniond", "com.apple.navd",
+  "com.apple.ndoagent", "com.apple.nearbyd", "com.apple.nfcd", "com.apple.ospredictiond", "com.apple.parsec-fbf",
+  "com.apple.peopled", "com.apple.perfpowermetricd", "com.apple.photoanalysisd", "com.apple.photosface",
+  "com.apple.powerexperienced", "com.apple.remindd", "com.apple.replicatord", "com.apple.routined",
+  "com.apple.rtcreportingd", "com.apple.safetyalertsd", "com.apple.seld", "com.apple.sensorkitd",
+  "com.apple.servicesintelligenced", "com.apple.seserviced", "com.apple.siri.sirireaderd",
+  "com.apple.siriinferenced", "com.apple.siriknowledged", "com.apple.sociallayerd", "com.apple.softposreaderd",
+  "com.apple.speechmaintenanced", "com.apple.spotlightknowledged", "com.apple.spotlightknowledged.updater",
+  "com.apple.symptomsd-diag", "com.apple.syncdefaultsd", "com.apple.systemvoiceassistant", "com.apple.terminusd",
+  "com.apple.textunderstandingd", "com.apple.tipsd", "com.apple.triald", "com.apple.uarpassetmanagerd",
+  "com.apple.uarpd", "com.apple.uarphidd", "com.apple.uarppersonalizationd", "com.apple.usbctelemetryd",
+  "com.apple.videosubscriptionsd", "com.apple.visioncompaniond", "com.apple.visualintelligenced",
+  "com.apple.voicebankingd", "com.apple.voicemail.vmd", "com.apple.watchlistd", "com.apple.watchpresenced",
+  "com.apple.weatherd", "com.apple.wifianalyticsd", "com.apple.wirelessinsightsd",
+]
+
+[group.extra]
+default = true
+source = "vphone-android android/vphone-native/src/services.rs TRIMMED_EXTRA: momentsd used 0.67 of a guest CPU at rest in the 0.6.0 log; coreduetd, modelcatalogd and mstreamd are UniXNU-sheng's BootWatchdogPolicy labels from iPadOS 27.0.1 (coreduetd held half a core through the boot)"
+labels = ["com.apple.momentsd", "com.apple.coreduetd", "com.apple.modelcatalogd", "com.apple.mediastream.mstreamd"]
+
+[group.signin]
+default = true
+source = "vphone-cli signin_followup: the Apple Account follow-up prompts; a guest whose Setup was skipped has none to show"
+labels = ["com.apple.appleidsetupd", "com.apple.followupd"]
+
+[group.hardware]
+default = true
+source = "hardware this host has no stand-in for. aned: iOSPlus10 ios26-root-spec.py DROP_N104 ('no Neural Engine on this SoC'; read on 26.5.2, label [U] on 27.0.1). The NFC, Secure Element and UWB jobs are in base already"
+labels = ["com.apple.aned", "com.apple.fairplayd.H2"]
+# fairplayd.H2 (the iPhone's; the iPad's is fairplayd.A2): UniXNU-droidvm package/DroidVMBootArgs27.c disables it on
+# iPadOS 27.0.1: without the FairPlayIOKit kext, which the kernel collection does not carry, it exits but its Mach
+# services stay registered, and lockdownd, accountsd and the apps behind them hang; on iOS 16 iOSPlus10 saw locationd
+# deadlock the same way. Costs: App Store apps do not start. The other three of UniXNU's iPad list are covered:
+# watchdogd (replace), identityservicesd and accessoryupdaterd (base). Its fourth, CommCenter, is kept here: see [idle].
+
+[group.store]
+default = false
+source = "vphone-cli app_store: off with the store apps. Off by default here: App Store installs are a goal (plan M6)"
+labels = ["com.apple.appstored", "com.apple.itunesstored"]
+
+[group.fewest]
+default = false
+source = "vphone-android services.rs FEWEST_EXTRA: each costs a feature (AirDrop, widgets, FairPlay, erase, hang reports, push) and none was run on iOS 27"
+labels = [
+  "com.apple.sharingd", "com.apple.chronod", "com.apple.mobile.obliteration",
+  "com.apple.spindump", "com.apple.tailspind", "com.apple.aggregated", "com.apple.activityawardsd", "com.apple.apsd",
+]
+
+[group.bringup-26]
+default = false
+source = "iOSPlus10 scripts/laurel/ios26-root-spec.py DROP_LOAD_LOOPS and DROP_LOAD_HOT, less what keep holds: jobs that looped or ran hot on a 26.5.2 root with no SEP, NFC or watch. For a first boot that shows a crash loop; labels [U] on 27.0.1"
+labels = [
+  "com.apple.deviceaccessd", "com.apple.gamepolicyd", "com.apple.driverkitd", "com.apple.factory.NFQRCoded",
+  "com.apple.biometrickitd.pearl", "com.apple.cloudpaird", "com.apple.sirittsd", "com.apple.PerfPowerServices",
+  "com.apple.biomed",
+]

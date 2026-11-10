@@ -1,0 +1,164 @@
+# Preferences seeded into the Data volume before the first boot. Read by roottweak.
+#
+# [[pref]] user = "mobile" | "root" | "any"   (any: /private/var/preferences, the any-user domain)
+#          domain, group, source, and a [pref.values] table. "@BUILD@" is the root's build number.
+# Files are binary property lists; mobile's are 501:501 0600, root's and any-user's 0:0 0644
+# (ios-sweet sweet-root-tweaks.py merge_pref; UniXNU scripts/seed-data-skip-setup.py).
+# A group is applied unless turned off (--no-GROUP); "visuals" is off unless --lighter-visuals.
+#
+# Written to files before the guest has ever run, so cfprefsd reads them at its first start. On a guest
+# that has booted they must go through cfprefsd instead (vphone-cli Research/Guest/setup_assistant_skip.md).
+
+# ---- setup: boot to the lock screen, not Setup Assistant ---------------------------------------------------
+[[pref]]
+group = "setup"
+user = "mobile"
+domain = "com.apple.purplebuddy"
+source = "UniXNU scripts/seed-data-skip-setup.py and make-data-seed.py (from ios-sweet); vphone-cli setup_assistant_skip.md: SetupDone, SetupFinishedAllSteps and SetupVersion 11 alone give the home screen on 27.0"
+[pref.values]
+SetupDone = true
+SetupFinishedAllSteps = true
+SetupVersion = 11
+daemonizeNeedsToRun = false
+
+[[pref]]
+group = "setup"
+user = "mobile"
+domain = "com.apple.purplebuddy.notbackedup"
+source = "UniXNU seed-data-skip-setup.py: no mini Setup flows. The iPhone has two more than the iPad (SIM, Face ID); they are run by the same flags [I]"
+[pref.values]
+ShouldRunDiagnosticsMiniBuddy = false
+ShouldRunHSA2MiniBuddy = false
+ShouldRunKeychainSyncMiniBuddy = false
+ShouldRunMesaMiniBuddy = false
+ShouldRunPaymentMiniBuddy = false
+ShouldRunStandardMiniBuddy = false
+SilentICDPUpgrade = false
+
+[[pref]]
+group = "setup"
+user = "mobile"
+domain = "com.apple.managedconfiguration.notbackedup"
+source = "UniXNU seed-data-skip-setup.py"
+[pref.values]
+LockdownActivationIndicatesCloudConfigurationAvailable = false
+
+# ---- migration: no data migration at every boot ------------------------------------------------------------
+[[pref]]
+group = "migration"
+user = "mobile"
+domain = "com.apple.migration"
+source = "UniXNU seed-data-skip-setup.py (LastSystemVersion must equal the build or the system migrates at the first boot); iOSPlus10 ios26-root-spec.py adds DMLastMigrationResults, which is what DataMigrator itself records on 27.0 (setup_assistant_skip.md)"
+[pref.values]
+LastSystemVersion = "@BUILD@"
+DMUserDataDisposition = { SyntheticDidUpgrade = false, buildVersion = "@BUILD@" }
+DMLastMigrationResults = { buildVersion = "@BUILD@", success = true }
+
+# ---- watchdogs: slow first launches are not killed ---------------------------------------------------------
+[[pref]]
+group = "watchdogs"
+user = "mobile"
+domain = "com.apple.springboard"
+source = "BKNoWatchdogs, FBLaunchWatchdogExceptions, MCForceShowCloudConfigurationUI: UniXNU seed-data-skip-setup.py. FBLaunchWatchdogScale 4: vphone-android android/create/installer/src/prefs.rs (about a minute where iOS allows 15 s; iOSPlus10 uses 3, and found 20 lets one hung launch hold the foreground 400 s)"
+[pref.values]
+BKNoWatchdogs = true
+FBLaunchWatchdogExceptions = { "com.apple.purplebuddy" = 100.0 }
+MCForceShowCloudConfigurationUI = false
+FBLaunchWatchdogScale = 4.0
+
+[[pref]]
+group = "watchdogs"
+user = "mobile"
+domain = "com.apple.frontboard"
+source = "iOSPlus10 scripts/ios16/root-tweaks-extra.py: the scale in FrontBoard's own domain as well"
+[pref.values]
+FBLaunchWatchdogScale = 4.0
+
+# ---- awake: the screen stays on while there may be no working input ---------------------------------------
+[[pref]]
+group = "awake"
+user = "mobile"
+domain = "com.apple.springboard"
+source = "SBDisableAutoDim, SBDontDimOrLockOnAC, SBDisableIdleSleep: UniXNU seed-data-skip-setup.py --no-auto-dim (a board without input turns its display off 30 s after SpringBoard starts and sleeps). SBMinimumLockscreenIdleTime: vphone-cli lock_screen_idle_timer.md, measured on 27.0 (the lock screen otherwise goes dark after 6 s whatever Auto-Lock says)"
+[pref.values]
+SBDisableAutoDim = true
+SBDontDimOrLockOnAC = true
+SBDisableIdleSleep = true
+SBMinimumLockscreenIdleTime = 2147483647
+
+# ---- coreanimation: plain framebuffers for a GPU that is not Apple's --------------------------------------
+[[pref]]
+group = "coreanimation"
+user = "mobile"
+domain = "com.apple.backboardd"
+source = "UniXNU scripts/make-data-seed.py: the three keys in root's and mobile's backboardd and .GlobalPreferences domains; iOSPlus10 root-add-metal-ios26.sh the same in backboardd"
+[pref.values]
+CAEnableDeepFramebuffer = false
+CAEnableFramebufferCompression = false
+CAEnableIOSurfaceCompression = false
+
+[[pref]]
+group = "coreanimation"
+user = "mobile"
+domain = ".GlobalPreferences"
+source = "UniXNU scripts/make-data-seed.py"
+[pref.values]
+CAEnableDeepFramebuffer = false
+CAEnableFramebufferCompression = false
+CAEnableIOSurfaceCompression = false
+
+[[pref]]
+group = "coreanimation"
+user = "root"
+domain = "com.apple.backboardd"
+source = "UniXNU scripts/make-data-seed.py"
+[pref.values]
+CAEnableDeepFramebuffer = false
+CAEnableFramebufferCompression = false
+CAEnableIOSurfaceCompression = false
+
+[[pref]]
+group = "coreanimation"
+user = "root"
+domain = ".GlobalPreferences"
+source = "UniXNU scripts/make-data-seed.py"
+[pref.values]
+CAEnableDeepFramebuffer = false
+CAEnableFramebufferCompression = false
+CAEnableIOSurfaceCompression = false
+
+[[pref]]
+group = "coreanimation"
+user = "any"
+domain = ".GlobalPreferences"
+source = "vphone-android prefs.rs: /private/var/preferences/.GlobalPreferences.plist is where vphone-cli puts the keys (backboardd 'consults neither com.apple.coreanimation nor the managed any-user file')"
+[pref.values]
+CAEnableDeepFramebuffer = false
+CAEnableFramebufferCompression = false
+CAEnableIOSurfaceCompression = false
+
+[[pref]]
+group = "coreanimation"
+user = "mobile"
+domain = "com.apple.coreanimation"
+source = "UniXNU-droidvm ipados27/scripts/build-droidvm-data-seed.py: on a device whose display pipe draws the camera and microphone indicators (Medina), every commit raised CASecureIndicatorLayerInvalidName and SpringBoard aborted. Found on the iPad J820; the iPhone has the same indicators [I]"
+[pref.values]
+CAEnableMedina = false
+
+[[pref]]
+group = "coreanimation"
+user = "root"
+domain = "com.apple.coreanimation"
+source = "UniXNU-droidvm build-droidvm-data-seed.py"
+[pref.values]
+CAEnableMedina = false
+
+# ---- visuals: less to draw (off unless --lighter-visuals) --------------------------------------------------
+[[pref]]
+group = "visuals"
+user = "mobile"
+domain = "com.apple.Accessibility"
+source = "vphone-android prefs.rs Group::Visuals: Reduce Motion and Reduce Transparency. For CPU rendering before the Metal plugin runs; not checked on iOS 27"
+[pref.values]
+ReduceMotionEnabled = true
+EnhancedBackgroundContrastEnabled = true
