@@ -1,8 +1,8 @@
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index 261ffbf..6693292 100644
+index 261ffbf..501918c 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -8145,6 +8145,13 @@ done:
+@@ -8145,6 +8145,15 @@ done:
  	if (!error && cache_authorized && root_recheck &&
  	    !native_owner_publish_boot_manifest(root_device, XNU_OWNER_ROOT_VOLUME_UUID,
  	        selected, volume)) error = EAUTH;
@@ -10,12 +10,75 @@ index 261ffbf..6693292 100644
 +	/* OneiOS hosted: the IOAESAccelerator AppleImage4 waits for, now that /chosen has the boot manifest hash. */
 +	if (!error) {
 +		extern void oneios_software_aes_start(void);
++		extern void oneios_chosen_mirror_boot_manifest(void);
++		oneios_chosen_mirror_boot_manifest();   /* onto the /chosen entry Image4 holds (IORegistryEntry.cpp) */
 +		oneios_software_aes_start();
 +	}
 +#endif /* XNU_HOSTED */
  #endif
  #if defined(XNU_OWNER_CACHE_STARTUP) && XNU_OWNER_CACHE_STARTUP
  	if (!error && cache_authorized && root_recheck) {
+diff --git a/iokit/Kernel/IORegistryEntry.cpp b/iokit/Kernel/IORegistryEntry.cpp
+index 1d6b3aa..9de8fb7 100644
+--- a/iokit/Kernel/IORegistryEntry.cpp
++++ b/iokit/Kernel/IORegistryEntry.cpp
+@@ -344,6 +344,39 @@ IORegistryEntry::init( OSDictionary * dict )
+ 	return true;
+ }
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0010-aes-after-boot-manifest.patch). The collection's Image4 looks /chosen up once, in its kext
++ * start, and reads every property from that entry afterwards. The platform expert then makes a nub for the node:
++ * init(old, plane) below gives the nub a copy of the properties and takes the old entry out of the planes, so a
++ * property set on /chosen later is not in the entry Image4 holds. On a phone iBoot put boot-manifest-hash in the
++ * device tree and the old entry has it; here the owner cache path of kern_exec.c publishes it after the root mount.
++ * The first /chosen entry is remembered when its nub replaces it, and the two published properties are mirrored
++ * onto it before the accelerator that Image4's start waits for is started.
++ */
++extern const IORegistryPlane * gIODTPlane;
++static IORegistryEntry * oneios_early_chosen;
++
++extern "C" void oneios_chosen_mirror_boot_manifest(void);
++void
++oneios_chosen_mirror_boot_manifest(void)
++{
++	static const char * const names[] = { "owner-boot-manifest-domain", "boot-manifest-hash" };
++	IORegistryEntry * now = IORegistryEntry::fromPath("/chosen", gIODTPlane);
++
++	if (now && oneios_early_chosen && now != oneios_early_chosen) {
++		for (unsigned int i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
++			OSObject * value = now->copyProperty(names[i]);
++			if (value) {
++				oneios_early_chosen->setProperty(names[i], value);
++				value->release();
++			}
++		}
++	}
++	OSSafeReleaseNULL(now);
++}
++#endif /* XNU_HOSTED */
++
+ bool
+ IORegistryEntry::init( IORegistryEntry * old,
+     const IORegistryPlane * plane )
+@@ -364,6 +397,16 @@ IORegistryEntry::init( IORegistryEntry * old,
+ 		}
+ 	}
+ 
++#if XNU_HOSTED
++	if (plane == gIODTPlane && !oneios_early_chosen) {
++		const char * oldName = old->getName();
++		if (oldName && !strcmp(oldName, "chosen")) {
++			old->retain();
++			oneios_early_chosen = old;
++		}
++	}
++#endif /* XNU_HOSTED */
++
+ 	WLOCK;
+ 
+ 	reserved->fRegistryEntryID = ++gIORegistryLastID;
 diff --git a/osfmk/arm64/oneios_host.c b/osfmk/arm64/oneios_host.c
 index 2611165..c0eabd8 100644
 --- a/osfmk/arm64/oneios_host.c
