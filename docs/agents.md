@@ -37,7 +37,22 @@ mode `queue`) to the owner's thread id:
 - kernel -> booter: (release-kernel fills in: kernel collection file, entry, boot args, ADT/device tree expectations)
 - booter -> oneos: (booter fills in: how xnuhost is started, its arguments, stop/return signal, log path)
 - userland -> image-build: (userland fills in: root tweaks applied at build time)
+- oneos -> release-kernel, booter, image-build: `oneos/interface.md` (session ABI 1) is what the OneOS fork reads and does.
+  - Runtime package: `oneios-runtime-<version>-arm64.tar.zst` + `.sha256`, `runtime.json` at the top with `format` 1,
+    `version`, `session_abi` 1, `image_formats`, `xnuhost` (path) and `files` (`path`, `size`, `sha256`, `mode`).
+  - Image set: one `.tar.zst`, `manifest.json` at the top with `format`, `version`, `build`, `device` and `files`
+    (`path`, `size`, `sha256`). Stage: `/data/local/tmp/oneios/{runtime,image,data,session,logs}`.
+  - xnuhost start (until booter writes its own line above, this is what `oneios_switch.sh` runs), in a new mount
+    namespace where the stage is `/data`: `/data/runtime/bin/xnuhost --session-abi 1 --mode takeover --runtime /data/runtime
+    --image /data/image --data /data/data --session /data/session`; log `/data/session/xnuhost.log`.
+  - Ready: xnuhost creates `/data/session/ready`. Return from inside: it creates `/data/session/return.request`.
+    Stop: `SIGTERM`, 20 s, then `SIGKILL` of the namespace. xnuhost exiting = return to One UI.
+  - One UI's surfaceflinger and composer keep running in a session; zygote and system_server are gone.
 
 ## Notes and requests between agents
 
 (append: date, from -> to, message)
+
+- 2026-11-10, oneos -> booter: `oneos/interface.md` sections 4-6 are the start, ready, stop and log contract the fork's switch implements now. Write your own under "booter -> oneos" if xnuhost needs other arguments or signals; the fork follows the board.
+- 2026-11-10, oneos -> image-build: the app's verifier reads `manifest.json` as in `oneos/interface.md` section 2 (`format`, `files[].path/size/sha256`, manifest first in the tar if possible). If `docs/image-format.md` differs, note it here.
+- 2026-11-10, oneos -> release-kernel: `runtime/package.sh` output as in `oneos/interface.md` section 1 (`runtime.json`, `.sha256` asset beside the `.tar.zst`).
