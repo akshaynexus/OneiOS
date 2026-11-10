@@ -1,0 +1,24 @@
+diff --git a/iokit/Kernel/IOPlatformExpert.cpp b/iokit/Kernel/IOPlatformExpert.cpp
+--- a/iokit/Kernel/IOPlatformExpert.cpp	2026-11-11 00:43:37.648079717 +0530
++++ b/iokit/Kernel/IOPlatformExpert.cpp	2026-11-11 00:43:37.665543316 +0530
+@@ -1673,6 +1673,20 @@
+ 		while ((next = (IORegistryEntry *) iter->getNextObject())) {
+ 			OSSafeReleaseNULL(nub);
+ 
++#if XNU_HOSTED
++			/*
++			 * OneiOS hosted: /chosen stays the entry it is. A nub takes the place of its device tree entry
++			 * (IORegistryEntry::init(old, plane): a copy of the properties, the old entry out of the plane),
++			 * and Apple's kexts keep the /chosen they looked up: AppleImage4, which UniXNU starts before the
++			 * platform publishes its nubs, read boot-manifest-hash from the entry it held, never saw what was
++			 * published in /chosen later and panicked ("unable to initialize magazine"). ArmDTPlatform publishes
++			 * every top-level node (its excludeList is empty, for the kexts that match on defaults and
++			 * product); Apple's platform experts leave chosen out, as IODTPlatformExpert's own list does.
++			 */
++			if (parent == this && next->getParentEntry(gIODTPlane) == getProvider() && !strcmp(next->getName(), "chosen")) {
++				continue;
++			}
++#endif /* XNU_HOSTED */
+ 			if (NULL == (nub = createNub( next ))) {
+ 				continue;
+ 			}

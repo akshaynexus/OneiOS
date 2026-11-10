@@ -19,6 +19,7 @@
 //     the module load is finished (nothing reads the link before OSMetaClass::postModLoad).
 // A kernel that is not in a collection has no IOAESAccelerator class: nothing is started.
 #include <IOKit/IOLib.h>
+#include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOService.h>
 #include <libkern/c++/OSMetaClass.h>
 #include <mach/kmod.h>
@@ -32,6 +33,9 @@ extern "C" const uint64_t oneios_aes_parent_meta_link;
 extern "C" const uint32_t oneios_aes_parent_size;
 extern "C" char oneios_aes_native_meta[] __asm__("__ZN9NativeAES10gMetaClassE");
 extern "C" volatile uint32_t native_aes_kat_status;
+
+// UniXNU's owner boot manifest (IOKitBSDInit.cpp): -1 not published yet, 0 published in /chosen, else why not.
+extern "C" volatile int native_owner_boot_manifest_status __attribute__((weak_import));
 
 extern "C" {
 // 1 the parent checked, 2 NativeAES registered, 3 started; 0x80 | n refused at step n; 0x40 no such class.
@@ -64,6 +68,15 @@ void oneios_software_aes_start(void)
         return;
     }
     oneios_software_aes_stage = 1;
+    // AppleImage4 reads /chosen boot-manifest-hash as soon as its wait for this service ends, and panics without it
+    // ("unable to initialize magazine"): say what is there, so that a boot which stops there shows why.
+    {
+        IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
+        OSData *hash = chosen ? OSDynamicCast(OSData, chosen->getProperty("boot-manifest-hash")) : nullptr;
+        IOLog("oneios-aes: /chosen boot-manifest-hash: %u bytes (owner boot manifest status %d)\n", hash ? hash->getLength() : 0,
+              &native_owner_boot_manifest_status ? native_owner_boot_manifest_status : -2);
+        OSSafeReleaseNULL(chosen);
+    }
 
     void *module = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
     if (!module) {

@@ -20,3 +20,4 @@
 # fable-prelink: the accelerator of 0008 is started when /chosen has the boot manifest hash (the owner cache path of
 # kern_exec.c), not at the board start: the collection's Image4 starts with AppleImage4 and panics without that hash.
 0010-aes-after-boot-manifest.patch
+0011-chosen-is-not-a-nub.patch
