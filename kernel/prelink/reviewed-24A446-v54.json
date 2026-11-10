@@ -1,0 +1,1500 @@
+{
+ "about": "Reviewed pins of the iPhone18,2 iOS 27.0.1 (24A446) kernelcache.release.v54 for OneiOS's kernel.kc: addresses and names, no Apple code. Addresses are original kernelcache VAs. Each record names bytes of the original (address, size, SHA-256) that emit.py checks before it uses the record.",
+ "kernelcache_sha256": "349c4692a6a85df0d396681f28d2d48dc04b95c6d60df0f94d84501e3d0c57e3",
+ "entry": "com.apple.kernel",
+ "early_security_init": {
+  "bundle": "com.apple.driver.AppleMobileFileIntegrity",
+  "original": "0xfffffe00092329cc",
+  "check": {
+   "address": "0xfffffe00092329cc",
+   "size": 32,
+   "sha256": "e95dda726d6b3d179964cbae7aff68df0554709ebdd7a0dd0e670d70ac8df167"
+  },
+  "evidence": "AMFI's kmod start (0xfffffe000923e448, libkmod's _start) reads a NULL _realmain (0xfffffe000b9023c8) and returns 0, so starting the kext registers nothing. AMFI's only call of mac_policy_register (through its stub 0xfffffe000924f448, GOT slot 0xfffffe000812d890) is in 0xfffffe0009232214 (_initializeAppleMobileFileIntegrity). That function has two callers in AMFI: 0xfffffe000923211c (62 instructions) and this one, eight instructions: bti c; pacibsp; stp x29, x30; mov x29, sp; bl 0xfffffe0009232214; mov w0, #0; ldp; retab. It is the void-to-int wrapper native-security-init.patch calls from OSKext::start (_NativePrelinkEarlySecurityInit). The iPad profile's pin (0xfffffe00092551ac of kernelcache.release.j820) is the same wrapper by its description."
+ },
+ "sites": [
+  {
+   "site": "0xfffffe000812db68",
+   "native_symbol": "_unixnu_kernel_stack_shift",
+   "check": {
+    "address": "0xfffffe000923fcc0",
+    "size": 36,
+    "sha256": "009e43abfbeeafca7e297afe22dc60f3d9b4760ba9e3eada6e1b41a817bb975e"
+   },
+   "evidence": "AppleMobileFileIntegrity's GOT slot for PAGE_SHIFT_CONST (target 0xfffffe0007df0ac8). Its only reader in AMFI is 0xfffffe000923fcc0: adrp/ldr the slot, ldr w8, [x8]; mvn(-1 << w8) & sp; cmp #128: the CoreEntitlements DER iterator's stack check of XnuPrelink's 24A446 (iPad) and 26C5035r fixtures. The hosted kernel is the same 4 KiB BCM2837 configuration with the same stack allocation, so the slot is bound to unixnu_kernel_stack_shift (the allocation alignment shift) as there."
+  }
+ ],
+ "functions": [
+  {
+   "original": "0xfffffe000abd2fd8",
+   "native_symbol": "_lck_grp_attr_setstat",
+   "check": {
+    "address": "0xfffffe000abd2fd8",
+    "size": 20,
+    "sha256": "393156235a72e3bd0aa7d51b66c58e51477b7c9d79772999dbb2bd993ae42e05"
+   },
+   "evidence": "Sets bit 16 (LCK_GRP_ATTR_STAT) in the attribute word at x0: lck_grp_attr_setstat (osfmk/kern/lock_group.c), between lck_grp_attr_alloc_init and lck_grp_alloc_init. The sandbox kext calls it at start."
+  },
+  {
+   "original": "0xfffffe000b44e330",
+   "native_symbol": "_SecureDTLookupEntry",
+   "check": {
+    "address": "0xfffffe000b44e330",
+    "size": 664,
+    "sha256": "dda88f6650d33da4371388ff6b4ff1e8b5ca7a5d8aae895377d5a6e0c95d87e5"
+   },
+   "evidence": "pexpert/gen/device_tree.c, the block that references \"device_tree.c\" and the two device-tree panic strings. 0xfffffe000b44e100 loads the root node global into x4 and tail-calls the 424-byte search that follows (find_entry): SecureDTFindEntry(propName, propValue, entryH). 0xfffffe000b44e330 checks the initialized flag, walks a path with a component buffer on its 208-byte frame and compares each child's \"name\" property: SecureDTLookupEntry(searchPoint, pathName, foundEntry). Same order as our kernel (FindEntry, find_entry, ..., LookupEntry). AMFI and AppleImage4 call both."
+  },
+  {
+   "original": "0xfffffe000b44e100",
+   "native_symbol": "_SecureDTFindEntry",
+   "check": {
+    "address": "0xfffffe000b44e100",
+    "size": 28,
+    "sha256": "0de4954fd322a2eab0761e9d7d752d1bf705ccbbee494300c680afbc95d83d1f"
+   },
+   "evidence": "pexpert/gen/device_tree.c, the block that references \"device_tree.c\" and the two device-tree panic strings. 0xfffffe000b44e100 loads the root node global into x4 and tail-calls the 424-byte search that follows (find_entry): SecureDTFindEntry(propName, propValue, entryH). 0xfffffe000b44e330 checks the initialized flag, walks a path with a component buffer on its 208-byte frame and compares each child's \"name\" property: SecureDTLookupEntry(searchPoint, pathName, foundEntry). Same order as our kernel (FindEntry, find_entry, ..., LookupEntry). AMFI and AppleImage4 call both."
+  },
+  {
+   "original": "0xfffffe000b1354a4",
+   "native_symbol": "_get_lockdown_mode_state",
+   "check": {
+    "address": "0xfffffe000b1354a4",
+    "size": 184,
+    "sha256": "82b43ccdb293c4cbf6a1b724d9a53193847b1b23bc402b873eef8ac7b298c6e9"
+   },
+   "evidence": "References its own name string (\"get_lockdown_mode_state\", the lock's sleep reason) and takes a global mutex around a cached value: get_lockdown_mode_state (bsd/kern/kern_xxx.c / lockdown_mode.c), between usrctl and ptrace in link order. AMFI asks for the lockdown mode at start."
+  },
+  {
+   "original": "0xfffffe000ac4ab60",
+   "native_symbol": "_zone_create_ro",
+   "check": {
+    "address": "0xfffffe000ac4ab60",
+    "size": 52,
+    "sha256": "ab0db3d869b08025443261dbc740245a7f1e49714416c8223ef009147341e902"
+   },
+   "evidence": "zone id = x3 + 10 (the first external read-only zone id), flags | 0x800000 (read-only), then the zone creation with that id and no extra setup, returns the id: zone_create_ro (osfmk/kern/zalloc.c), 20 instructions before zdestroy. AMFI creates its read-only zone with it."
+  },
+  {
+   "original": "0xfffffe000b2d528c",
+   "native_symbol": "_IOSimpleLockGetMachLock",
+   "check": {
+    "address": "0xfffffe000b2d528c",
+    "size": 8,
+    "sha256": "d33fdb74881bcff46b1cf4fc3e20479b1882e0e683789e80e6d650554066a1aa"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d523c",
+   "native_symbol": "_IOSimpleLockFree",
+   "check": {
+    "address": "0xfffffe000b2d523c",
+    "size": 80,
+    "sha256": "2b614929faef27f16d179a45310a4333297c229bd2397ea89b2e8b8c534664b1"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d5210",
+   "native_symbol": "_IOSimpleLockDestroy",
+   "check": {
+    "address": "0xfffffe000b2d5210",
+    "size": 44,
+    "sha256": "abb77a4ff599c069dc468a1f23b41162e59946d8c842863a85441bcb12ee99fb"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d51b4",
+   "native_symbol": "_IOSimpleLockInit",
+   "check": {
+    "address": "0xfffffe000b2d51b4",
+    "size": 92,
+    "sha256": "fe084acee638b17a3f6577a44abc69e1250a273a8e31a2412c5b30f83872638d"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d51a4",
+   "native_symbol": "_IOSimpleLockAlloc",
+   "check": {
+    "address": "0xfffffe000b2d51a4",
+    "size": 16,
+    "sha256": "e80a67d4b004545f3a64fd9b35477661bcdd56f52b8a0c7db2756d6e1d3b32f6"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d519c",
+   "native_symbol": "_IORWLockGetMachLock",
+   "check": {
+    "address": "0xfffffe000b2d519c",
+    "size": 8,
+    "sha256": "d33fdb74881bcff46b1cf4fc3e20479b1882e0e683789e80e6d650554066a1aa"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d518c",
+   "native_symbol": "_IORWLockFree",
+   "check": {
+    "address": "0xfffffe000b2d518c",
+    "size": 16,
+    "sha256": "9453898ee8219c4a331a1f75efc42dda8f0ce6ce27b7fb170b196f57815e59a2"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d50f0",
+   "native_symbol": "_IORWLockAlloc",
+   "check": {
+    "address": "0xfffffe000b2d50f0",
+    "size": 20,
+    "sha256": "eb437d3065cff61c059495fdac0e3fe45a47a8209306f3cd6c4e894076e487ac"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d50dc",
+   "native_symbol": "_IORecursiveLockWakeup",
+   "check": {
+    "address": "0xfffffe000b2d50dc",
+    "size": 20,
+    "sha256": "943daa76b4b600ef122e0b22b89e772db40b7a673dfe7d2b74dff6489f800adb"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d5094",
+   "native_symbol": "_IORecursiveLockSleepDeadline",
+   "check": {
+    "address": "0xfffffe000b2d5094",
+    "size": 72,
+    "sha256": "340b72796bc5d0719f8423e0824f182323c92c030490b68758e9f4ebcd7dd7f1"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d504c",
+   "native_symbol": "_IORecursiveLockSleep",
+   "check": {
+    "address": "0xfffffe000b2d504c",
+    "size": 72,
+    "sha256": "59933bf968026ac9e872c33bcb71795e1e97c74417251e249adf3d722fcb19c0"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d5034",
+   "native_symbol": "_IORecursiveLockHaveLock",
+   "check": {
+    "address": "0xfffffe000b2d5034",
+    "size": 24,
+    "sha256": "55ace84fa1b8748b719defbbd6fff56d178f8dc631554ef8c7e35bc3b2636353"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d4fa0",
+   "native_symbol": "_IORecursiveLockTryLock",
+   "check": {
+    "address": "0xfffffe000b2d4fa0",
+    "size": 88,
+    "sha256": "055a9cff90231f13f96ceb787e98c2e5f7f7eddec0d3489c293289f37ac546b3"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d4f24",
+   "native_symbol": "_IORecursiveLockGetMachLock",
+   "check": {
+    "address": "0xfffffe000b2d4f24",
+    "size": 8,
+    "sha256": "d33fdb74881bcff46b1cf4fc3e20479b1882e0e683789e80e6d650554066a1aa"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b2d4db8",
+   "native_symbol": "_IORecursiveLockAllocWithLockGroup",
+   "check": {
+    "address": "0xfffffe000b2d4db8",
+    "size": 148,
+    "sha256": "4e9ab0606f16ad07ab9d3fe0942811ee19f43fef5dfd0b12eef5233a005322da"
+   },
+   "evidence": "The rest of iokit/Kernel/IOLocks.cpp in source order, between the functions the matcher pairs (IORecursiveLockAlloc, Free, Lock, Unlock) and IOConditionLock: each body read from its disassembly (GetMachLock functions return x0; TryLock and HaveLock compare the owner at +24 with the current thread; Sleep/SleepDeadline/Wakeup as for IOLock; IORWLockAlloc and IOSimpleLockAlloc tail-call the rw and spin allocators with the IOKit lock group; IORWLockFree passes the group in x1). AMFI calls IORWLockAlloc; IOStorageFamily IOSimpleLockFree."
+  },
+  {
+   "original": "0xfffffe000b271c64",
+   "native_symbol": "__ZN12OSDictionary12withCapacityEj",
+   "check": {
+    "address": "0xfffffe000b271c64",
+    "size": 156,
+    "sha256": "fbeae5144fc4dfd3c59c3bc1589843ebf5c8273d962d9a393ec050f4860ed478"
+   },
+   "evidence": "The metaclass's alloc (vtable +104 of OSDictionary::gMetaClass), then the virtual initWithCapacity(x0) at vtable +208, releasing on failure: OSDictionary::withCapacity(unsigned int), 197 instructions after the file's static initializer. AMFI's initialization calls it."
+  },
+  {
+   "original": "0xfffffe000b264f2c",
+   "native_symbol": "_OSSpinLockTry",
+   "check": {
+    "address": "0xfffffe000b264f2c",
+    "size": 28,
+    "sha256": "8e458e63268735bf57d6737631797889878e11c1442a499e9308e9c46c5e48ec"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264f20",
+   "native_symbol": "_OSSpinLockUnlock",
+   "check": {
+    "address": "0xfffffe000b264f20",
+    "size": 12,
+    "sha256": "12f375d4d97200840bcdcf6315119df30356f58ad0633e3c4b332d97fc536fc5"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264f14",
+   "native_symbol": "_OSBitXorAtomic16",
+   "check": {
+    "address": "0xfffffe000b264f14",
+    "size": 12,
+    "sha256": "b3a80e991b78ef7ce7415f0af42144dd0cb9abea4cd2d187cf9a56e3cd49d19c"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264f08",
+   "native_symbol": "_OSBitOrAtomic16",
+   "check": {
+    "address": "0xfffffe000b264f08",
+    "size": 12,
+    "sha256": "1fb6a35fe2ce423a0ae002ee98184795324630cb108960604e3c91566c9aeacd"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264ef8",
+   "native_symbol": "_OSBitAndAtomic16",
+   "check": {
+    "address": "0xfffffe000b264ef8",
+    "size": 16,
+    "sha256": "49432c59d18d68e1c17718fab5a41f2f6a68e4c7a90ecd12519ec1e28627c2ae"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264ee4",
+   "native_symbol": "_OSDecrementAtomic16",
+   "check": {
+    "address": "0xfffffe000b264ee4",
+    "size": 20,
+    "sha256": "ee35b59ce07b5ec1294acc93e49031a9ff1a7083155e30599ec83dbbda3a448d"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264ed0",
+   "native_symbol": "_OSIncrementAtomic16",
+   "check": {
+    "address": "0xfffffe000b264ed0",
+    "size": 20,
+    "sha256": "5a93f6b84f1ad460671311cdedd5673f7b99553e54de518d242b829b38a9a059"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264ec4",
+   "native_symbol": "_OSBitXorAtomic8",
+   "check": {
+    "address": "0xfffffe000b264ec4",
+    "size": 12,
+    "sha256": "44156e4dcdf6bfd02f280ec5d28d67859aa3360caef636f6cf5ba5b2b838e0ed"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264eb8",
+   "native_symbol": "_OSBitOrAtomic8",
+   "check": {
+    "address": "0xfffffe000b264eb8",
+    "size": 12,
+    "sha256": "7d18dd985918bc7f99bb4a4ca59adfea1d65484bae1c175a0a8739d2c4c796a0"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264ea8",
+   "native_symbol": "_OSBitAndAtomic8",
+   "check": {
+    "address": "0xfffffe000b264ea8",
+    "size": 16,
+    "sha256": "39108b6294b7ac34c467f28ee245d3df5006d72c35dc8ba055243b3724fe7158"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264e94",
+   "native_symbol": "_OSDecrementAtomic8",
+   "check": {
+    "address": "0xfffffe000b264e94",
+    "size": 20,
+    "sha256": "c102b5d9b88e335d77b7c3f6ea3ffc320f06b4c79822c1417681cc21a2f84a4f"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264e80",
+   "native_symbol": "_OSIncrementAtomic8",
+   "check": {
+    "address": "0xfffffe000b264e80",
+    "size": 20,
+    "sha256": "4a7d1842241c334ee98f1aa00b34231684ad65e4b35cc0d0019ce3de35744dc7"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264e1c",
+   "native_symbol": "_OSTestAndClear",
+   "check": {
+    "address": "0xfffffe000b264e1c",
+    "size": 100,
+    "sha256": "d1205be21f738d46b8c48262d1705eba0a111861fb42c4c294d90cfb2fccef85"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264dbc",
+   "native_symbol": "_OSTestAndSet",
+   "check": {
+    "address": "0xfffffe000b264dbc",
+    "size": 96,
+    "sha256": "282d9e7d424e8748ba2d0c5ec5431efd2f7a5f01988b4631983b035632602b92"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264db0",
+   "native_symbol": "_OSBitXorAtomic",
+   "check": {
+    "address": "0xfffffe000b264db0",
+    "size": 12,
+    "sha256": "ac3a4bf24fa8f86196a264c5b8f9c8d97231ae265fd26ef2fe98330999e0cba8"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264da4",
+   "native_symbol": "_OSBitOrAtomic",
+   "check": {
+    "address": "0xfffffe000b264da4",
+    "size": 12,
+    "sha256": "4a3b399595ec116a5d606b9f31b1f80cb1e5dd981b501a073be330e1e6ac2a02"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264d94",
+   "native_symbol": "_OSBitAndAtomic",
+   "check": {
+    "address": "0xfffffe000b264d94",
+    "size": 16,
+    "sha256": "18ddc9c1815ee707a73ce77568c65edab7f5897624f09d41c93936c2b8dfe265"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264d84",
+   "native_symbol": "_OSDecrementAtomic",
+   "check": {
+    "address": "0xfffffe000b264d84",
+    "size": 16,
+    "sha256": "4b3e17e77b136d46615bf9c0fd771324556cf51e27d312d7615be48c3152ed12"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264d74",
+   "native_symbol": "_OSIncrementAtomic",
+   "check": {
+    "address": "0xfffffe000b264d74",
+    "size": 16,
+    "sha256": "eb495084c1597e05ac2465d8073c2b9007ae79de58c8b12ea8359ebeb30658d8"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264d68",
+   "native_symbol": "_OSAddAtomic64",
+   "check": {
+    "address": "0xfffffe000b264d68",
+    "size": 12,
+    "sha256": "c738f3df2912c8d74ce008540f65cbbe751e29fa40ae7e1dd8cb6dff7fa12315"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264d5c",
+   "native_symbol": "_OSAddAtomic",
+   "check": {
+    "address": "0xfffffe000b264d5c",
+    "size": 12,
+    "sha256": "8270aafa0a1d26910d7ee858f6a88465138515b091378fec4a04861cf19b6b8f"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264d4c",
+   "native_symbol": "_OSAddAtomic16",
+   "check": {
+    "address": "0xfffffe000b264d4c",
+    "size": 16,
+    "sha256": "e10458609dbf4a1c383d85bfd5c870bcdc1df614096de9ac4747ae722986cfbf"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264d3c",
+   "native_symbol": "_OSAddAtomic8",
+   "check": {
+    "address": "0xfffffe000b264d3c",
+    "size": 16,
+    "sha256": "e4e81bc949707528ba785f28e99c6539c93e863cac2890372e0d91e520e67e43"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264d24",
+   "native_symbol": "_OSCompareAndSwapPtr",
+   "check": {
+    "address": "0xfffffe000b264d24",
+    "size": 24,
+    "sha256": "d5588781738ec110b0ddb5b935a1db1d2404ac812aa55ccf0a5e429606c79c0b"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264d0c",
+   "native_symbol": "_OSCompareAndSwap64",
+   "check": {
+    "address": "0xfffffe000b264d0c",
+    "size": 24,
+    "sha256": "d5588781738ec110b0ddb5b935a1db1d2404ac812aa55ccf0a5e429606c79c0b"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b264cf4",
+   "native_symbol": "_OSCompareAndSwap",
+   "check": {
+    "address": "0xfffffe000b264cf4",
+    "size": 24,
+    "sha256": "f190607ccdab213ed64d65d2890c6dcb27b3c5dee839f13099902598e287674b"
+   },
+   "evidence": "libkern/gen/OSAtomicOperations.c in source order from 0xfffffe000b264cf4 to OSSpinLockTry, one LSE instruction each, the operand width and operation of each body read from its disassembly (casal w/x; ldaddb/h/w/x; ldclr, ldset, ldeor in three widths; the two bit-test loops; stlr wzr; casa 0 -> 1). Our kernel has the same functions in the same order between devsw_unlock and OSReportWithBacktrace. AMFI, AppleImage4 and most kexts call them."
+  },
+  {
+   "original": "0xfffffe000b2660a0",
+   "native_symbol": "__ZN11OSMetaClassD2Ev",
+   "check": {
+    "address": "0xfffffe000b2660a0",
+    "size": 536,
+    "sha256": "a62234e5e08a8d9fc0f5d2145f695e658523f5e86c4a44088c70f1bfadbb54df"
+   },
+   "evidence": "libkern/c++/OSMetaClass.cpp after logError, in source order as in our kernel: the constructor with a zone (seven arguments: calls the plain constructor, then zone_create_ext(zone_name, size, flags | 0x2000000, 0xffff, NULL) unless a tunable bit is set, stores the zone through x4) and the destructor (536 bytes). AMFI's class initializers call the first; most kexts reference the second."
+  },
+  {
+   "original": "0xfffffe000b266030",
+   "native_symbol": "__ZN11OSMetaClassC2EPKcPKS_jPP4zoneS1_19zone_create_flags_t",
+   "check": {
+    "address": "0xfffffe000b266030",
+    "size": 112,
+    "sha256": "c9e28a519cbc2663aef93751565ce4e2a9648e3e44da76856f6394857266c47a"
+   },
+   "evidence": "libkern/c++/OSMetaClass.cpp after logError, in source order as in our kernel: the constructor with a zone (seven arguments: calls the plain constructor, then zone_create_ext(zone_name, size, flags | 0x2000000, 0xffff, NULL) unless a tunable bit is set, stores the zone through x4) and the destructor (536 bytes). AMFI's class initializers call the first; most kexts reference the second."
+  },
+  {
+   "original": "0xfffffe000b2d47c0",
+   "native_symbol": "_IOLogv",
+   "check": {
+    "address": "0xfffffe000b2d47c0",
+    "size": 268,
+    "sha256": "941dd848c967214e45c0fc08b2bf9b5f1b6b5b3a2f18176dd6d8758470b25c7a"
+   },
+   "evidence": "(format, va_list): keeps the caller's return address (xpaci of x30), a 256-byte stack buffer zeroed, then the os_log and console printf paths: IOLogv (iokit/Kernel/IOLib.cpp), directly after IOLog (70 instructions before). Image4's log shim tail-calls it."
+  },
+  {
+   "original": "0xfffffe000b2d4da4",
+   "native_symbol": "_IOLockWakeup",
+   "check": {
+    "address": "0xfffffe000b2d4da4",
+    "size": 20,
+    "sha256": "8e3ff9bb61606a11fa04416150c652641ad9ddb019e1b825faa9b326ab5670a3"
+   },
+   "evidence": "iokit/Kernel/IOLocks.cpp in source order from 0xfffffe000b2d4d28, up to IORecursiveLockAlloc (paired by the matcher at +73 instructions): IOLockAlloc (tail call of the mutex allocator with the IOKit lock group), IOLockFree (destroy with that group, then free to the mutex zone), IOLockGetMachLock (returns x0), IOLockSleep and IOLockSleepDeadline (insert the sleep action 16 and tail-call lck_mtx_sleep / _deadline), IOLockWakeup (drops the lock argument, tail-calls thread_wakeup_prim(event, one, 0)), IORecursiveLockAllocWithLockGroup (NULL group check, typed allocation). IOCryptoAcceleratorFamily and IOStorageFamily call them."
+  },
+  {
+   "original": "0xfffffe000b2d4d90",
+   "native_symbol": "_IOLockSleepDeadline",
+   "check": {
+    "address": "0xfffffe000b2d4d90",
+    "size": 20,
+    "sha256": "47f37d71486344a31553880d2ce64c533a308d8f25e3e85f850647a1dacfb1b6"
+   },
+   "evidence": "iokit/Kernel/IOLocks.cpp in source order from 0xfffffe000b2d4d28, up to IORecursiveLockAlloc (paired by the matcher at +73 instructions): IOLockAlloc (tail call of the mutex allocator with the IOKit lock group), IOLockFree (destroy with that group, then free to the mutex zone), IOLockGetMachLock (returns x0), IOLockSleep and IOLockSleepDeadline (insert the sleep action 16 and tail-call lck_mtx_sleep / _deadline), IOLockWakeup (drops the lock argument, tail-calls thread_wakeup_prim(event, one, 0)), IORecursiveLockAllocWithLockGroup (NULL group check, typed allocation). IOCryptoAcceleratorFamily and IOStorageFamily call them."
+  },
+  {
+   "original": "0xfffffe000b2d4d7c",
+   "native_symbol": "_IOLockSleep",
+   "check": {
+    "address": "0xfffffe000b2d4d7c",
+    "size": 20,
+    "sha256": "fbfa313f33dd50a06e2826ca14d571e6a2b521e4d94ca975a49da8dd3860721a"
+   },
+   "evidence": "iokit/Kernel/IOLocks.cpp in source order from 0xfffffe000b2d4d28, up to IORecursiveLockAlloc (paired by the matcher at +73 instructions): IOLockAlloc (tail call of the mutex allocator with the IOKit lock group), IOLockFree (destroy with that group, then free to the mutex zone), IOLockGetMachLock (returns x0), IOLockSleep and IOLockSleepDeadline (insert the sleep action 16 and tail-call lck_mtx_sleep / _deadline), IOLockWakeup (drops the lock argument, tail-calls thread_wakeup_prim(event, one, 0)), IORecursiveLockAllocWithLockGroup (NULL group check, typed allocation). IOCryptoAcceleratorFamily and IOStorageFamily call them."
+  },
+  {
+   "original": "0xfffffe000b2d4d74",
+   "native_symbol": "_IOLockGetMachLock",
+   "check": {
+    "address": "0xfffffe000b2d4d74",
+    "size": 8,
+    "sha256": "d33fdb74881bcff46b1cf4fc3e20479b1882e0e683789e80e6d650554066a1aa"
+   },
+   "evidence": "iokit/Kernel/IOLocks.cpp in source order from 0xfffffe000b2d4d28, up to IORecursiveLockAlloc (paired by the matcher at +73 instructions): IOLockAlloc (tail call of the mutex allocator with the IOKit lock group), IOLockFree (destroy with that group, then free to the mutex zone), IOLockGetMachLock (returns x0), IOLockSleep and IOLockSleepDeadline (insert the sleep action 16 and tail-call lck_mtx_sleep / _deadline), IOLockWakeup (drops the lock argument, tail-calls thread_wakeup_prim(event, one, 0)), IORecursiveLockAllocWithLockGroup (NULL group check, typed allocation). IOCryptoAcceleratorFamily and IOStorageFamily call them."
+  },
+  {
+   "original": "0xfffffe000b2d4d38",
+   "native_symbol": "_IOLockFree",
+   "check": {
+    "address": "0xfffffe000b2d4d38",
+    "size": 60,
+    "sha256": "cf0a1bea17cbc9608095f9e6031c32a6236b92ef30b797b8fcbb973df3fde6fe"
+   },
+   "evidence": "iokit/Kernel/IOLocks.cpp in source order from 0xfffffe000b2d4d28, up to IORecursiveLockAlloc (paired by the matcher at +73 instructions): IOLockAlloc (tail call of the mutex allocator with the IOKit lock group), IOLockFree (destroy with that group, then free to the mutex zone), IOLockGetMachLock (returns x0), IOLockSleep and IOLockSleepDeadline (insert the sleep action 16 and tail-call lck_mtx_sleep / _deadline), IOLockWakeup (drops the lock argument, tail-calls thread_wakeup_prim(event, one, 0)), IORecursiveLockAllocWithLockGroup (NULL group check, typed allocation). IOCryptoAcceleratorFamily and IOStorageFamily call them."
+  },
+  {
+   "original": "0xfffffe000b2d4d28",
+   "native_symbol": "_IOLockAlloc",
+   "check": {
+    "address": "0xfffffe000b2d4d28",
+    "size": 16,
+    "sha256": "59e45ebcd43a241096ada05a5be562b26fee8f4a9bb72e8fed771b8f28259b9e"
+   },
+   "evidence": "iokit/Kernel/IOLocks.cpp in source order from 0xfffffe000b2d4d28, up to IORecursiveLockAlloc (paired by the matcher at +73 instructions): IOLockAlloc (tail call of the mutex allocator with the IOKit lock group), IOLockFree (destroy with that group, then free to the mutex zone), IOLockGetMachLock (returns x0), IOLockSleep and IOLockSleepDeadline (insert the sleep action 16 and tail-call lck_mtx_sleep / _deadline), IOLockWakeup (drops the lock argument, tail-calls thread_wakeup_prim(event, one, 0)), IORecursiveLockAllocWithLockGroup (NULL group check, typed allocation). IOCryptoAcceleratorFamily and IOStorageFamily call them."
+  },
+  {
+   "original": "0xfffffe000b263e60",
+   "native_symbol": "_bdevsw_isfree",
+   "check": {
+    "address": "0xfffffe000b263e60",
+    "size": 228,
+    "sha256": "053048da7e30ff1eac92a7773528b5ddd1bf0e25f81745c93b153b3e357517a7"
+   },
+   "evidence": "Index in x0: negative means search; bounds 23 (nblkdev 24), entries of 56 bytes compared with the template entry by memcmp, returns the index or -1: bdevsw_isfree (bsd/kern/bsd_stubs.c), 57 instructions before bdevsw_add. IOStorageFamily calls it."
+  },
+  {
+   "original": "0xfffffe000b2d4470",
+   "native_symbol": "_IOFreeTypeVarImpl",
+   "check": {
+    "address": "0xfffffe000b2d4470",
+    "size": 12,
+    "sha256": "7202735f0bc8d5b7fc1b66de42ebb11bbf3f3c442bbef852cf8ca88cbcfa8eb9"
+   },
+   "evidence": "IOLib.cpp in source order after IOFreeData (0xfffffe000b2d43b8), as in our kernel: IOFreeDataShareable (the IOFreeData body on the shareable heap view), IOMallocTypeVarImpl (view | 1, size, Z_ZERO flags 0x1f1004, tail call of the typed variable allocator), IOFreeTypeVarImpl (12 bytes), then IOSetProcessorCacheMode, which the matcher pairs at the next address. IOStorageFamily calls IOMallocTypeVarImpl."
+  },
+  {
+   "original": "0xfffffe000b2d4458",
+   "native_symbol": "_IOMallocTypeVarImpl",
+   "check": {
+    "address": "0xfffffe000b2d4458",
+    "size": 24,
+    "sha256": "075fedd486c9451ba8a97697c0e271e4d10466c66d3864de18610e2967207603"
+   },
+   "evidence": "IOLib.cpp in source order after IOFreeData (0xfffffe000b2d43b8), as in our kernel: IOFreeDataShareable (the IOFreeData body on the shareable heap view), IOMallocTypeVarImpl (view | 1, size, Z_ZERO flags 0x1f1004, tail call of the typed variable allocator), IOFreeTypeVarImpl (12 bytes), then IOSetProcessorCacheMode, which the matcher pairs at the next address. IOStorageFamily calls IOMallocTypeVarImpl."
+  },
+  {
+   "original": "0xfffffe000b2d4408",
+   "native_symbol": "_IOFreeDataShareable",
+   "check": {
+    "address": "0xfffffe000b2d4408",
+    "size": 80,
+    "sha256": "d531bc3f37add887a13ccc09985c87ee599c49519b4a864c7d5fd07ed7a0a250"
+   },
+   "evidence": "IOLib.cpp in source order after IOFreeData (0xfffffe000b2d43b8), as in our kernel: IOFreeDataShareable (the IOFreeData body on the shareable heap view), IOMallocTypeVarImpl (view | 1, size, Z_ZERO flags 0x1f1004, tail call of the typed variable allocator), IOFreeTypeVarImpl (12 bytes), then IOSetProcessorCacheMode, which the matcher pairs at the next address. IOStorageFamily calls IOMallocTypeVarImpl."
+  },
+  {
+   "original": "0xfffffe000b2d3da0",
+   "native_symbol": "_IOMallocTypeImpl",
+   "check": {
+    "address": "0xfffffe000b2d3da0",
+    "size": 28,
+    "sha256": "bf9ef62072e14b96f601f489e3a630d88be0aa50507994467e8223f8c3e6463b"
+   },
+   "evidence": "x0 a kalloc type view: flags = Z_ZERO (4), or Z_ZERO | 0x8000 when bit 4 of the view's flags (+40) is clear, then a tail call of the typed allocator: IOMallocTypeImpl (iokit/Kernel/IOLib.cpp). After IOKernelAllocateWithPhysicalRestrict and before IOPageableMapForAddress in link order, as in our kernel. IOStorageFamily calls it."
+  },
+  {
+   "original": "0xfffffe000abdd164",
+   "native_symbol": "_lck_mtx_gate_wait",
+   "check": {
+    "address": "0xfffffe000abdd164",
+    "size": 712,
+    "sha256": "63f8518c4ebb8e01d1b6516c2424e6292fb385ff053fa74d731ebf7b53b1382e"
+   },
+   "evidence": "The mutex gate block of osfmk/kern/locks.c, ten consecutive functions from 0xfffffe000abdcc04 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait): alloc_init is the zalloc of the gate zone plus the initial words, close ends in a panic path with no return value and try_close returns one, open/handoff/steal are the three thunks that drop the lock argument (x0 = x1) and tail-call the gate function. AppleImage4 uses them at start; the matcher had bound close to the static gate_try_close, which takes the gate in x0 (panic 'Gate used is invalid')."
+  },
+  {
+   "original": "0xfffffe000abdd158",
+   "native_symbol": "_lck_mtx_gate_steal",
+   "check": {
+    "address": "0xfffffe000abdd158",
+    "size": 12,
+    "sha256": "58da13a6911110ea740bff1c5aba0abdd70ee92c705568c03685d35cbacf8c18"
+   },
+   "evidence": "The mutex gate block of osfmk/kern/locks.c, ten consecutive functions from 0xfffffe000abdcc04 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait): alloc_init is the zalloc of the gate zone plus the initial words, close ends in a panic path with no return value and try_close returns one, open/handoff/steal are the three thunks that drop the lock argument (x0 = x1) and tail-call the gate function. AppleImage4 uses them at start; the matcher had bound close to the static gate_try_close, which takes the gate in x0 (panic 'Gate used is invalid')."
+  },
+  {
+   "original": "0xfffffe000abdd148",
+   "native_symbol": "_lck_mtx_gate_handoff",
+   "check": {
+    "address": "0xfffffe000abdd148",
+    "size": 16,
+    "sha256": "537977ff857707874ccfb2b302266d5a11cd0ea68723f986f009f495b1ba872b"
+   },
+   "evidence": "The mutex gate block of osfmk/kern/locks.c, ten consecutive functions from 0xfffffe000abdcc04 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait): alloc_init is the zalloc of the gate zone plus the initial words, close ends in a panic path with no return value and try_close returns one, open/handoff/steal are the three thunks that drop the lock argument (x0 = x1) and tail-call the gate function. AppleImage4 uses them at start; the matcher had bound close to the static gate_try_close, which takes the gate in x0 (panic 'Gate used is invalid')."
+  },
+  {
+   "original": "0xfffffe000abdd13c",
+   "native_symbol": "_lck_mtx_gate_open",
+   "check": {
+    "address": "0xfffffe000abdd13c",
+    "size": 12,
+    "sha256": "7a6e19c0a1c733f7f867d31e962d8f3f2e21ef8a9e9e005fb467c251d1eb12fd"
+   },
+   "evidence": "The mutex gate block of osfmk/kern/locks.c, ten consecutive functions from 0xfffffe000abdcc04 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait): alloc_init is the zalloc of the gate zone plus the initial words, close ends in a panic path with no return value and try_close returns one, open/handoff/steal are the three thunks that drop the lock argument (x0 = x1) and tail-call the gate function. AppleImage4 uses them at start; the matcher had bound close to the static gate_try_close, which takes the gate in x0 (panic 'Gate used is invalid')."
+  },
+  {
+   "original": "0xfffffe000abdd020",
+   "native_symbol": "_lck_mtx_gate_close",
+   "check": {
+    "address": "0xfffffe000abdd020",
+    "size": 284,
+    "sha256": "3056b577a497ffc5cb6020af683e8b41c3525404149df133cf86af3f1ce1cad6"
+   },
+   "evidence": "The mutex gate block of osfmk/kern/locks.c, ten consecutive functions from 0xfffffe000abdcc04 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait): alloc_init is the zalloc of the gate zone plus the initial words, close ends in a panic path with no return value and try_close returns one, open/handoff/steal are the three thunks that drop the lock argument (x0 = x1) and tail-call the gate function. AppleImage4 uses them at start; the matcher had bound close to the static gate_try_close, which takes the gate in x0 (panic 'Gate used is invalid')."
+  },
+  {
+   "original": "0xfffffe000abdceec",
+   "native_symbol": "_lck_mtx_gate_try_close",
+   "check": {
+    "address": "0xfffffe000abdceec",
+    "size": 308,
+    "sha256": "e4914b3de3c6dbe0c978cd6a3c0a2aa64ec00f21a72ecc03d51fdbce99f0e2b1"
+   },
+   "evidence": "The mutex gate block of osfmk/kern/locks.c, ten consecutive functions from 0xfffffe000abdcc04 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait): alloc_init is the zalloc of the gate zone plus the initial words, close ends in a panic path with no return value and try_close returns one, open/handoff/steal are the three thunks that drop the lock argument (x0 = x1) and tail-call the gate function. AppleImage4 uses them at start; the matcher had bound close to the static gate_try_close, which takes the gate in x0 (panic 'Gate used is invalid')."
+  },
+  {
+   "original": "0xfffffe000abdcd90",
+   "native_symbol": "_lck_mtx_gate_free",
+   "check": {
+    "address": "0xfffffe000abdcd90",
+    "size": 348,
+    "sha256": "0beb126c438bf04ce89549c2b41ffa8aea358d21b12f1dd1a8936eee07989f74"
+   },
+   "evidence": "The mutex gate block of osfmk/kern/locks.c, ten consecutive functions from 0xfffffe000abdcc04 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait): alloc_init is the zalloc of the gate zone plus the initial words, close ends in a panic path with no return value and try_close returns one, open/handoff/steal are the three thunks that drop the lock argument (x0 = x1) and tail-call the gate function. AppleImage4 uses them at start; the matcher had bound close to the static gate_try_close, which takes the gate in x0 (panic 'Gate used is invalid')."
+  },
+  {
+   "original": "0xfffffe000abdcc58",
+   "native_symbol": "_lck_mtx_gate_destroy",
+   "check": {
+    "address": "0xfffffe000abdcc58",
+    "size": 312,
+    "sha256": "de0f9119c97602a8d4788f36ee7885e844d51b226df25220cb6e43f9c8e78661"
+   },
+   "evidence": "The mutex gate block of osfmk/kern/locks.c, ten consecutive functions from 0xfffffe000abdcc04 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait): alloc_init is the zalloc of the gate zone plus the initial words, close ends in a panic path with no return value and try_close returns one, open/handoff/steal are the three thunks that drop the lock argument (x0 = x1) and tail-call the gate function. AppleImage4 uses them at start; the matcher had bound close to the static gate_try_close, which takes the gate in x0 (panic 'Gate used is invalid')."
+  },
+  {
+   "original": "0xfffffe000abdcc20",
+   "native_symbol": "_lck_mtx_gate_alloc_init",
+   "check": {
+    "address": "0xfffffe000abdcc20",
+    "size": 56,
+    "sha256": "75490b418d35b0c96dd87605b467132a85f135fc6482b1df00e756fe8b31fd48"
+   },
+   "evidence": "The mutex gate block of osfmk/kern/locks.c, ten consecutive functions from 0xfffffe000abdcc04 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait): alloc_init is the zalloc of the gate zone plus the initial words, close ends in a panic path with no return value and try_close returns one, open/handoff/steal are the three thunks that drop the lock argument (x0 = x1) and tail-call the gate function. AppleImage4 uses them at start; the matcher had bound close to the static gate_try_close, which takes the gate in x0 (panic 'Gate used is invalid')."
+  },
+  {
+   "original": "0xfffffe000abdcc04",
+   "native_symbol": "_lck_mtx_gate_init",
+   "check": {
+    "address": "0xfffffe000abdcc04",
+    "size": 28,
+    "sha256": "1f866e13d5bb144c14941577a665234299a990b4f73bf0a99668ba3f2de676aa"
+   },
+   "evidence": "The mutex gate block of osfmk/kern/locks.c, ten consecutive functions from 0xfffffe000abdcc04 in source order (init, alloc_init, destroy, free, try_close, close, open, handoff, steal, wait): alloc_init is the zalloc of the gate zone plus the initial words, close ends in a panic path with no return value and try_close returns one, open/handoff/steal are the three thunks that drop the lock argument (x0 = x1) and tail-call the gate function. AppleImage4 uses them at start; the matcher had bound close to the static gate_try_close, which takes the gate in x0 (panic 'Gate used is invalid')."
+  },
+  {
+   "original": "0xfffffe000b1314cc",
+   "native_symbol": "_code_signing_configuration",
+   "check": {
+    "address": "0xfffffe000b1314cc",
+    "size": 240,
+    "sha256": "90f996280e41aa87699301d1f3ec55700f9bb7ba2231401a73a23913bd4f9df6"
+   },
+   "evidence": "A once flag (ldaprb), then a configuration word built bit by bit from device-tree/boot-argument booleans (masks 0x7c000000, 0x88000000, 0x02000000 ...) and stored through the two out-pointers: code_signing_configuration(monitor_type_out, config_out) of bsd/kern/code_signing/xnu.c. Between code_signing_deallocate and disable_code_signing_feature in link order. AppleImage4 calls it at start."
+  },
+  {
+   "original": "0xfffffe000ab91700",
+   "native_symbol": "_exclaves_register_xrt_hosted_callbacks",
+   "check": {
+    "address": "0xfffffe000ab91700",
+    "size": 28,
+    "sha256": "df268fa374cedea2316871193d963aaab7bcd1342e754c0fe0d7560ee3a654f3"
+   },
+   "evidence": "Stores x0 in a global pointer when that pointer is still NULL, returns nothing: exclaves_register_xrt_hosted_callbacks (osfmk/kern/exclaves.c). com.apple.kec.XrtHostedXnu calls it from its start with its callback table."
+  },
+  {
+   "original": "0xfffffe000ab8c854",
+   "native_symbol": "_panic_active",
+   "check": {
+    "address": "0xfffffe000ab8c854",
+    "size": 28,
+    "sha256": "86aece5b988b857afd5f1c7f42ac42b65d18b9462e76be609ac9578779a6958c"
+   },
+   "evidence": "Returns whether a 32-bit global is 3 or 4 (the debugger operation: panic, or the debugger entered for a panic): panic_active of osfmk/kern/debug.c. In link order it lies between log and panic_display_kernel_aslr, where our kernel has oslog_is_safe, debug_mode_active, debug_putc, panic_display_process_name and panic_active; the first two read other globals (entry count, not_in_kdp), the next two are not predicates. corecrypto calls it before logging."
+  },
+  {
+   "original": "0xfffffe000ad5ff50",
+   "native_symbol": "_clock_timebase_info",
+   "check": {
+    "address": "0xfffffe000ad5ff50",
+    "size": 24,
+    "sha256": "df429fcb0c4933f9a3853fb32c25df0489c369b2c166e58808a46b6bc3dd4e46"
+   },
+   "evidence": "Copies the 8 bytes at offset 8 of the rtclock data ({numer, denom}) to *x0: clock_timebase_info (osfmk/arm/rtclock.c: *info = rtclock_timebase_const), 68 instructions after mach_absolute_time in the same file. corecrypto's timing code calls it."
+  },
+  {
+   "original": "0xfffffe000b43f330",
+   "native_symbol": "_memset",
+   "check": {
+    "address": "0xfffffe000b43f330",
+    "size": 96,
+    "sha256": "f7c884b881c8b8ffd5a9726184c08e650d9f6c1bca2da5dd427b0e4553b70f6b"
+   },
+   "evidence": "Replicates the byte in x1 (x * 0x0101010101010101), stores pairs with stp/stnp in 64-byte blocks from x0 for x2 bytes: memset of osfmk/arm64/bzero.s, 44 instructions after __bzero (the entry before it, at -4, is secure_memset, which memset_s calls). corecrypto calls it in its self-test."
+  },
+  {
+   "original": "0xfffffe000b43e300",
+   "native_symbol": "_memset_s",
+   "check": {
+    "address": "0xfffffe000b43e300",
+    "size": 84,
+    "sha256": "8345a617274c609fda0d0f914d1c4056d106b5251f3152cb992449bc5004adca"
+   },
+   "evidence": "s == NULL -> EINVAL (22); smax negative -> E2BIG (7); n > smax -> EOVERFLOW (84) after the fill; calls the fill with (s, c, min): memset_s (osfmk/arm/strncmp-family, libkern). In the corecrypto support block before cc_clear."
+  },
+  {
+   "original": "0xfffffe000b2d43b8",
+   "native_symbol": "_IOFreeData",
+   "check": {
+    "address": "0xfffffe000b2d43b8",
+    "size": 80,
+    "sha256": "7789ba039938c82d9f266b30d8fc4045c0ad5f3f5728026280914f5033fd0075"
+   },
+   "evidence": "NULL check, kfree(address, size) on the same heap view as IOMallocData, counter decremented: IOFreeData. Follows IOMallocZeroDataShareable in link order."
+  },
+  {
+   "original": "0xfffffe000b2d4288",
+   "native_symbol": "_IOMallocData",
+   "check": {
+    "address": "0xfffffe000b2d4288",
+    "size": 76,
+    "sha256": "fdb2344405985c835bf69197cfbeb8c135a0114164d8ea4ea84844adb0e7bdd4"
+   },
+   "evidence": "kalloc of x0 bytes from a fixed heap view with flags 0x31000 (no Z_ZERO), then the IOKit allocation counter: IOMallocData. 19 instructions (its own length) before IOMallocZeroData in link order."
+  },
+  {
+   "original": "0xfffffe000b2bdd04",
+   "native_symbol": "_register_crypto_functions",
+   "check": {
+    "address": "0xfffffe000b2bdd04",
+    "size": 52,
+    "sha256": "0ada4f1956db33dff0f6a1ac84dcdd8b5c5f7c99f4a4b27b1e5246eecfce476c"
+   },
+   "evidence": "Returns -1 when a global pointer is already set; otherwise stores x0 there, sets a flag byte and returns 0: register_crypto_functions (libkern/crypto/register_crypto.c). corecrypto's registration; just before SHA256_Init in link order."
+  },
+  {
+   "original": "0xfffffe000ad2c40c",
+   "native_symbol": "_read_random",
+   "check": {
+    "address": "0xfffffe000ad2c40c",
+    "size": 168,
+    "sha256": "8421b1322bca6bc3fae3688fc6b92b26543866ca44b69101a4e59af5e9d7012d"
+   },
+   "evidence": "prng refresh through an authenticated global call, then generate in chunks of at most 0x100 bytes with the CPU number of the current thread: read_random (osfmk/prng/prng_random.c). Between read_frandom and write_random in link order."
+  },
+  {
+   "original": "0xfffffe000abd3e34",
+   "native_symbol": "_lck_mtx_try_lock",
+   "check": {
+    "address": "0xfffffe000abd3e34",
+    "size": 36,
+    "sha256": "5502b04d1c521a1afc67b669680b0a1d9d386dd00b81120c93f889c6fa60d807"
+   },
+   "evidence": "casa of 0 -> the current thread's ctid (thread +1272) on lock+8, returns whether it was 0: lck_mtx_try_lock. Between lck_mtx_lock_spin_always and lck_mtx_try_lock_spin in link order."
+  },
+  {
+   "original": "0xfffffe000abd31ac",
+   "native_symbol": "_lck_mtx_alloc_init",
+   "check": {
+    "address": "0xfffffe000abd31ac",
+    "size": 112,
+    "sha256": "a6048ad770c495210d14266bfe6bd0165c82fe18b503b317021e4f2d57ba8f97"
+   },
+   "evidence": "zalloc of the mutex zone, first word = 0x22000000 | the group's attribute id, second 0, owner 0, then the group's reference and lock counters: lck_mtx_alloc_init(grp, attr). Between lck_attr_alloc_init and lck_mtx_init in link order."
+  },
+  {
+   "original": "0xfffffe000ad5fe40",
+   "native_symbol": "_mach_absolute_time",
+   "check": {
+    "address": "0xfffffe000ad5fe40",
+    "size": 48,
+    "sha256": "abb7c19ec8e64fd9442b0ac63d517c44dd947f80781419e9cf943ce14161035b"
+   },
+   "evidence": "Reads the per-CPU base timebase (current thread +440 -> +88), the non-speculative Apple counter S3_4_C15_C10_6, the base again and retries when it changed; returns the sum: mach_absolute_time (machine_routines_asm.s). The same body Droid-VM's reviewed list names in the iPad kernelcache. corecrypto calls it at start."
+  },
+  {
+   "original": "0xfffffe000b3ec5a8",
+   "native_symbol": "_PE_parse_boot_argn",
+   "check": {
+    "address": "0xfffffe000b3ec5a8",
+    "size": 36,
+    "sha256": "2b2b59d4a3ff226ee9b70cf97489a3d66b4d97a9147c8a121f7faabb480ee347"
+   },
+   "evidence": "Shifts (x0, x1, x2) to (x1, x2, x3), x0 = a global's value + 108 (the boot_args command line), w4 = 0, and tail-calls the next function: PE_parse_boot_argn -> PE_parse_boot_argn_internal(PE_boot_args(), arg_string, arg_ptr, max_len, false). corecrypto calls it at start with a boot-argument name."
+  },
+  {
+   "original": "0xfffffe000b3eeea8",
+   "native_symbol": "_kprintf",
+   "check": {
+    "address": "0xfffffe000b3eeea8",
+    "size": 400,
+    "sha256": "e2283e9245fbe8602b4ef52ab6071a5da9b3fc576cee98d6b98b712119b394f4"
+   },
+   "evidence": "Variadic (va_list from x29+16), x0 the format; returns early on two disable flags, then masks interrupts (the inlined ml_set_interrupts_enabled_with_debug, its panic string), formats and restores: kprintf of pexpert/arm/pe_kprintf.c. corecrypto's first call at start (0xfffffe000ab038dc, x0 a string); XnuPrelink's iPad fixture records the same corecrypto kprintf import."
+  },
+  {
+   "original": "0xfffffe000ab84518",
+   "native_symbol": "_mach_continuous_time",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000ab84518",
+    "size": 12,
+    "sha256": "d81a6809f44fa6dc4b5926986d74ff6c7aeec7cd278ab31bae93d2b5b4d2a2da"
+   },
+   "evidence": "Byte-identical (12 bytes) to 0xfffffe000acf4500 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Returns the continuous (sleep-inclusive) counter register directly; follows clock_continuoustime_interval_to_deadline, which reads the same register."
+  },
+  {
+   "original": "0xfffffe000abe1a40",
+   "native_symbol": "_printf",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000abe1a40",
+    "size": 56,
+    "sha256": "fc40ae160d329d2103fe9e9278509ed29d360daa7f457b36a61ddb3db9e4b7d4"
+   },
+   "evidence": "Byte-identical (56 bytes) to 0xfffffe000ad51994 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Variadic: builds a va_list from the stack arguments, passes it with the stripped caller address to the shared console formatter and returns 0; subr_prf.c/cons order right after cons_putc_locked (paired), before vprintf and consdebug_putc. Eleven kexts call it. Source: osfmk/kern/printf.c printf."
+  },
+  {
+   "original": "0xfffffe000abe1bc0",
+   "native_symbol": "_vprintf",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000abe1bc0",
+    "size": 36,
+    "sha256": "7a7c5dafbe7f84f5eda81981230c2cb2c4a3432432ec2a1be3192f236a9eb51f"
+   },
+   "evidence": "Byte-identical (36 bytes) to 0xfffffe000ad51b14 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Takes (fmt, va_list), passes them with the stripped caller address to the same formatter as printf and returns 0; order after printf and before consdebug_putc. APFS and AppleEffaceableStorage call it. Source: osfmk/kern/printf.c vprintf."
+  },
+  {
+   "original": "0xfffffe000ac10874",
+   "native_symbol": "_task_is_privileged",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000ac10874",
+    "size": 12,
+    "sha256": "3432f29aac3e853b6e0d7137fc4847657d9090733766ec83091d1194104842e8"
+   },
+   "evidence": "Byte-identical (12 bytes) to 0xfffffe000ad80834 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Between init_task_ledgers and task_get_mach_trap_filter_mask as in task.c, where native has task_is_privileged; the 27 build returns a cached bool byte of the task (+0x6a8) where native computes effective uid 0 from the task tokens, same meaning. No symbol in the original image; Sandbox calls it."
+  },
+  {
+   "original": "0xfffffe000ac1277c",
+   "native_symbol": "_task_set_cs_auxiliary_info",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000ac1277c",
+    "size": 32,
+    "sha256": "9a93d02a35e12565a488fa7ef3b04a2dfb1649e744cc6763fdbfc8cd4841b30c"
+   },
+   "evidence": "Byte-identical (32 bytes) to 0xfffffe000ad8273c of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Returns KERN_INVALID_ARGUMENT (4) for a null task, otherwise stores x1 into task auxiliary code-signing info at original offset 0x6a0 and returns 0. Matches osfmk/kern/task.c task_set_cs_auxiliary_info; native layout is resolved by symbol. Also cross-checked with the retained import and RELEASE-LTO pairing; recovery provenance: prelink-recovery-2026-11-02."
+  },
+  {
+   "original": "0xfffffe000ac4bd40",
+   "native_symbol": "_get_task_pidsuspended",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000ac4bd40",
+    "size": 16,
+    "sha256": "8d9d5229bb16beb4bde6c314115f5f8b3200d9140c9c9eb729fa5f5159dbd1e9"
+   },
+   "evidence": "Byte-identical (16 bytes) to 0xfffffe000adbbc24 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Between get_threadtask_early and current_thread_aborted as in bsd_kern.c: returns the bool at task+0x412, the byte task_pidsuspend sets and clears in the 27 kernel (task->pidsuspended). No symbol in the original image; IOHIDFamily calls it."
+  },
+  {
+   "original": "0xfffffe000ac9afdc",
+   "native_symbol": "_vm_map_page_mask",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000ac9afdc",
+    "size": 36,
+    "sha256": "2f6fec562b8d4b942dbabb093a78571b830b4bdf3e9034964852bb7ddac7fbe5"
+   },
+   "evidence": "Byte-identical (36 bytes) to 0xfffffe000ae0aeb4 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Returns ~(-1 << shift) with shift read from byte 0x2c of the map, or 14 when the map is NULL (the native body uses its own layout and PAGE_SHIFT); sandbox calls it with kernel_map and AMFI with a task map. Source: osfmk/vm/vm_map.c vm_map_page_mask, config/Private.exports."
+  },
+  {
+   "original": "0xfffffe000aca0374",
+   "native_symbol": "_vm_map_copyin",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000aca0374",
+    "size": 20,
+    "sha256": "adc5f6f6f0d2c6c32ce51521ca45e1ea67067c8a8f4598e59f7da541fef87a9a"
+   },
+   "evidence": "Byte-identical (20 bytes) to 0xfffffe000ae1024c of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Tail-calls vm_map_copyin_internal with flags from src_destroy (Darwin 26 adds flag 0x100 that the internal function owns); same arguments as native vm_map_copyin."
+  },
+  {
+   "original": "0xfffffe000acceff8",
+   "native_symbol": "_upl_valid_page",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000acceff8",
+    "size": 60,
+    "sha256": "0c1008028891282d605d4c849d5df26b495a581d2026d819f28ccdf546388839"
+   },
+   "evidence": "Byte-identical (60 bytes) to 0xfffffe000ae3ee30 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Returns the inverse of bit 1 (absent) of the UPL flags word; vm_pageout.c upl_valid_page. Ported from 0xfffffe000a8e9404: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000acd6498",
+   "native_symbol": "_upl_page_present",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000acd6498",
+    "size": 44,
+    "sha256": "bc74c5dddea0fba3483910e52839bb71601ab89dbf3f4b14b63eb85d28acc4c8"
+   },
+   "evidence": "Byte-identical (44 bytes) to 0xfffffe000ae462d0 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Returns upl[index].phys_addr != 0; osfmk/vm/vm_pageout.c upl_page_present. Ported from 0xfffffe000a8e93a0: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000acd64c4",
+   "native_symbol": "_upl_dirty_page",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000acd64c4",
+    "size": 56,
+    "sha256": "f1af82d101a3cacbfbc14ce825902314c70e6f3d1ad52658a000d193bb6e36d3"
+   },
+   "evidence": "Byte-identical (56 bytes) to 0xfffffe000ae462fc of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Tests bit 2 (dirty) of the UPL flags word after the phys_addr check; vm_pageout.c upl_dirty_page. Ported from 0xfffffe000a8e93cc: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000ad57598",
+   "native_symbol": "_ml_cpu_signal",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000ad57598",
+    "size": 60,
+    "sha256": "b2abba24172aa23b5c8b4a6573d9aa3f23a7a0a65a3328d891d0ff84d882bac8"
+   },
+   "evidence": "Byte-identical (60 bytes) to 0xfffffe000aec669c of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Compares the MPIDR cluster of the target with this CPU and writes S3_5_C15_C0_0 or S3_5_C15_C0_1 with the immediate IPI type; ml_cpu_signal with ml_cpu_signal_type inlined. Ported from 0xfffffe000a962464: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000ad9a8d4",
+   "native_symbol": "_cluster_max_io_size",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000ad9a8d4",
+    "size": 100,
+    "sha256": "eae23cfa8d529697d68067a7d5433ddf40900e905e94339a25435f067d35ecd4"
+   },
+   "evidence": "Byte-identical (100 bytes) to 0xfffffe000af0a218 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Switches on CL_READ/CL_WRITE, reads mnt_seg/read/write counts, clamps to the UPL size and returns the byte maximum; bsd/vfs/vfs_cluster.c cluster_max_io_size. Ported from 0xfffffe000a9a0f44: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000adb5834",
+   "native_symbol": "_vnode_lookup",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000adb5834",
+    "size": 12,
+    "sha256": "29a3d38acb8a600e9719f081fad28d27a3bb22e4b4d88cbbf6894ca8e48a25eb"
+   },
+   "evidence": "Byte-identical (12 bytes) to 0xfffffe000af25178 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Tail-calls vnode_lookupat with a NULL start directory (x4 = 0), which is the whole body of vnode_lookup."
+  },
+  {
+   "original": "0xfffffe000adc4e50",
+   "native_symbol": "_vnode_getfromfd",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000adc4e50",
+    "size": 16,
+    "sha256": "280c5f2b99aa5f74e694b4c5f97dfb142bca00b1c244b56bc9701163d56a2c58"
+   },
+   "evidence": "Byte-identical (16 bytes) to 0xfffffe000af34790 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Wrapper of the fd-to-vnode helper with both optional outputs NULL: resolves the context proc, looks up the fd vnode, takes an iocount and drops the fileproc, which is vnode_getfromfd(ctx, fd, vpp)."
+  },
+  {
+   "original": "0xfffffe000ade7d1c",
+   "native_symbol": "_vnode_mount",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000ade7d1c",
+    "size": 40,
+    "sha256": "f2870d72e5b1d279b0dbc96d0906f4fae80c28f6b8693a5ae036c2cf9bb37cf1"
+   },
+   "evidence": "Byte-identical (40 bytes) to 0xfffffe000af57664 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Loads vnode.v_mount at +0xd8 and authenticates with address diversity 0xd6ef; returns zero for null. Native has the same field and discriminator, adding an explicit authentication failure trap. Ported from 0xfffffe000a9e9ad4: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000adfe368",
+   "native_symbol": "_throttle_lowpri_window",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000adfe368",
+    "size": 20,
+    "sha256": "6a28371ea3ec3c228feeb1c557116812b1d542111e6695b1e4dc3885f5bc5b73"
+   },
+   "evidence": "Byte-identical (20 bytes) to 0xfffffe000af6dc88 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Reads the current thread through TPIDR_EL1 and returns bit 0 of byte +0x741, the original uu_lowpri_window. Matches bsd/miscfs/specfs/spec_vnops.c throttle_lowpri_window. Also cross-checked with the retained import and RELEASE-LTO pairing; recovery provenance: prelink-recovery-2026-11-02."
+  },
+  {
+   "original": "0xfffffe000b0b23ec",
+   "native_symbol": "_get_aiotask",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b0b23ec",
+    "size": 16,
+    "sha256": "63f7baef323892990578a57f6f1fa48d54de1f990c7b9d95c9036bbd3fa539c5"
+   },
+   "evidence": "Byte-identical (16 bytes) to 0xfffffe000b221130 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: BTI; MRS TPIDR_EL1; LDR x0,[x8,#0x708]; RET. The RELEASE reference _get_aiotask has the same thread-relative accessor with its source-layout offset 0x6b8. Source bsd/kern/kern_aio.c returns current_uthread()->uu_aio_task; IOMediaBSDClient.cpp DKR_GET_TASK calls get_aiotask then falls back to current_task. Previous verified mapping and retained IOStorageFamily import agree on this identity. Resolve the native accessor by symbol; do not copy the original thread offset."
+  },
+  {
+   "original": "0xfffffe000b0b7f78",
+   "native_symbol": "_csblob_get_teamid",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b0b7f78",
+    "size": 12,
+    "sha256": "63cde01bb8c9e69852cf127f51f7c2829441ae34eb25375701b8b284fbe6999d"
+   },
+   "evidence": "Byte-identical (12 bytes) to 0xfffffe000b226cbc of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Returns cs_blob+0xb8, which in the Darwin 26 cs_blob is csb_teamid (cdhash grew to a 64-byte hash plus length, so every field from csb_hashtype on moved by 0x30: hashtype 0xa0, cd 0xb0, teamid 0xb8). Reference-symbol matched it to csblob_get_auxiliary_info only because native csb_auxiliary_info is also at 0xb8."
+  },
+  {
+   "original": "0xfffffe000b0b7ff4",
+   "native_symbol": "_csblob_get_cdhash_with_length",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b0b7ff4",
+    "size": 24,
+    "sha256": "55fc722c4e7aeef40a42998c29c096e4531cf112df3d45b004ff42983b6c817b"
+   },
+   "evidence": "Byte-identical (24 bytes) to 0xfffffe000b226d38 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Darwin 26 KPI: returns cs_blob+0x58 (the cdhash) and stores the cdhash length byte from +0x98; AMFI uses that length (<= 64) to format and compare cdhashes. Name chosen here; darwin26-kpi.patch returns CS_CDHASH_LEN."
+  },
+  {
+   "original": "0xfffffe000b0b810c",
+   "native_symbol": "_csblob_get_auxiliary_info",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b0b810c",
+    "size": 12,
+    "sha256": "b1dd9ff5da120675b30fe49ec40f25bc388cdcc25b41e78970f2afa692ec8278"
+   },
+   "evidence": "Byte-identical (12 bytes) to 0xfffffe000b226e50 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Returns cs_blob+0xe8, the Darwin 26 csb_auxiliary_info (native 0xb8 + 0x30); follows csblob_set_auxiliary_info, which stores the same field."
+  },
+  {
+   "original": "0xfffffe000b0b8118",
+   "native_symbol": "_csblob_get_trust_level",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b0b8118",
+    "size": 44,
+    "sha256": "27af5a91eea6ca97fe28e565647e8bdd6554df4be3de7ddd7c9b87b64897b1cc"
+   },
+   "evidence": "Byte-identical (44 bytes) to 0xfffffe000b226e5c of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Returns the code signing monitor trust level when csb_csm_obj is set, else -1; this kernel has no monitor and native returns -1."
+  },
+  {
+   "original": "0xfffffe000b0b81bc",
+   "native_symbol": "_csblob_os_entitlements_set",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b0b81bc",
+    "size": 108,
+    "sha256": "05ac7b80fe3885232a35b7ca81208b3a2c32902854d78134e208573a97af6090"
+   },
+   "evidence": "Byte-identical (108 bytes) to 0xfffffe000b226f00 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Retains the OSEntitlements object and stores it signed (discriminator 0xaa50, cs_blob.csb_entitlements) at cs_blob+0xd0 (native 0xa0 + 0x30)."
+  },
+  {
+   "original": "0xfffffe000b0b8228",
+   "native_symbol": "_csblob_os_entitlements_copy",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b0b8228",
+    "size": 120,
+    "sha256": "6065c9bb1851703369b5919a351e53c39394d2c3e0518baa77eb6c4ef00331d8"
+   },
+   "evidence": "Byte-identical (120 bytes) to 0xfffffe000b226f6c of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Loads csb_entitlements (0xaa50) at cs_blob+0xd0, retains and returns it."
+  },
+  {
+   "original": "0xfffffe000b0b82a0",
+   "native_symbol": "_csblob_os_entitlements_get",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b0b82a0",
+    "size": 40,
+    "sha256": "1ecc214dee130bb7a58957a3be0129b27e0fab4b059ea7e9d6086dce595bb06b"
+   },
+   "evidence": "Byte-identical (40 bytes) to 0xfffffe000b226fe4 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Returns the authenticated csb_entitlements (0xaa50) at cs_blob+0xd0 without retaining it."
+  },
+  {
+   "original": "0xfffffe000b0f4a70",
+   "native_symbol": "_proc_task",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b0f4a70",
+    "size": 24,
+    "sha256": "aea2b55f8d66abe630c162c148a2eace9021fda1be01b90575a43db9d1b38486"
+   },
+   "evidence": "Byte-identical (24 bytes) to 0xfffffe000b263760 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Returns the task placed after the proc unless the proc flag P_LHASTASK is clear; same test and select as native proc_task."
+  },
+  {
+   "original": "0xfffffe000b11326c",
+   "native_symbol": "_sysctl_handle_opaque",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b11326c",
+    "size": 128,
+    "sha256": "6a60420abb167cd0490c14ac86d48fd70d4112284df11dde1489d7b4921c0078"
+   },
+   "evidence": "Byte-identical (128 bytes) to 0xfffffe000b281f18 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Calls req->oldfunc (SYSCTL_OUT of arg1/arg2), then req->newfunc when req->newptr is set (SYSCTL_IN). Source: bsd/kern/kern_newsysctl.c sysctl_handle_opaque. Ported from 0xfffffe000acf992c: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000b12c15c",
+   "native_symbol": "_mbuf_datastart",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b12c15c",
+    "size": 48,
+    "sha256": "5487a428059967eb73ab77fef42a7d891f13c33f388e803d39e313fe761c2ecb"
+   },
+   "evidence": "Byte-identical (48 bytes) to 0xfffffe000b29ae08 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Returns the M_EXT buffer start or the inline packet data at +0xe0, as native mbuf_datastart does. AppleUSBDeviceMux pairs it with mbuf_maxlen for each scatter-gather segment of a USB read."
+  },
+  {
+   "original": "0xfffffe000b12c18c",
+   "native_symbol": "_mbuf_setdata",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b12c18c",
+    "size": 104,
+    "sha256": "285c9b9309942b3c4735e49887e8763b8621a032c6359ba78ac586e4dcb03b86"
+   },
+   "evidence": "Byte-identical (104 bytes) to 0xfffffe000b29ae38 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: (mbuf, data, len): returns EINVAL when data precedes the buffer start or data + len passes its end, then stores m_data and m_len. AppleUSBDeviceMux calls it with the mbuf_datastart result and the transfer length, as bsd/kern/kpi_mbuf.c mbuf_setdata does."
+  },
+  {
+   "original": "0xfffffe000b130598",
+   "native_symbol": "_check_trust_cache_runtime_for_uuid",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b130598",
+    "size": 128,
+    "sha256": "b8cff8e7ab9b98cdef4fdfcd04c0001ec93046a2e9f6205a9320c6dc44a80df4"
+   },
+   "evidence": "Byte-identical (128 bytes) to 0xfffffe000b29f244 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: kern_trustcache.c source order between trust_cache_runtime_init and unload_trust_cache, both paired; called by AMFI. Source: bsd/kern/kern_trustcache.c check_trust_cache_runtime_for_uuid."
+  },
+  {
+   "original": "0xfffffe000b131688",
+   "native_symbol": "_enable_developer_mode",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b131688",
+    "size": 80,
+    "sha256": "a3f530d39af28ef4ea1cd11e4dc94ecf28d2737e5dc9c7125214308264b30e93"
+   },
+   "evidence": "Byte-identical (80 bytes) to 0xfffffe000b2a0334 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: kern_codesigning.c source order between secure_channel_shared_page and developer_mode_state; TXM wrapper in original, XNU body in native Ported from 0xfffffe000ad16920: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000b1316d8",
+   "native_symbol": "_disable_developer_mode",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b1316d8",
+    "size": 80,
+    "sha256": "4e99366350e62ef486e85d8d17359dfdec7df6c65f63c7743d649d4f75780a08"
+   },
+   "evidence": "Byte-identical (80 bytes) to 0xfffffe000b2a0384 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: kern_codesigning.c source order after enable_developer_mode, before developer_mode_state Ported from 0xfffffe000ad16970: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000b1317cc",
+   "native_symbol": "_restricted_execution_mode_enable",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b1317cc",
+    "size": 64,
+    "sha256": "d86db2ac2413609aad06eb2a7d0c6a21a2a2d87cd4f48fd87962a9af23c25d7d"
+   },
+   "evidence": "Byte-identical (64 bytes) to 0xfffffe000b2a0478 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: kern_codesigning.c source order after extended_research_mode_state Ported from 0xfffffe000ad16a64: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000b131838",
+   "native_symbol": "_update_csm_device_state",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b131838",
+    "size": 72,
+    "sha256": "19ceae774bd7f6bb43dadcd6df5a6c442ddaca07affafea6ae5ef412a89bb076"
+   },
+   "evidence": "Byte-identical (72 bytes) to 0xfffffe000b2a04e4 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: kern_codesigning.c source order after restricted_execution_mode_state Ported from 0xfffffe000ad16ad0: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000b132098",
+   "native_symbol": "_set_local_signing_public_key",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b132098",
+    "size": 76,
+    "sha256": "7dd7839a24880ee45caf3e53ae3ee80bce90031855cb5423c8f2abb61d826731"
+   },
+   "evidence": "Byte-identical (76 bytes) to 0xfffffe000b2a0d44 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Sends the key to the code signing monitor (selector 0x1a); native without a monitor stores it in the kernel. Source order after the compilation service cdhash functions."
+  },
+  {
+   "original": "0xfffffe000b1320e4",
+   "native_symbol": "_get_local_signing_public_key",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b1320e4",
+    "size": 84,
+    "sha256": "5edc804c650bbfb8af4c580f3ffe9afb983c7c87dd3282718902fe949e687b5e"
+   },
+   "evidence": "Byte-identical (84 bytes) to 0xfffffe000b2a0d90 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Monitor selector 0x1b returning the key pointer or NULL; native returns the kernel copy."
+  },
+  {
+   "original": "0xfffffe000b132138",
+   "native_symbol": "_unrestrict_local_signing_cdhash_ext",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b132138",
+    "size": 80,
+    "sha256": "092cfe1bc3066d4a919d9eb3f96f09ae6a7e449850f55652d82d40dd5c0a87f6"
+   },
+   "evidence": "Byte-identical (80 bytes) to 0xfffffe000b2a0de4 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Darwin 26 KPI: monitor selector 0x1c with a 64-byte cdhash and its length at +0x40; the 20-byte variant follows it. Name chosen here; implemented in darwin26-kpi.patch (no-op without a monitor, like native)."
+  },
+  {
+   "original": "0xfffffe000b14c500",
+   "native_symbol": "_ttsetwater",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b14c500",
+    "size": 120,
+    "sha256": "5260b67b37ab94954c69f7672279a03bd590057c419a19619142e0caccd33867"
+   },
+   "evidence": "Byte-identical (120 bytes) to 0xfffffe000b2bb0b8 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Reads t_ospeed at +0x190, computes cps = speed / 10, stores t_lowat at +0x1d0 clamped to 32..256 with cps / 2 semantics, then t_hiwat clamped to 144..2064 and rounded by CBSIZE. Source bsd/kern/tty.c ttsetwater, between ttnread and ttyselect. IOSerialFamily calls it from its termios setup."
+  },
+  {
+   "original": "0xfffffe000b265694",
+   "native_symbol": "__ZN15OSMetaClassBase9_ptmf2ptfEPKS_MS_FvvE",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b265694",
+    "size": 44,
+    "sha256": "3971e56900712fa76cce868f1185032e7962503cdd820fbef04fb9e07fec3312"
+   },
+   "evidence": "Byte-identical (44 bytes) to 0xfffffe000b3d2e50 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Nonzero member pointer x1 is authenticated with type discriminator 0xa83d and resigned with function discriminator 0x4a27. Native uses the same PAC keys and discriminators, plus an explicit authentication failure trap. Source: OSMetaClass.cpp feature ptrauth_member_function_pointer_type_discrimination. Ported from 0xfffffe000ae4082c: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000b266a30",
+   "native_symbol": "__ZNK11OSMetaClass19instanceConstructedEv",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b266a30",
+    "size": 32,
+    "sha256": "e70e74087d15950f6d653a8c12e0f94d6e1f52df3029a5c79731e3d28426d67d"
+   },
+   "evidence": "Byte-identical (32 bytes) to 0xfffffe000b3d41ec of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Atomic increment of instanceCount at +0x24; on zero-to-one follows superClassLink at +0x10 and repeats. Native uses OSIncrementAtomic, original uses LDADD. Source: OSMetaClass.cpp:985. Ported from 0xfffffe000ae41be4: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000b2721c8",
+   "native_symbol": "__ZN12OSDictionary14iterateObjectsEU13block_pointerFbPK8OSSymbolP8OSObjectE",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b2721c8",
+    "size": 212,
+    "sha256": "c1bd9b345dd7ec9dcbb569ea808c1f018a7cc550f47fe2dd2a2176114a25f442"
+   },
+   "evidence": "Byte-identical (212 bytes) to 0xfffffe000b3df984 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: After the OSDictionary setObject overloads as in OSDictionary.cpp: walks count (+0x14) key/value pairs calling the block (invoke at +0x10) and stops on a true return or an updateStamp change, which is iterateObjects(block) with the refcon variant inlined. Sandbox, IOHIDFamily, IOSurface and IOAVFamily call it."
+  },
+  {
+   "original": "0xfffffe000b331bb0",
+   "native_symbol": "__ZN13IOCommandGate6enableEv",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b331bb0",
+    "size": 204,
+    "sha256": "d878336857264b23ebaf3df0c03e539a8cf3e960a07994d9e0d2cfebb8d18022"
+   },
+   "evidence": "Byte-identical (204 bytes) to 0xfffffe000b49f1f4 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Original and native __ZTV13IOCommandGate have this method at slot 0xc0 with matching authenticated-pointer key, address diversity and discriminator 39702. The table identity is present in the LTO-only map before this anchor is added. Also cross-checked with the retained import and RELEASE-LTO pairing; recovery provenance: prelink-recovery-2026-11-02."
+  },
+  {
+   "original": "0xfffffe000b331e60",
+   "native_symbol": "__ZN13IOCommandGate4freeEv",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b331e60",
+    "size": 84,
+    "sha256": "478722a855256439c3d61eb1b5784635607021f121b0cba5f4a5ff958e3a25fb"
+   },
+   "evidence": "Byte-identical (84 bytes) to 0xfffffe000b49f4a4 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Original and native __ZTV13IOCommandGate have this method at slot 0x80 with matching authenticated-pointer key, address diversity and discriminator 60869. The table identity is present in the LTO-only map before this anchor is added. Also cross-checked with the retained import and RELEASE-LTO pairing; recovery provenance: prelink-recovery-2026-11-02."
+  },
+  {
+   "original": "0xfffffe000b336310",
+   "native_symbol": "__ZN18IOTimerEventSource10setTimeoutEjyy",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b336310",
+    "size": 116,
+    "sha256": "452624f62e4a6de1da4d896d9f06bac69867c00bec9930f94cec16525df33e14"
+   },
+   "evidence": "Byte-identical (116 bytes) to 0xfffffe000b4a3954 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Original and native __ZTV18IOTimerEventSource have this method at slot 0x158 with matching authenticated-pointer key, address diversity and discriminator 41656. The table identity is present in the LTO-only map before this anchor is added. Also cross-checked with the retained import and RELEASE-LTO pairing; recovery provenance: prelink-recovery-2026-11-02."
+  },
+  {
+   "original": "0xfffffe000b336d38",
+   "native_symbol": "__ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b336d38",
+    "size": 160,
+    "sha256": "b5bd5cc51dc45c4b6f6df0b6184674a88a225eacfd9e33591b640e9b80b22f3c"
+   },
+   "evidence": "Byte-identical (160 bytes) to 0xfffffe000b4a437c of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Original and native __ZTV18IOTimerEventSource have this method at slot 0x98 with matching authenticated-pointer key, address diversity and discriminator 45898. The table identity is present in the LTO-only map before this anchor is added. Also cross-checked with the retained import and RELEASE-LTO pairing; recovery provenance: prelink-recovery-2026-11-02."
+  },
+  {
+   "original": "0xfffffe000b336dd8",
+   "native_symbol": "__ZN18IOTimerEventSource12checkForWorkEv",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b336dd8",
+    "size": 88,
+    "sha256": "cf4502445c963b91d2ed55403f1fad9594fb67d4bf7c34ed84371970bc38cc52"
+   },
+   "evidence": "Byte-identical (88 bytes) to 0xfffffe000b4a441c of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Original and native __ZTV18IOTimerEventSource have this method at slot 0x90 with matching authenticated-pointer key, address diversity and discriminator 9038. The table identity is present in the LTO-only map before this anchor is added. Also cross-checked with the retained import and RELEASE-LTO pairing; recovery provenance: prelink-recovery-2026-11-02."
+  },
+  {
+   "original": "0xfffffe000b339b18",
+   "native_symbol": "__ZN12IODMACommand12OutputHost32EPS_NS_9Segment64EPvj",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b339b18",
+    "size": 40,
+    "sha256": "9128c527e2274be1c86889c9e538f6a2b1041517fd46c2d71a00945e22450866"
+   },
+   "evidence": "Byte-identical (40 bytes) to 0xfffffe000b4a715c of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Stores the 32-bit address and length unswapped at segments[index] and returns true; OutputHost32 and OutputLittle32 have this body on a little-endian host (folded). Ported from 0xfffffe000af118c4: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000b33cc64",
+   "native_symbol": "__ZN12IODMACommand12OutputHost64EPS_NS_9Segment64EPvj",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b33cc64",
+    "size": 40,
+    "sha256": "7b4649bc8eb8ed3ae87fb5efc6a734390f930bb9ee32b58efc1482d1265ef750"
+   },
+   "evidence": "Byte-identical (40 bytes) to 0xfffffe000b4aa2a8 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Stores the 64-bit address and length unswapped at segments[index] and returns true; OutputHost64 and OutputLittle64 have this body on a little-endian host (folded). Ported from 0xfffffe000af14a3c: identical masked instruction shape and strings."
+  },
+  {
+   "original": "0xfffffe000b35b218",
+   "native_symbol": "__ZNK5IOCPU19serializePropertiesEP11OSSerialize",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b35b218",
+    "size": 188,
+    "sha256": "49d1e76b881dd6b4adb868582b7836f8d691c36aff50461032833a3169db2e2c"
+   },
+   "evidence": "Byte-identical (188 bytes) to 0xfffffe000b4c8844 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Original and native __ZTV5IOCPU have this method at slot 0x168 with matching authenticated-pointer key, address diversity and discriminator 215. The table identity is present in the LTO-only map before this anchor is added. Also cross-checked with the retained import and RELEASE-LTO pairing; recovery provenance: prelink-recovery-2026-11-02."
+  },
+  {
+   "original": "0xfffffe000b387778",
+   "native_symbol": "_IOCircularDataQueueCopyLatest",
+   "ported": true,
+   "optional": true,
+   "check": {
+    "address": "0xfffffe000b387778",
+    "size": 68,
+    "sha256": "733c3d1deeb6a84f14f002c6bc55029f14eadbd3c09935b3cf0bde76e4a06179"
+   },
+   "evidence": "Byte-identical (68 bytes) to 0xfffffe000b4f4d64 of the iPad kernelcache (38e6d9fa5f78), reviewed in XnuPrelink's fileset-24A446-symbols.json: Same 68-byte instruction shape as the rebuilt LTO RELEASE symbol: null queue returns kIOReturnBadArgument (0xe00002c2); otherwise takes the address of the stack copy of data and calls _getLatestInQueueMemInternal with w3=1 (copy). Source IOCircularDataQueueImplementation.h copyLatestInQueueMem/IOCircularDataQueueCopyLatest; consumer IOFastPathHIDLEDService::timerCallback in IOHIDFamily calls this API and logs its name. Previously reference-order; rebuilding the adapter archives changed reference layout and dropped that inference."
+  }
+ ],
+ "data": [
+  {
+   "original": "0xfffffe0007df0ac8",
+   "native_symbol": "_PAGE_SHIFT_CONST",
+   "sections": [
+    "__DATA_CONST,__const",
+    "__DATA_CONST,__const"
+   ],
+   "evidence": "Read as a 32-bit shift count by AMFI's stack check above (0xfffffe000923fcc8) and zero in the file (set at boot): PAGE_SHIFT_CONST. The matcher left it unpaired."
+  }
+ ]
+}

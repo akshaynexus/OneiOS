@@ -1,0 +1,42 @@
+diff --git a/libkern/c++/OSKext.cpp b/libkern/c++/OSKext.cpp
+index b921bd8..06f606b 100644
+--- a/libkern/c++/OSKext.cpp
++++ b/libkern/c++/OSKext.cpp
+@@ -8505,7 +8505,12 @@ OSKext::start(bool startDependenciesFlag)
+ 		bool executable = false;
+ 		if (!earlyInit || !isPrelinked() || mac_late ||
+ 		    getPropertyForHostArch(kAppleSecurityExtensionKey) != kOSBooleanTrue ||
++#if XNU_HOSTED
++		    /* OneiOS hosted: the collection is linked high and runs low; link address + slide wraps by design. */
++		    ((target = (uintptr_t)earlyInit->unsigned64BitValue() + vm_kernel_slide), false) ||
++#else
+ 		    __builtin_add_overflow((uintptr_t)earlyInit->unsigned64BitValue(), vm_kernel_slide, &target) ||
++#endif
+ 		    (target & 3)) {
+ 			panic("NativePrelink: invalid early security initializer or phase for %s", getIdentifierCString());
+ 		}
+diff --git a/osfmk/prng/prng_random.c b/osfmk/prng/prng_random.c
+index 310719a..7f35aa0 100644
+--- a/osfmk/prng/prng_random.c
++++ b/osfmk/prng/prng_random.c
+@@ -606,7 +606,20 @@ source_corecrypto14_bootstrap(void)
+ 	}
+ 	kmod_info_t *original = source_corecrypto14_original();
+ 	if (original != NULL) {
++#if XNU_HOSTED
++		/*
++		 * OneiOS hosted: this start runs before OSKext has seen the collection, and kmod_info.address is the one
++		 * field of a prelinked kmod_info outside the fixup chains: OSKext adds the slide to it when it adopts the
++		 * kext (OSKext.cpp, "kaslr: unslid"). Original corecrypto reads its own Mach-O header through it in its
++		 * integrity self-test. The slide is not zero under xnuhost, so lend it the slid address for the call.
++		 */
++		extern vm_offset_t vm_kernel_slide;
++		original->address += vm_kernel_slide;
+ 		source_corecrypto14_status = source_corecrypto14_start_once(original, NULL);
++		original->address -= vm_kernel_slide;
++#else
++		source_corecrypto14_status = source_corecrypto14_start_once(original, NULL);
++#endif
+ 		if (source_corecrypto14_status != KERN_SUCCESS) {
+ 			panic("original corecrypto initialization failed: %d", source_corecrypto14_status);
+ 		}

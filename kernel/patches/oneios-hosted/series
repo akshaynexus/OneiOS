@@ -11,3 +11,6 @@
 # the launch policy; with storage/ (the block driver archive) and the owner-root options of the hosted defconfig.
 # Made on top of the four above it in a tree with 0001, 0003, 0002 and 0005; builds after 0006. 0004-README.md.
 0004-root-mount-launchd.patch
+# fable-prelink: two places that add the collection slide to a prelinked kext address (zero on UniXNU boards, not here):
+# the early start of original corecrypto, and the overflow check of AMFI's early security initializer.
+0007-prelink-kext-start.patch
