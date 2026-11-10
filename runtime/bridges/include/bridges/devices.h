@@ -7,6 +7,7 @@
 #define ONEIOS_BRIDGE_DEVICES_H
 
 #include "bridges/bridges.h"
+#include "../../brightness/brightness.h"
 #include "xnuhost.h"
 
 // "oneios,bridge": the message channel of drivers/bridge (haptics, Bluetooth HCI).
@@ -16,6 +17,7 @@ typedef struct {
   // the HCI channel is not served.
   br_hci *(*hci_factory)(br_hci_rx_fn rx, br_hci_state_fn state, void *ctx);
   const char *bt_address_path;            // default /mnt/vendor/efs/bluetooth/bt_addr
+  br_bright *brightness;                  // NULL: the brightness channel is not served (br_bright_open)
 } br_bridge_config;
 xh_virtio *br_bridge_create(uint64_t base, unsigned spi, const br_bridge_config *config);
 

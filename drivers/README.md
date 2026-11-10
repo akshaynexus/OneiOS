@@ -10,6 +10,7 @@ These sources are built into the kernel (not loaded later). Each talks to its ho
 | `bridge/` | `oneios_bridge_proto.h` (the message protocol, shared with xnuhost), `OneiOSBridge.c` (the guest end of the `oneios,bridge` virtio-mmio device), `oneios_bridge.h` (the API the drivers below use) | new; the transport follows UniXNU-droidvm's `DroidVMVirtioNet.c` |
 | `haptics/` | `OneiOSVibrator.cpp` (the `vibrator` IOService and the closed-loop node), `oneios_haptic.c` (the Actuator stream node, requests to the host) | iOSPlus10 `2700-laurel-pmi632-haptics.patch`: the iOS side as is, the PMI632 motor replaced by the host |
 | `bluetooth/` | bluetoothd's transport: `oneios_bt_ctl.c` (kernel control), `oneios_bt_dev.c` (`/dev` nodes), `oneios_bt_h4.c` (framing, answers), `oneios_bt_ios.c` (core), `oneios_bt.c` (start), `OneiOSBluetooth.cpp` (device-tree nub) | iOSPlus10 `2600-laurel-bluetooth-wcn3990.patch`: the iOS side as is, UART/firmware/power replaced by the host |
+| `brightness/` | `OneiOSBacklight.cpp` (the backlight service CoreBrightness drives; the host's light readings), `oneios_als_hid.h` and `OneiOSALSDevice.cpp` (the light sensor as a HID device; not built) | iOSPlus10 `2201-laurel-backlight-panel-power.patch`, `9005-laurel-backlight-calibration.patch`: the iOS side as is, the DSI panel replaced by the host |
 | `cpu/`, `net/`, `audio/`, `gpu/`, `camera/` | notes only: these use UniXNU-droidvm's drivers unchanged, or are not built yet | `README.md` in each |
 
 ## Build
@@ -34,7 +35,8 @@ command of its universe (Mach, BSD, IOKit) plus `-Wall -Wextra -Werror`. No Appl
    (`cpu/README.md`).
 5. No KernelConfigTables entry, no patch to XNU's `conf/files`: the vibrator service is made by hand.
 
-Boot arguments: `oneios-bridge=0`, `oneios_haptic=0`, `oneios_haptic_ui=0`, `oneios_vib_cap=0`, `oneios_bt=0`.
+Boot arguments: `oneios-bridge=0`, `oneios_haptic=0`, `oneios_haptic_ui=0`, `oneios_vib_cap=0`, `oneios_bt=0`, `oneios_bl=0`,
+`oneios_bl_conform=0`.
 
 ## Device tree (drivers -> booter)
 

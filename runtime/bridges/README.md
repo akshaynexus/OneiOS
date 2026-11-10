@@ -18,6 +18,7 @@ tests/host.sh      # both; CI runs it
 | `net/` | tap back end, the built-in DHCP answer, `oneios-net.sh` (routing and NAT, root) |
 | `bt/` | the Bluetooth HAL (HIDL 1.0/1.1) over `/dev/hwbinder` without Android libraries; packet checks |
 | `audio/` | the back end xnuhost links (`backend.c`) and the AAudio helper process (`aaudio_helper.c` -> `oneios-audio`) |
+| `brightness/` | the panel's backlight (sysfs, the curve, fades, restore), the light sensor `als_rear`, `brightctl` (the phone test); its own `README.md` and `Makefile` |
 | `devices/` | `bridge_dev.c` (`oneios,bridge`), `virtio_net.c` (`droidvm,net`), `virtio_snd.c` (`droidvm,virtio-snd`) |
 | `tools/bridgectl.c` | tries each bridge on the phone without xnuhost (root) |
 | `tests/` | `test_bridges.c`, `host.sh` |

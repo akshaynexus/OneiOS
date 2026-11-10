@@ -40,6 +40,14 @@ void oneios_vibrator_key(int key, int down);      // 0 power, 1 volume up, 2 vol
 // drivers/bluetooth
 void oneios_bt_start(void);
 
+// drivers/brightness
+void oneios_backlight_start(void);
+// The host's last ambient light reading. False until one has come.
+bool oneios_als_read(uint32_t *millilux);
+// fn gets every reading, on the bridge's worker thread. One listener; NULL removes it.
+typedef void (*oneios_als_handler)(void *context, uint32_t millilux);
+void oneios_als_listen(oneios_als_handler fn, void *context);
+
 #ifdef __cplusplus
 }
 #endif

@@ -24,7 +24,7 @@ struct ob_header {
   uint32_t length;                       // payload bytes after the header
 };
 
-enum { OB_CH_CONTROL = 0, OB_CH_HAPTIC = 1, OB_CH_HCI = 2, OB_CH_CAMERA = 3, OB_CH_COUNT = 4 };
+enum { OB_CH_CONTROL = 0, OB_CH_HAPTIC = 1, OB_CH_HCI = 2, OB_CH_CAMERA = 3, OB_CH_BRIGHTNESS = 4, OB_CH_COUNT = 5 };
 
 // ---- control ----------------------------------------------------------------------------------
 // guest -> host OB_CTL_HELLO { u32 version }; host -> guest OB_CTL_HELLO { u32 version, u32 channels }
@@ -53,5 +53,30 @@ enum {
 };
 enum { OB_HCI_STATE_OFF = 0, OB_HCI_STATE_READY = 1, OB_HCI_STATE_FAILED = 2 };
 struct ob_hci_state { uint32_t state; uint8_t bd_addr[6]; uint8_t reserved[2]; };
+
+// ---- brightness (drivers/brightness, runtime/bridges/brightness) ------------------------------
+enum {
+  OB_BRIGHT_SET = 1,                     // guest -> host: struct ob_bright_set
+  OB_BRIGHT_QUERY = 2,                   // guest -> host: no payload; the host answers OB_BRIGHT_STATE
+  OB_BRIGHT_STATE = 3,                   // host -> guest: struct ob_bright_state
+  OB_BRIGHT_ALS = 4,                     // host -> guest: struct ob_bright_als, when the light changes and every 2 s
+};
+enum { OB_BRIGHT_LINEAR = 1u };          // ob_bright_set.flags: the level is a fraction of the light, not of the slider
+enum { OB_BRIGHT_HAS_PANEL = 1u, OB_BRIGHT_HAS_ALS = 2u };      // ob_bright_state.flags
+struct ob_bright_set {
+  uint32_t level;                        // 0..65535 of the panel's range for iOS; 0 is the lowest level, not off
+  uint32_t fade_ms;                      // the host walks to the level in this time; 0 = at once
+  uint32_t flags;                        // OB_BRIGHT_LINEAR
+};
+struct ob_bright_state {
+  uint32_t flags;                        // OB_BRIGHT_HAS_*
+  uint32_t max_nits;                     // the light at level 65535
+  uint32_t min_millinits;                // the light at level 0
+  uint32_t level;                        // where the panel is now on the slider's scale, 0..65535
+};
+struct ob_bright_als {
+  uint32_t millilux;
+  uint32_t clear, ir, uv;                // the sensor's channel counts
+};
 
 #endif

@@ -85,13 +85,31 @@ static void hci_state(void *ctx, int state)
   to_guest(s, OB_CH_HCI, OB_HCI_STATE, &message, sizeof message);
 }
 
+static void bright_state(bridge_state *s)
+{
+  br_bright_info info;
+  br_bright_info_get(s->config.brightness, &info);
+  // The lowest level's light: the floor's share of the range, of max_nits (the node is close to linear in light).
+  uint64_t min_millinits = info.ceiling ? (uint64_t)info.max_nits * 1000u * info.floor / info.ceiling : 0;
+  struct ob_bright_state state = { (info.panel ? OB_BRIGHT_HAS_PANEL : 0) | (info.als ? OB_BRIGHT_HAS_ALS : 0), info.max_nits, (uint32_t)min_millinits,
+                                   br_bright_level(s->config.brightness) };
+  to_guest(s, OB_CH_BRIGHTNESS, OB_BRIGHT_STATE, &state, sizeof state);
+}
+
+static void bright_als(void *ctx, const br_als_sample *sample)
+{
+  struct ob_bright_als als = { sample->millilux, sample->clear, sample->ir, sample->uv };
+  to_guest(ctx, OB_CH_BRIGHTNESS, OB_BRIGHT_ALS, &als, sizeof als);
+}
+
 static void from_guest(bridge_state *s, const struct ob_header *h, const uint8_t *payload)
 {
   switch (h->channel) {
   case OB_CH_CONTROL:
     if (h->type == OB_CTL_HELLO) {
       struct ob_ctl_hello hello = { OB_PROTO_VERSION, 1u << OB_CH_CONTROL | (s->config.haptic ? 1u << OB_CH_HAPTIC : 0) |
-                                                       (s->config.hci_factory ? 1u << OB_CH_HCI : 0) };
+                                                       (s->config.hci_factory ? 1u << OB_CH_HCI : 0) |
+                                                       (s->config.brightness ? 1u << OB_CH_BRIGHTNESS : 0) };
       to_guest(s, OB_CH_CONTROL, OB_CTL_HELLO, &hello, sizeof hello);
     }
     break;
@@ -110,6 +128,17 @@ static void from_guest(bridge_state *s, const struct ob_header *h, const uint8_t
       else if (br_hci_state(s->hci) == OB_HCI_STATE_READY) hci_state(s, OB_HCI_STATE_READY);   // already open: say so again
     } else if (h->type == OB_HCI_CLOSE) { if (s->hci) br_hci_close(s->hci); }
     else if (s->hci && h->type >= OB_HCI_COMMAND && h->type <= OB_HCI_ISO) (void)br_hci_send(s->hci, (uint8_t)h->type, payload, h->length);
+    break;
+  case OB_CH_BRIGHTNESS:
+    if (!s->config.brightness) break;
+    if (h->type == OB_BRIGHT_SET && h->length >= sizeof(struct ob_bright_set)) {
+      struct ob_bright_set set;
+      memcpy(&set, payload, sizeof set);
+      br_bright_set(s->config.brightness, set.level, set.flags & OB_BRIGHT_LINEAR, set.fade_ms);
+    } else if (h->type == OB_BRIGHT_QUERY) {
+      bright_state(s);
+      br_bright_listen(s->config.brightness, bright_als, s);      // light readings from now on
+    }
     break;
   }
 }

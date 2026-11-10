@@ -25,6 +25,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 | Haptics | `drivers/haptics` (port of iOSPlus10's LaurelVibrator and haptic node) | `runtime/bridges/haptics`: evdev force feedback | both built; host tested with a fake actuator |
 | Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp` (unchanged) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | host built and tested with a fake back end; AAudio as root without system_server is [U] |
 | Camera | design only (section 7) | design only | not built |
+| Backlight and light sensor | `drivers/brightness`: the backlight service (port of iOSPlus10's `AppleARMBacklight`), the light readings; the HID light sensor device is written, not built | `runtime/bridges/brightness`: the backlight sysfs node, `als_rear` by evdev, `brightctl` | both built; host tested; never run on the phone or in a session (section 7a) |
 
 Common pieces:
 
@@ -32,9 +33,9 @@ Common pieces:
   `oneios,bridge`, carrying small messages (haptic requests, HCI packets). Guest end `drivers/bridge/OneiOSBridge.c`,
   host end `runtime/bridges/devices/bridge_dev.c`. Devices that already have a virtio driver in UniXNU-droidvm
   (network, sound) use standard virtio devices instead.
-- **Tests**: `runtime/bridges/tests/host.sh` (CI runs it): 170 checks with ASan and UBSan, the virtio devices driven
+- **Tests**: `runtime/bridges/tests/host.sh` (CI runs it): 184 checks (and 48 in `brightness/`) with ASan and UBSan, the virtio devices driven
   through xnuhost's real transport (`runtime/xnuhost/src/virtio.c`) by a guest made of plain memory; then the Android
-  build. `drivers/build.py --check` compiles the nine kernel sources with the kernel build's own compile records
+  build. `drivers/build.py --check` compiles the ten kernel sources with the kernel build's own compile records
   (xnu-12377, arm64e, `-Wall -Wextra -Werror`); the archive's 292 undefined symbols all resolve in `xnu.macho`.
 - **On the phone**: `runtime/bridges/build/android/bridgectl` (static) tries each bridge without xnuhost:
   `bridgectl cpu|haptic|haptic-pattern|bt|net|audio`. It is the first thing to run when the phone is attached.
@@ -372,12 +373,59 @@ FigCaptureDevice with a steady preview stream, a still from the same stream.
   the app layer and is the fallback; it needs an AIDL binder client.
 - [U] whether Samsung's provider serves the 200 MP sensor's binned modes to a plain Camera2 client as on One UI.
 
+## 7a. Panel backlight and ambient light (fable-brightness, 2026-11-11)
+
+Details and the phone test: `runtime/bridges/brightness/README.md`, `drivers/brightness/README.md`.
+
+### The phone
+
+- Panel: `E3_S6E3HAF_AMB679FN01`, command mode, `qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_dcs"`,
+  `qcom,mdss-dsi-bl-min-level = <1>`, `qcom,mdss-brightness-default-level = <0x9f6>` (2550) [F DT lines 9233-9243].
+  The node carries no `bl-max-level` of its own (the `PBA_BOOTING` stand-in panels have 0x639c = 25500 and 0xfff).
+  Brightness is a DCS command that Samsung's panel driver (`ss_dsi_panel`, a vendor module, not in the kernel
+  repository) builds from its candela tables (`samsung,ss_candela_map_table_revA`).
+- The backlight class device: expected `/sys/class/backlight/panel` (Samsung's name; Qualcomm's is
+  `panel0-backlight`) [I, not read on the phone]. `max_brightness` [U]: `brightctl info` prints both.
+- Light: `als_rear` = Sensortek STK6D2x, I2C address 0x47, `stk,als_scale = <1000>` [F DT line 11736,
+  `drivers/optics/stk6d2x_sec.c`, `stk6d2x.h:25`]. Samsung's rear flicker sensor: it faces away from the screen.
+  Off until `1` is written to the input device's `enable` attribute; then one report per frame of its FIFO:
+  `REL_X` infrared, `REL_RX` UV, `REL_RY` clear (each the gain-normalised average + 1), `ABS_Y/Z/RX` the gains
+  (`stk_sec_report`). `/sys/class/sensors/als_rear/` has `als_ir`, `als_clear`, `als_uv`, `als_raw_data`. No lux in
+  this mode; the scale to lux is not calibrated [U].
+- The front light sensor is on the sensor hub (SSC), reachable only through the sensors HAL: not used.
+
+### iOS side (`drivers/brightness`, port of iOSPlus10 `2201-laurel-backlight-panel-power.patch` and `9005-laurel-backlight-calibration.patch`)
+
+- `OneiOSBacklight` (service name `AppleARMBacklight`): `backlight-control`, `IODisplayParameters`, `max-nits`,
+  `min-nits`, `brightness-nits`, `backlight-calibration-parameters`, `backlight-marketing-table`; takes
+  `{brightness, FadePeriod}` and `brightness-nits` and sends `OB_BRIGHT_SET` on the bridge channel.
+- The original `AppleARMBacklight` class is in the kernel collection (AppleARMPlatform) [F kernelcache 24A446], so
+  the class cannot have that name; conformance for CoreBrightness's `IOObjectConformsTo` is made by linking the
+  class under the original's metaclass at run time (`oneios_bl_conform=0` turns it off).
+- Light: `OB_BRIGHT_ALS` readings are kept in the kernel. The way to CoreBrightness is a HID device for the
+  original `AppleUSBALSService` (AppleHIDALSService is in the collection): `OneiOSALSDevice.cpp`, not built.
+
+### The bridge (`runtime/bridges/brightness`)
+
+- Route: the backlight sysfs node as root (no system_server, no surfaceflinger, no binder). Slider squared over
+  `1..ceiling`; never 0; One UI's value written back at the stop.
+- `als_rear` read by evdev without a grab; clear counts x `ONEIOS_ALS_SCALE` millilux.
+
+### Missing, unknown
+
+- [U] everything on the phone: the node's name and range, writing it in the session's namespace, the sensor's
+  `enable` file, the counts in known light.
+- [U] everything in iOS: no session reaches backboardd yet.
+- The HID light sensor device is not built; auto-brightness has no input until it is. A rear sensor is a poor
+  input for it in any case (dark when the phone lies face up).
+- iOS's `IOMFBBrightnessLevel` on the framebuffer is not handled here (the display driver is UniXNU-droidvm's).
+
 ## 8. Sources
 
 | What | Repository and commit |
 |---|---|
 | Stock device trees (decompiled): CPUs, haptics, audio, Wi-Fi, Bluetooth, camera slots | [samsung-sm8650/android_kernel_samsung_sm8650-devicetrees@2f6a973](https://github.com/samsung-sm8650/android_kernel_samsung_sm8650-devicetrees/tree/2f6a9734e556f2f7680b0094bec4ad4671157f8b) (`samsung/e3q_eur_openx_w00_r09.dts`, `qcom/pineapple-v2.dts`) |
-| Samsung's kernel source: CS40L26 and sec_vib_inputff drivers, `e3q_defconfig` | [samsung-sm8650/android_kernel_samsung_sm8650@809f7ed](https://github.com/samsung-sm8650/android_kernel_samsung_sm8650/tree/809f7edaad95be2f60ce09f577fe5104d8940214) |
+| Samsung's kernel source: CS40L26 and sec_vib_inputff drivers, `e3q_defconfig`, `drivers/optics/stk6d2x*.c` (the light sensor) | [samsung-sm8650/android_kernel_samsung_sm8650@809f7ed](https://github.com/samsung-sm8650/android_kernel_samsung_sm8650/tree/809f7edaad95be2f60ce09f577fe5104d8940214) |
 | Common device tree: HAL binaries (Bluetooth HIDL 1.1, vibrator service, camera provider, sensor modules) | [samsung-sm8650/android_device_samsung_sm8650-common@48c66f6](https://github.com/samsung-sm8650/android_device_samsung_sm8650-common/tree/48c66f6543b31784fce4e7d23ea855897f18ce6e) |
 | e3q device tree: Wi-Fi and Bluetooth firmware names | [samsung-sm8650/android_device_samsung_e3q@fb2ba30](https://github.com/samsung-sm8650/android_device_samsung_e3q/tree/fb2ba3010d59c0f38ddf81aef7fd9c78e2172860) |
 | Other trees seen, not used: Samsung OSS builds with KernelSU, the Gunyah kernel | `YuzakiKokuban/android_kernel_samsung_sm8650` (7c7f8dd), `Andy312432/android_kernel_samsung_sm8650_gunyah` (bacbd93) |

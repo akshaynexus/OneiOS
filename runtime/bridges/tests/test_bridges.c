@@ -533,6 +533,52 @@ static void test_bridge_device(const char *tmp)
   br_haptic_close(haptic);
 }
 
+// The brightness channel: the hello's bit, the state answer, a set that reaches the panel's node.
+static void test_bridge_brightness(const char *tmp)
+{
+  char dir[400], panel[440], path[480];
+  snprintf(dir, sizeof dir, "%s/backlight", tmp);
+  snprintf(panel, sizeof panel, "%s/panel", dir);
+  mkdir(dir, 0755); mkdir(panel, 0755);
+  snprintf(path, sizeof path, "%s/max_brightness", panel);
+  FILE *f = fopen(path, "w"); fputs("510\n", f); fclose(f);
+  snprintf(path, sizeof path, "%s/brightness", panel);
+  f = fopen(path, "w"); fputs("100\n", f); fclose(f);
+  br_bright_options options = { .backlight_dir = dir, .no_als = true, .max_nits = 500 };
+  br_bright *bright = br_bright_open(&options);
+  CHECK(bright != NULL);
+  br_bridge_config config = { .brightness = bright };
+  xh_virtio *dev = br_bridge_create(0, 41, &config);
+  CHECK(dev != NULL);
+  guest g;
+  guest_up(&g, dev, 2, 0);
+  static uint8_t rx[2][OB_MAX_MESSAGE];
+  for (unsigned i = 0; i < 2; i++) post1(&g, OB_QUEUE_RX, rx[i], OB_MAX_MESSAGE, true);
+  struct ob_ctl_hello hello = { OB_PROTO_VERSION, 0 };
+  send_message(&g, OB_CH_CONTROL, OB_CTL_HELLO, &hello, sizeof hello);
+  CHECK(reap(&g, OB_QUEUE_RX) == 16);
+  memcpy(&hello, rx[0] + 8, 8);
+  CHECK(hello.channels == (1u << OB_CH_CONTROL | 1u << OB_CH_BRIGHTNESS));
+  send_message(&g, OB_CH_BRIGHTNESS, OB_BRIGHT_QUERY, NULL, 0);
+  CHECK(reap(&g, OB_QUEUE_RX) == 8 + (int)sizeof(struct ob_bright_state));
+  struct ob_header header;
+  struct ob_bright_state state;
+  memcpy(&header, rx[1], 8); memcpy(&state, rx[1] + 8, sizeof state);
+  CHECK(header.channel == OB_CH_BRIGHTNESS && header.type == OB_BRIGHT_STATE && state.flags == OB_BRIGHT_HAS_PANEL && state.max_nits == 500);
+  CHECK(state.min_millinits == 500000 / 255 && state.level > 40000 && state.level < 42000);     // 100 of 255, the square root
+  struct ob_bright_set set = { 65535, 0, 0 };
+  send_message(&g, OB_CH_BRIGHTNESS, OB_BRIGHT_SET, &set, sizeof set);
+  struct ob_bright_set shortened = { 0, 0, 0 };
+  send_message(&g, OB_CH_BRIGHTNESS, OB_BRIGHT_SET, &shortened, 4);          // too short: ignored
+  usleep(100000);
+  CHECK(br_bright_current(bright) == 255);
+  br_bright_close(bright);
+  f = fopen(path, "r");
+  unsigned back = 0;
+  CHECK(f && fscanf(f, "%u", &back) == 1 && back == 100);
+  if (f) fclose(f);
+}
+
 static rx_record wire;
 static br_net *wire_net;
 static br_net_rx_fn guest_rx;
@@ -673,6 +719,7 @@ int main(void)
   test_net();
   test_bt(tmp);
   test_bridge_device(tmp);
+  test_bridge_brightness(tmp);
   test_net_device();
   test_snd_device();
   char cmd[300];

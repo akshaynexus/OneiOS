@@ -317,4 +317,5 @@ void oneios_drivers_start(void) {
     (void)oneios_haptic_start();
     oneios_vibrator_start();
     oneios_bt_start();
+    oneios_backlight_start();
 }

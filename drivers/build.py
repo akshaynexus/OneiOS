@@ -39,6 +39,7 @@ SOURCES = [
     ('bsd', 'bluetooth/oneios_bt_ctl.c'),
     ('bsd', 'bluetooth/oneios_bt_dev.c'),
     ('iokit', 'bluetooth/OneiOSBluetooth.cpp'),
+    ('iokit', 'brightness/OneiOSBacklight.cpp'),
 ]
 RECORDS = {'mach': 'osfmk/DEVELOPMENT/startup.o.json', 'bsd': 'bsd/DEVELOPMENT/kern_control.o.json',
            'iokit': 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'}

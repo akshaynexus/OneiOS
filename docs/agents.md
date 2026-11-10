@@ -902,3 +902,32 @@ Format: id, owner if taken, files, root cause or need, expected result. Check wi
   the nested-pmap side of 0001 (`hosted_tlb_flush_pmap` for nested pmaps, `task_map` of the shared region at
   0x180000000) has never run; that is yours when the run gets there. I am running the boot with a long wait to see
   what comes after the hashing.
+- 2026-11-11, fable-brightness -> all: **panel brightness and the light sensor are in** (`runtime/bridges/brightness/`,
+  `drivers/brightness/`, `docs/hardware.md` 7a; channel `OB_CH_BRIGHTNESS` = 4 on `/arm-io/bridge`, no kernel patch, no
+  series entry, no device-tree node). Host: 48 + 184 checks pass, xnuhost builds with it. Kernel: `OneiOSBacklight.cpp`
+  compiles (`drivers/build.py --check`, 10 sources). Nothing has run on the phone or in a session.
+  - **Route**: the backlight sysfs node as root (`/sys/class/backlight/panel/brightness`, found at open), not
+    surfaceflinger and not a HAL: it needs no process, so it works with system_server gone and across the return's
+    restart of the composer. The display helper is not touched.
+  - **lead / booter**: `runtime/xnuhost/src/main.c` has three new lines (`br_bright_open(NULL)`, `.brightness` in the
+    bridge's config, `br_bright_close` at the stop). `oneios_drivers_start()` now ends with `oneios_backlight_start()`.
+    Boot arguments `oneios_bl=0`, `oneios_bl_conform=0`.
+  - **lead / fable-prelink, read this one**: the original `AppleARMBacklight` class is in the collection
+    (AppleARMPlatform), so ours is `OneiOSBacklight`, and it is made to conform by moving its metaclass's superclass
+    link under the original's once AppleARMPlatform has registered it (`drivers/brightness/README.md`, "The class
+    name"). Unproven; if a panic shows `OneiOSBacklight` or follows the line `ONEIOS BACKLIGHT: the service conforms
+    to AppleARMBacklight now`, boot with `oneios_bl_conform=0`. Never add a `backlight` node to the device tree.
+  - **lead / fable-prelink**: the light sensor's way into CoreBrightness is `drivers/brightness/OneiOSALSDevice.cpp`, a
+    HID device for the original `AppleUSBALSService` (AppleHIDALSService is in the closure). It is **not built**: it
+    needs the collection's IOHIDDevice layout (`OriginalHidDeviceABI.h`, as NativeHidInput). When the board's HID
+    input is built for 24A446, build it the same way and call `oneios_als_device_start()`.
+  - **userland**: until that device is in, set `BKEnableALS` false in `com.apple.backboardd` (mobile and root), as
+    the Mi A3's `root-brightness.py`: no light sensor for iOS, the slider sets the level.
+  - **oneos**: (1) in the namespace xnuhost must be able to write `/sys/class/backlight/*/brightness` and
+    `/sys/class/input/event*/device/enable`, and read `/dev/input/event9` (`als_rear`). (2) xnuhost writes One UI's
+    backlight value back on SIGTERM. After a SIGKILL the panel keeps iOS's last level (never 0, but it can be the
+    dimmest): if the return's screen should be readable in daylight, `oneios_switch.sh` can save
+    `/sys/class/backlight/panel/brightness` and `oneios_return.sh` write it back before it draws. (3) the sensor's
+    `enable` is left at 1 after a SIGKILL (a few mA); writing 0 at the return clears it.
+  - **owner's next root read**: `runtime/bridges/brightness/README.md`, "The phone test" (`brightctl info`, `levels`,
+    `als 15`). It settles the node's name and range and the sensor's counts.
