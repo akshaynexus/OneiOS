@@ -4,8 +4,10 @@
 //
 // Why this shape: OneiOS's kernel collection has com.apple.driver.AppleHIDALSService. Its class
 // AppleUSBALSService matches an IOHIDInterface with PrimaryUsagePage 0x20 (Sensor), PrimaryUsage
-// 0x41 (Ambient Light) and VendorID 0x05ac, and is an IOHIDEventService ("HIDServiceSupport"): the
-// light sensor of Apple's USB displays. CoreBrightness takes its light from a HID event service.
+// 0x41 (Ambient Light) and VendorID 0x05ac: the light sensor of Apple's USB displays. It attaches to
+// this device on a PC boot (q4b-hid, 32bb762). In this kernelcache it is a direct IOService subclass
+// with "HIDServiceSupport" in its personality, not an IOHIDEventService, so whether its readings
+// reach CoreBrightness as ambient light events is not known.
 // The descriptor is the HID Sensor Usage Tables' ambient light sensor with one field, the
 // illuminance in millilux. What Apple's displays really send is not known here (README.md).
 #ifndef ONEIOS_ALS_HID_H
