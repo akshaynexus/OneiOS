@@ -51,3 +51,8 @@
 # Metal's kernel side (the AGXAccelerator under the collection's IOAcceleratorES, AGXDeviceUserClient) is in the GPU
 # archive of 0005 (gpu/build-oneios-gpu.py, gpu/OneiOSAdreno.cpp) and starts from oneios_gpu3d_start.
 0024-gpu-pool.patch
+# fable-user (Q6): the host's text fixups on code pages only, once, with a record of the changed words so that a
+# page validated again is hashed as it was read ("Text page corruption detected" otherwise); a twin that cannot be
+# made is tried again before the panic; hosted_mapcheck=1 (a debugging record of every task's host mappings).
+# 0025-README.md. Goes with xnuhost's task.c of the same commit (one task creation at a time, waits by the clock).
+0025-text-fixup-once.patch

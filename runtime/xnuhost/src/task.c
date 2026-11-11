@@ -14,6 +14,8 @@
 #include "xnuhost.h"
 #include "../stub/stub_abi.h"
 #include <errno.h>
+#include <dirent.h>
+#include <stdio.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -94,6 +96,7 @@ extern const uint8_t xh_stub_blob[], xh_stub_blob_end[];
 
 typedef struct {
   bool used, dead;
+  bool zombie;                               // destroyed by the kernel, its process not yet reported dead
   int pid;
   uint32_t exit_status;
   uint32_t service_slot;
@@ -202,6 +205,8 @@ static void mark_dead(task *t, uint32_t status)
     }
 }
 
+static void task_release(task *t);
+
 static void *reader_main(void *arg)
 {
   (void)arg;
@@ -214,7 +219,10 @@ static void *reader_main(void *arg)
       pthread_cond_broadcast(&T.reply);
     } else if (m.kind == M_EXITED) {
       for (unsigned i = 0; i < MAX_TASKS; i++)
-        if (T.tasks[i].used && T.tasks[i].pid == m.pid && !T.tasks[i].dead) mark_dead(&T.tasks[i], m.status);
+        if (T.tasks[i].used && T.tasks[i].pid == m.pid && !T.tasks[i].dead) {
+          mark_dead(&T.tasks[i], m.status);
+          if (T.tasks[i].zombie) task_release(&T.tasks[i]);
+        }
     }
     pthread_mutex_unlock(&T.lock);
   }
@@ -314,14 +322,22 @@ static task *task_of(uint64_t handle)
 // Waits until *word is not 0, the task is dead, or the time is up. Returns 0, -ESRCH, -ETIMEDOUT.
 static int wait_word(task *t, uint32_t *word, int seconds)
 {
-  struct timespec step = { 0, 100 * 1000 * 1000 };
-  for (int i = 0; i < seconds * 10; i++) {
+  // By the clock, not by the number of waits: a futex wait that a signal interrupts (the vCPU threads get
+  // them all the time: kicks, timers) returns at once, and a hundred of those are not ten seconds.
+  struct timespec now, until;
+  clock_gettime(CLOCK_MONOTONIC, &until);
+  until.tv_sec += seconds;
+  for (;;) {
     if (__atomic_load_n(word, __ATOMIC_ACQUIRE)) return 0;
     if (t->dead) return -ESRCH;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (now.tv_sec > until.tv_sec || (now.tv_sec == until.tv_sec && now.tv_nsec >= until.tv_nsec)) return -ETIMEDOUT;
+    struct timespec step = { 0, 100 * 1000 * 1000 };
     futex(word, FUTEX_WAIT, 0, &step);
   }
-  return __atomic_load_n(word, __ATOMIC_ACQUIRE) ? 0 : -ETIMEDOUT;
 }
+
+static void log_task_threads(int pid);
 
 static int64_t order(task *t, const struct xs_op *ops, unsigned count)
 {
@@ -344,15 +360,31 @@ static int64_t order(task *t, const struct xs_op *ops, unsigned count)
   if (rc || took_ms >= 1000)
     LOGE("tasks: pid %d: order %u (va 0x%llx, size 0x%llx, prot %u) %s after %ld ms", t->pid, ops[0].op, (unsigned long long)ops[0].va,
          (unsigned long long)ops[0].size, ops[0].prot, rc ? "was not answered" : "took long: answered", took_ms);
+  if (rc == -ETIMEDOUT) log_task_threads(t->pid);
   if (rc) result = rc;
   else for (unsigned i = 0; i < count; i++) if (sp->ops[i].result < 0) { result = sp->ops[i].result; break; }
   pthread_mutex_unlock(&t->lock);
   return result;
 }
 
+static int64_t task_create_one(uint64_t *handle);
+
 int64_t xh_task_create(uint64_t *handle)
 {
   if (!T.available && T.sock < 0) return -ENOSYS;
+  // One creation at a time, from the choice of the table entry to the factory's answer. The wait for the
+  // answer gives T.lock up; without this, a second vCPU creating a task meanwhile took the same entry (not
+  // marked used yet) and the same answer: two address spaces of the kernel then shared one handle and one
+  // Linux process (a new process found the memory of another one in place), and the other process was lost.
+  static pthread_mutex_t creating = PTHREAD_MUTEX_INITIALIZER;
+  pthread_mutex_lock(&creating);
+  int64_t created = task_create_one(handle);
+  pthread_mutex_unlock(&creating);
+  return created;
+}
+
+static int64_t task_create_one(uint64_t *handle)
+{
   pthread_mutex_lock(&T.lock);
   task *t = NULL;
   for (unsigned i = 0; i < MAX_TASKS && !t; i++) if (!T.tasks[i].used) t = &T.tasks[i];
@@ -384,6 +416,51 @@ int64_t xh_task_create(uint64_t *handle)
   return 0;
 }
 
+// What every Linux thread of a task process is doing (state and system call from /proc), for the log, when
+// the process does not answer: "tid state syscall-number first-arguments".
+static void log_task_threads(int pid)
+{
+  char path[64], line[160];
+  snprintf(path, sizeof path, "/proc/%d/task", pid);
+  DIR *dir = opendir(path);
+  if (!dir) { LOGE("tasks: pid %d: no /proc entry (%s)", pid, strerror(errno)); return; }
+  struct dirent *e;
+  int shown = 0;
+  while ((e = readdir(dir)) != NULL && shown < 24) {
+    if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+    char state = '?';
+    snprintf(path, sizeof path, "/proc/%d/task/%s/stat", pid, e->d_name);
+    FILE *f = fopen(path, "r");
+    if (f) { if (fgets(line, sizeof line, f)) { char *close = strrchr(line, ')'); if (close && close[1] == ' ') state = close[2]; } fclose(f); }
+    line[0] = 0;
+    snprintf(path, sizeof path, "/proc/%d/task/%s/syscall", pid, e->d_name);
+    f = fopen(path, "r");
+    if (f) { if (fgets(line, 80, f)) line[strcspn(line, "\n")] = 0; fclose(f); }
+    LOGE("tasks: pid %d thread %s: state %c, syscall %s", pid, e->d_name, state, line[0] ? line : "?");
+    shown++;
+  }
+  closedir(dir);
+}
+
+// True once `seconds` have passed since `since` (CLOCK_MONOTONIC).
+static bool seconds_passed(const struct timespec *since, int seconds)
+{
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return now.tv_sec - since->tv_sec > seconds || (now.tv_sec - since->tv_sec == seconds && now.tv_nsec >= since->tv_nsec);
+}
+
+// The task's slots go back to the pool. Only when its Linux process is gone: a slot is a page of the trap
+// memfd that the process has mapped, and a thread of the old process that still waits on that page would
+// answer the orders, or run the register state, of whoever gets the slot next. T.lock held.
+static void task_release(task *t)
+{
+  for (unsigned s = 0; s < MAX_SLOTS; s++)
+    if (T.threads[s].used && T.threads[s].task == t - T.tasks) { T.threads[s].used = false; slot_free(s); }
+  slot_free(t->service_slot);
+  t->used = t->zombie = false;
+}
+
 int64_t xh_task_destroy(uint64_t handle)
 {
   task *t = task_of(handle);
@@ -391,13 +468,19 @@ int64_t xh_task_destroy(uint64_t handle)
   if (!t->dead) {
     struct message m = { .kind = M_KILL, .pid = t->pid };
     send(T.sock, &m, sizeof m, MSG_NOSIGNAL);
-    for (int i = 0; i < 200 && !t->dead; i++) usleep(5000);       // the reader marks it dead on the factory's report
+    kill(t->pid, SIGKILL);                 // at once; the factory's report (the reader marks it dead) is what is waited for
+    // By the clock: usleep returns early whenever a signal arrives, and the vCPU threads get them all the time.
+    struct timespec began, step = { 0, 2 * 1000 * 1000 };
+    clock_gettime(CLOCK_MONOTONIC, &began);
+    while (!t->dead && !seconds_passed(&began, 20)) nanosleep(&step, NULL);
   }
   pthread_mutex_lock(&T.lock);
-  for (unsigned s = 0; s < MAX_SLOTS; s++)
-    if (T.threads[s].used && T.threads[s].task == t - T.tasks) { T.threads[s].used = false; slot_free(s); }
-  slot_free(t->service_slot);
-  t->used = false;
+  if (t->dead) task_release(t);
+  else {
+    // Never seen so far. The slots stay taken until the factory reports the exit (reader_main).
+    LOGE("tasks: pid %d did not die in 20 s: its slots are kept until it does", t->pid);
+    t->zombie = true;
+  }
   pthread_mutex_unlock(&T.lock);
   return 0;
 }
@@ -512,11 +595,19 @@ int64_t xh_thread_destroy(uint64_t handle)
     tp->command = XS_EXIT;
     __atomic_store_n(&tp->to_task, 1, __ATOMIC_RELEASE);
     futex(&tp->to_task, FUTEX_WAKE, 1, NULL);
-    struct timespec step = { 0, 20 * 1000 * 1000 };
-    for (int i = 0; i < 100 && !t->dead; i++) {      // the kernel zeroes tid when the thread is gone
-      uint32_t tid = __atomic_load_n(&tp->tid, __ATOMIC_ACQUIRE);
-      if (!tid) break;
+    // Linux zeroes tid when the thread is gone. Waited for by the clock (an interrupted futex wait returns at
+    // once): until then the thread still has this slot's page, and the slot must not go to another thread,
+    // whose register state it would take and run in this task's address space.
+    struct timespec began, step = { 0, 20 * 1000 * 1000 };
+    clock_gettime(CLOCK_MONOTONIC, &began);
+    uint32_t tid;
+    while ((tid = __atomic_load_n(&tp->tid, __ATOMIC_ACQUIRE)) != 0 && !t->dead && !seconds_passed(&began, 10))
       futex(&tp->tid, FUTEX_WAIT, tid, &step);
+    if (tid != 0 && !t->dead) {
+      // Never seen so far. The slot and the area stay with the task; xh_task_destroy takes them back.
+      LOGE("tasks: thread %u of pid %d did not exit in 10 s: its slot is kept until the task goes", tid, t->pid);
+      log_task_threads(t->pid);
+      return 0;
     }
     struct xs_op op = { .op = XS_OP_UNMAP, .va = T.base + XS_THREADS_OFF + (uint64_t)th->area * XS_AREA_SIZE, .size = XS_AREA_SIZE };
     order(t, &op, 1);

@@ -25,7 +25,7 @@ task's traps (`handle_svc`, exceptions, signals, ASTs, exec, thread exit) has no
 | `hosted_copyio.c` | page-table walk + copy through the RAM window; where the table does not allow the access: `arm_fast_fault`, then `vm_fault` (as `handle_kernel_abort` does for a copyio fault), and the copy goes on. Not resolvable -> `EFAULT`. No kernel fault and no recovery entry is involved |
 | bug 1, `hosted_pmap.h` `hosted_copy_user_pages` | the caller's buffer is touched with no lock held (1 KiB stack bounce buffer per piece; the stack is always host-mapped). Under the pmap lock and the TLB lock only the bounce buffer and the window are touched. With interrupts masked the pmap lock is only tried. `hosted_user_atomic` for the single-access words |
 | bug 2, `copyio.c` `copy_ensure_address_space_spec` | no bit 55 under `XNU_HOSTED`: a kernel-to-kernel copy must name `VM_MIN_KERNEL_ADDRESS..VM_MAX_KERNEL_ADDRESS`, any other copy must not. `copy_validate_user_addr` refuses (`EFAULT`) a user range that reaches `VM_MIN_KERNEL_ADDRESS` or `xh_info.user_va_limit` |
-| `bsd/kern/ubc_subr.c` `cs_text_fixup_page` | calls `hosted_text_fixup(page, PAGE_SIZE)`: once per page of original text, after its hash, before any mapping (fable-smp's rule on the board) |
+| `bsd/kern/ubc_subr.c` `cs_text_fixup_page` | called `hosted_text_fixup` at validation. **Replaced by 0025** (`0025-README.md`): it also rewrote data pages and made every later validation of the page fail |
 | `arm/thread.h` | `machine.hosted_thread`, `hosted_pmap`, `hosted_pac`, `hosted_refill` in place of `reserved4/12/14/6` |
 
 ## Tests (PC, `qemu-aarch64 -cpu cortex-a710`, boot arguments of `README.md` + `hosted_selftest=1`)

@@ -194,6 +194,15 @@ index, pairs, sign extension) and run against the device models.
   handler copies its registers (x0-x30 with x16 intact, sp, pc, NZCV, v0-v31, FPSR, FPCR, the thread
   register) to the thread's trap page, wakes xnuhost and waits. Seccomp user notification is not used: it
   carries the Linux number and six arguments, not x16.
+- **One Linux process per kernel address space, and nothing shared between two.** `task_create` runs one at
+  a time (the wait for the factory's answer gives the table lock up: two vCPUs once got the same table
+  entry and the same answer, and two iOS processes shared one Linux process). A destroyed task's slots
+  (pages of the trap memfd its process has mapped) go back to the pool only when the factory has reported
+  the process dead, and a destroyed thread's slot only when Linux has cleared its tid: a thread of the old
+  process that still waits on the page would take the next owner's orders or register state. Every such
+  wait is by the clock (`CLOCK_MONOTONIC`); the vCPU threads get signals all the time, and a wait counted
+  in interrupted `futex`/`usleep` calls ends in milliseconds. An order that is not answered in 10 s, or a
+  thread that does not exit, is logged with each Linux thread's state and system call from `/proc`.
 - **Faults, undefined instructions, breakpoints, FP exceptions** arrive the same way as SIGSEGV/SIGBUS,
   SIGILL, SIGTRAP, SIGFPE, with the fault address and Linux's ESR when it gives one.
 - **Running a thread.** `thread_run(thread, state, trap)` releases the thread with the given registers (the
@@ -205,7 +214,11 @@ index, pairs, sign extension) and run against the device models.
 - **The thread register.** iOS reads its TSD base from `TPIDRRO_EL0`, which Linux keeps 0 and user space
   cannot write. The host keeps the base in `TPIDR_EL0` (`xh_user_state.tsd`) and `text_fixup()` rewrites
   `mrs xN, TPIDRRO_EL0` to `mrs xN, TPIDR_EL0` in a page before it is mapped executable (after the kernel
-  validated its signature). Risks: a data word in text with that encoding; code that writes `TPIDR_EL0`.
+  validated its signature). The call matches 32-bit patterns and must see a page once, so the kernel
+  (`osfmk/arm64/hosted/hosted_text.c`, patch 0025) calls it only for a file's page that is being entered
+  with execute permission (never for data or link-edit pages, which are validated too), records every word
+  it changed, and hashes the page with the original words when XNU validates it again. Risks: a data word
+  inside a code page with one of the encodings; code that writes `TPIDR_EL0`.
 - **Plain arm64 binaries**: `thread_set_pac(thread, 0)` turns the keys off for that thread
   (`PR_PAC_SET_ENABLED_KEYS`).
 

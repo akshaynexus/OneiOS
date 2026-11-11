@@ -28,8 +28,9 @@ iPhone18,2 kexts), the boot gets through:
 Not reached: a SpringBoard that stays up, a frame on the display, `session/ready`. What is missing for that, as
 seen in the log: the guest has an IOMobileFramebuffer since `0020` (`kernel/patches/oneios-hosted/display/`: it
 starts, the console reaches `display.sock` through it, and backboardd opens it), but backboardd has not submitted a
-frame: in the run that got there it died in a workqueue thread's start first. There is no touch digitizer yet,
-and some processes die with "Text page corruption detected". The key store is in since `0022`: an AppleKeyStore
+frame: in the run that got there it died in a workqueue thread's start first. There is no touch digitizer yet.
+The processes that died with "Text page corruption detected", dyld assertions or a lost Linux thread no longer do
+(`0025` and xnuhost's task layer: 14 minutes past early boot with 129 processes and none of those). The key store is in since `0022`: an AppleKeyStore
 service in software (no passcode, class keys from a constant, key wrap by AES; **not a security boundary**), with
 which launchd's keybag task ends in `DONE MKB_INIT` instead of "FATAL KEYBAG ERROR: failed to load system bag";
 securityd wraps and unwraps its keys through it. A host with one kind of CPU (or one vCPU) used to assert in the

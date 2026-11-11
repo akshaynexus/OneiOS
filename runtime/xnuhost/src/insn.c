@@ -77,7 +77,8 @@ bool xh_decode_sys(uint32_t insn, xh_sys_insn *s)
 // says CPU 0, which is always a valid slot (the number is only a hint: a thread can be moved right
 // after reading it). A write of TPIDR_EL0 would destroy the TSD base and becomes a nop.
 // Each word is classified by its original value, so one pass is right; a second pass over the same
-// page is not (it would zero the TSD reads): the kernel fixes a page once, as it is paged in.
+// page is not (it would zero the TSD reads): the kernel fixes a page once, when it is first entered
+// executable, and only pages of code (the patterns are also plain data words in a data page).
 // A host with no seccomp (qemu-user) cannot trap a task's `svc`: Linux, or qemu, would run it as its
 // own system call. There, text_fixup also turns iOS's `svc #0x80` into an undefined instruction
 // (XH_SVC_MARK), and xh_thread_run reports that trap as the system call it stands for.

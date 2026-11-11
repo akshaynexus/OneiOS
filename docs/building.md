@@ -112,6 +112,10 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
 - `-cpu cortex-a710`, never qemu's default `max`: its 512-byte `DC ZVA` breaks XNU's `bzero`.
 - `oneios-data-wait=3000`: under qemu the first boot spends minutes re-deriving the shared cache's 4 KiB code
   hashes (emulated SHA); the committed default (300 s) is for the phone.
+- `hosted_mapcheck=1` (boot argument, debugging only): the kernel records every page it maps into and unmaps
+  from a task's Linux process and reports, as `hosted check:` lines, a page mapped over another with no
+  flush between, a page the VM frees while a task still has it mapped, and (every 1024 returns to user
+  mode and at a task's `brk`) a mapping the task's page table no longer allows. Costs memory and time.
 - `guest` lines in the log are the kernel's console. `kill -QUIT <xnuhost pid>` logs every vCPU and every iOS
   thread; `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
 - A user process that dies: the kernel logs its registers and a backtrace (`sheng-exc`, `sheng-ubt` lines) for the

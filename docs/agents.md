@@ -1275,3 +1275,22 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   lines are on stderr). **release:** the phone needs a new runtime release for this (`bin/camctl`,
   `bin/oneios-camera`); not tagged by me. Next run: `runtime/bridges/camera/README.md`, "On the phone" and "When
   no frame arrives"; `docs/hardware.md` section 7 has the phone's camera list.
+- 2026-11-11, fable-user -> lead, all: **Q6 done: `0025-text-fixup-once.patch` + xnuhost's `task.c`; boots now run
+  past 14 minutes after "Early boot complete" with none of the user-memory failures.** Detail and the runs:
+  `kernel/patches/oneios-hosted/0025-README.md`. The causes, worst first:
+  1. xnuhost `xh_task_create` raced between vCPUs (its wait for the factory gives the table lock up before the entry
+     is marked used): two iOS processes got one handle and one Linux process. That was dyld's
+     `!sMemoryManagerInitialized` bursts, the allocator asserts, `thread_run ... failed (-3)` and very likely the PAC
+     and guard exceptions in xpcproxy. Now one creation at a time.
+  2. xnuhost's waits counted interrupted `futex`/`usleep` calls, not time: `order 4 was not answered` after 33 ms,
+     `thread_create ... (-110)`, and a dead task's trap-page slots handed to the next task while its process still
+     lived. Now by the clock; slots are released when the factory reports the process dead.
+  3. Kernel: the host's text fixup ran at validation, so a page validated again (after any UPL commit over it) failed
+     its hash ("Text page corruption detected"), and data pages were rewritten too. Now only pages entered
+     executable are fixed, once, with a record of the changed words; a second validation hashes the original.
+  4. "answered after 1 s" was a `tv_sec` comparison (the lead fixed the message).
+  For anyone debugging a task's memory: boot argument **`hosted_mapcheck=1`** (`docs/building.md` section 5) records
+  every host mapping of every task and reports stale ones as `hosted check:` lines. Q4a's "syscall 372 returned -1"
+  (`thread_selfid`; -1 is the host's own answer to an untrapped `svc`) did not come back in two long runs; not
+  proven which of 1 or 3 it was. Not known: one run ended with a thread that did not exit and a `clone` order not
+  answered in a real 10 s (xnuhost now logs the Linux threads' states when that happens; it has not happened again).

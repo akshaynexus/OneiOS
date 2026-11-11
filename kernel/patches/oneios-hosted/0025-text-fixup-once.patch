@@ -1,0 +1,716 @@
+diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
+index 9d0b645..ee7d9b1 100644
+--- a/bsd/kern/ubc_subr.c
++++ b/bsd/kern/ubc_subr.c
+@@ -6609,13 +6609,10 @@ cs_text_fixup_page(struct vnode *vp, memory_object_offset_t page_offset, void *k
+ 	}
+ #if XNU_HOSTED
+ 	/*
+-	 * OneiOS hosted: the host rewrites what iOS text cannot do in a Linux task (the TSD base read from
+-	 * TPIDRRO_EL0, the CPU number in TPIDR_EL0; docs/booter.md). Both callers come here once per page of
+-	 * original text: after its hash was checked, before any mapping. A second pass over a fixed page would
+-	 * rewrite the rewritten reads, and there is none: a page changed after validation fails its hash.
++	 * OneiOS hosted: the host's own fixups (TSD and CPU number reads, svc under qemu) are not made here:
++	 * every page of a signed file is validated, data too, and they are for code only. See
++	 * vm_fault_enter_prepare and osfmk/arm64/hosted/hosted_text.c.
+ 	 */
+-	extern uint32_t hosted_text_fixup(void *text, uint64_t size);
+-	written += hosted_text_fixup(kva, PAGE_SIZE);
+ #endif
+ 	return written;
+ }
+diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
+index 300f2a9..9a99337 100644
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -3023,6 +3023,10 @@ pmap_assert_free(ppnum_t ppnum)
+ inline void
+ pmap_recycle_page(ppnum_t pn)
+ {
++#if XNU_HOSTED
++	extern void hosted_check_page_free(ppnum_t pn);
++	hosted_check_page_free(pn);       /* hosted_mapcheck=1: no task may still have the page */
++#endif
+ 	const bool is_freed = pmap_verify_free(pn);
+ 
+ 	if (__improbable(!is_freed)) {
+diff --git a/osfmk/arm/pmap/pmap.h b/osfmk/arm/pmap/pmap.h
+index 75e9dc9..b8da9cd 100644
+--- a/osfmk/arm/pmap/pmap.h
++++ b/osfmk/arm/pmap/pmap.h
+@@ -499,6 +499,8 @@ struct pmap {
+ 	uint64_t hosted_task;
+ 	/* A number no other task ever had: threads use it to tell their Linux twin belongs to this task. */
+ 	uint64_t hosted_seq;
++	/* hosted_mapcheck=1: what the task has mapped in the host (hosted_pmap.h, struct hosted_check_top). */
++	struct hosted_check_top *hosted_check;
+ #endif /* XNU_HOSTED */
+ };
+ 
+diff --git a/osfmk/arm64/hosted/hosted.h b/osfmk/arm64/hosted/hosted.h
+index 612f12d..6448da5 100644
+--- a/osfmk/arm64/hosted/hosted.h
++++ b/osfmk/arm64/hosted/hosted.h
+@@ -169,6 +169,14 @@ extern uint64_t hosted_copy_user_pages(struct pmap *pmap, uint64_t uaddr, void *
+ #define HOSTED_UA_STORE 1u
+ extern bool hosted_user_atomic(struct pmap *pmap, uint64_t uaddr, uint32_t size, uint32_t op, uint64_t *value);
+ 
++/* hosted_pmap.h, boot-arg hosted_mapcheck=1: the task's host mappings against its page table */
++extern unsigned hosted_check_audit(struct pmap *pmap, const char *why);
++
++/* hosted_text.c: the host's text fixups, once per page of code, and the page as its signature knows it */
++extern uint32_t hosted_text_fix_page(unsigned int page, const void *object, uint64_t offset);
++extern const void *hosted_text_original(unsigned int page, const void *object, uint64_t offset, const void *kaddr);
++extern void hosted_text_original_done(void);
++
+ /* hosted_user.c: user mode (hosted_thread_exception_return is in hosted_asm.s) */
+ struct thread;
+ struct arm_saved_state;
+diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
+index d38e080..669c3e3 100644
+--- a/osfmk/arm64/hosted/hosted_pmap.h
++++ b/osfmk/arm64/hosted/hosted_pmap.h
+@@ -272,6 +272,292 @@ hosted_kernel_enter(uint64_t va, uint64_t size)
+ 	hosted_tlb_unlock(old);
+ }
+ 
++/* ---- debug: what every task has mapped in the host (boot-arg hosted_mapcheck=1) --------------- */
++
++/*
++ * The host mapping of a task is a TLB that nothing but this file fills and flushes. When a process sees a
++ * page it should not (another task's data, an old copy), the question is whether that TLB went stale. With
++ * hosted_mapcheck=1 every fill and flush is also recorded here, per pmap (va -> page, protection) and per
++ * page (how many task mappings), and three things are reported on the console ("hosted check:", printed
++ * at the next audit):
++ *   - a fill at an address that still had another page mapped: its entry changed with no flush between;
++ *   - a page freed by the VM while a task still has it mapped;
++ *   - (hosted_check_audit, called by hosted_user.c now and then and when a task traps on a brk) a mapping
++ *     that the task's page table no longer has, or has with less access.
++ * Costs memory (16 KiB per 16 MiB of a task's address space in use) and time: off unless asked for.
++ */
++static TUNABLE(bool, hosted_check_on, "hosted_mapcheck", false);
++extern int proc_selfpid(void);
++extern void delay(int usec);
++
++#define HOSTED_CHECK_LEAF_SHIFT 24
++#define HOSTED_CHECK_TOP        ((unsigned)(HOSTED_KERNEL_VA_MIN >> HOSTED_CHECK_LEAF_SHIFT))
++#define HOSTED_CHECK_LEAF       (1u << (HOSTED_CHECK_LEAF_SHIFT - 12))
++#define HOSTED_CHECK_PAGE(e)    (((e) & 0x0fffffffu) - 1)
++#define HOSTED_CHECK_PROT(e)    ((e) >> 28)
++
++struct hosted_check_top {
++	uint32_t *leaf[HOSTED_CHECK_TOP];       /* [va >> 24][(va >> 12) & 0xfff]: 0, or (page index + 1) | prot << 28 */
++};
++
++static uint8_t *hosted_check_counts;            /* per page of the RAM window: task mappings (255 sticks) */
++
++/*
++ * A finding is made with the TLB lock held or in a context that cannot print (interrupts masked): it is
++ * noted here and printed by hosted_check_report() from thread context.
++ */
++struct hosted_check_note {
++	uint8_t  kind;                          /* 1 replaced, 2 freed while mapped, 3 stale (audit) */
++	int32_t  pid;
++	uint64_t task, va, entry;
++	uint32_t had_page, had_prot, now_page, now_prot;
++};
++#define HOSTED_CHECK_NOTES 64
++static struct hosted_check_note hosted_check_notes[HOSTED_CHECK_NOTES];
++static uint32_t hosted_check_noted, hosted_check_printed;
++
++static void
++hosted_check_note(uint8_t kind, uint64_t task, uint64_t va, uint32_t had_page, uint32_t had_prot, uint32_t now_page, uint32_t now_prot, uint64_t entry)
++{
++	uint32_t n = os_atomic_inc_orig(&hosted_check_noted, relaxed);
++
++	if (n < HOSTED_CHECK_NOTES) {
++		hosted_check_notes[n] = (struct hosted_check_note){ .kind = kind, .pid = proc_selfpid(), .task = task, .va = va, .entry = entry,
++			                                            .had_page = had_page, .had_prot = had_prot, .now_page = now_page, .now_prot = now_prot };
++	}
++}
++
++/* Prints what was noted. Thread context, interrupts enabled, no lock held. */
++void hosted_check_report(void);
++void
++hosted_check_report(void)
++{
++	while (hosted_check_printed < HOSTED_CHECK_NOTES && hosted_check_printed < os_atomic_load(&hosted_check_noted, relaxed)) {
++		uint32_t n = os_atomic_inc_orig(&hosted_check_printed, relaxed);
++		if (n >= HOSTED_CHECK_NOTES) {
++			break;
++		}
++		const struct hosted_check_note *note = &hosted_check_notes[n];
++		if (note->kind == 1) {
++			printf("hosted check: task %llu (in pid %d) va 0x%llx: page 0x%x (prot %u) was still mapped when its entry became page 0x%x (prot %u): no flush between\n",
++			    note->task, note->pid, note->va, note->had_page, note->had_prot, note->now_page, note->now_prot);
++		} else if (note->kind == 2) {
++			printf("hosted check: page 0x%x is freed while %u task mapping(s) of it remain (pid %d frees it)\n",
++			    note->had_page, note->had_prot, note->pid);
++		} else {
++			printf("hosted check: audit: task %llu (in pid %d) va 0x%llx: the host maps page 0x%x prot %u, the page table has page 0x%x prot %u (entry 0x%llx)\n",
++			    note->task, note->pid, note->va, note->had_page, note->had_prot, note->now_page, note->now_prot, note->entry);
++		}
++	}
++}
++struct hosted_check_stats {
++	uint64_t fills, replaced, unmapped, freed_mapped, audits, stale;
++} hosted_check_stats;
++
++/* Before a fill, in thread context with no lock held: the tables the fill will write into. */
++static void
++hosted_check_prepare(pmap_t pmap, uint64_t va)
++{
++	if (!hosted_check_on || va >= HOSTED_KERNEL_VA_MIN) {
++		return;
++	}
++	if (hosted_check_counts == NULL) {
++		uint8_t *counts = kalloc_data(hosted_info.ram_size >> 12, Z_WAITOK | Z_ZERO);
++		if (counts != NULL && !os_atomic_cmpxchg(&hosted_check_counts, NULL, counts, relaxed)) {
++			kfree_data(counts, hosted_info.ram_size >> 12);
++		}
++	}
++	struct hosted_check_top *top = os_atomic_load(&pmap->hosted_check, relaxed);
++	if (top == NULL) {
++		top = kalloc_data(sizeof(*top), Z_WAITOK | Z_ZERO);
++		if (top != NULL && !os_atomic_cmpxchg(&pmap->hosted_check, NULL, top, relaxed)) {
++			kfree_data(top, sizeof(*top));
++		}
++		top = os_atomic_load(&pmap->hosted_check, relaxed);
++	}
++	if (top != NULL && top->leaf[va >> HOSTED_CHECK_LEAF_SHIFT] == NULL) {
++		uint32_t *leaf = kalloc_data(HOSTED_CHECK_LEAF * sizeof(uint32_t), Z_WAITOK | Z_ZERO);
++		if (leaf != NULL && !os_atomic_cmpxchg(&top->leaf[va >> HOSTED_CHECK_LEAF_SHIFT], NULL, leaf, relaxed)) {
++			kfree_data(leaf, HOSTED_CHECK_LEAF * sizeof(uint32_t));
++		}
++	}
++}
++
++static void
++hosted_check_count(uint32_t page, int by)
++{
++	if (hosted_check_counts != NULL && page < (hosted_info.ram_size >> 12) && hosted_check_counts[page] != 255) {
++		hosted_check_counts[page] = (uint8_t)(hosted_check_counts[page] + by);
++	}
++}
++
++/* task_map(va, one page, prot, pa) succeeded. TLB lock held. */
++static void
++hosted_check_filled(pmap_t pmap, uint64_t va, pmap_paddr_t pa, uint32_t prot)
++{
++	struct hosted_check_top *top = hosted_check_on ? pmap->hosted_check : NULL;
++	uint32_t *leaf = top != NULL && va < HOSTED_KERNEL_VA_MIN ? top->leaf[va >> HOSTED_CHECK_LEAF_SHIFT] : NULL;
++
++	if (leaf == NULL) {
++		return;
++	}
++	uint32_t page = (uint32_t)((pa - hosted_info.ram_phys) >> 12);
++	uint32_t *entry = &leaf[(va >> 12) & (HOSTED_CHECK_LEAF - 1)];
++	hosted_check_stats.fills++;
++	if (*entry != 0) {
++		if (HOSTED_CHECK_PAGE(*entry) != page) {
++			hosted_check_stats.replaced++;
++			hosted_check_note(1, pmap->hosted_task, va, HOSTED_CHECK_PAGE(*entry), HOSTED_CHECK_PROT(*entry), page, prot, 0);
++		}
++		hosted_check_count(HOSTED_CHECK_PAGE(*entry), -1);
++	}
++	*entry = (page + 1) | (prot << 28);
++	hosted_check_count(page, 1);
++}
++
++/* task_unmap(va, size) was given. TLB lock held. */
++static void
++hosted_check_unmapped(pmap_t pmap, uint64_t va, uint64_t size)
++{
++	struct hosted_check_top *top = hosted_check_on ? pmap->hosted_check : NULL;
++	uint64_t end = va + size;
++
++	if (top == NULL) {
++		return;
++	}
++	if (end > HOSTED_KERNEL_VA_MIN) {
++		end = HOSTED_KERNEL_VA_MIN;
++	}
++	while (va < end) {
++		uint64_t next = ((va >> HOSTED_CHECK_LEAF_SHIFT) + 1) << HOSTED_CHECK_LEAF_SHIFT;
++		uint32_t *leaf = top->leaf[va >> HOSTED_CHECK_LEAF_SHIFT];
++		if (next > end) {
++			next = end;
++		}
++		if (leaf != NULL) {
++			for (uint64_t at = va; at < next; at += 4096) {
++				uint32_t *entry = &leaf[(at >> 12) & (HOSTED_CHECK_LEAF - 1)];
++				if (*entry != 0) {
++					hosted_check_count(HOSTED_CHECK_PAGE(*entry), -1);
++					*entry = 0;
++					hosted_check_stats.unmapped++;
++				}
++			}
++		}
++		va = next;
++	}
++}
++
++/* The task is gone. No lock held. */
++static void
++hosted_check_destroy(pmap_t pmap)
++{
++	struct hosted_check_top *top = pmap->hosted_check;
++
++	if (top == NULL) {
++		return;
++	}
++	uint32_t old = hosted_tlb_lock();
++	hosted_check_unmapped(pmap, 0, HOSTED_KERNEL_VA_MIN);
++	pmap->hosted_check = NULL;
++	hosted_tlb_unlock(old);
++	for (unsigned i = 0; i < HOSTED_CHECK_TOP; i++) {
++		if (top->leaf[i] != NULL) {
++			kfree_data(top->leaf[i], HOSTED_CHECK_LEAF * sizeof(uint32_t));
++		}
++	}
++	kfree_data(top, sizeof(*top));
++}
++
++/* The VM frees a page (pmap_recycle_page): nobody may still have it mapped. Any context. */
++void hosted_check_page_free(ppnum_t pn);
++void
++hosted_check_page_free(ppnum_t pn)
++{
++	pmap_paddr_t pa = ptoa(pn);
++
++	if (!hosted_check_on || hosted_check_counts == NULL || !hosted_pa_in_window(pa)) {
++		return;
++	}
++	uint32_t page = (uint32_t)((pa - hosted_info.ram_phys) >> 12);
++	uint8_t count = hosted_check_counts[page];
++	if (count != 0 && count != 255) {
++		hosted_check_stats.freed_mapped++;
++		hosted_check_note(2, 0, 0, page, count, 0, 0, 0);
++	}
++}
++
++/* One recorded mapping against the page table. TLB lock and the pmap's lock held. True if the table allows it. */
++static bool
++hosted_check_entry(pmap_t pmap, uint64_t va, uint32_t recorded, bool note)
++{
++	pt_entry_t pte = hosted_walk(pmap, va);
++	uint32_t allowed = hosted_pte_prot(pte | ARM_PTE_AF, true);     /* a cleared reference bit leaves the TLB alone */
++	uint32_t page = hosted_pa_in_window(pte_to_pa(pte)) ? (uint32_t)((pte_to_pa(pte) - hosted_info.ram_phys) >> 12) : ~0u;
++
++	if (allowed != 0 && page == HOSTED_CHECK_PAGE(recorded) && !(HOSTED_CHECK_PROT(recorded) & ~allowed)) {
++		return true;
++	}
++	if (note) {
++		hosted_check_note(3, pmap->hosted_task, va, HOSTED_CHECK_PAGE(recorded), HOSTED_CHECK_PROT(recorded), page, allowed, (uint64_t)pte);
++	}
++	return false;
++}
++
++/*
++ * Every host mapping of the task against its page table. Thread context, no lock held. Returns the number
++ * of mappings the table does not allow. An entry is changed first and flushed a moment later (for a range,
++ * after the whole range), so a mapping that disagrees is looked at again 2 ms later, and only one that
++ * still disagrees then counts.
++ */
++unsigned hosted_check_audit(pmap_t pmap, const char *why);
++unsigned
++hosted_check_audit(pmap_t pmap, const char *why)
++{
++	uint64_t suspects[16];
++	unsigned suspected = 0, stale = 0;
++
++	if (!hosted_check_on || pmap == NULL || pmap->hosted_check == NULL) {
++		return 0;
++	}
++	pmap_lock(pmap, PMAP_LOCK_SHARED);
++	uint32_t old = hosted_tlb_lock();
++	struct hosted_check_top *top = pmap->hosted_check;
++	hosted_check_stats.audits++;
++	for (unsigned i = 0; top != NULL && i < HOSTED_CHECK_TOP; i++) {
++		const uint32_t *leaf = top->leaf[i];
++		for (unsigned j = 0; leaf != NULL && j < HOSTED_CHECK_LEAF; j++) {
++			uint64_t va = ((uint64_t)i << HOSTED_CHECK_LEAF_SHIFT) | ((uint64_t)j << 12);
++			if (leaf[j] != 0 && !hosted_check_entry(pmap, va, leaf[j], false) && suspected < 16) {
++				suspects[suspected++] = va;
++			}
++		}
++	}
++	hosted_tlb_unlock(old);
++	pmap_unlock(pmap, PMAP_LOCK_SHARED);
++	if (suspected != 0) {
++		delay(2000);
++		pmap_lock(pmap, PMAP_LOCK_SHARED);
++		old = hosted_tlb_lock();
++		top = pmap->hosted_check;
++		for (unsigned k = 0; top != NULL && k < suspected; k++) {
++			const uint32_t *leaf = top->leaf[suspects[k] >> HOSTED_CHECK_LEAF_SHIFT];
++			uint32_t recorded = leaf != NULL ? leaf[(suspects[k] >> 12) & (HOSTED_CHECK_LEAF - 1)] : 0;
++			if (recorded != 0 && !hosted_check_entry(pmap, suspects[k], recorded, true)) {
++				stale++;
++			}
++		}
++		hosted_check_stats.stale += stale;
++		hosted_tlb_unlock(old);
++		pmap_unlock(pmap, PMAP_LOCK_SHARED);
++	}
++	if (stale != 0) {
++		printf("hosted check: %s: %u of pid %d's host mappings are not what its page table says\n", why, stale, proc_selfpid());
++	}
++	hosted_check_report();
++	return stale;
++}
++
+ /* ---- iOS tasks ------------------------------------------------------------------------------ */
+ 
+ /* The Linux process that is this pmap's address space; made at the first need. 0 if it cannot be made. */
+@@ -308,6 +594,7 @@ hosted_pmap_task(pmap_t pmap)
+ void
+ hosted_pmap_destroy(pmap_t pmap)
+ {
++	hosted_check_destroy(pmap);
+ 	uint32_t old = hosted_tlb_lock();
+ 	uint64_t task = pmap->hosted_task;
+ 	pmap->hosted_task = 0;
+@@ -334,6 +621,7 @@ hosted_user_fill(pmap_t pmap, uint64_t va, uint32_t access)
+ 		return false;
+ 	}
+ 	va &= ~(uint64_t)ARM_PGMASK;
++	hosted_check_prepare(pmap, va);
+ 	pmap_lock(pmap, PMAP_LOCK_SHARED);
+ 	uint32_t old = hosted_tlb_lock();
+ 	pt_entry_t pte = hosted_walk(pmap, va);
+@@ -342,6 +630,9 @@ hosted_user_fill(pmap_t pmap, uint64_t va, uint32_t access)
+ 	    pmap->hosted_task != 0) {
+ 		filled = HPC(task_map, pmap->hosted_task, va, ARM_PGBYTES, prot, pte_to_pa(pte)) == 0;
+ 		hosted_pmap_stats.user_maps += filled;
++		if (filled && hosted_pa_in_window(pte_to_pa(pte))) {
++			hosted_check_filled(pmap, va, pte_to_pa(pte), prot);
++		}
+ 	}
+ 	hosted_tlb_unlock(old);
+ 	pmap_unlock(pmap, PMAP_LOCK_SHARED);
+@@ -356,6 +647,7 @@ hosted_task_unmap_locked(pmap_t pmap, uint64_t va, uint64_t size)
+ 	if (pmap->hosted_task != 0) {
+ 		(void)HPC(task_unmap, pmap->hosted_task, va, size, 0, 0);
+ 		hosted_pmap_stats.user_unmaps++;
++		hosted_check_unmapped(pmap, va, size);
+ 	}
+ }
+ 
+diff --git a/osfmk/arm64/hosted/hosted_text.c b/osfmk/arm64/hosted/hosted_text.c
+new file mode 100644
+index 0000000..2e5ccc6
+--- /dev/null
++++ b/osfmk/arm64/hosted/hosted_text.c
+@@ -0,0 +1,183 @@
++/*
++ * OneiOS: the host's text fixups, once per page of code (arm64/hosted/hosted.h explains the model).
++ *
++ * iOS code cannot run unchanged in a Linux task: it reads the thread's TSD base from TPIDRRO_EL0 and the CPU
++ * number from TPIDR_EL0, and where the host has no seccomp (qemu-user) its `svc #0x80` must become a
++ * trapping instruction. xnuhost's text_fixup host call rewrites those instructions in a page. Three rules
++ * follow from what that call is, and this file keeps them:
++ *
++ *  1. Code only. The call matches 32-bit patterns; in a page of data a matching word is data, and
++ *     rewriting it corrupts the file's contents for every process. So a page is fixed when it is first
++ *     entered into an address space with execute permission (vm_fault_enter_prepare), not when it is
++ *     validated: a signed file's data and link-edit pages are validated too.
++ *  2. Once. A second pass over a fixed page rewrites the rewritten instructions (the TSD read becomes a
++ *     zero). Each fixed page has a record: whose page it is (object, offset) and every word that changed,
++ *     before and after. A page whose record matches and whose words are the "after" ones is left alone.
++ *  3. The signature still checks. A fixed page no longer has the bytes its hash was made from, and XNU
++ *     validates a page again whenever it may have changed (after any UPL over it is committed: a read() of
++ *     the file, the first page of an executable at every exec). The second validation used to fail
++ *     ("Text page corruption detected", the process killed). vm_page_validate_cs_mapped_slow now asks for
++ *     the page as it was (hosted_text_original): a copy with the recorded words put back, which is what
++ *     gets hashed.
++ *
++ * A record is found by physical page number. Records of pages that were freed stay until the page number
++ * is fixed again; a stale one cannot match, because a page read in again has its original words.
++ */
++#include <mach/mach_types.h>
++#include <mach/vm_param.h>
++#include <kern/debug.h>
++#include <kern/kalloc.h>
++#include <kern/locks.h>
++#include <kern/misc_protos.h>
++#include <arm/pmap.h>
++#include <vm/pmap.h>
++#include <vm/vm_kern_xnu.h>
++#include <libkern/OSAtomic.h>
++#include <string.h>
++
++#if XNU_HOSTED
++
++#include <arm64/hosted/hosted.h>
++
++struct hosted_text_site {
++	uint16_t index;                 /* word in the page */
++	uint32_t original, fixed;
++};
++
++struct hosted_text_record {
++	struct hosted_text_record *next;
++	ppnum_t                    page;
++	uint32_t                   count;
++	const void                *object;      /* identity only, never dereferenced */
++	uint64_t                   offset;
++	struct hosted_text_site    sites[];
++};
++
++#define HOSTED_TEXT_BUCKETS 16384
++#define HOSTED_TEXT_WORDS   ((uint32_t)(PAGE_SIZE / sizeof(uint32_t)))
++#define HOSTED_TEXT_WORDS_MAX (16384 / sizeof(uint32_t))
++
++static LCK_GRP_DECLARE(hosted_text_grp, "hosted_text");
++static LCK_MTX_DECLARE(hosted_text_lock, &hosted_text_grp);
++static struct hosted_text_record *hosted_text_table[HOSTED_TEXT_BUCKETS];
++static uint32_t hosted_text_scratch[HOSTED_TEXT_WORDS_MAX] __attribute__((aligned(16)));
++
++struct hosted_text_stats {
++	uint64_t pages_fixed, pages_clean, words_fixed, already_fixed, originals, no_record_memory;
++} hosted_text_stats;
++
++static struct hosted_text_record **
++hosted_text_slot(ppnum_t page)
++{
++	struct hosted_text_record **slot = &hosted_text_table[page % HOSTED_TEXT_BUCKETS];
++
++	while (*slot != NULL && (*slot)->page != page) {
++		slot = &(*slot)->next;
++	}
++	return slot;
++}
++
++/* The page's record if it is this page's and the page holds what the fixup left. Lock held. */
++static struct hosted_text_record *
++hosted_text_fixed_record(ppnum_t page, const void *object, uint64_t offset, const uint32_t *words)
++{
++	struct hosted_text_record *record = *hosted_text_slot(page);
++
++	if (record == NULL || record->object != object || record->offset != offset) {
++		return NULL;
++	}
++	for (uint32_t i = 0; i < record->count; i++) {
++		if (words[record->sites[i].index] != record->sites[i].fixed) {
++			return NULL;            /* read in again since: its original words */
++		}
++	}
++	return record;
++}
++
++/*
++ * A page of `object` at `offset` is about to be entered with execute permission: the host's fixups, unless
++ * it has them. Returns the number of words changed now. Thread context, may block (a mutex, a host call).
++ */
++uint32_t
++hosted_text_fix_page(ppnum_t page, const void *object, uint64_t offset)
++{
++	uint32_t *words = (uint32_t *)phystokv(ptoa(page));
++	uint32_t  changed = 0;
++
++	lck_mtx_lock(&hosted_text_lock);
++	if (hosted_text_fixed_record(page, object, offset, words) != NULL) {
++		hosted_text_stats.already_fixed++;
++		lck_mtx_unlock(&hosted_text_lock);
++		return 0;
++	}
++	memcpy(hosted_text_scratch, words, PAGE_SIZE);
++	if (hosted_text_fixup(words, PAGE_SIZE) != 0) {
++		for (uint32_t i = 0; i < HOSTED_TEXT_WORDS; i++) {
++			changed += words[i] != hosted_text_scratch[i];
++		}
++	}
++	struct hosted_text_record *record = kalloc_data(sizeof(*record) + changed * sizeof(record->sites[0]), Z_WAITOK);
++	struct hosted_text_record **slot = hosted_text_slot(page);
++	struct hosted_text_record *old = *slot;
++	if (record != NULL) {
++		record->next = old != NULL ? old->next : NULL;
++		record->page = page;
++		record->count = changed;
++		record->object = object;
++		record->offset = offset;
++		for (uint32_t i = 0, n = 0; i < HOSTED_TEXT_WORDS && n < changed; i++) {
++			if (words[i] != hosted_text_scratch[i]) {
++				record->sites[n++] = (struct hosted_text_site){ .index = (uint16_t)i,
++					                                        .original = hosted_text_scratch[i], .fixed = words[i] };
++			}
++		}
++		*slot = record;
++	} else {
++		/* No record: the page is right to run, but its next validation will not know its original. */
++		hosted_text_stats.no_record_memory++;
++		if (old != NULL) {
++			*slot = old->next;
++		}
++	}
++	if (old != NULL) {
++		kfree_data(old, sizeof(*old) + old->count * sizeof(old->sites[0]));
++	}
++	if (changed != 0) {
++		hosted_text_stats.pages_fixed++;
++		hosted_text_stats.words_fixed += changed;
++	} else {
++		hosted_text_stats.pages_clean++;
++	}
++	lck_mtx_unlock(&hosted_text_lock);
++	return changed;
++}
++
++/*
++ * The page as its signature knows it. If the page (mapped at kaddr) carries the host's fixups, returns a
++ * copy with the original words, to be hashed instead, and keeps the lock until hosted_text_original_done();
++ * NULL if the page is as it was read (nothing to undo, nothing held).
++ */
++const void *
++hosted_text_original(ppnum_t page, const void *object, uint64_t offset, const void *kaddr)
++{
++	lck_mtx_lock(&hosted_text_lock);
++	struct hosted_text_record *record = hosted_text_fixed_record(page, object, offset, kaddr);
++	if (record == NULL || record->count == 0) {
++		lck_mtx_unlock(&hosted_text_lock);
++		return NULL;
++	}
++	memcpy(hosted_text_scratch, kaddr, PAGE_SIZE);
++	for (uint32_t i = 0; i < record->count; i++) {
++		hosted_text_scratch[record->sites[i].index] = record->sites[i].original;
++	}
++	hosted_text_stats.originals++;
++	return hosted_text_scratch;
++}
++
++void
++hosted_text_original_done(void)
++{
++	lck_mtx_unlock(&hosted_text_lock);
++}
++
++#endif /* XNU_HOSTED */
+diff --git a/osfmk/arm64/hosted/hosted_user.c b/osfmk/arm64/hosted/hosted_user.c
+index ef48fcb..b33ae3b 100644
+--- a/osfmk/arm64/hosted/hosted_user.c
++++ b/osfmk/arm64/hosted/hosted_user.c
+@@ -391,6 +391,11 @@ hosted_user_loop(void)
+ 		}
+ 
+ 		uint64_t twin = hosted_twin_ensure(thread);
++		for (int attempt = 0; __improbable(twin == 0) && attempt < 3; attempt++) {
++			/* the host did not answer in its own time limit (it logs why): the thread cannot run without one */
++			printf("hosted: no Linux thread for thread %p of pid %d yet: trying again\n", thread, proc_selfpid());
++			twin = hosted_twin_ensure(thread);
++		}
+ 		if (__improbable(twin == 0)) {
+ 			panic("hosted: no task process or thread for thread %p (xnuhost without the task layer?)", thread);
+ 		}
+@@ -404,6 +409,12 @@ hosted_user_loop(void)
+ 			}
+ 		}
+ 
++		static uint32_t hosted_audit_tick;
++		if (__improbable((os_atomic_inc(&hosted_audit_tick, relaxed) & 0x3ff) == 0)) {
++			(void)ml_set_interrupts_enabled(TRUE);
++			(void)hosted_check_audit(thread->machine.hosted_pmap, "audit");         /* hosted_mapcheck=1 */
++		}
++
+ 		/* return_to_user: every AST is taken before user mode, interrupts masked from the check on */
+ 		(void)hosted_irq_mask();
+ 		if (thread->machine.CpuDatap->cpu_pending_ast != 0) {
+@@ -473,6 +484,7 @@ hosted_user_loop(void)
+ 		case XH_TRAP_BRK:
+ 			hosted_user_stats.brk++;
+ 			(void)ml_set_interrupts_enabled(TRUE);
++			(void)hosted_check_audit(thread->machine.hosted_pmap, "brk");           /* hosted_mapcheck=1 */
+ 			hosted_user_brk_immediate(context, &trap);
+ 			(void)ml_set_interrupts_enabled(FALSE);
+ 			break;
+diff --git a/osfmk/conf/files.arm64 b/osfmk/conf/files.arm64
+index f89aeea..b2e01df 100644
+--- a/osfmk/conf/files.arm64
++++ b/osfmk/conf/files.arm64
+@@ -68,6 +68,7 @@ osfmk/arm64/hosted/hosted_machine.c	optional nos_arm_asm
+ osfmk/arm64/hosted/hosted_blk.c	optional nos_arm_asm
+ osfmk/arm64/hosted/hosted_user.c	optional nos_arm_asm
+ osfmk/arm64/hosted/hosted_copyio.c	optional nos_arm_asm
++osfmk/arm64/hosted/hosted_text.c	optional nos_arm_asm
+ osfmk/arm64/hosted/hosted_smp.c	optional nos_arm_asm
+ osfmk/arm64/pinst.s	optional nos_arm_asm
+ osfmk/arm64/cswitch.s	optional nos_arm_asm
+diff --git a/osfmk/vm/vm_fault.c b/osfmk/vm/vm_fault.c
+index f2b6da0..27fbfd2 100644
+--- a/osfmk/vm/vm_fault.c
++++ b/osfmk/vm/vm_fault.c
+@@ -95,6 +95,9 @@
+ #include <vm/vm_dyld_pager_internal.h>
+ #include <vm/vm_entry_lock_internal.h>
+ #include <vm/vm_fault_internal.h>
++#if XNU_HOSTED
++#include <arm64/hosted/hosted.h>      /* hosted_text_fix_page, hosted_text_original */
++#endif
+ #include <vm/vm_map_internal.h>
+ #include <vm/vm_object_internal.h>
+ #include <vm/vm_page_internal.h>
+@@ -4091,6 +4094,16 @@ vm_fault_enter_prepare(
+ 		 * We either have a good page, or a tainted page that has been accepted by the process.
+ 		 * In both cases the page will be entered into the pmap.
+ 		 */
++#if XNU_HOSTED
++		/*
++		 * OneiOS hosted: a page of a file that is about to be executable in a task gets the host's text
++		 * fixups here, once (hosted_text.c): after its validation, before its first execute mapping in any
++		 * address space. A copy of such a page (an internal object) already has them.
++		 */
++		if ((*prot & VM_PROT_EXECUTE) && pmap != kernel_pmap && !object->internal && !is_tainted) {
++			(void)hosted_text_fix_page(VM_PAGE_GET_PHYS_PAGE(m), object, m->vmp_offset);
++		}
++#endif /* XNU_HOSTED */
+ 		*page_needs_data_sync = vm_fault_enter_set_mapped(object, m, *prot, fault_type);
+ 		if ((fault_type & VM_PROT_WRITE) && is_tainted) {
+ 			/*
+@@ -8952,6 +8965,39 @@ vm_page_validate_cs_mapped_slow(
+ 	validated = 0;
+ 	tainted = 0;
+ 	nx = 0;
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted: a page that carries the host's text fixups is hashed as it was read (hosted_text.c).
++	 * Every UPL committed over a validated page clears its validation (a read() of the file is enough), so
++	 * the same page comes here again and again; with the fixed bytes it failed and its process was killed.
++	 */
++	const void *hosted_original = hosted_text_original(VM_PAGE_GET_PHYS_PAGE(page), object, page->vmp_offset, kaddr);
++	cs_validate_page(vnode,
++	    pager,
++	    mo_offset,
++	    hosted_original != NULL ? hosted_original : kaddr,
++	    &validated,
++	    &tainted,
++	    &nx);
++	if (hosted_original != NULL) {
++		hosted_text_original_done();
++	}
++	if (tainted) {
++		static uint32_t hosted_said;
++		if (os_atomic_inc(&hosted_said, relaxed) <= 40) {
++			extern const char *vnode_getname_printable(struct vnode *vp);
++			extern void vnode_putname_printable(const char *name);
++			const char *hosted_name = vnode != NULL ? vnode_getname_printable(vnode) : NULL;
++			printf("hosted cs: %s offset 0x%llx (page 0x%x) fails its hash in pid %d (%s the host's fixups%s)\n",
++			    hosted_name != NULL ? hosted_name : "?", mo_offset,
++			    VM_PAGE_GET_PHYS_PAGE(page), proc_selfpid(), hosted_original != NULL ? "with" : "without",
++			    page->vmp_wpmapped ? ", was mapped writable" : "");
++			if (hosted_name != NULL) {
++				vnode_putname_printable(hosted_name);
++			}
++		}
++	}
++#else /* XNU_HOSTED */
+ 	cs_validate_page(vnode,
+ 	    pager,
+ 	    mo_offset,
+@@ -8959,6 +9005,7 @@ vm_page_validate_cs_mapped_slow(
+ 	    &validated,
+ 	    &tainted,
+ 	    &nx);
++#endif /* XNU_HOSTED */
+ 
+ 	page->vmp_cs_validated |= validated;
+ 	page->vmp_cs_tainted |= tainted;

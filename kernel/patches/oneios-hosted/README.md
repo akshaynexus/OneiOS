@@ -65,12 +65,17 @@ What that run showed is wrong or missing (none of it fixed yet unless a later li
   boot task ends with `DONE MKB_INIT`.
 - `Text page corruption detected for pid N` (3 processes), one `dyld` assertion (`!sMemoryManagerInitialized`), one
   `xpcproxy` fatal exception: user pages that fail their code-signature check or change under a process.
+  **Fixed by 0025 and a change in xnuhost's task layer** (`0025-README.md`): two iOS processes could get one
+  Linux process (task creation raced between vCPUs), xnuhost's waits ended early, and the host's text fixup made a
+  page fail its hash the second time it was validated. With them: 14 minutes past "Early boot complete", 129
+  processes, none of these lines.
 - mount-phase-2: `failed to create overprovisioning volume` (ignored by the task); `DT_get_fstab_entries: failed to
   get filesystem entry at: /filesystems/fstab`.
 - `OneiOS launch policy: no /private/var/oneios/bin/oneios-init in this seed: no service manager`.
 
 - Later runs: `Debugger synch pending on cpu 0` at the first stackshot (fixed by 0017); once,
-  `hosted: thread_create in task 85 failed (-110)` and a panic in `hosted_user.c:383` (open, the board's Q6).
+  `hosted: thread_create in task 85 failed (-110)` and a panic in `hosted_user.c:383` (xnuhost's wait counted
+  interrupted futex calls, not time: fixed with 0025's commit).
 - Why SpringBoard exits: `+[FBDisplayManager sharedInstance]` traps in FrontBoardServices (no main display), and
   chronod aborts in QuartzCore's `query_displays`: backboardd offers no display. The display stand-in is the board's
   Q4a.
@@ -79,7 +84,11 @@ What that run showed is wrong or missing (none of it fixed yet unless a later li
   and thermalmonitord, backboardd and MobileGestaltHelper open the framebuffer (`status 0`). No swap yet: in the
   one run that got there backboardd died 4.5 minutes later in `_pthread_wqthread_setup` (a new workqueue thread's
   first system call returned -1) and the kernel then stopped with `Console I/O from interrupt-disabled context`
-  from a `printf` in `hosted_user_loop` (seen twice). Both belong to Q6.
+  from a `printf` in `hosted_user_loop` (seen twice; the printf is fixed by 0023). The system call is 372,
+  `thread_selfid`, which cannot fail in the kernel: the -1 is what the host returns for a `svc` it executes
+  itself, so that thread's `svc` was not trapped, or it ran in another process's memory. Both ways are closed by
+  0025 and its xnuhost change; in the first long run with them backboardd was still alive 7 minutes after it
+  opened the framebuffer. Whether it then swaps is not known (no user-space log read).
 
 Not reached: a swap from backboardd, a frame from SpringBoard, `session/ready`. Nothing here has run on the phone.
 
