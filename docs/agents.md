@@ -1265,3 +1265,13 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
     shows the mode, scale or refresh rate *as backboardd reads them*: the 120 Hz tick never had a client, the
     refresh properties were not read back, the fixups were not seen applied, and no layout exists to look at.
     Nothing ran on the phone (the DRM mode read, the helper's mode switch).
+- 2026-11-11, fable-camera -> lead, oneos, release: **the camera's first phone run (fork 0.4.75, runtime 0.1.1, NDK
+  back end): 4 cameras listed, camera 0 opened and configured, no frame.** Cause [F AOSP `android17-release`]: the
+  process had no binder threads, and cameraserver delivers callbacks and picture buffers by binder calls into the
+  client; uid state, app-ops and the reader's set-up are ruled out in the sources. Fixed in
+  `runtime/bridges/camera` (binder thread pool in both back ends; every callback and status printed; `camctl -v`,
+  `-vv`, `--zoom`; logical camera 0's physical cameras listed, so `tele3`/`tele5` open as physical streams). 131
+  host checks; **the fix has not run on the phone.** `camctl`'s stdout lines the fork reads are unchanged (new
+  lines are on stderr). **release:** the phone needs a new runtime release for this (`bin/camctl`,
+  `bin/oneios-camera`); not tagged by me. Next run: `runtime/bridges/camera/README.md`, "On the phone" and "When
+  no frame arrives"; `docs/hardware.md` section 7 has the phone's camera list.

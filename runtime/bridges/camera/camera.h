@@ -91,6 +91,7 @@ int cam_meta_set_i32(uint8_t *buffer, size_t size, uint32_t tag, const int32_t *
 #define CAM_MAX_LIST  32
 typedef struct {
   char id[32];                            // the camera's id for its back end
+  char parent[32];                        // "" or, for a physical camera that is not listed by itself, the logical camera it is opened through
   uint32_t role;
   int facing, orientation, logical, hal_buffers;
   float focal_mm, physical_w, physical_h, equiv35;
@@ -102,7 +103,9 @@ typedef struct {
 } cam_info;
 void cam_info_from_meta(cam_info *info, const uint8_t *buffer, size_t size);
 void cam_info_finish(cam_info *info);                        // equiv35 from the focal length and the sensor's size
-void cam_assign_roles(cam_info *list, int count);            // one camera per role, the others OC_ROLE_OTHER
+// One camera per role, the others OC_ROLE_OTHER. A camera listed by itself comes before a logical one
+// made of several, and that before a physical camera reached through its logical camera (`parent`).
+void cam_assign_roles(cam_info *list, int count);
 // The picture size to use for a request: the same size if the camera has it, else the largest with
 // the same shape that is not larger, else the largest that fits the transport. 0 or -ENOENT.
 int  cam_pick_size(const cam_info *info, int width, int height, int *out_w, int *out_h);
@@ -125,6 +128,12 @@ extern const cam_backend cam_backend_test;                   // a moving test pi
 #ifdef __ANDROID__
 extern const cam_backend cam_backend_ndk;                    // Camera2 NDK through cameraserver
 extern const cam_backend cam_backend_hal;                    // the provider HAL over binder, as cameraserver uses it
+// Starts this process's binder threads once (4 at most): a plain executable has none, and both back
+// ends are called back over binder (backend_ndk.c's header). 0 or -ENOSYS (no such platform symbol).
+int cam_binder_threads(void);
+// camctl --zoom: a zoom ratio put into the NDK request (0 = none). On a logical camera cameraserver
+// then picks the lens; a second way to the telephotos when a physical stream is refused.
+extern float cam_ndk_zoom;
 #endif
 bool cam_system_server_running(void);
 
@@ -151,6 +160,6 @@ const cam_info *cam_core_find(const cam_core *core, const char *which);   // a r
 int  cam_core_start(cam_core *core, const cam_info *camera, int width, int height, int fps);
 void cam_core_stop(cam_core *core);
 void cam_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-extern int cam_verbose;
+extern int cam_verbose;                                      // 0; 1 (-v) steps and the first callbacks; 2 (-vv) every callback and frame
 
 #endif

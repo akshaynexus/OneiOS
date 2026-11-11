@@ -72,7 +72,7 @@ int main(int argc, char **argv)
   if (argc < 2) { fprintf(stderr, "usage: oneios-camera FD [auto|ndk|hal|test]   (started by xnuhost; camctl tries it by hand)\n"); return 2; }
   channel = atoi(argv[1]);
   const char *backend = argc > 2 ? argv[2] : getenv("ONEIOS_CAMERA_BACKEND");
-  if (getenv("ONEIOS_CAMERA_VERBOSE")) cam_verbose = 1;
+  if (getenv("ONEIOS_CAMERA_VERBOSE")) cam_verbose = atoi(getenv("ONEIOS_CAMERA_VERBOSE")) > 1 ? 2 : 1;      // 2: every callback and frame
   (void)prctl(PR_SET_PDEATHSIG, SIGTERM);
   struct sigaction action = { .sa_handler = on_signal };
   sigaction(SIGTERM, &action, NULL);

@@ -13,7 +13,9 @@
 //   --frames N                    default 60
 //   --out FILE.png                default /data/local/tmp/oneios-camera-<camera>.png
 //   --nv12 FILE                   also the same frame's raw NV12
-//   -v
+//   --zoom RATIO                  ndk only: a zoom ratio in the request (3 or 5 on the logical rear camera picks a telephoto)
+//   -v                            the steps, the session's and device's callbacks, the first captures and every 30th
+//   -vv                           every capture callback and every picture (the diagnostic run)
 // Exit: 0 frames arrived and the picture was written; 1 not; 2 usage.
 #define _GNU_SOURCE
 #include "bridges/bridges.h"
@@ -73,9 +75,10 @@ static double now(void)
 
 static void print_camera(int index, const cam_info *c)
 {
-  printf("%2d  id %-4s %-9s %s  %5.2f mm (35 mm equivalent %3.0f)  sensor %dx%d  turned %3d  %s%s\n", index, c->id, cam_role_name(c->role),
+  printf("%2d  id %-4s %-9s %s  %5.2f mm (35 mm equivalent %3.0f)  sensor %dx%d  turned %3d  %s%s%s%s\n", index, c->id, cam_role_name(c->role),
          c->facing == OC_FACING_FRONT ? "front" : c->facing == OC_FACING_BACK ? "back " : "other", (double)c->focal_mm, (double)c->equiv35,
-         c->pixel_w, c->pixel_h, c->orientation, c->logical ? "logical " : "", c->hal_buffers ? "hal-buffers" : "");
+         c->pixel_w, c->pixel_h, c->orientation, c->logical ? "logical " : "", c->hal_buffers ? "hal-buffers " : "",
+         c->parent[0] ? "physical camera of id " : "", c->parent);
   printf("      YUV sizes:");
   int shown = 0;
   for (int i = 0; i < c->nsizes; i++)
@@ -131,9 +134,12 @@ int main(int argc, char **argv)
 {
   const char *backend = "auto", *which = "wide", *out = NULL, *raw = NULL, *command = NULL, *helper = NULL;
   int width = 1280, height = 720, fps = 30, frames = 60;
+  double zoom = 0;
   for (int i = 1; i < argc; i++) {
     const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
-    if (!strcmp(a, "-v")) cam_verbose = 1;
+    if (!strcmp(a, "-v")) cam_verbose = cam_verbose < 1 ? 1 : 2;
+    else if (!strcmp(a, "-vv")) cam_verbose = 2;
+    else if (!strcmp(a, "--zoom") && v) { zoom = atof(v); i++; }
     else if (!strcmp(a, "--backend") && v) { backend = v; i++; }
     else if (!strcmp(a, "--camera") && v) { which = v; i++; }
     else if (!strcmp(a, "--size") && v && sscanf(v, "%dx%d", &width, &height) == 2) i++;
@@ -145,9 +151,9 @@ int main(int argc, char **argv)
     else if (!command && !strcmp(a, "helper") && v) { command = a; helper = v; i++; }
     else { command = NULL; break; }
   }
-  if (!command || frames < 1 || fps < 1 || width < 2 || height < 2 || width > (int)OC_MAX_WIDTH || height > (int)OC_MAX_HEIGHT) {
+  if (!command || zoom < 0 || zoom > 100 || frames < 1 || fps < 1 || width < 2 || height < 2 || width > (int)OC_MAX_WIDTH || height > (int)OC_MAX_HEIGHT) {
     fprintf(stderr, "usage: camctl [--backend auto|ndk|hal|test] [--camera wide|front|ultrawide|tele3|tele5|id:ID|INDEX] [--size WxH] [--fps N]\n"
-                    "              [--frames N] [--out FILE.png] [--nv12 FILE] [-v] list | capture | helper PATH-TO-oneios-camera\n");
+                    "              [--frames N] [--out FILE.png] [--nv12 FILE] [--zoom RATIO] [-v | -vv] list | capture | helper PATH-TO-oneios-camera\n");
     return 2;
   }
   char default_out[128];
@@ -161,8 +167,12 @@ int main(int argc, char **argv)
   stats s = { 0 };
   uint64_t seen = 0;
 
+#ifdef __ANDROID__
+  cam_ndk_zoom = (float)zoom;
+#endif
   if (!strcmp(command, "helper")) {
     // As xnuhost does it: the helper process, its socket, the ring it passes.
+    if (cam_verbose) setenv("ONEIOS_CAMERA_VERBOSE", cam_verbose > 1 ? "2" : "1", 1);      // the helper prints what camctl would
     br_camera *camera = br_camera_helper(helper, backend);
     struct oc_camera list[OC_MAX_CAMERAS];
     if (!camera) return 1;

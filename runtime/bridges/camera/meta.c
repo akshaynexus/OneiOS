@@ -120,10 +120,11 @@ void cam_assign_roles(cam_info *list, int count)
 {
   bool taken[OC_ROLE_OTHER + 1] = { false };
   // The first camera of each kind in the list's order has the role (Android lists the main rear and
-  // front cameras first); a plain camera is preferred to a logical one made of several.
-  for (int pass = 0; pass < 2; pass++)
+  // front cameras first); a plain camera is preferred to a logical one made of several, and both to
+  // a physical camera that is only reached through its logical camera (a physical stream).
+  for (int pass = 0; pass < 3; pass++)
     for (int i = 0; i < count; i++) {
-      if (pass == 0 ? list[i].logical : !list[i].logical) continue;
+      if ((list[i].parent[0] ? 2 : list[i].logical ? 1 : 0) != pass) continue;
       uint32_t role = role_of(&list[i]);
       if (role != OC_ROLE_OTHER && taken[role]) role = OC_ROLE_OTHER;
       taken[role] = true;

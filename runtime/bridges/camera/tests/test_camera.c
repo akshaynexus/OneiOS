@@ -323,6 +323,24 @@ static void test_meta(void)
   list[0].facing = OC_FACING_BACK; list[0].logical = 1;
   cam_assign_roles(list, 1);
   CHECK(list[0].role == OC_ROLE_WIDE);
+  // The phone's list by cameraserver (2026-11-11): logical 0, front 1, ultra-wide 2, a second front 3; then
+  // logical 0's physical cameras that are not listed themselves, in any order (a wide one too).
+  memset(list, 0, sizeof list);
+  static const struct { const char *id, *parent; int facing, logical; float focal, pw, ph; uint32_t role; } phone[7] = {
+    { "0", "", OC_FACING_BACK, 1, 6.3f, 9.83f, 7.37f, OC_ROLE_WIDE }, { "1", "", OC_FACING_FRONT, 0, 3.3f, 4.5f, 3.4f, OC_ROLE_FRONT },
+    { "2", "", OC_FACING_BACK, 0, 2.2f, 5.9f, 4.4f, OC_ROLE_ULTRAWIDE }, { "3", "", OC_FACING_FRONT, 0, 3.3f, 3.8f, 2.9f, OC_ROLE_OTHER },
+    { "58", "0", OC_FACING_BACK, 0, 18.6f, 5.8f, 4.35f, OC_ROLE_TELE5 }, { "5", "0", OC_FACING_BACK, 0, 6.3f, 9.83f, 7.37f, OC_ROLE_OTHER },
+    { "52", "0", OC_FACING_BACK, 0, 7.9f, 4.1f, 3.1f, OC_ROLE_TELE3 },
+  };
+  for (int i = 0; i < 7; i++) {
+    snprintf(list[i].id, sizeof list[i].id, "%s", phone[i].id); snprintf(list[i].parent, sizeof list[i].parent, "%s", phone[i].parent);
+    list[i].facing = phone[i].facing; list[i].logical = phone[i].logical; list[i].focal_mm = phone[i].focal; list[i].physical_w = phone[i].pw; list[i].physical_h = phone[i].ph;
+    cam_info_finish(&list[i]);
+  }
+  cam_assign_roles(list, 7);
+  roles = true;
+  for (int i = 0; i < 7; i++) if (list[i].role != phone[i].role) { roles = false; printf("  phone camera %s: role %s\n", list[i].id, cam_role_name(list[i].role)); }
+  CHECK(roles);                                     // the listed logical camera stays the wide one; the telephotos come from its physical cameras
   CHECK(cam_role_from_name("tele5") == OC_ROLE_TELE5 && cam_role_from_name("other") == OC_ROLE_NONE && !strcmp(cam_role_name(OC_ROLE_ULTRAWIDE), "ultrawide"));
 }
 

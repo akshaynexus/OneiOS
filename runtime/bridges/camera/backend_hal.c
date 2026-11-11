@@ -47,8 +47,6 @@ typedef struct { int version, numFds, numInts; int data[]; } native_handle;
 
 // Platform symbols of libbinder_ndk and libnativewindow that the NDK's link libraries leave out.
 static AIBinder *(*check_service)(const char *instance);
-static void (*start_thread_pool)(void);
-static bool (*set_thread_pool_max)(uint32_t count);
 static void (*mark_vintf)(AIBinder *binder);
 static const native_handle *(*buffer_handle)(const AHardwareBuffer *buffer);
 
@@ -359,17 +357,29 @@ static void class_destroy(void *data) { (void)data; }
 static binder_status_t no_transact(AIBinder *b, transaction_code_t c, const AParcel *in, AParcel *out) { (void)b; (void)c; (void)in; (void)out; return STATUS_UNKNOWN_TRANSACTION; }
 
 // ---- set-up -------------------------------------------------------------------------------------
+// The binder threads of this process, for both back ends (platform symbols of libbinder_ndk).
+int cam_binder_threads(void)
+{
+  static bool started;
+  if (started) return 0;
+  void (*start_thread_pool)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "ABinderProcess_startThreadPool");
+  bool (*set_thread_pool_max)(uint32_t) = (bool (*)(uint32_t))dlsym(RTLD_DEFAULT, "ABinderProcess_setThreadPoolMaxThreadCount");
+  if (!start_thread_pool || !set_thread_pool_max) return -ENOSYS;
+  (void)set_thread_pool_max(4);
+  start_thread_pool();
+  started = true;
+  return 0;
+}
+
 static int hal_init(void)
 {
   if (hal.ready) return 0;
   check_service = (AIBinder *(*)(const char *))dlsym(RTLD_DEFAULT, "AServiceManager_checkService");
-  start_thread_pool = (void (*)(void))dlsym(RTLD_DEFAULT, "ABinderProcess_startThreadPool");
-  set_thread_pool_max = (bool (*)(uint32_t))dlsym(RTLD_DEFAULT, "ABinderProcess_setThreadPoolMaxThreadCount");
   mark_vintf = (void (*)(AIBinder *))dlsym(RTLD_DEFAULT, "AIBinder_markVintfStability");
   buffer_handle = (const native_handle *(*)(const AHardwareBuffer *))dlsym(RTLD_DEFAULT, "AHardwareBuffer_getNativeHandle");
-  if (!check_service || !start_thread_pool || !set_thread_pool_max || !mark_vintf || !buffer_handle) {
-    cam_log("hal: this Android's libbinder_ndk or libnativewindow lacks a platform symbol (service %d, pool %d/%d, vintf %d, handle %d)",
-            check_service != NULL, start_thread_pool != NULL, set_thread_pool_max != NULL, mark_vintf != NULL, buffer_handle != NULL);
+  if (!check_service || !mark_vintf || !buffer_handle || cam_binder_threads()) {
+    cam_log("hal: this Android's libbinder_ndk or libnativewindow lacks a platform symbol (service %d, vintf %d, handle %d, or the thread pool's)",
+            check_service != NULL, mark_vintf != NULL, buffer_handle != NULL);
     return -ENOSYS;
   }
   hal.provider_class = AIBinder_Class_define(PROVIDER, class_create, class_destroy, no_transact);
@@ -377,8 +387,7 @@ static int hal_init(void)
   hal.session_class = AIBinder_Class_define(SESSION, class_create, class_destroy, no_transact);
   hal.callback_class = AIBinder_Class_define(CALLBACK, class_create, class_destroy, callback_transact);
   if (!hal.provider_class || !hal.device_class || !hal.session_class || !hal.callback_class) return -ENOMEM;
-  (void)set_thread_pool_max(4);
-  start_thread_pool();                       // the HAL's calls into the callback arrive on these threads
+  // cam_binder_threads() above: the HAL's calls into the callback arrive on those threads.
   hal.provider = check_service(PROVIDER "/internal/0");
   if (!hal.provider) { cam_log("hal: no service " PROVIDER "/internal/0"); return -ENOENT; }
   if (!AIBinder_associateClass(hal.provider, hal.provider_class)) { cam_log("hal: the provider is not an " PROVIDER); return -EPROTO; }

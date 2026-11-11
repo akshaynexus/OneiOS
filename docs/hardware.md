@@ -24,7 +24,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 | Bluetooth | `drivers/bluetooth` (port of iOSPlus10's transport) on `drivers/bridge` | `runtime/bridges/bt`: the HAL over `/dev/hwbinder` | both built; HAL client untested on the phone |
 | Haptics | `drivers/haptics` (port of iOSPlus10's LaurelVibrator and haptic node) | `runtime/bridges/haptics`: evdev force feedback | both built; host tested with a fake actuator |
 | Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp` (unchanged) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | host built and tested with a fake back end; AAudio as root without system_server is [U] |
-| Camera | `drivers/camera`: the `oneios,camera` transport, `/dev/oneios-camera`; `userland/camera`: the capture plug-in (its device object not written) | `runtime/bridges/camera`: helper `oneios-camera` (provider HAL in a session, Camera2 NDK with One UI), ring, device, `camctl` | host and kernel sides built and host-tested; iOS shows no camera yet; nothing run on the phone (section 7) |
+| Camera | `drivers/camera`: the `oneios,camera` transport, `/dev/oneios-camera`; `userland/camera`: the capture plug-in (its device object not written) | `runtime/bridges/camera`: helper `oneios-camera` (provider HAL in a session, Camera2 NDK with One UI), ring, device, `camctl` | host and kernel sides built and host-tested; iOS shows no camera yet; one phone run (2026-11-11): cameraserver lists 4 cameras and opens one for a root client, no frame arrived (no binder threads in the process: fixed, the fix not yet run on the phone); the HAL back end never run (section 7) |
 | Backlight and light sensor | `drivers/brightness`: the backlight service (port of iOSPlus10's `AppleARMBacklight`), the light readings; the HID light sensor device is written, not built | `runtime/bridges/brightness`: the backlight sysfs node, `als_rear` by evdev, `brightctl` | both built; host tested; never run on the phone or in a session (section 7a) |
 
 Common pieces:
@@ -323,9 +323,11 @@ ports; `DroidVMVirtioSnd.c`: virtio-snd transport, node `/arm-io/virtio-snd`, co
 
 ## 7. Camera (fable-camera, 2026-11-11)
 
-Built on all three sides; **never run on the phone** (it was not attached), and iOS shows no camera yet: the capture
-device object in the plug-in is not written. Details: `runtime/bridges/camera/README.md` (the host, the route, the
-phone commands), `drivers/camera/README.md`, `userland/camera/README.md`.
+Built on all three sides; iOS shows no camera yet: the capture device object in the plug-in is not written. **One
+phone run (2026-11-11, `camctl` with the NDK back end): the cameras are listed and one opens, no frame arrived; the
+cause is fixed in the code and the fix has not run on the phone yet** ("The first phone run" below). Details:
+`runtime/bridges/camera/README.md` (the host, the route, the phone commands), `drivers/camera/README.md`,
+`userland/camera/README.md`.
 
 ### The phone [F]
 
@@ -344,15 +346,49 @@ phone commands), `drivers/camera/README.md`, `userland/camera/README.md`.
 - Services running in a session: the provider HAL `vendor.samsung.hardware.camera.provider`
   (`ICameraProvider/internal/0`), `media.camera` (cameraserver), and the vendor-facing
   `android.frameworks.cameraservice.service.ICameraService/default`.
-- [U] which camera ids the provider lists, and whether the 3x and 5x sensors are among them for a plain client:
-  the bridge gives roles by facing and 35 mm equivalent focal length (below 18 mm ultra-wide, below 45 wide, below
-  90 3x, else 5x); `camctl list` shows what the phone has.
+- Cameras by cameraserver [F the phone, SM-S928B, Android 17 `CP2A.260605.016.S928BXXU6EZIF`, `camctl --backend
+  ndk list` as root, 2026-11-11]. Every one has YUV sizes up to 1920x1080 and the frame rate ranges 15-15, 24-24,
+  15-30, 30-30, 15-60, 60-60:
+
+  | Id | Facing | Focal length (35 mm equivalent) | Sensor array | Turned | Kind | Bridge role |
+  |---|---|---|---|---|---|---|
+  | 0 | back | 6.30 mm (22) | 4080x3060 | 90 | logical multi-camera | `wide` |
+  | 1 | front | 3.30 mm (25) | 4000x3000 | 270 | | `front` |
+  | 2 | back | 2.20 mm (14) | 4000x3000 | 90 | | `ultrawide` |
+  | 3 | front | 3.30 mm (30) | 3392x2544 | 270 | | `other` (not given to the guest) |
+
+  The 3x and 5x telephotos are not cameras of their own: they are physical cameras behind logical camera 0. The
+  bridge lists a logical camera's physical cameras after these and opens one as a physical stream of its logical
+  camera. [U] their ids, and whether the HAL gives such a stream alone (else: camera 0 with a zoom ratio).
+- [U] which ids the provider HAL lists (expected: every sensor and Samsung's hidden ones). Roles are given by
+  facing and 35 mm equivalent focal length (below 18 mm ultra-wide, below 45 wide, below 90 3x, else 5x).
+
+### The first phone run (2026-11-11)
+
+`camctl --backend ndk --camera wide --frames 90 capture`, root through KernelSU, One UI running, runtime 0.1.1:
+camera 0 opened, the 1280x720 30 fps session was made, the repeating request was accepted, and `no frame arrived`,
+with no error.
+
+- **Cause [F AOSP `android17-release`; I that it is the only one]: no binder threads.** cameraserver delivers
+  everything by binder calls into the client: the callbacks, and the pictures (the `AImageReader`'s buffer queue is
+  in the client; cameraserver's request thread calls its `dequeueBuffer`). An app has binder threads from zygote; a
+  plain executable has none and the NDK camera and media libraries start none. The calls made while the client is
+  itself inside a call (open, configure) are served on the calling thread, so those succeed; then cameraserver's
+  first `dequeueBuffer` waits for ever, and the error callback could not arrive either.
+- **Not the cause [F the same sources]:** uid state (uids below 10000 are always active; an idle uid is
+  disconnected with an error, not starved), app-ops (none for a native client below uid 10000), the privacy switch
+  and device policy (they refuse the open). The reader's format (YUV_420_888), its CPU-read usage and the
+  `TEMPLATE_PREVIEW` request with the reader's window as its target were already right.
+- **Fix:** both back ends start the binder thread pool (4 threads, ordinary priority) before anything else; the
+  NDK back end prints every session, device and capture callback and every status by name, and at the stop a
+  `stopped at:` line that names the stage when no picture came (`camctl -v`, `-vv`). Not yet run on the phone.
+- **If it still gives no frame:** the HAL back end (`--backend hal`) becomes the route with One UI running too.
 
 ### The path
 
 | Part | Where | State |
 |---|---|---|
-| Helper process `bin/oneios-camera`: opens a camera, NV12 frames with the sensor's time into a memfd ring | `runtime/bridges/camera` | built for Android; 130 host checks with a test picture; not run on the phone |
+| Helper process `bin/oneios-camera`: opens a camera, NV12 frames with the sensor's time into a memfd ring | `runtime/bridges/camera` | built for Android; 131 host checks with a test picture; on the phone: the list and the open work, no frame yet (above) |
 | xnuhost: the helper's socket and ring, the `oneios,camera` virtio device (`/arm-io/camera`, `XL_DEV_CAMERA`) | `runtime/bridges/camera` (`libonecamera.a`), `runtime/xnuhost/src/main.c` | linked into xnuhost; the device tested on xnuhost's transport against a guest of plain memory |
 | Kernel: the transport and `/dev/oneios-camera` (the `NCFRAME1` layout of iOSPlus10's and HakiOS's node, NV12) | `drivers/camera` | compiles with the kernel's records, links against `xnu.macho`; 37 host checks of the pure parts; not run |
 | Plug-in: the node's reader, IOSurface-backed 420f pixel buffers, the report of what CMCapture 27 has, the vendor hook | `userland/camera` | reader host-tested (26 checks); the plug-in syntax-checked only (no SDK); **the FigCaptureDevice for CMCapture 27 is not written** |
@@ -380,7 +416,8 @@ phone commands), `drivers/camera/README.md`, `userland/camera/README.md`.
 - **The capture device object** (`oneios_camera_device_create`, `userland/camera/README.md`, "Not written"): needs
   the 24A446 shared cache on the build machine and a guest that reaches SpringBoard. Also there: how the plug-in is
   loaded into `cameracaptured`, the device tree nodes, the camera permission.
-- [U] everything on the phone: `runtime/bridges/camera/README.md`, "On the phone" (with One UI running) and "In a
+- [U] on the phone: the capture again with the fix, the telephotos, the diagnostic run if no frame arrives
+  (`runtime/bridges/camera/README.md`, "On the phone" and "When no frame arrives"), and "In a
   session" (the HAL back end with system_server stopped; whether Samsung's HAL takes a plain YCbCr_420_888 stream
   from a client that is not cameraserver; what a killed helper leaves in the provider).
 - oneos: if a killed helper leaves the camera "in use" in the provider, the provider's init service has to be
