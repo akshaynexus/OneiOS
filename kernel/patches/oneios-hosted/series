@@ -68,3 +68,9 @@
 # process that stops itself on an assertion (SpringBoard in FrontBoardServices on the phone), when no crash report
 # is written.
 0028-exception-text.patch
+# lead: a debugging aid. oneios-iouc=NAME,... logs which IOKit user client methods those processes call and what
+# they return (first call of each class and selector, and each change of status). Off without the boot argument.
+0029-iokit-client-trace.patch
+# lead: a debugging aid. oneios-display-report=SECONDS prints the display backend's counters (vsync ticks, swaps
+# validated and refused, transfers, retirements, the family's state words). Off without the boot argument.
+0030-display-report.patch

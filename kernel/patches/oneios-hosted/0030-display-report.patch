@@ -1,0 +1,124 @@
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+--- a/osfmk/arm64/hosted/hosted_machine.c
++++ b/osfmk/arm64/hosted/hosted_machine.c
+@@ -687,6 +687,112 @@
+ 	thread_terminate(current_thread());
+ }
+ 
++/*
++ * OneiOS hosted (0030), a debugging aid: the display backend's own counters on the console, every
++ * oneios-display-report=SECONDS (off without it). UniXNU's LegacyDisplayProbe keeps them for a debugger: the vsync
++ * tick (sent, armed, idle stops), swaps validated, accepted and refused with the last reason, transfers, retirements,
++ * the slot of a family method the backend does not implement that the family called (guard), the family's state
++ * words and the last swaps' timeline. Weak: a kernel without the display archive prints nothing.
++ */
++extern unsigned native_legacy_prepare_report(char *out, unsigned cap) __attribute__((weak_import));
++extern unsigned native_legacy_state_words(char *out, unsigned cap) __attribute__((weak_import));
++extern unsigned native_legacy_swap_timeline(char *out, unsigned cap) __attribute__((weak_import));
++extern volatile uint32_t native_legacy_swap_validation_calls __attribute__((weak_import));
++extern volatile uint32_t native_legacy_swap_validation_reason __attribute__((weak_import));
++extern volatile uint32_t native_legacy_swap_accepted_count __attribute__((weak_import));
++extern volatile uint32_t native_legacy_swap_rejected_count __attribute__((weak_import));
++extern volatile uint32_t native_legacy_transfer_calls __attribute__((weak_import));
++extern volatile int native_legacy_transfer_status __attribute__((weak_import));
++extern volatile uint32_t native_legacy_retirement_calls __attribute__((weak_import));
++extern volatile uint32_t native_legacy_retired_generation __attribute__((weak_import));
++extern volatile uint32_t native_legacy_presented_generation __attribute__((weak_import));
++extern volatile uint32_t native_legacy_guard_slot __attribute__((weak_import));
++extern volatile uint64_t native_legacy_guard_caller __attribute__((weak_import));
++extern volatile uint32_t native_legacy_client_calls __attribute__((weak_import));
++extern volatile uint32_t native_legacy_swapstat[16] __attribute__((weak_import));
++extern volatile uint32_t native_legacy_pm_stage __attribute__((weak_import));
++extern volatile uint32_t native_legacy_pm_calls __attribute__((weak_import));
++extern volatile uint32_t native_legacy_pm_callbacks __attribute__((weak_import));
++extern volatile uint32_t native_legacy_pm_ordinal __attribute__((weak_import));
++extern volatile int native_legacy_pm_status __attribute__((weak_import));
++extern volatile uint64_t native_legacy_object __attribute__((weak_import));
++static uint32_t hosted_display_report_every;
++
++static void
++hosted_display_report_thread(__unused void *arg, __unused wait_result_t result)
++{
++	static char text[2048];
++	for (;;) {
++		assert_wait_timeout((event_t)&hosted_display_report_every, THREAD_UNINT, hosted_display_report_every * 1000, NSEC_PER_MSEC);
++		(void)thread_block(THREAD_CONTINUE_NULL);
++		if (&native_legacy_prepare_report == NULL || &native_legacy_swap_validation_calls == NULL) {
++			printf("oneios-display-report: no display backend in this kernel\n");
++			break;
++		}
++		text[0] = 0;
++		(void)native_legacy_prepare_report(text, sizeof(text));
++		printf("oneios-display-report: %s\n", text);
++		printf("oneios-display-report: clients %u; swaps validated %u (accepted %u, refused %u, last reason %u); transfers %u (status %d); "
++		    "retirements %u (generation %u, presented %u); guard slot %u caller 0x%llx\n",
++		    native_legacy_client_calls, native_legacy_swap_validation_calls, native_legacy_swap_accepted_count,
++		    native_legacy_swap_rejected_count, native_legacy_swap_validation_reason, native_legacy_transfer_calls,
++		    native_legacy_transfer_status, native_legacy_retirement_calls, native_legacy_retired_generation,
++		    native_legacy_presented_generation, native_legacy_guard_slot,
++		    native_legacy_guard_caller ? (unsigned long long)(native_legacy_guard_caller - vm_kernel_slide) : 0ULL);
++		/* NativeLegacyDisplay.cpp: [0] validated, [1] kicks, [2] refused in flight, [3] display not ready, [4] no validated head, ... */
++		printf("oneios-display-report: swapstat validated %u kicks %u in-flight %u not-ready %u no-head %u latch-busy %u fence %u copy %u blank %u "
++		    "flips %u latches %u retires %u\n", native_legacy_swapstat[0], native_legacy_swapstat[1], native_legacy_swapstat[2],
++		    native_legacy_swapstat[3], native_legacy_swapstat[4], native_legacy_swapstat[5], native_legacy_swapstat[6], native_legacy_swapstat[7],
++		    native_legacy_swapstat[8], native_legacy_swapstat[9], native_legacy_swapstat[10], native_legacy_swapstat[11]);
++		/*
++		 * The power state: the family's swap_submit drops every swap, answering success, while the display object's
++		 * word at +7180 is 0 (24A446 v54: 0xfffffe000a18cfcc). Only the family's setPowerState writes it, with the
++		 * power state the power manager calls it with; the word at +7184 is what the backend announces at start.
++		 * pm stage: 1 driver registered, 2 state 1 asked for, 3 setPowerState called, 4 the family's answered.
++		 */
++		{
++			uint32_t words[4] = { 0, 0, 0, 0 };
++			if (native_legacy_object != 0) {
++				memcpy(words, (const void *)(uintptr_t)(native_legacy_object + 7180), sizeof(words));
++			}
++			printf("oneios-display-report: power: pm stage %u calls %u callbacks %u ordinal %u status 0x%x; display +7180 %u +7184 %u +7188 %u +7192 %u\n",
++			    native_legacy_pm_stage, native_legacy_pm_calls, native_legacy_pm_callbacks, native_legacy_pm_ordinal,
++			    (unsigned)native_legacy_pm_status, words[0], words[1], words[2], words[3]);
++		}
++		text[0] = 0;
++		(void)native_legacy_state_words(text, sizeof(text));
++		printf("oneios-display-report: %s\n", text);
++		text[0] = 0;
++		if (native_legacy_swap_timeline(text, sizeof(text)) != 0) {
++			for (char *line = text; *line;) {
++				char *end = strchr(line, '\n');
++				if (end != NULL) {
++					*end = 0;
++				}
++				printf("oneios-display-report: %s\n", line);
++				if (end == NULL) {
++					break;
++				}
++				line = end + 1;
++			}
++		}
++	}
++	thread_terminate(current_thread());
++}
++
++static void
++hosted_display_report_start(void)
++{
++	thread_t thread = THREAD_NULL;
++	if (!PE_parse_boot_argn("oneios-display-report", &hosted_display_report_every, sizeof(hosted_display_report_every)) ||
++	    hosted_display_report_every == 0) {
++		return;
++	}
++	if (kernel_thread_start(hosted_display_report_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++
+ void hosted_user_backtrace_start(void);
+ void
+ hosted_user_backtrace_start(void)
+@@ -695,6 +801,7 @@
+ 	/* 0027: decided and said here, on bsd_init's thread: its first caller may have interrupts masked (no console) */
+ 	extern bool hosted_user_pac_off(void);
+ 	(void)hosted_user_pac_off();
++	hosted_display_report_start();
+ 	if (!PE_parse_boot_argn("oneios-ubt", hosted_ubt_names, sizeof(hosted_ubt_names)) || hosted_ubt_names[0] == 0) {
+ 		return;
+ 	}

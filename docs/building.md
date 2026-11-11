@@ -160,6 +160,12 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   thread of those processes is (`oneios-ubt:` lines: scheduler state, saved pc and lr, the return addresses up the
   frame pointers; `0026`). Give a long line's addresses to `scripts/debug/dsc.py` for the slide, then name the rest
   with `--slide`.
+- IOKit calls of a process: `oneios-iouc=NAME[,NAME...]` logs which user client methods those processes call and
+  what they return (`oneios-iouc: backboardd[53] IOMobileFramebufferUserClient selector 5 -> 0x0 (call 1)`: the
+  first call of each class and selector, each change of status, and calls 16, 64, 256, ...; `0029`).
+- The display backend's counters: `oneios-display-report=SECONDS` prints, every so often, the vsync tick, swaps
+  validated, accepted and refused, the backend's kick statistics, the power state the family's swap path tests
+  (`display +7180`), the power manager's calls, and the last swaps' timeline (`0030`).
 - What the PC cannot show: seccomp (qemu-user has none; a marked trap instruction stands in), real timing, the
   phone's GPU, panel, HALs, SELinux and KernelSU.
 

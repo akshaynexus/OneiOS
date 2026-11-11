@@ -1,0 +1,103 @@
+diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
+--- a/iokit/Kernel/IOUserClient.cpp
++++ b/iokit/Kernel/IOUserClient.cpp
+@@ -5134,6 +5134,69 @@
+ 	return is_io_registry_entry_set_properties( connection, properties, propertiesCnt, result );
+ }
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0029), a debugging aid: which IOKit user client methods a named process calls and what they
++ * return. Boot argument oneios-iouc=NAME[,NAME...] (the process's short name; off without it). One line for the
++ * first call of each (class, selector) and for each change of its status, at most 600 lines:
++ *   oneios-iouc: backboardd[53] IOMobileFramebufferUserClient selector 72 -> 0x0 (call 1)
++ * For a compositor that opens the framebuffer and never submits a frame: whether it registers for vsync, what
++ * its swap calls answer, what the accelerator refuses.
++ */
++struct hosted_iouc_entry { const OSMetaClass *meta; uint32_t selector; uint32_t calls; IOReturn last; };
++static struct hosted_iouc_entry hosted_iouc_table[512];
++static char hosted_iouc_names[128];
++static int hosted_iouc_state = -1;
++static uint32_t hosted_iouc_lines;
++static void
++hosted_iouc_trace(IOUserClient *client, uint32_t selector, IOReturn ret)
++{
++	if (hosted_iouc_state < 0) {
++		hosted_iouc_state = PE_parse_boot_argn("oneios-iouc", hosted_iouc_names, sizeof(hosted_iouc_names)) && hosted_iouc_names[0];
++	}
++	if (hosted_iouc_state == 0 || client == NULL) {
++		return;
++	}
++	char name[33] = "";
++	proc_name(proc_selfpid(), name, sizeof(name));
++	size_t length = strlen(name);
++	bool wanted = false;
++	for (const char *at = hosted_iouc_names; *at && !wanted;) {
++		const char *end = strchr(at, ',');
++		size_t n = end ? (size_t)(end - at) : strlen(at);
++		wanted = n == length && !strncmp(at, name, n);
++		at += n + (end ? 1 : 0);
++	}
++	if (!wanted) {
++		return;
++	}
++	const OSMetaClass *meta = client->getMetaClass();
++	/* A racy table is fine here: a lost count or a doubled line at worst. */
++	struct hosted_iouc_entry *e = NULL;
++	for (unsigned i = 0; i < 512; i++) {
++		if (hosted_iouc_table[i].meta == meta && hosted_iouc_table[i].selector == selector) {
++			e = &hosted_iouc_table[i];
++			break;
++		}
++		if (hosted_iouc_table[i].meta == NULL) {
++			e = &hosted_iouc_table[i];
++			e->meta = meta; e->selector = selector; e->calls = 0; e->last = ~ret;
++			break;
++		}
++	}
++	if (e == NULL) {
++		return;
++	}
++	e->calls++;
++	/* also at call 16, 64, 256, ...: how often a call that keeps its answer is made */
++	if ((e->last != ret || (e->calls >= 16 && (e->calls & (e->calls - 1)) == 0 && (__builtin_ctz(e->calls) & 1) == 0)) && hosted_iouc_lines < 600) {
++		hosted_iouc_lines++;
++		IOLog("oneios-iouc: %s[%d] %s selector %u -> 0x%x (call %u)\n", name, proc_selfpid(), meta->getClassName(), selector, ret, e->calls);
++	}
++	e->last = ret;
++}
++#endif /* XNU_HOSTED */
++
+ /* Routine io_user_client_method */
+ kern_return_t
+ is_io_connect_method_var_output
+@@ -5207,6 +5270,9 @@
+ 
+ 	if (kIOReturnSuccess == ret) {
+ 		ret = client->callExternalMethod(selector, &args);
++#if XNU_HOSTED
++		hosted_iouc_trace(client, selector, ret);
++#endif
+ 	}
+ 
+ 	*scalar_outputCnt = args.scalarOutputCount;
+@@ -5328,6 +5394,9 @@
+ 	}
+ 	if (kIOReturnSuccess == ret) {
+ 		ret = client->callExternalMethod( selector, &args );
++#if XNU_HOSTED
++		hosted_iouc_trace(client, selector, ret);
++#endif
+ 	}
+ 
+ 	*scalar_outputCnt = args.scalarOutputCount;
+@@ -5442,6 +5511,9 @@
+ 	}
+ 	if (kIOReturnSuccess == ret) {
+ 		ret = client->callExternalMethod( selector, &args );
++#if XNU_HOSTED
++		hosted_iouc_trace(client, selector, ret);
++#endif
+ 	}
+ 
+ 	*scalar_outputCnt = args.scalarOutputCount;
