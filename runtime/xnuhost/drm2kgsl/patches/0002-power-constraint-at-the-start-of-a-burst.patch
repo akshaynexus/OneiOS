@@ -1,0 +1,54 @@
+--- a/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-11 15:01:16.293196654 +0530
++++ b/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-11 15:28:10.041802862 +0530
+@@ -457,6 +457,7 @@
+    uint64_t constrained_submits[8];
+    unsigned constrained_next;
+    bool constraint_on;   /* the constrained queue's KGSL context has its constraint set now (kgsl_constraint_update) */
++   bool constraint_rate;   /* ONEIOS: the rate rule's own last answer, which its hysteresis follows (not a burst's) */
+ 
+    /* Whether the guest asked for its fault count (MSM_PARAM_FAULTS): then this context's GPU resets count in the shmem's
+     * global_faults (kgsl_note_reset). A guest that reads global_faults from the shmem alone (Linux turnip) never asks, and keeps
+@@ -1445,9 +1446,17 @@
+ kgsl_constraint_now(struct kgsl_context *kctx)
+ {
+    static uint64_t min_rate = 60;
++   /* ONEIOS: and the first DRM2KGSL_PWR_CONSTRAINT_BURST submissions (default 2; 0, upstream's rule alone) after a pause of
++    * 100 ms or more. iOS's render server draws sparse frames for a touch or a clock tick, and with the rate rule alone each
++    * ran at the governor's idle clock: 22-31 ms from submission to done on the S24 Ultra (2026-11-11). Constraining every
++    * submission (MIN_RATE 0) brought them to 8-10 ms, but also held the top clock through a steady redraw at 40-50 frames a
++    * second that needed none of it, the phone at 68 C. Now: the start of a burst at the top clock, a sustained animation at 60
++    * a second or more too (upstream), anything slower and steady to the governor. */
++   static uint64_t burst = 2;
+    static bool read;
+    if (!read) {
+       kgsl_parse_u64_env("DRM2KGSL_PWR_CONSTRAINT_MIN_RATE", &min_rate);
++      kgsl_parse_u64_env("DRM2KGSL_PWR_CONSTRAINT_BURST", &burst);
+       read = true;
+    }
+    struct timespec ts;
+@@ -1459,12 +1468,23 @@
+       return true;
+    /* The sixth most recent submission, this one counted: six within 100 ms is 60 a second (three, 30, to keep it). */
+    unsigned count = (unsigned)MIN2(min_rate / 10, (uint64_t)n);
+-   if (kctx->constraint_on)
++   if (kctx->constraint_rate)
+       count = MAX2(count / 2, 2u);
+    if (count < 2)
+       return true;
+    const uint64_t then = kctx->constrained_submits[(kctx->constrained_next - count) % n];
+-   return then && now - then <= 100000000ull;
++   kctx->constraint_rate = then && now - then <= 100000000ull;
++   if (kctx->constraint_rate)
++      return true;
++   /* ONEIOS: the start of a burst, checked after the rate rule so that its hysteresis state stays its own. */
++   const unsigned depth = (unsigned)MIN2(burst, (uint64_t)n - 1);
++   for (unsigned k = 0; k < depth; k++) {
++      const uint64_t later = kctx->constrained_submits[(kctx->constrained_next - 1 - k) % n];
++      const uint64_t earlier = kctx->constrained_submits[(kctx->constrained_next - 2 - k) % n];
++      if (!earlier || later - earlier >= 100000000ull)
++         return true;
++   }
++   return false;
+ }
+ 
+ /* The context's power constraint: the GPU's highest level while a submission that asks for it runs. */

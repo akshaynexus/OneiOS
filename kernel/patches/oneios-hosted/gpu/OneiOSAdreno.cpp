@@ -34,6 +34,7 @@
 #include <pexpert/pexpert.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <machine/machine_routines.h>
+#include <mach/task_info.h>
 extern "C" uint64_t gPhysBase, gPhysSize;
 #include "DroidVMVirtgpuABI.h"
 
@@ -216,6 +217,69 @@ extern volatile uint64_t droidvm_virtgpu_live[4], droidvm_virtgpu_last_refusal[4
 struct DroidVMClientMemory { char name[16]; uint64_t pageBytes, userBytes; uint32_t sizes[8]; };
 extern DroidVMClientMemory droidvm_virtgpu_client_memory[64];
 }
+// Which processes use the CPU, the same interval: the client that keeps a still screen redrawing (SpringBoard committing,
+// or only backboardd running an animation of its own), and the heat. The busiest eight, as a percentage of one CPU:
+//   oneios-cpu: 10 s: backboardd[53] 62%, SpringBoard[30] 35%, kernel_task[0] 20%, ... (all 140%)
+// From each task's recorded user and system time (TASK_POWER_INFO); a process that started or ended inside the interval
+// counts from where it was seen.
+extern "C" {
+typedef struct proc *proc_t;
+typedef int (*proc_iterate_fn_t)(proc_t, void *);
+void proc_iterate(unsigned int flags, proc_iterate_fn_t callout, void *arg, proc_iterate_fn_t filterfn, void *filterarg);
+task_t proc_task(proc_t);
+int proc_pid(proc_t);
+kern_return_t task_info(task_t, task_flavor_t, task_info_t, mach_msg_type_number_t *);
+void absolutetime_to_nanoseconds(uint64_t, uint64_t *);
+}
+namespace cpu {
+struct Seen { int pid; uint32_t round; uint64_t mach; };
+Seen seen[1024];
+struct Busy { int pid; uint64_t mach; char name[24]; };
+struct Walk { uint32_t round; Busy top[8]; uint64_t all; };
+int visit(proc_t p, void *arg)
+{
+    Walk &w = *static_cast<Walk *>(arg);
+    task_t task = proc_task(p);
+    const int pid = proc_pid(p);
+    if (!task || pid < 0) return 0;
+    task_power_info_data_t info = {};
+    mach_msg_type_number_t count = TASK_POWER_INFO_COUNT;
+    if (task_info(task, TASK_POWER_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS) return 0;
+    const uint64_t now = info.total_user + info.total_system;
+    Seen &e = seen[unsigned(pid) % 1024];
+    const uint64_t used = e.pid == pid && e.round + 1 == w.round && now >= e.mach ? now - e.mach : 0;
+    e.pid = pid; e.round = w.round; e.mach = now;
+    w.all += used;
+    unsigned at = 8;
+    while (at > 0 && w.top[at - 1].mach < used) at--;
+    if (at < 8 && used) {
+        memmove(&w.top[at + 1], &w.top[at], (7 - at) * sizeof(Busy));
+        w.top[at].pid = pid; w.top[at].mach = used;
+        strlcpy(w.top[at].name, proc_best_name(p), sizeof w.top[at].name);
+    }
+    return 0;   // PROC_RETURNED
+}
+void report(uint32_t every, uint32_t round)
+{
+    Walk w = {};
+    w.round = round;
+    proc_iterate(1 /* PROC_ALLPROCLIST */, visit, &w, nullptr, nullptr);
+    if (round < 2) return;   // the first walk only records where each process was
+    const uint64_t span = uint64_t(every) * 1000000000ull;
+    char text[220];
+    size_t at = 0;
+    for (unsigned i = 0; i < 8 && w.top[i].mach; i++) {
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(w.top[i].mach, &ns);
+        at += snprintf(text + at, sizeof text - at, "%s%.20s[%d] %llu%%", at ? ", " : "", w.top[i].name, w.top[i].pid, ns * 100 / span);
+        if (at >= sizeof text - 1) break;
+    }
+    uint64_t all = 0;
+    absolutetime_to_nanoseconds(w.all, &all);
+    IOLog("oneios-cpu: %u s: %s (all %llu%%)\n", every, at ? text : "idle", all * 100 / span);
+}
+}  // namespace cpu
+
 namespace {
 void report(void *, wait_result_t)
 {
@@ -223,8 +287,9 @@ void report(void *, wait_result_t)
     PE_parse_boot_argn("oneios-gpu-report", &every, sizeof every);
     if (!every) return;
     uint64_t was[8] = {}, fences[3] = {}, hist[10] = {}, closed[2] = {}, live[4] = {};
-    for (;;) {
+    for (uint32_t round = 1;; round++) {
         IOSleep(every * 1000);
+        cpu::report(every, round);
         uint64_t now[8], rs[3], h[10], cl[3], lv[4];
         for (unsigned i = 0; i < 8; i++) now[i] = droidvm_virtgpu_stats[i];
         for (unsigned i = 0; i < 3; i++) rs[i] = droidvm_virtgpu_rs_fences[i];

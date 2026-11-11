@@ -89,15 +89,19 @@ Two changes to Droid-VM's `drm2kgsl_renderer.c` at the pin, marked `ONEIOS` in t
    `GEM_SET_IOVA` as a whole, and freed chunk by chunk (unbind, free, close). With one dma-buf everything goes the
    way it went.
 
-### 2.2 `drm2kgsl/patches/0002-power-constraint-from-the-first-frame.patch`
+### 2.2 `drm2kgsl/patches/0002-power-constraint-at-the-start-of-a-burst.patch`
 
-drm2kgsl runs a compositor queue's submissions at the GPU's highest level (a KGSL power constraint) only while it submits at
-`DRM2KGSL_PWR_CONSTRAINT_MIN_RATE` a second, 60 upstream. iOS's render server draws sparse frames when the screen changes
-little (1-5 in 10 s at the lock screen), and each ran at the governor's idle clock: 22-31 ms from submission to done. With the
-rate 0 (the environment variable, phone, 2026-11-11) frames took 8-10 ms at 40-60 a second. The patch makes 0 the default; the
-variable still overrides it. Only queues that ask are constrained (the render server's: `context N: constrained ...` in the
-log), and only while each of their submissions runs. drm2kgsl's matching vCPU clamp looks for threads named `crosvm_vcpu*`;
-xnuhost's are `xnu-cpuN`, so it does nothing here.
+drm2kgsl runs a compositor queue's submissions at the GPU's highest level (a KGSL power constraint) while it submits at
+`DRM2KGSL_PWR_CONSTRAINT_MIN_RATE` a second (60; upstream). iOS's render server draws sparse frames for a touch or a clock tick,
+and with that rule alone each ran at the governor's idle clock: 22-31 ms from submission to done. Constraining every submission
+(`MIN_RATE=0`, phone, 2026-11-11) gave 8-10 ms, but also held the top clock through a steady 40-50 frames a second that a still
+lock screen kept drawing (section 5.1), with the SoC at 68 C. The patch adds: the first `DRM2KGSL_PWR_CONSTRAINT_BURST` (2)
+submissions after a pause of 100 ms or more are constrained too. So a touch's first frames and a sparse update run at the top
+clock, a sustained animation at 60 a second or more as upstream, and anything slower and steady is the governor's. The rate
+rule's hysteresis (it stays on down to half its rate) follows the rate rule's own answer, not a burst's, or a burst would have
+kept a 45 fps redraw constrained. `MIN_RATE=0` still constrains every submission; `BURST=0` is upstream's rule alone. Only
+queues that ask are constrained (the render server's: `context N: constrained ...` in the log). drm2kgsl's matching vCPU
+clamp looks for threads named `crosvm_vcpu*`; xnuhost's are `xnu-cpuN`, so it does nothing here.
 
 To change it: edit a copy of the pinned file, `diff -u` against the original into `drm2kgsl/patches/`, `make`.
 A new pin of virglrenderer that the patch no longer applies to stops the build (`patch -F0`).
@@ -384,6 +388,14 @@ pages the driver allocated (Turnip's buffers and textures): memory that exists f
 own pages wired for the GPU (`CREATE_BLOB_USER`: an IOSurface or a no-copy buffer imported, often another process's window
 surface); those pages belong to the surface and are counted again wherever it is imported. The clients line gives own+wired
 MiB per process; the memory line comes whenever the live counts change, the clients line too.
+
+**Who keeps a still screen drawing.** `oneios-cpu: 10 s: backboardd[53] 62%, SpringBoard[30] 35%, ... (all 140%)`, every
+report: the eight busiest processes in the interval, as a percentage of one CPU, from each task's recorded user and system time.
+The phone's run of 2026-11-11 drew 40-58 frames a second for ten minutes with nobody touching the lock screen, from the lock
+screen's first frame until the first SpringBoard (pid 30) aborted; after its restart the same screen drew 0 a second and
+frames came only with touches. Before iconservicesagent had a GPU device (an earlier boot) the screen idled. Which process
+drives those frames is what this line shows: a client that commits (SpringBoard busy beside backboardd) or the render server
+alone running an animation of its own.
 
 Reading a leak: "own" or the live count rising across screens that come back to the same state, while "closed" lags "blobs".
 The sizes line (one per client, with the clients line) counts live blobs by size: metal2vulkan's pooled blocks are 64 MiB

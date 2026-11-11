@@ -1,6 +1,6 @@
---- a/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-11 15:01:16.310423821 +0530
-+++ b/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-11 15:06:44.551411218 +0530
-@@ -2779,18 +2779,21 @@
+--- a/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-11 15:28:10.041802862 +0530
++++ b/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-11 15:28:10.052308066 +0530
+@@ -2795,18 +2795,21 @@
     }
  
     struct kgsl_object *obj = kgsl_object_from_blob_id(kctx, blob_id);
@@ -23,7 +23,7 @@
        return -EINVAL;
     }
  
-@@ -2816,11 +2819,13 @@
+@@ -2832,11 +2835,13 @@
           drm_err("guest-alloc blob_id=%" PRIu64 ": %u chunks hold 0x%" PRIx64 " of 0x%" PRIx64 " bytes",
                   blob_id, n, total, obj->blob_size);
           kgsl_chunks_drop(dctx->fd, chunks, n);
@@ -37,7 +37,7 @@
           return -ENOMEM;
        }
        obj->chunks = chunks;
-@@ -2832,6 +2837,7 @@
+@@ -2848,6 +2853,7 @@
        if (bret) {
           drm_err("guest-alloc bind failed blob_id=%" PRIu64 " iova=0x%" PRIx64 " (%u chunks)",
                   blob_id, obj->iova, n);
@@ -45,7 +45,7 @@
           return bret;
        }
        drm_dbg("guest-alloc completed blob_id=%" PRIu64 " chunks=%u iova=0x%" PRIx64,
-@@ -2840,6 +2846,7 @@
+@@ -2856,6 +2862,7 @@
        if (kctx->pending_guest_fd < 0) {
           drm_err("guest-alloc blob_id=%" PRIu64 " has no dma-buf from the VMM; "
                   "is udmabuf enabled and CREATE_GUEST_HANDLE set?", blob_id);
@@ -53,7 +53,7 @@
           return -ENOENT;
        }
        int gfd = kctx->pending_guest_fd;
-@@ -2850,6 +2857,7 @@
+@@ -2866,6 +2873,7 @@
        uint32_t mem_id = kgsl_import_dmabuf(dctx->fd, gfd, kgsl_flags);
        if (!mem_id) {
           close(gfd);
@@ -61,7 +61,7 @@
           return -ENOMEM;
        }
        obj->mem_id = mem_id;
-@@ -2859,6 +2867,7 @@
+@@ -2875,6 +2883,7 @@
        if (bret) {
           drm_err("guest-alloc bind failed blob_id=%" PRIu64 " iova=0x%" PRIx64,
                   blob_id, obj->iova);
@@ -69,7 +69,7 @@
           return bret;
        }
        drm_dbg("guest-alloc completed blob_id=%" PRIu64 " mem_id=%u iova=0x%" PRIx64,
-@@ -3052,6 +3061,10 @@
+@@ -3068,6 +3077,10 @@
        kgsl_chunks_drop(dctx->fd, kctx->pending_chunks, kctx->pending_nr_chunks);
        kctx->pending_chunks = NULL;
     }
