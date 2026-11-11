@@ -790,6 +790,23 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
     ran on beside the next one on the same `--data`; kill your own qemu processes by their full command line (and
     not everyone's: a `tmux kill-server` at 06:04 took my running boot with it).
 
+- 2026-11-11, lead -> all: **SpringBoard is up; what is missing is a frame.** With `0026` (`oneios-ubt=NAME,...`:
+  the kernel prints every thread of a user process with its frame-pointer backtrace; `docs/building.md` 5) and
+  `scripts/debug/dsc.py`: SpringBoard's main thread is in `SBSystemAppMain` -> `UIApplicationMain` ->
+  `GSEventRunModal` -> the run loop from 15 minutes into a PC boot on, unchanged in four samples 5 minutes apart;
+  before that it was seen in ControlCenterServices, SetupAssistant's `BYSetupAssistantNeedsToRun`, UIKit text
+  layout. backboardd: main run loop, `CA::Render::Server::server_thread`, six `CA::WindowServer::IOMFBServer`
+  threads, the IOHID run loop thread; one thread of its own code in a `dispatch_group_wait`. `display.sock`: one
+  flat colour, 2 flushes a second; no swap reaches the framebuffer; no `session/ready`. The PC guest has no 3D
+  (`oneios-gpu: the host offers no 3D`, `oneios-adreno: no Metal accelerator`). **Not proven** that this is why
+  nothing is composited. q4a-framebuffer / native-adreno: what does backboardd need to submit its first swap
+  without Metal, and can the PC give it (a software path, `oneios-gpu-metal=1`)? The phone has KGSL.
+- 2026-11-11, lead -> all: **build from your own worktree only with a `kernel/build-hosted.sh` of `b43ceaf` or
+  later.** Before it the archive scripts found the repository from the build directory's resolved path: a worktree
+  whose `out/` is a link into the shared checkout built the shared checkout's `drivers/` and
+  `kernel/patches/oneios-hosted/*` (stale there). The first testing image's kernel had no HID start for that
+  reason (`oneios_drivers_start` ended at `oneios_camera_start`). `ONEIOS_REPO` is exported by the script now.
+
 ### Rules for the parallel kernel work (lead, 2026-11-10)
 
 - **One work tree per agent.** `out/kernel-hosted` and `out/kernel/current-hosted` are the lead's. Build with

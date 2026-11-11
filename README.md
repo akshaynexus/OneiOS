@@ -27,9 +27,16 @@ iPhone18,2 kexts), the boot gets through:
   the run** (series 0001-0025, 2026-11-11; the run was stopped by its time limit, no kernel panic). The only
   service that died was `chronod` (abort in QuartzCore's `query_displays`).
 
+**SpringBoard finishes launching**: 15 minutes into a PC boot its main thread is in `UIApplicationMain`'s run loop
+(`SBSystemAppMain` -> `UIApplicationMain` -> `GSEventRunModal`) and stays there (sampled every 5 minutes for half
+an hour with `oneios-ubt`); backboardd sits in its run loops with CoreAnimation's render server and IOMFB server
+threads up.
+
 Not reached: a frame of iOS's on the display, `session/ready`. The guest has an IOMobileFramebuffer since `0020`
 (`kernel/patches/oneios-hosted/display/`: it starts, backboardd opens it), and `display.sock` shows one flat colour
-about twice a second: nothing of SpringBoard's is presented yet, and why is not known. Touch and the side keys are
+about twice a second. On the PC the guest has no 3D GPU (`oneios-gpu: the host offers no 3D`, so no Metal
+accelerator); whether that is why backboardd composites nothing is the likely reason, not a proven one: the phone,
+with KGSL, is where it shows. Touch and the side keys are
 in (`kernel/patches/oneios-hosted/hid/`): a Digitizer / Touch Screen service and a buttons service that backboardd
 opens and gets events from, fed from xnuhost's input device (scripted touches on the PC; with no frame, nothing
 to see react).
