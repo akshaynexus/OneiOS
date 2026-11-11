@@ -51,6 +51,12 @@ $(A)/gpu3d_kgsl.o: src/gpu3d_kgsl.c src/gpu3d.h drm2kgsl/config.h
 	$(ANDROID_CC) -std=gnu11 $(CFLAGS) -Wall -Wextra -Werror -Wno-unused-parameter -Isrc $(VIRGL_INC) -c $< -o $@
 endif
 $(A)/gpu3d.o: CFLAGS += $(GPU3D_DEF)
+# gpu3d.o holds the 2D-only stub of xh_gpu3d_kgsl_open unless XH_DRM2KGSL is set: it must be rebuilt when the
+# virglrenderer checkout appears or goes, or a stale stub and gpu3d_kgsl.o both define it (release 0.1.2's first run).
+GPU3D_MODE := $(if $(GPU3D_DEF),drm2kgsl,2d)
+$(A)/gpu3d.mode: FORCE
+	@mkdir -p $(A); echo '$(GPU3D_MODE)' | cmp -s - $@ || echo '$(GPU3D_MODE)' > $@
+$(A)/gpu3d.o: $(A)/gpu3d.mode
 # gpuctl: the renderer alone, for a check on the phone (tools/gpuctl.c).
 $(A)/gpuctl: tools/gpuctl.c $(A)/gpu3d.o $(GPU3D) src/gpu3d.h
 	$(ANDROID_CC) -std=gnu11 $(CFLAGS) $(WARN) -Wno-unused-parameter -Isrc -static -o $@ tools/gpuctl.c $(A)/gpu3d.o $(GPU3D) -lm
