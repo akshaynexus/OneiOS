@@ -376,6 +376,7 @@ payload. The tunnel's own counters (`DroidVMVirtioGpu3D.cpp`) are printed instea
 oneios-gpu-report: 10 s: submits +612 (fenced +600); frames +598 mean 3100 us max ever 41000 us; <1/<2/<4/<8/<16/<32 ms +0/+12/+400/+150/+30/+6 longer +0; fence timeouts +0; refusals +0 (op 0 0x0)
 oneios-gpu-memory: blobs +14 closed +9 (deferred +2, waiting 3); live 210: own 150 (64 MiB), wired 60 (32 MiB); contexts +0 clients 3
 oneios-gpu-clients: backboardd 40+20 MiB, iconservicesagent 16+0 MiB
+oneios-gpu-sizes: backboardd <1 120, <2 30, <4 12, <8 4, <16 2, <32 6, <64 0, 64+ 3 MiB blobs
 ```
 
 Three lines because IOLog cuts a line at 256 bytes: the first phone runs lost the memory figures that way. "own" blobs are
@@ -385,6 +386,11 @@ surface); those pages belong to the surface and are counted again wherever it is
 MiB per process; the memory line comes whenever the live counts change, the clients line too.
 
 Reading a leak: "own" or the live count rising across screens that come back to the same state, while "closed" lags "blobs".
+The sizes line (one per client, with the clients line) counts live blobs by size: metal2vulkan's pooled blocks are 64 MiB
+buffers, so growth in "64+" is the runtime's pools (empty blocks it keeps, trimmed after 2 s idle, `NativeBridgeMetalFrontend.mm`
+`watchIdleMemory`) and growth below it is resources (windows, textures). The plug-in's own pool report (`/private/var/ngpu/debug/client-mem`)
+writes `m2v-mem.txt` in the process's temporary folder on the guest's Data volume, which nothing reads out of a phone session yet.
+
 The phone's numbers before this split (backboardd 20 -> 383 -> 431 -> 460 -> 543 -> 925 MiB in 16 min, 2026-11-11) mixed both
 kinds; the steps at 543 and 925 came after SpringBoard restarts (it aborted on `processIdentity`, not a GPU fault). The
 plug-in keeps each imported surface while anything else in backboardd still retains it and lets it go at the next import, a

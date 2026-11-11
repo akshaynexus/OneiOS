@@ -203,6 +203,7 @@ extern "C" int native_ram_block_gpu_addon(const uint8_t **data, uint64_t *bytes)
 //   oneios-gpu-memory: blobs +14 closed +9 (deferred +2, waiting 3); live 210: own 150 (64 MiB), wired 60 (32 MiB);
 //     contexts +0 clients 3
 //   oneios-gpu-clients: backboardd 40+20 MiB, iconservicesagent 16+0 MiB
+//   oneios-gpu-sizes: backboardd <1 120, <2 30, <4 12, <8 4, <16 2, <32 6, <64 0, 64+ 3 MiB blobs   (one per client)
 // "frames" are backboardd's fenced submissions, one or more per frame CoreAnimation draws on the GPU, with the time from
 // submission to the GPU being done. "own" blobs are pages this driver allocated (Turnip's buffers, textures): GPU memory
 // that exists because of the client. "wired" blobs are the caller's own pages wired for the GPU (CREATE_BLOB_USER: an
@@ -263,6 +264,14 @@ void report(void *, wait_result_t)
                 at += snprintf(text + at, sizeof text - at, "%s%s", at ? ", " : "", one);
             }
             IOLog("oneios-gpu-clients: %s\n", at ? text : "none");
+            // Each client's live blobs by size: metal2vulkan's pooled blocks are 64 MiB buffers ("64+"), windows and
+            // textures the small sizes, so growth in "64+" is the runtime's pools and growth below is resources.
+            for (unsigned i = 0; i < 64; i++) {
+                const DroidVMClientMemory &c = droidvm_virtgpu_client_memory[i];
+                if (!c.name[0] || !(c.pageBytes + c.userBytes)) continue;
+                IOLog("oneios-gpu-sizes: %.16s <1 %u, <2 %u, <4 %u, <8 %u, <16 %u, <32 %u, <64 %u, 64+ %u MiB blobs\n", c.name,
+                      c.sizes[0], c.sizes[1], c.sizes[2], c.sizes[3], c.sizes[4], c.sizes[5], c.sizes[6], c.sizes[7]);
+            }
         }
         memcpy(was, now, sizeof was);
         memcpy(fences, rs, sizeof fences);
