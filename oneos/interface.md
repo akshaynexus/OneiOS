@@ -101,7 +101,8 @@ A tool the package lacks is shown as "Not in this runtime", not as a failure.
 | `image.sha256`, `image.ids` | `sha256sum` list of `image/`; `dev:inode:size:mtime` of each file | root at staging |
 | `data/` | the guest's writable state (Data store, anything xnuhost keeps). Survives a new runtime or image | xnuhost |
 | `session/` | this session: `xnuhost.pid`, `xnuhost.log`, `ready`, `return.request`, `tmp/`, the baseline | switch, xnuhost |
-| `logs/` | earlier sessions' `xnuhost-<epoch>.log` (the last 5) | return |
+| `logs/` | earlier sessions' `xnuhost-<epoch>.log` (the last 5; the next switch moves `session/xnuhost.log` there, so the epoch is that switch's time and the file's own time is its session's last line) | switch |
+| `switch.log`, `return.log`, `return.outcome`, `control/display.log`, `control/watchdog_feeder.log` | the fork's own logs: the switch, the return with the watcher and the key readers, how the last return ended, the display helper's output, the watchdog feeder | switch, return |
 
 ## 4. How the switch starts xnuhost
 
@@ -167,3 +168,32 @@ works whatever xnuhost is doing, as long as xnuhost does not grab that device.
 ## 7. Overlay mode
 
 Not part of this interface. The fork only does the takeover session.
+
+## 8. Log lines the fork reads (Session logs, fork 0.4.76)
+
+The fork's **Session logs** screen (its `docs/oneios.md`, "Session logs"; `OneiosLogs.kt`, `oneios_root.sh logs` and
+`logfile`, both read only) shows `session/xnuhost.log` and `logs/xnuhost-*.log` and puts a summary above each: how
+far the boot got, the kernel panic, the processes that died, how the session ended. Its *Collect logs* takes the
+same files, redacted. It reads these lines and nothing else, so change one only together with the fork's
+`OneiosLogs.kt` and `OneiosLogsTest`. A line it does not find is simply not in the summary.
+
+- **The framing** of `runtime/xnuhost/src/log.c`: `[seconds.millis] xnuhost I|E|D text`, `[seconds.millis] guest
+  text` (the tag is `guest` padded to nine characters), and `xnuhost !! text 0x<16 hex> 0x<16 hex>` with no time.
+  Its chips are E (`xnuhost E`), !! (`xnuhost !!`), guest, and the word `panic`.
+- **Stages**, in this order, the furthest one seen being "how far the boot got":
+  `xnuhost I xnuhost: session ABI` (also the start of a new boot after a restart in place);
+  `xnuhost I cpu0: entering the kernel at`; console `Darwin Kernel Version`; console `BSD root: `;
+  console `load_init_program: attempting to load`; console `com.apple.xpc.launchd|`; the first console line with
+  `backboardd[`; the first with `SpringBoard[` or `crashed: SpringBoard.`; `xnuhost I guest ready: first frame`.
+- **Panic:** console `panic(cpu N caller 0x...): TEXT`.
+- **Processes that died:** console `sheng-exit: NAME[PID] status 0xS reason ns N code 0xC` (the signal is S's low
+  7 bits), `Process[PID] crashed: NAME.`, `[NAME: killed] exiting with signal N`.
+- **The end:** `xnuhost I stopping: WHY (reason R, code C)` with WHY one of `signal N`, `the guest halted on cpuN`,
+  `PSCI SYSTEM_OFF`, `PSCI SYSTEM_RESET`, `kernel fault` (any other WHY is shown as it is) and R one of
+  `XH_HALT_*`; `xnuhost I exit N` with the exit codes of `docs/booter.md`; `xnuhost I the guest asked for a
+  restart: starting again`; `xnuhost E the guest restarted N times without getting ready`;
+  `xnuhost !! fault inside a host call: signal, address` and `fault on a host thread: signal, address` (the first
+  value is the signal); `xnuhost !! kernel fault with no exception upcall`.
+
+An exit with code 2 (setup) has no line of its own: the fork shows the last `xnuhost E` line of a log that never
+entered the kernel. A line that said so (`exit 2`) would be better, and the fork would read it as it is.
