@@ -2,6 +2,8 @@
 #   make            build/android/libonebridges.a (linked into xnuhost) and build/android/oneios-audio,
 #                   build/android/bridgectl (the on-phone test tool)
 #   make test       unit tests on the build host (no phone, no Apple files), with ASan and UBSan
+#   make test-binder the Bluetooth HAL client against a fake HAL on a real binder driver (a binderfs
+#                   mounted in a user namespace: CONFIG_ANDROID_BINDERFS, no root); skipped without it
 NDK ?= $(HOME)/Android/Sdk/ndk/28.2.13676358
 TOOLS := $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin
 ANDROID_CC ?= $(TOOLS)/aarch64-linux-android30-clang
@@ -39,11 +41,21 @@ $(H)/test_bridges: tests/test_bridges.c $(CORE:%=%.c) $(DEVICES:%=%.c) $(XNUHOST
 	@mkdir -p $(H)
 	$(CC) -std=gnu11 -O1 -g $(WARN) $(INC) -fsanitize=address,undefined tests/test_bridges.c $(CORE:%=%.c) $(DEVICES:%=%.c) $(XNUHOST)/src/virtio.c -lpthread -o $@
 
-test: $(H)/test_bridges
+BINDER_TEST := tests/test_hidl_binder.c bt/hci.c bt/hidl_parcel.c bt/hci_hidl.c cpu/topology.c
+$(H)/test_hidl_binder: $(BINDER_TEST) $(HDR)
+	@mkdir -p $(H)
+	$(CC) -std=gnu11 -O1 -g $(WARN) $(INC) -fsanitize=address,undefined $(BINDER_TEST) -lpthread -o $@
+# The binderfs is mounted on build/host/binderfs inside the namespace only; it goes with the namespace.
+test-binder: $(H)/test_hidl_binder
+	@if ! grep -qw binder /proc/filesystems; then echo "test-binder: skipped (no binderfs in this kernel)"; exit 0; fi; \
+	mkdir -p $(H)/binderfs; \
+	unshare -Urm sh -c 'mount -t binder binder "$$1" && ASAN_OPTIONS=detect_leaks=0 ONEIOS_HWBINDER="$$1/hwbinder" "$$2"' sh $(H)/binderfs $(H)/test_hidl_binder
+
+test: $(H)/test_bridges test-binder
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_bridges   # the devices live as long as xnuhost: the transport has no destroy
 	$(MAKE) -C brightness test
 	$(MAKE) -C battery test
 
 clean:
 	rm -rf build
-.PHONY: all test clean brightctl batteryctl
+.PHONY: all test test-binder clean brightctl batteryctl

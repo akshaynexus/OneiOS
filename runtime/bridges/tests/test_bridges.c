@@ -514,6 +514,13 @@ static void test_bridge_device(const char *tmp)
   memcpy(&header, rx[3], 8); memcpy(&state, rx[3] + 8, sizeof state);
   CHECK(header.type == OB_HCI_STATE && state.state == OB_HCI_STATE_READY);
 
+  // A controller that failed after it was opened (the HAL died, no initializationComplete) is closed and opened again.
+  unsigned closes = dev_radio.closes;
+  br_hci_set_state(dev_radio.hci, OB_HCI_STATE_FAILED);
+  send_message(&g, OB_CH_HCI, OB_HCI_OPEN, NULL, 0);
+  CHECK(dev_radio.opens == 2 && dev_radio.closes == closes + 1);
+  br_hci_set_state(dev_radio.hci, OB_HCI_STATE_READY);
+
   // Malformed messages from the guest change nothing.
   uint8_t junk[4] = { 1, 2, 3, 4 };
   post1(&g, OB_QUEUE_TX, junk, 4, false);
@@ -529,7 +536,7 @@ static void test_bridge_device(const char *tmp)
   br_haptic_flush(haptic);
   w32(&g, 0x70, 0);
   br_haptic_flush(haptic);
-  CHECK(motor.stops == 2 && dev_radio.closes == 1);
+  CHECK(motor.stops == 2 && dev_radio.closes == closes + 2);   // the reopen above closed it once
   br_haptic_close(haptic);
 }
 

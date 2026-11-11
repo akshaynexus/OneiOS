@@ -354,16 +354,28 @@ static int boot(void)
       LOGI("cpu: %u E + %u P vCPUs on the host's %u E + %u P cores", cpu_plan.n_e, cpu_plan.n_p, host.n_e, host.n_p);
     } else LOGI("cpu: no host topology under /sys: vCPUs are not placed");
 
+    // Bluetooth: the phone's controller through its HAL (hidl), or none (virtual). auto: hidl when the HAL is
+    // registered; the HAL itself is opened only when bluetoothd connects.
     bool hidl = !strcmp(config.bluetooth, "hidl");
+    int hal = 0;
+    if (!strcmp(config.bluetooth, "auto")) { hal = br_hci_hidl_probe(); hidl = hal > 0; }
     haptic = br_haptic_open(NULL);
     brightness = br_bright_open(NULL);
     battery = br_battery_open(NULL);
     br_bridge_config bridge = { .haptic = haptic, .hci_factory = hidl ? br_hci_open_hidl : NULL, .brightness = brightness, .battery = battery };
-    if (br_bridge_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &bridge)) kinds[ndev++] = XL_DEV_BRIDGE;
-    if (hidl && br_bt_address("/mnt/vendor/efs/bluetooth/bt_addr", machine.bt_mac) == 0) {
-      machine.bt_transport = 3;                     // the phone's controller, H4 over the bridge
+    bool have_bridge = br_bridge_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &bridge) != NULL;
+    if (have_bridge) kinds[ndev++] = XL_DEV_BRIDGE;
+    if (hidl && have_bridge) {
+      machine.bt_transport = 3;                     // the phone's controller, H4 over the bridge (bluetoothd's H4BC)
       machine.bt_speed = 3000000;
-    }
+      bool address = br_bt_address("/mnt/vendor/efs/bluetooth/bt_addr", machine.bt_mac) == 0;
+      if (!address) xl_machine_mac(&machine, 0, machine.bt_mac);
+      LOGI("bluetooth: on: the phone's controller through its HAL%s, address %02x:%02x:%02x:%02x:%02x:%02x%s; the HAL is opened when bluetoothd connects",
+           hal == 11 ? " 1.1" : hal == 10 ? " 1.0" : "", machine.bt_mac[0], machine.bt_mac[1], machine.bt_mac[2], machine.bt_mac[3],
+           machine.bt_mac[4], machine.bt_mac[5], address ? "" : " (made up: /mnt/vendor/efs/bluetooth/bt_addr not read)");
+    } else if (hidl) LOGI("bluetooth: off: no bridge device for the controller's packets");
+    else LOGI("bluetooth: off (%s): iOS gets no controller%s", config.bluetooth,
+              !strcmp(config.bluetooth, "virtual") ? "; bluetooth=hidl in xnuhost.conf (or --bluetooth hidl) for the phone's" : "");
 
     br_net_config net;
     br_net_config_defaults(&net);

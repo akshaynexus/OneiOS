@@ -133,6 +133,8 @@ static void from_guest(bridge_state *s, const struct ob_header *h, const uint8_t
     if (!s->config.hci_factory) break;
     if (h->type == OB_HCI_OPEN) {
       if (!s->hci) s->hci = s->config.hci_factory(hci_rx, hci_state, s);
+      // Failed after it was opened (the HAL died, or never finished initialising): a new client starts over.
+      else if (br_hci_state(s->hci) == OB_HCI_STATE_FAILED) br_hci_close(s->hci);
       if (!s->hci || br_hci_open(s->hci)) hci_state(s, OB_HCI_STATE_FAILED);
       else if (br_hci_state(s->hci) == OB_HCI_STATE_READY) hci_state(s, OB_HCI_STATE_READY);   // already open: say so again
     } else if (h->type == OB_HCI_CLOSE) { if (s->hci) br_hci_close(s->hci); }

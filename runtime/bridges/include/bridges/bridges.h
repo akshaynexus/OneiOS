@@ -158,7 +158,12 @@ int     br_hci_state(br_hci *h);
 bool    br_hci_packet_ok(uint8_t type, const uint8_t *packet, size_t length);
 // The phone's HAL: android.hardware.bluetooth@1.0/1.1 IBluetoothHci/default over /dev/hwbinder
 // (bt/hci_hidl.c; the service on the S24 Ultra is vendor.bluetooth-1-1-qti). Needs root.
+// Two threads: one answers the HAL's callbacks, one makes the calls (br_hci_send only queues, up to
+// 512 packets). ONEIOS_HWBINDER names another binder device than /dev/hwbinder (the PC test).
 br_hci *br_hci_open_hidl(br_hci_rx_fn rx, br_hci_state_fn state, void *ctx);
+// Asks hwservicemanager for the HAL once and lets it go: 11 (1.1) or 10 (1.0) when it is registered and
+// this domain may find it, else -errno (-ENODEV: no binder device). Logs why when it is not found.
+int     br_hci_hidl_probe(void);
 // The controller's address as the phone stores it (text "AA:BB:.." or 6 raw bytes). 0 or -1.
 int     br_bt_address(const char *path, uint8_t out[6]);
 

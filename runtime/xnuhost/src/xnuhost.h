@@ -62,7 +62,8 @@ typedef struct {
   bool  selftest;
   int   bridges;            // runtime/bridges devices (network, sound, haptics, Bluetooth, CPU placement): 1, 0, -1 = by mode
   char  clusters[XH_MAX_CPUS + 1]; // "EEPPPPPP": the cluster type of each vCPU, overriding the bridges' plan ("" = the plan, else all P)
-  char  bluetooth[16];      // "virtual" (no controller, transport 10) or "hidl" (the phone's controller, transport 3)
+  char  bluetooth[16];      // "auto" (hidl when the bridges are on and the phone's HAL is registered, else virtual),
+                            // "virtual" (no controller, transport 10) or "hidl" (the phone's controller, transport 3)
 } xh_config;
 
 void xh_config_defaults(xh_config *c);

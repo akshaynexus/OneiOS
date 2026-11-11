@@ -73,6 +73,9 @@ static int bt(void)
   static const uint8_t reset[] = { 0x03, 0x0c, 0x00 }, read_address[] = { 0x09, 0x10, 0x00 };
   uint8_t address[6];
   if (!br_bt_address("/mnt/vendor/efs/bluetooth/bt_addr", address)) printf("address file: %02x:%02x:%02x:%02x:%02x:%02x\n", address[0], address[1], address[2], address[3], address[4], address[5]);
+  int hal = br_hci_hidl_probe();
+  if (hal < 0) { printf("no Bluetooth HAL found (%d)\n", hal); return 1; }
+  printf("HAL %s registered\n", hal == 11 ? "1.1" : "1.0");
   br_hci *h = br_hci_open_hidl(bt_rx, bt_changed, NULL);
   if (!h || br_hci_open(h)) return 1;
   for (unsigned i = 0; i < 200 && bt_state < 1; i++) usleep(100000);      // the firmware download takes seconds
@@ -84,6 +87,7 @@ static int bt(void)
   br_hci_close(h);
   usleep(200000);
   if (rc || bt_events < 2) { printf("send %d, %u events (2 expected)\n", rc, bt_events); return 1; }
+  printf("bt: ok: %u events (Command Complete of HCI Reset and Read BD_ADDR expected)\n", bt_events);
   return 0;
 }
 
@@ -121,10 +125,14 @@ static int audio(const char *path)
   return 0;
 }
 
+// The bridges' own lines (why a HAL was not found, the HAL's state), as xnuhost logs them.
+static void say(int level, const char *line) { printf("  %s%s\n", level == 0 ? "error: " : "", line); }
+
 int main(int argc, char **argv)
 {
   int rc = 2;
   setvbuf(stdout, NULL, _IOLBF, 0);
+  br_log_sink = say;
   if (argc < 2) { fprintf(stderr, "usage: bridgectl cpu|haptic|haptic-pattern|bt|net|audio ... (see tools/bridgectl.c)\n"); return 2; }
   if (!strcmp(argv[1], "cpu")) rc = cpu(argc, argv);
   else if (!strcmp(argv[1], "haptic")) rc = haptic(argc, argv, false);

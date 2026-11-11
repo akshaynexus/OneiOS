@@ -21,7 +21,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 | CPU | `droidvm-amp.patch` + `DroidVMCpufreq.c` (UniXNU-droidvm, unchanged) | `runtime/bridges/cpu`: topology, vCPU plan, thread placement, the cpufreq device | host built and tested; kernel side waits for release-kernel (series, archive) and booter (device tree, placement calls) |
 | GPU | UniXNU-droidvm's virtio-gpu 3D + NativeAdreno user client (unchanged) | booter's `virtio_gpu.c` + drm2kgsl | booter's; not owned here (section 2) |
 | Wi-Fi / network | `DroidVMVirtioNet.c` + `DroidVMVirtioEthernet.cpp` (unchanged) | `runtime/bridges/net` (tap, built-in DHCP), `devices/virtio_net.c`, `net/oneios-net.sh` | host built and tested; routing script not run on the phone |
-| Bluetooth | `drivers/bluetooth` (port of iOSPlus10's transport) on `drivers/bridge` | `runtime/bridges/bt`: the HAL over `/dev/hwbinder` | both built; HAL client untested on the phone |
+| Bluetooth | `drivers/bluetooth` (port of iOSPlus10's transport) on `drivers/bridge` | `runtime/bridges/bt`: the HAL over `/dev/hwbinder` | both built; on by default in a session since 2026-11-11 (before: off, `bluetooth=virtual`); HAL client tested on the PC against a fake HAL on a real binder driver, not yet on the phone |
 | Haptics | `drivers/haptics` (port of iOSPlus10's LaurelVibrator and haptic node) | `runtime/bridges/haptics`: evdev force feedback | both built; host tested with a fake actuator |
 | Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp` (unchanged) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | host built and tested with a fake back end; AAudio as root without system_server is [U] |
 | Camera | `drivers/camera`: the `oneios,camera` transport, `/dev/oneios-camera`; `userland/camera`: the capture plug-in (its device object not written) | `runtime/bridges/camera`: helper `oneios-camera` (provider HAL in a session, Camera2 NDK with One UI), ring, device, `camctl` | host and kernel sides built and host-tested; iOS shows no camera yet; one phone run (2026-11-11): cameraserver lists 4 cameras and opens one for a root client, no frame arrived (no binder threads in the process: fixed, the fix not yet run on the phone); the HAL back end never run (section 7) |
@@ -204,7 +204,14 @@ interface with no radio (`droidvm-wifi-ssid=NAME` shows one joined network).
   binder UAPI, `IServiceManager::get`, `initialize_1_1(callbacks)` (or `initialize` on a 1.0 service),
   `sendHciCommand/AclData/ScoData/IsoData`, and a callback object the HAL calls (events, ACL, SCO, ISO,
   `initializationComplete`, and the base methods `interfaceChain`, `interfaceDescriptor`, `ping`, ...). A death
-  notification turns the state to failed.
+  notification turns the state to failed. Two threads: the looper only answers the HAL's calls into us; the caller
+  makes our calls (get, initialize, the sends, close) in order from a queue of up to 512 packets, so the guest's
+  vCPU, which holds the bridge device's lock, never waits on a binder call, and a HAL that sends an event before its
+  `sendHciCommand` returns is answered at once. No `initializationComplete` within 15 s
+  (`ONEIOS_BT_INIT_TIMEOUT_MS`) is a failure with a line naming SELinux. `br_hci_hidl_probe()` asks for the
+  service once at xnuhost's start. `ONEIOS_HWBINDER` names another binder device (the PC test).
+- `bridge_dev.c`: an `OB_HCI_OPEN` while the controller is failed (the HAL died or never finished) closes it and
+  opens it again, so a new bluetoothd client starts over.
 - `hidl_parcel.c`: the parcels (interface token, `hidl_string`, `hidl_vec<uint8_t>` as scatter-gather buffer
   objects, strong binders). Unit-tested byte for byte; the transaction codes are the HIDL order of the methods.
 - `hci.c`: packet length checks both ways, the state, the address file.
@@ -214,15 +221,28 @@ interface with no radio (`droidvm-wifi-ssid=NAME` shows one joined network).
 - [U] **SELinux**: hwservicemanager checks `find` for the caller's context, and the HAL's domain must be allowed to
   call back into ours (`binder { call transfer }`). KernelSU's domain is allowed most things; if the callback is
   denied, a `ksud sepolicy` rule is needed. `bridgectl bt` shows which step fails.
-- [U] the transaction codes and the callback handshake against the real HAL (written from the interface
-  definitions, never run). First test: `bridgectl bt` must print two Command Complete events.
-- booter: the tree's node. Today `runtime/loader/src/machine.c` publishes `/bluetooth` with `transport-encoding` 10
-  (the virtual transport of Apple's VMs) and `/defaults/vmm-present` 1. For a real controller iOSPlus10 used
-  `transport-encoding` 3 (H4BC), `transport-speed` 3000000 and the real `local-mac-address` (`br_bt_address`). Which
-  of the two bluetoothd 27 takes with `vmm-present` set is [U]; make it a switch.
-- userland: the bluetoothd job on, BlueTool's firmware step skipped (iOSPlus10 `userland/bluetooth/negroni-bluetool.c`,
-  `scripts/bt/bt-launchd.py`), `BTAudioHALPlugin.driver` kept in HAL, bluetoothd's iAP PTY made non-blocking
-  (iOSPlus10 `docs/laurel_sprout/bluetooth.md`, last section).
+- [U] the transaction codes and the callback handshake against the real libhwbinder and the QTI HAL. Tested on the PC
+  (`make -C runtime/bridges test-binder`, 2026-11-11): a fake hwservicemanager and IBluetoothHci 1.1 and 1.0 on a
+  real binder driver (binderfs in a user namespace) that read every parcel with libhwbinder's checks (tokens,
+  `readBuffer`/`readEmbeddedBuffer` parent links), call back two-way from their own thread, `interfaceChain` on our
+  callback, Reset and Read BD_ADDR answered, ACL echoed, close; no HAL registered; no `initializationComplete`; a
+  HAL that dies. First phone test: `bridgectl bt` must print two Command Complete events (`runtime/bridges/README.md`).
+- booter: the tree's node. `runtime/loader/src/machine.c` publishes `/bluetooth` with `transport-encoding` 10 (the
+  virtual transport of Apple's VMs) or, with the HAL (`bluetooth=hidl`, or `auto` when the HAL is registered, the
+  default since 2026-11-11), `transport-encoding` 3 (H4BC), `transport-speed` 3000000 and the phone's
+  `local-mac-address`; `/defaults/vmm-present` 1 either way. What 24A446's `/usr/sbin/bluetoothd` contains (strings,
+  read from `os.img` on the PC): `HCI Transport is set to H4BC`, `No valid serial port found (tried cu.bluetooth and
+  uart.bluetooth)`, `Bluetooth is running inside a Virtual Machine, so skipping chip initialization` and `... skipping
+  check for Bluetooth available` (`kern.hv_vmm_present`). So with `vmm-present` it should take the H4BC transport on
+  our `/dev/cu.bluetooth` and run no BlueTool firmware step [I: from the strings, not run].
+- The session of 2026-11-11 14:33 had none of this: xnuhost's default was `bluetooth=virtual`, so the bridge offered
+  no HCI channel (`channels 0x33`), the guest said `ONEIOS BT: off: the host serves no Bluetooth controller` and hid
+  the nub; xnuhost logged nothing about it. The key store answers `aks_wrap_key`/`aks_unwrap_key` (10/11; the same log
+  has `selector 10 from securityd: 0x0` and `selector 11 ...: 0x0`), the fix Droid-VM needed (PROGRESS 11-02) for
+  bluetoothd to store its LE identity root; bluetoothd ran once (pid 74) with no restart loop.
+- userland: the bluetoothd job is on (it ran); BlueTool's firmware step should be skipped by `vmm-present` (above);
+  `BTAudioHALPlugin.driver` kept in HAL and bluetoothd's iAP PTY made non-blocking (iOSPlus10
+  `docs/laurel_sprout/bluetooth.md`, last section) are not done: they matter for headsets.
 - SCO audio goes through the HAL as HCI; A2DP is iOS's own stack over ACL. LE Audio (ISO) only with a 1.1 HAL.
 - UniXNU QcaBluetooth is a radio driver for a bare-metal WCN7850: not needed here.
 

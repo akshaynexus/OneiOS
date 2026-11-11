@@ -253,8 +253,13 @@ measured on the phone.
 The bridges are linked in as `libonebridges.a` and come after the GPU in the window order: `bridge`, `net`,
 `virtio-snd`. They are on in a takeover session and off in `--mode bench` (`--set bridges=0|1`). With them,
 `/cpus` gets the host's cluster types (E vCPUs first), each vCPU thread is put on its cluster's host CPUs,
-and so is the iOS thread a vCPU runs (when the vCPU changes). `--bluetooth hidl` bridges the phone's
-controller (`/bluetooth` transport-encoding 3, the phone's address); the default `virtual` keeps encoding 10.
+and so is the iOS thread a vCPU runs (when the vCPU changes). Bluetooth (`--bluetooth`,
+`bluetooth=` in `xnuhost.conf`): `hidl` bridges the phone's controller (`/bluetooth` transport-encoding 3 =
+bluetoothd's H4BC UART transport, transport-speed 3000000, the address of `/mnt/vendor/efs/bluetooth/bt_addr`);
+`virtual` gives iOS none (encoding 10, the guest driver hides the nub); the default `auto` is `hidl` when the bridges
+are on and hwservicemanager returns `android.hardware.bluetooth@1.x::IBluetoothHci/default` at the start (asked once
+and let go; the HAL is opened only when bluetoothd connects), else `virtual`. One log line says which:
+`bluetooth: on: the phone's controller through its HAL 1.1, address ...` or `bluetooth: off (...)` with the reason.
 A bridge whose Linux side is missing logs one line and is left out. At a stop the motor is stopped and
 `bin/oneios-net.sh down` removes the tap's rules. Every virtio node carries its SPI as `interrupts` and as
 `droidvm,intid` (the name UniXNU-droidvm's transports read).

@@ -16,14 +16,14 @@ tests/host.sh      # both; CI runs it
 | `cpu/` | host topology from sysfs, the vCPU plan (E first, then P), thread placement, the cpufreq register window |
 | `haptics/` | evdev force feedback (`sec_vibrator_inputff`), a worker thread, the iOS-to-effect mapping |
 | `net/` | tap back end, the built-in DHCP answer, `oneios-net.sh` (routing and NAT, root) |
-| `bt/` | the Bluetooth HAL (HIDL 1.0/1.1) over `/dev/hwbinder` without Android libraries; packet checks |
+| `bt/` | the Bluetooth HAL (HIDL 1.0/1.1) over `/dev/hwbinder` without Android libraries (two threads: one answers the HAL's callbacks, one makes the calls from a queue, so a vCPU never waits on the HAL); packet checks; `br_hci_hidl_probe` for xnuhost's start |
 | `audio/` | the back end xnuhost links (`backend.c`) and the AAudio helper process (`aaudio_helper.c` -> `oneios-audio`) |
 | `brightness/` | the panel's backlight (sysfs, the curve, fades, restore), the light sensor `als_rear`, `brightctl` (the phone test); its own `README.md` and `Makefile` |
 | `battery/` | the phone's battery for iOS: Android's `power_supply` nodes read every 3 s, normalized, changes sent to the guest; `batteryctl` (the phone test); its own `README.md` and `Makefile` |
 | `camera/` | the camera (fable-camera): the helper process `oneios-camera`, the frame ring, xnuhost's end (`libonecamera.a`) and `camctl`; its own `Makefile` and `README.md` |
 | `devices/` | `bridge_dev.c` (`oneios,bridge`), `virtio_net.c` (`droidvm,net`), `virtio_snd.c` (`droidvm,virtio-snd`) |
 | `tools/bridgectl.c` | tries each bridge on the phone without xnuhost (root) |
-| `tests/` | `test_bridges.c`, `host.sh` |
+| `tests/` | `test_bridges.c`, `host.sh`; `test_hidl_binder.c` (`make test-binder`, part of `make test`): the HAL client against a fake hwservicemanager and IBluetoothHci on a real binder driver, a binderfs mounted in a user namespace (the PC kernel's `CONFIG_ANDROID_BINDERFS`; no root; skipped without it) |
 
 ## Into xnuhost (bridges -> booter)
 
@@ -75,9 +75,14 @@ adb push build/android/bridgectl build/android/oneios-audio /data/local/tmp/
 adb shell su -c '/data/local/tmp/bridgectl cpu'
 adb shell su -c '/data/local/tmp/bridgectl haptic 200 1000'
 adb shell su -c '/data/local/tmp/bridgectl haptic-pattern'
-adb shell su -c '/data/local/tmp/bridgectl bt'            # with Bluetooth off in One UI's settings
+adb shell su -c '/data/local/tmp/bridgectl bt'            # with Bluetooth off in One UI's settings (see below)
 adb shell su -c '/data/local/tmp/bridgectl audio /data/local/tmp/oneios-audio'
 ```
 
-`bt` takes the controller from One UI's Bluetooth app if that app has it open: turn Bluetooth off first. `haptic`
+`bt` takes the controller from One UI's Bluetooth app if that app has it open: turn Bluetooth off first. It prints
+`HAL 1.1 registered`, `bluetooth: HAL 1.1 found, initialising ...`, `bluetooth: HAL initialisation complete: the
+controller is on (status 0)`, `state 1`, two events `<- type 4, 6 bytes: 0e 04 01 03 0c 00` (Reset) and `<- type 4,
+12 bytes: 0e 0a 01 09 10 00 <address, low byte first>` (Read BD_ADDR), `bt: ok: 2 events ...`, then `ok`. The
+bridge's own lines (`error: bluetooth: ...`) say which step failed: not registered / find denied, `initialize`
+refused, or no `initializationComplete` in 15 s (then look for `avc: denied` lines with `hal_bluetooth` in dmesg). `haptic`
 and `audio` are harmless beside One UI. None of them has been run yet.
