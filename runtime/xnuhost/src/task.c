@@ -643,6 +643,22 @@ void xh_tasks_dump(void)
          tp->tid, t->dead ? "task gone" : running ? "in user code since the state shown" : "stopped in the kernel's hands", tp->trap.kind,
          (unsigned long long)tp->trap.far, tp->trap.insn, (unsigned long long)tp->state.pc, (unsigned long long)tp->state.x[30],
          (unsigned long long)tp->state.sp, (unsigned long long)tp->state.x[16], (unsigned long long)tp->state.x[0], (unsigned long long)tp->state.x[1], (unsigned long long)tp->state.x[2]);
+    // The return addresses up the frame-pointer chain, read from the task's process (scripts/debug/dsc.py names
+    // them): what a thread that sits in one place is in the middle of. Nothing is printed when the read fails.
+    if (!t->dead) {
+      char line[14 * 20 + 1];
+      size_t used = 0;
+      uint64_t fp = tp->state.x[29];
+      for (int depth = 0; depth < 14 && fp && !(fp & 7); depth++) {
+        uint64_t pair[2];
+        struct iovec local = { pair, sizeof pair }, remote = { (void *)(uintptr_t)fp, sizeof pair };
+        if (process_vm_readv(t->pid, &local, 1, &remote, 1, 0) != (ssize_t)sizeof pair) break;
+        used += (size_t)snprintf(line + used, sizeof line - used, " 0x%llx", (unsigned long long)(pair[1] & 0x7fffffffffffULL));
+        if (pair[0] <= fp) break;
+        fp = pair[0];
+      }
+      if (used) LOGI("thread %u frames:%s", s, line);
+    }
   }
 }
 

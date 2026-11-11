@@ -92,6 +92,11 @@ What that run showed is wrong or missing (none of it fixed yet unless a later li
 
 - Touch and buttons (`hid/`, section below): the guest has a Digitizer / Touch Screen service and a buttons service;
   backboardd opens both and gets their events queued. No frame yet, so nothing can be seen to react.
+- With series 0001-0025 (the display 0020, the key store 0022, 0023, the task layer's fixes with 0025) and a
+  collection with 214 originals on the stub: a 1000 s run ends at its time limit with no panic; 123 services
+  spawned, about 190 processes, `backboardd` and `SpringBoard` alive to the end, only `chronod` dead (abort in
+  QuartzCore's `query_displays`, 40 s after backboardd opened the framebuffer). `display.sock` shows one flat colour,
+  about two flushes a second; no swap from backboardd, no `session/ready`.
 
 Not reached: a swap from backboardd, a frame from SpringBoard, `session/ready`. Nothing here has run on the phone.
 

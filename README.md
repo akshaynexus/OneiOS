@@ -22,14 +22,15 @@ iPhone18,2 kexts), the boot gets through:
 - the Data volume's first start: `newfs_apfs` (the first user process), the dyld shared cache's 4K code signatures
   (5.8 GiB hashed once per boot, about 3 minutes under qemu), the cache mapped and slid, the volume mounted, the
   seed unpacked and verified by the kernel;
-- **launchd**: all of its early boot tasks ("Early boot complete. Continuing system boot."), then about 125
-  processes, among them `SpringBoard`, which starts and exits (signal 5) again and again.
+- **launchd**: all of its early boot tasks ("Early boot complete. Continuing system boot."), then its services:
+  123 spawned and about 190 processes in 16 minutes, with **`backboardd` and `SpringBoard` running to the end of
+  the run** (series 0001-0025, 2026-11-11; the run was stopped by its time limit, no kernel panic). The only
+  service that died was `chronod` (abort in QuartzCore's `query_displays`).
 
-Not reached: a SpringBoard that stays up, a frame on the display, `session/ready`. What is missing for that, as
-seen in the log: the guest has an IOMobileFramebuffer since `0020` (`kernel/patches/oneios-hosted/display/`: it
-starts, the console reaches `display.sock` through it, and backboardd opens it), but backboardd has not submitted a
-frame: in the run that got there it died in a workqueue thread's start first. Touch and the side keys are in
-(`kernel/patches/oneios-hosted/hid/`): a Digitizer / Touch Screen service and a buttons service that backboardd
+Not reached: a frame of iOS's on the display, `session/ready`. The guest has an IOMobileFramebuffer since `0020`
+(`kernel/patches/oneios-hosted/display/`: it starts, backboardd opens it), and `display.sock` shows one flat colour
+about twice a second: nothing of SpringBoard's is presented yet, and why is not known. Touch and the side keys are
+in (`kernel/patches/oneios-hosted/hid/`): a Digitizer / Touch Screen service and a buttons service that backboardd
 opens and gets events from, fed from xnuhost's input device (scripted touches on the PC; with no frame, nothing
 to see react).
 The processes that died with "Text page corruption detected", dyld assertions or a lost Linux thread no longer do

@@ -119,8 +119,10 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   from a task's Linux process and reports, as `hosted check:` lines, a page mapped over another with no
   flush between, a page the VM frees while a task still has it mapped, and (every 1024 returns to user
   mode and at a task's `brk`) a mapping the task's page table no longer allows. Costs memory and time.
-- `guest` lines in the log are the kernel's console. `kill -QUIT <xnuhost pid>` logs every vCPU and every iOS
-  thread; `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
+- `guest` lines in the log are the kernel's console. `kill -QUIT <xnuhost pid>` (the pid in `SESSION/xnuhost.pid`,
+  not `pkill`: the task factory has the same command line and dies of the signal) logs every vCPU and every iOS
+  thread, with the thread's return addresses up its frame pointers where the host can read the task's memory (on
+  the phone; under qemu-user it cannot, and only pc and lr are shown); `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
 - A user process that dies: the kernel logs its registers and a backtrace (`sheng-exc`, `sheng-ubt` lines) for the
   processes named in the boot argument `sheng-exc-name=SpringBoard,backboardd,...` (default: backboardd, chronod,
   liveactivitiesd; launchd always). `scripts/debug/dsc.py ADDR...` names those addresses in the image set's dyld
