@@ -649,6 +649,17 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   `pure-leaf` pairs; please take every one whose function has arguments or a result a caller uses off its name
   (stub or right name), as the README now says.
 
+- 2026-11-11, lead -> parent, display agent: **the lead's vsync reading was wrong** (the compositor of iOS 27 registers
+  no vsync client and paces itself by the refresh interval the backend reports: `NativeLegacyDisplay.cpp`, int-209;
+  `arms=0` is expected). What the phone's combined session shows instead: 20 swaps in 330 s with about 860 touch
+  frames, backboardd's render server thread waiting for work in 107 of 118 samples, SpringBoard's main thread idle
+  in 103 of 118 (when busy it is in UIKit's update cycle and commits). So neither process is busy or stuck; what
+  holds the rate down while a finger moves is not found. The guest's side of the scanout is already Droid-VM's
+  (`DroidVMVirtioGpuDisplay.cpp` unchanged: a resource per IOSurface, complete-on-post on by default); the two
+  18 MB copies per frame and the 25..94 ms a swap takes to complete are on the host (xnuhost's flush, the display
+  helper): the display agent's. They bound the rate at about 20 a second and do not explain 3. Touch: see
+  `kernel/patches/oneios-hosted/hid/README.md`, "What Droid-VM's touch fixes are here".
+
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
 Format: id, owner if taken, files, root cause or need, expected result. Check with: `kernel/build-hosted.sh`, then

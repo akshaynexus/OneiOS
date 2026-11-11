@@ -54,6 +54,8 @@ void oneios_hid_input_start(void);
 // DroidVMVirtioInput.c's counters: devices found and started, events, frames, finger sets published.
 extern volatile uint32_t droidvm_input_found, droidvm_input_started;
 extern volatile uint64_t droidvm_input_events, droidvm_input_frames, droidvm_input_published;
+// Finger sets the transport sent again for a finger held still (its touch_still: every 8 ms without a frame).
+extern volatile uint64_t droidvm_input_still;
 extern volatile uint64_t oneios_hid_key_events, oneios_hid_button_reports;
 // NativeHidInput's: the wrapper of the event driver's dispatch ([0] 3 = installed), contacts begun and at an edge.
 extern volatile uint32_t native_touch_edge_install[3], native_touch_edge_stats[4];
@@ -301,10 +303,10 @@ native_hid_live_checkpoint(IOService *device)
 			}
 			IOLog("oneios-hid: touch screen: %llu virtio-input events, %llu frames, %llu finger sets, %llu HID reports "
 			    "(last result 0x%x), %u contacts begun (%u at an edge); the last began at x %d.%d%% y %d.%d%%, "
-			    "the last lift was at x %d.%d%% y %d.%d%%\n", droidvm_input_events, droidvm_input_frames,
+			    "the last lift was at x %d.%d%% y %d.%d%%; %llu sets resent for a held finger\n", droidvm_input_events, droidvm_input_frames,
 			    droidvm_input_published, reports, native_hid_input_results[6], native_touch_edge_stats[1],
 			    native_touch_edge_stats[2], at[0] / 10, at[0] % 10, at[1] / 10, at[1] % 10, at[2] / 10, at[2] % 10,
-			    at[3] / 10, at[3] % 10);
+			    at[3] / 10, at[3] % 10, droidvm_input_still);
 		} else {
 			IOLog("oneios-hid: buttons: %llu key events, %llu button states, %llu HID reports (last result 0x%x)\n",
 			    oneios_hid_key_events, oneios_hid_button_reports, reports, native_hid_input_results[4]);

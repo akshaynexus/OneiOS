@@ -140,6 +140,15 @@ kernel event services too (the multitouch and button kexts), not DriverKit ones.
 nothing (the old order). Why the DriverKit driver's process needs more than 120 s is not looked at; nothing here
 uses it.
 
+## What Droid-VM's touch fixes are here (lead, 2026-11-11)
+
+| Droid-VM fix | Here |
+|---|---|
+| A held finger is sent again every 8 ms with x one axis unit off (`touch_still`, `DROIDVM_TOUCH_STILL_MS`) | in: it is in the transport, which is staged unchanged there. The log line counts the sets resent |
+| The touch screen as its own Digitizer device (`sheng-touch-split=1` on its board) | in since Q4b: `native_hid_touch_allocate`, a second `NativeHidInput`, with no boot argument |
+| A finger down in the bottom 4 % starts on the edge (`DROIDVM_TOUCH_BOTTOM_SNAP`) | in, same file |
+| A swipe from outside the display's black border starts at the border (its host's `EvdevEncoder`) | not here and not needed while the guest's frame fills the panel: there is no border inside the touch area. If the display helper ever letterboxes, xnuhost's `input.c` needs it |
+
 ## Build, boot arguments, log
 
 Built by `kernel/build-hosted.sh` (needs `external/NativeHidInput` at 24f1f3f or later: `scripts/setup/get-references.sh
@@ -159,7 +168,7 @@ oneios-hid: touch screen: event driver IOHIDEventDriver attached (registry id 0x
 oneios-hid: touch screen: Digitizer/Touch Screen, Built-In, DisplayIntegrated published on the event service; edge wrapper 3
 oneios-hid: touch screen: 1 user client(s) on the event service: IOHIDEventServiceUserClient (pid N, backboardd)
 oneios-hid: touch screen: N HID events queued for the service's client(s), 0 dropped
-oneios-hid: touch screen: N virtio-input events, N frames, N finger sets, N HID reports (last result 0x0), N contacts begun (N at an edge); the last began at x 49.8% y 100.0%, the last lift was at x 51.2% y 41.0%
+oneios-hid: touch screen: N virtio-input events, N frames, N finger sets, N HID reports (last result 0x0), N contacts begun (N at an edge); the last began at x 49.8% y 100.0%, the last lift was at x 51.2% y 41.0%; 212 sets resent for a held finger
 ```
 
 The two positions are what Apple's event driver put in its events (read by the edge wrapper, 0 % at the left and
