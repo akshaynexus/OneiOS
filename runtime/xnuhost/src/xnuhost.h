@@ -54,6 +54,7 @@ typedef struct {
   char  text_fixups[1024];  // text-fixup=FILE,OFFSET,ORIGINAL,REPLACEMENT entries for /chosen text-fixups, NUL-separated
   unsigned text_fixups_length;
   bool  input;              // read /dev/input
+  char  input_script[512];  // a file of scripted touches and keys (input_script.c), "" = none
   bool  tasks;              // start the task factory
   int   task_uid;           // uid of iOS task processes, -1 = xnuhost's own
   int   log_level;
@@ -290,6 +291,8 @@ void       xh_virtio_unlock(xh_virtio *dev);
 unsigned   xh_virtio_pop(xh_virtio *dev, unsigned queue, uint16_t *head, xh_viov *iov, unsigned max);
 void       xh_virtio_push(xh_virtio *dev, unsigned queue, uint16_t head, uint32_t written);
 void       xh_virtio_config_changed(xh_virtio *dev);
+// Whether the guest's driver has set DRIVER_OK: the device's queues are in use.
+bool       xh_virtio_ready(xh_virtio *dev);
 // Test hook: guest memory translation (default xh_ram).
 extern void *(*xh_virtio_translate)(uint64_t pa, uint64_t len);
 uint64_t   xh_virtio_mmio_read(xh_virtio *dev, uint64_t offset, unsigned size);
@@ -316,6 +319,14 @@ void  xh_input_stop(void);
 // virtio-input side
 void  xh_virtio_input_event(xh_virtio *dev, uint16_t type, uint16_t code, int32_t value);
 void  xh_virtio_input_set_abs(xh_virtio *dev, unsigned axis, int32_t min, int32_t max, int32_t res);
+// Input script (input_script.c): touches and key presses from a text file (input-script=FILE), for a host with no
+// touchscreen and for repeatable checks. The file's format is at the top of input_script.c.
+typedef enum { XH_STEP_ABS, XH_STEP_READY, XH_STEP_WAIT, XH_STEP_EVENT, XH_STEP_REPEAT } xh_input_step_kind;
+typedef struct { xh_input_step_kind kind; uint16_t type, code; int32_t value, min, max; } xh_input_step;
+// The file's text as steps (malloc'ed); -1 and the line's number for a line that is not understood.
+int   xh_input_script_parse(const char *text, xh_input_step **steps, unsigned *count, unsigned *bad_line);
+int   xh_input_script_start(xh_virtio *dev, const char *path);   // 0: running, or no path; -1: unreadable or a bad line
+void  xh_input_script_stop(void);
 
 // ---- iOS tasks (task.c; aarch64 Linux only) -----------------------------------------------------
 // Forks the task factory. Must run before any other thread exists and before RAM is mapped.

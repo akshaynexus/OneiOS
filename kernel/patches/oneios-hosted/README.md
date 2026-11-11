@@ -90,6 +90,9 @@ What that run showed is wrong or missing (none of it fixed yet unless a later li
   0025 and its xnuhost change; in the first long run with them backboardd was still alive 7 minutes after it
   opened the framebuffer. Whether it then swaps is not known (no user-space log read).
 
+- Touch and buttons (`hid/`, section below): the guest has a Digitizer / Touch Screen service and a buttons service;
+  backboardd opens both and gets their events queued. No frame yet, so nothing can be seen to react.
+
 Not reached: a swap from backboardd, a frame from SpringBoard, `session/ready`. Nothing here has run on the phone.
 
 ## What the patch does (files, functions)
@@ -255,3 +258,39 @@ with a renderer, and the PC has none.
 NativeAdreno (the `AGXAccelerator` under the collection's `IOAcceleratorES`, `AGXDeviceUserClient`) needs no patch:
 it is in the GPU archive of `0005` and starts from `oneios_gpu3d_start` (`docs/gpu.md` 5.1, with the PC boot's
 lines and what is not tested).
+
+## hid/: touch, buttons and the light sensor's HID device (fable-hid, 2026-11-11)
+
+No numbered patch: an archive (`hid/build-oneios-hid.py`, hooked into `kernel/build-hosted.sh`) whose start,
+`oneios_hid_input_start`, is the last call of `oneios_drivers_start` (`drivers/bridge/OneiOSBridge.c`).
+`hid/README.md` has the files, the evidence for the layout header, the buttons table and the log lines.
+
+- `hid/OriginalHidDeviceABI.h`: the layout of the collection's original `IOHIDDevice` (24A446 iPhone18,2), checked
+  at every build against what the kernelcache says (`hid/IOHIDDevice-24A446-v54.json`): 207 vtable slots with their
+  pointer-authentication discriminators, 0xd0 bytes. Any driver that subclasses `IOHIDDevice` includes it.
+- UniXNU's NativeHidInput as two devices (touch screen, buttons) fed by UniXNU-droidvm's virtio-input transport
+  from xnuhost's `/arm-io/input-0`; `drivers/brightness/OneiOSALSDevice.cpp` built against the same header.
+- It needs three pairs in the collection that were wrong or missing until 2026-11-11 (fable-prelink has them):
+  `IOReportLegend::addReporterLegend(IOReporter *, ...)` (a PAC failure in `IOHIDDevice::start` without it) and
+  `IOSharedDataQueue::getQueueSize` / `setQueueSize` (the panic stub when backboardd opens a service).
+
+Seen under qemu-aarch64 (main at `3202197` plus this, 8 vCPUs, `--input-script runtime/xnuhost/tools/input-demo.script`):
+
+1. 10 s into the boot: `droidvm input /arm-io/input-0: OneiOS touchscreen, touch`, both HID devices started under
+   `IOHIDResource`, `ONEIOS ALS: on`, and `oneios-hid: light sensor: OneiOSALSDevice(IOHIDInterface(AppleUSBALSService))`:
+   Apple's light sensor service attaches to our device.
+2. The touch screen's and the buttons' interfaces wait (`matching deferred by IOHIDEventDriver`) until driverkitd
+   is active, three to five minutes after launchd's early boot here. The collection then tries the DriverKit event
+   driver first (`AppleUserHIDEventService`; `DK: ... waiting for server com.apple.driverkit.AppleUserHIDDrivers`),
+   gives up after 120 s (`failed to launch server`: the driver extension's process does not start in this guest
+   yet) and the kernel's `IOHIDEventDriver` takes both devices. Not a fault of this archive, but two minutes
+   without touch; open.
+3. `oneios-hid: touch screen: 1 user client(s) on the event service: IOHIDEventServiceUserClient (pid 84, backboardd)`
+   and the same for the buttons: backboardd found the digitizer and opened it.
+4. The script's events arrive as HID reports the family accepts (`last result 0x0`) and Apple's event driver
+   queues its events for backboardd: `touch screen: 444 HID events queued for the service's client(s), 0 dropped`,
+   `21 contacts begun (10 at an edge)`; `buttons: 66 HID events queued`.
+
+Not seen: backboardd or SpringBoard acting on an event (no user-space log was read, and no frame is drawn yet).
+Nothing ran on the phone.
+

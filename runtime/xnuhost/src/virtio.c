@@ -129,6 +129,14 @@ void xh_virtio_push(xh_virtio *d, unsigned qi, uint16_t head, uint32_t written)
   pthread_mutex_unlock(&d->lock);
 }
 
+bool xh_virtio_ready(xh_virtio *d)
+{
+  pthread_mutex_lock(&d->lock);
+  bool ready = d->status & 4;
+  pthread_mutex_unlock(&d->lock);
+  return ready;
+}
+
 void xh_virtio_config_changed(xh_virtio *d)
 {
   pthread_mutex_lock(&d->lock);

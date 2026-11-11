@@ -58,6 +58,9 @@ scripts/bg.sh kernel-hosted env HOSTED_OUT=me kernel/build-hosted.sh
 
 - `HOSTED_OUT=<name>` gives you your own tree and output; without it the build uses the default tree
   (`out/kernel-hosted`, `out/kernel/current-hosted/`), which belongs to the lead.
+- The build compiles UniXNU's sources from `external/` (`scripts/setup/get-references.sh`): among them
+  `NativeHidInput` at 24f1f3f for the touch screen and buttons; a checkout from before 2026-11-11 is older and the
+  build says so (remove `external/NativeHidInput` and fetch again).
 - Incremental work on one patch: `kernel/hosted-dev.sh` (see [kernel/patches/oneios-hosted/README.md](../kernel/patches/oneios-hosted/README.md)).
 - The reference for the prelink (optional, worth thousands of paired functions; rebuild only when the source
   changes): `scripts/bg.sh ref env XNU_FILESET_REFERENCE=1 HOSTED_OUT=me kernel/build-hosted.sh` (see
@@ -122,6 +125,11 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   processes named in the boot argument `sheng-exc-name=SpringBoard,backboardd,...` (default: backboardd, chronod,
   liveactivitiesd; launchd always). `scripts/debug/dsc.py ADDR...` names those addresses in the image set's dyld
   shared cache (it finds the slide from a whole backtrace; its header says how to give it the cache).
+- Touch and keys on the PC: add `--input-script runtime/xnuhost/tools/input-demo.script` (keep `--no-input`: the
+  evdev reader would open the PC's own devices). The script gives xnuhost's input device a panel's axes and, once
+  the guest's driver runs it, repeats a tap, a swipe up from the bottom edge and the three side keys
+  ([booter.md](booter.md) 2.8). The kernel's `oneios-hid:` lines say what attached and what arrived
+  ([the HID archive's README](../kernel/patches/oneios-hosted/hid/README.md)).
 - What user space did, after the run has stopped: the Data volume is in `--data`'s `data.img` and launchd keeps
   its own log on it (every job spawned or refused, every exit with its reason).
   `apfs-fuse -o ro,vol=2 out/run/data/data.img MNT`, then `MNT/root/log/com.apple.xpc.launchd/launchd.log`, and

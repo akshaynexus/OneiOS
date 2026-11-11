@@ -24,8 +24,8 @@ Command line (the first line is what the OneOS fork runs, `oneos/interface.md` s
 ```sh
 xnuhost --session-abi 1 --mode takeover --runtime DIR --image DIR --data DIR --session DIR
         [--kernel FILE] [--cpus N] [--ram SIZE] [--boot-args TEXT] [--display shm|drm|none]
-        [--width W --height H] [--hz N] [--scale 2|3] [--no-input] [--no-tasks] [--config FILE]
-        [--set KEY=VALUE] [-v]
+        [--width W --height H] [--hz N] [--scale 2|3] [--no-input] [--input-script FILE] [--no-tasks]
+        [--config FILE] [--set KEY=VALUE] [-v]
 xnuhost --selftest            # on the phone: page size, address bits, PAC keys across fork, memfd, seccomp
 ```
 
@@ -295,7 +295,14 @@ Linux's page cache and a sparse file: the store is a raw image.
   session in which surfaceflinger and the composer are stopped. Written against the kernel's UAPI, never run.
 - **`none`.** Frame in memory only.
 - **Input** is read from evdev directly and not grabbed, so the switch's Volume Up + Volume Down watcher
-  keeps working beside it.
+  keeps working beside it. The guest's side is `kernel/patches/oneios-hosted/hid` (`docs/hardware.md` 7b).
+- **`--input-script FILE`** (`input-script=FILE`; `src/input_script.c`, whose head has the format): touches and
+  key presses from a text file, on the same virtio-input device, for a host with no touchscreen (the PC under
+  qemu) and for repeatable checks. `abs` lines give the device its axes before the guest starts (a device
+  without `ABS_MT_POSITION_X/Y` is not a touch screen to the guest), `ready` waits for the guest's driver
+  (`xh_virtio_ready`: DRIVER_OK), then `tap`, `swipe`, `key`, `ev`, `wait`, `repeat`.
+  `tools/input-demo.script` is a 1440 x 3120 panel with a tap, a swipe from the bottom edge and the three side
+  keys, repeated. It runs beside the evdev reader, or alone with `--no-input`.
 - `session/ready` is created at the guest's first presented frame (or by the `ready` host call). The guest's
   display driver also presents the boot framebuffer (the console, and later a blank or CPU-copied frame drawn
   there): a flush of a resource whose backing starts at `boot_args.Video`'s address is shown but is not that

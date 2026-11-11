@@ -1,0 +1,20 @@
+# A stand-in for the phone's touchscreen and side keys (xnuhost --input-script FILE; format: src/input_script.c).
+# The axes are a 1440 x 3120 panel's, as the S24 Ultra's touchscreen driver is expected to state them (not read
+# from the phone yet); the guest scales whatever range the device states to its screen.
+abs 0x2f 0 9             # ABS_MT_SLOT
+abs 0x39 0 65535         # ABS_MT_TRACKING_ID
+abs 0x35 0 1439 10       # ABS_MT_POSITION_X
+abs 0x36 0 3119 10       # ABS_MT_POSITION_Y
+ready                    # the guest's virtio-input driver has started the device
+wait 3000
+tap 720 1560             # the middle of the screen
+wait 1000
+swipe 720 3100 720 1500 300   # up from the bottom edge: Home
+wait 1000
+key 115                  # volume up
+wait 500
+key 114                  # volume down
+wait 500
+key 116                  # power
+wait 5000
+repeat

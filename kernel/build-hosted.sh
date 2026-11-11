@@ -124,6 +124,26 @@ if 'CONFIG_XNU_NATIVE_LEGACY_DISPLAY' in text:
     raise SystemExit('build-hosted: the hosted defconfig already sets CONFIG_XNU_NATIVE_LEGACY_DISPLAY')
 open(config, 'w').write(text.rstrip('\n') + '\nCONFIG_XNU_NATIVE_LEGACY_DISPLAY=y\n')
 PY
+# Touch, buttons and the light sensor (no numbered patch: oneios_drivers_start calls oneios_hid_input_start):
+# UniXNU's NativeHidInput and OneiOSALSDevice under the collection's original IOHIDDevice
+# (kernel/patches/oneios-hosted/hid/OriginalHidDeviceABI.h is its layout), fed by
+# UniXNU-droidvm's virtio-input transport from xnuhost's input device: one more board archive of this build only
+# (kernel/patches/oneios-hosted/hid/build-oneios-hid.py). backboardd takes touches from its Digitizer service.
+cp "$ROOT/kernel/patches/oneios-hosted/hid/build-oneios-hid.py" "$DEVICE/scripts/"
+python3 -I - "$DEVICE/board.toml" "$DEVICE/configs/oneios_hosted_defconfig" <<'PY'
+import re, sys
+board, config = sys.argv[1:]
+text = open(board).read()
+new, n = re.subn(r'^(\s*)("build-oneios-gpu\.py")', lambda m: m.group(1) + '"build-oneios-hid.py",\n' + m.group(1) + m.group(2), text, count=1, flags=re.M)
+if n != 1:
+    raise SystemExit('build-hosted: board.toml archives have no build-oneios-gpu.py')
+open(board, 'w').write(new)
+text = open(config).read()
+new, n = re.subn(r'^(CONFIG_XNU_EXTRA_LD_ARCHIVES="[^"\n]*)"', lambda m: m.group(1) + ' -Wl,-force_load,{tree}/build/oneios-hid/liboneioshid.a"', text, count=1, flags=re.M)
+if n != 1:
+    raise SystemExit('build-hosted: the hosted defconfig has no CONFIG_XNU_EXTRA_LD_ARCHIVES')
+open(config, 'w').write(new)
+PY
 mkdir -p "$UNIXNU_OUT_DIR"
 [ -e "$UNIXNU_OUT_DIR/feeds" ] || [ ! -d "$ROOT/out/kernel/unixnu/feeds" ] || ln -s "$ROOT/out/kernel/unixnu/feeds" "$UNIXNU_OUT_DIR/feeds"
 

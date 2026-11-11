@@ -836,6 +836,31 @@ static void test_virtio_input(void)
   CHECK(used[1] == 5 && ev[0].type == 0);
 }
 
+// The scripted event source (input_script.c): the file's lines as steps.
+static void test_input_script(void)
+{
+  xh_input_step *s = NULL;
+  unsigned n = 0, bad = 0;
+  CHECK(!xh_input_script_parse("# a panel\nabs 0x35 0 1439 10\n\nabs 0x36 0 3119\nready\nwait 250\ntap 700 1500 40  # a tap\nkey 116\nrepeat 2\n", &s, &n, &bad));
+  // 2 axes, ready, wait, tap (6 events, wait, 3 events), key (2 events, wait, 2 events), repeat
+  CHECK(n == 2 + 1 + 1 + 10 + 5 + 1 && s[0].kind == XH_STEP_ABS && s[0].code == 0x35 && s[0].max == 1439 && s[0].value == 10 && s[1].value == 0);
+  CHECK(s[2].kind == XH_STEP_READY && s[3].kind == XH_STEP_WAIT && s[3].value == 250);
+  CHECK(s[4].type == 3 && s[4].code == 0x2f && s[5].code == 0x39 && s[5].value == 1 && s[6].code == 0x35 && s[6].value == 700 &&
+        s[7].code == 0x36 && s[7].value == 1500 && s[8].type == 1 && s[8].code == 0x14a && s[8].value == 1 && s[9].type == 0);
+  CHECK(s[10].kind == XH_STEP_WAIT && s[10].value == 40 && s[11].code == 0x39 && s[11].value == -1 && s[12].value == 0 && s[13].type == 0);
+  CHECK(s[14].type == 1 && s[14].code == 116 && s[14].value == 1 && s[16].kind == XH_STEP_WAIT && s[16].value == 100 && s[17].value == 0);
+  CHECK(s[19].kind == XH_STEP_REPEAT && s[19].value == 2);
+  free(s);
+  CHECK(!xh_input_script_parse("swipe 100 3000 100 1000 160\nrepeat\n", &s, &n, &bad) && n == 6 + 10 * 4 + 3 + 1 && s[n - 1].value == -1 &&
+        s[6].kind == XH_STEP_WAIT && s[6].value == 16 && s[8].code == 0x36 && s[8].value == 2800 && s[44].value == 1000);
+  free(s);
+  CHECK(xh_input_script_parse("wait 5\n\nev 3 0x35\n", &s, &n, &bad) == -1 && bad == 3);
+  CHECK(xh_input_script_parse("abs 0x40 0 10\n", &s, &n, &bad) == -1 && bad == 1);
+  CHECK(xh_input_script_parse("tap 1 2 x\n", &s, &n, &bad) == -1);
+  driver d = { .dev = xh_virtio_input_create(0, 44) };
+  CHECK(d.dev && !xh_virtio_ready(d.dev) && driver_init(&d, 0, 2, GUEST_PA + 0x10000) && xh_virtio_ready(d.dev));
+}
+
 // ---- the seccomp filter, run as the kernel would ------------------------------------------------
 static uint32_t bpf_run(const struct xs_filter_insn *f, unsigned n, uint32_t nr, uint64_t ip, const uint64_t args[6], uint32_t arch)
 {
@@ -1009,6 +1034,7 @@ int main(void)
   test_virtio_gpu();
   test_virtio_gpu3d();
   test_virtio_input();
+  test_input_script();
   test_filter();
   freopen("/dev/null", "w", stderr);          // the refusals below print their reasons
   test_config(dir);

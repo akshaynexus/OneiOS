@@ -28,7 +28,10 @@ iPhone18,2 kexts), the boot gets through:
 Not reached: a SpringBoard that stays up, a frame on the display, `session/ready`. What is missing for that, as
 seen in the log: the guest has an IOMobileFramebuffer since `0020` (`kernel/patches/oneios-hosted/display/`: it
 starts, the console reaches `display.sock` through it, and backboardd opens it), but backboardd has not submitted a
-frame: in the run that got there it died in a workqueue thread's start first. There is no touch digitizer yet.
+frame: in the run that got there it died in a workqueue thread's start first. Touch and the side keys are in
+(`kernel/patches/oneios-hosted/hid/`): a Digitizer / Touch Screen service and a buttons service that backboardd
+opens and gets events from, fed from xnuhost's input device (scripted touches on the PC; with no frame, nothing
+to see react).
 The processes that died with "Text page corruption detected", dyld assertions or a lost Linux thread no longer do
 (`0025` and xnuhost's task layer: 14 minutes past early boot with 129 processes and none of those). The key store is in since `0022`: an AppleKeyStore
 service in software (no passcode, class keys from a constant, key wrap by AES; **not a security boundary**), with
@@ -41,8 +44,8 @@ Built and tested on the PC, not yet on the phone: xnuhost and its loader, the GP
 display helper, the hardware bridges (CPU, network, Bluetooth, haptics, audio, brightness and the light sensor,
 camera), the image pipeline, the runtime package and releases, and the OneOS fork's iOS 27 card, session scripts and
 Hardware checks, and the iOS user-space cross toolchain with the Metal plug-in built for the iPhone's shared cache
-(not loaded by any boot yet). Not done: the camera's iOS-side capture device, auto-brightness's last link into
-CoreBrightness. Never: passcode, Face ID, Wallet, calls, SMS.
+(not loaded by any boot yet). Not done: the camera's iOS-side capture device, auto-brightness past Apple's light
+sensor service (it attaches to our HID device; no reading has gone through it). Never: passcode, Face ID, Wallet, calls, SMS.
 
 ## Layout
 

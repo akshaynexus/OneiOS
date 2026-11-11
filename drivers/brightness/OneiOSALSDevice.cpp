@@ -5,12 +5,12 @@
  * (com.apple.driver.AppleHIDALSService, in the kernel collection) to turn into the ambient light
  * events CoreBrightness reads. oneios_als_hid.h says why this shape and has the descriptor.
  *
- * NOT BUILT, NEVER COMPILED. It is a subclass of the kernel collection's own IOHIDDevice, so it needs
- * that class's layout: the header "OriginalHidDeviceABI.h" that NativeHidInput is built against
- * (external/NativeHidInput, UniXNU scripts/build-sheng-hid-input.py; that script qualifies iOS 17 only
- * and has no iOS 27 iPhone run). It is written on NativeHidInput's pattern and uses only the calls
- * that file uses. drivers/build.py does not list it. When the board's HID input is built for 24A446,
- * build this file the same way and call oneios_als_device_start() after oneios_drivers_start().
+ * It is a subclass of the kernel collection's own IOHIDDevice: the header "OriginalHidDeviceABI.h" is that
+ * class's layout for the 24A446 iPhone18,2 collection (kernel/patches/oneios-hosted/hid). So it is built there, into
+ * the hosted kernel's HID archive (build-oneios-hid.py), not by drivers/build.py: its class registers after the
+ * collection's IOHIDFamily has loaded, and oneios_als_device_start() is called by oneios_hid_input_start
+ * (OneiOSHidInput.cpp) once the touch screen and the buttons are published. Written on NativeHidInput's pattern,
+ * with only the calls that file uses.
  *
  * Unknown until a session reaches backboardd: whether AppleUSBALSService takes a device that is not
  * on USB (its personality asks only for the IOHIDInterface, the usages and the vendor), and which
@@ -49,7 +49,7 @@ class OneiOSALSDevice : public IOHIDDevice {
 		uint8_t report[ONEIOS_ALS_REPORT_SIZE];
 		oneios_als_report(self->fMillilux, report);
 		IOBufferMemoryDescriptor *buffer = IOBufferMemoryDescriptor::withBytes(report, sizeof(report), kIODirectionNone);
-		IOReturn result = buffer != nullptr ? self->handleReport(buffer, 0, 0) : kIOReturnNoMemory;
+		IOReturn result = buffer != nullptr ? self->handleReport(buffer, kIOHIDReportTypeInput, 0) : kIOReturnNoMemory;
 		OSSafeReleaseNULL(buffer);
 		return result;
 	}

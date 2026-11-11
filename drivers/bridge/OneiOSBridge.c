@@ -312,6 +312,11 @@ void oneios_bridge_start(void) {
     else printf("ONEIOS BRIDGE: no worker thread: nothing from the host is received\n");
 }
 
+// Touch, buttons and the light sensor's HID device: the hosted kernel's HID archive (kernel/patches/oneios-hosted/hid,
+// OneiOSHidInput.cpp), which subclasses the kernel collection's IOHIDDevice and so is linked only into a kernel built
+// for that collection (kernel/build-hosted.sh). Weak: a kernel linked without the archive starts none.
+__attribute__((weak)) void oneios_hid_input_start(void) {}
+
 void oneios_drivers_start(void) {
     oneios_bridge_start();
     (void)oneios_haptic_start();
@@ -319,4 +324,5 @@ void oneios_drivers_start(void) {
     oneios_bt_start();
     oneios_backlight_start();
     oneios_camera_start();
+    oneios_hid_input_start();   // after the backlight: the light sensor's device listens to its readings
 }

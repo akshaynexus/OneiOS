@@ -89,6 +89,7 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
     c->text_fixups_length += (unsigned)n + 1;
   }
   else if (!strcmp(key, "input")) return flag(value, &c->input);
+  else if (!strcmp(key, "input-script")) return copy(c->input_script, sizeof c->input_script, value);
   else if (!strcmp(key, "tasks")) return flag(value, &c->tasks);
   else if (!strcmp(key, "task-uid")) c->task_uid = atoi(value);
   else if (!strcmp(key, "bridges")) { bool on; if (flag(value, &on)) return -1; c->bridges = on; }
@@ -142,7 +143,7 @@ static void usage(void)
         "               [--session-abi 1] [--mode takeover|bench] [--cpus N] [--ram SIZE]\n"
         "               [--boot-args TEXT] [--display shm|drm|none] [--gpu auto|3d|2d] [--width W --height H]\n"
         "               [--hz N] [--scale 2|3]\n"
-        "               [--no-input] [--no-tasks] [--config FILE] [--set KEY=VALUE] [-v]\n"
+        "               [--no-input] [--input-script FILE] [--no-tasks] [--config FILE] [--set KEY=VALUE] [-v]\n"
         "       xnuhost --selftest      checks of this host (trap layer, PAC, memory), no kernel\n"
         "docs/booter.md describes the image set's files, the session files and the exit codes.\n", stderr);
 }

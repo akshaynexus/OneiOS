@@ -25,7 +25,8 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 | Haptics | `drivers/haptics` (port of iOSPlus10's LaurelVibrator and haptic node) | `runtime/bridges/haptics`: evdev force feedback | both built; host tested with a fake actuator |
 | Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp` (unchanged) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | host built and tested with a fake back end; AAudio as root without system_server is [U] |
 | Camera | `drivers/camera`: the `oneios,camera` transport, `/dev/oneios-camera`; `userland/camera`: the capture plug-in (its device object not written) | `runtime/bridges/camera`: helper `oneios-camera` (provider HAL in a session, Camera2 NDK with One UI), ring, device, `camctl` | host and kernel sides built and host-tested; iOS shows no camera yet; one phone run (2026-11-11): cameraserver lists 4 cameras and opens one for a root client, no frame arrived (no binder threads in the process: fixed, the fix not yet run on the phone); the HAL back end never run (section 7) |
-| Backlight and light sensor | `drivers/brightness`: the backlight service (port of iOSPlus10's `AppleARMBacklight`), the light readings; the HID light sensor device is written, not built | `runtime/bridges/brightness`: the backlight sysfs node, `als_rear` by evdev, `brightctl` | both built; host tested; never run on the phone or in a session (section 7a) |
+| Backlight and light sensor | `drivers/brightness`: the backlight service (port of iOSPlus10's `AppleARMBacklight`), the light readings; the HID light sensor device, built into the hosted kernel's HID archive | `runtime/bridges/brightness`: the backlight sysfs node, `als_rear` by evdev, `brightctl` | both built; host tested; in a PC boot the HID device starts and Apple's `AppleUSBALSService` attaches to it; never run on the phone or in a session (section 7a) |
+| Touch screen and buttons | `kernel/patches/oneios-hosted/hid`: UniXNU's NativeHidInput (digitizer, buttons) under the collection's `IOHIDDevice`, UniXNU-droidvm's virtio-input transport with the side keys | xnuhost's `input.c` (evdev, no grab) and `virtio_input.c`; `input_script.c` for a host with no panel | built; in a PC boot backboardd opens both services and scripted touches and keys are queued for it as HID events; never run on the phone (section 7b) |
 
 Common pieces:
 
@@ -470,7 +471,9 @@ Details and the phone test: `runtime/bridges/brightness/README.md`, `drivers/bri
   the class cannot have that name; conformance for CoreBrightness's `IOObjectConformsTo` is made by linking the
   class under the original's metaclass at run time (`oneios_bl_conform=0` turns it off).
 - Light: `OB_BRIGHT_ALS` readings are kept in the kernel. The way to CoreBrightness is a HID device for the
-  original `AppleUSBALSService` (AppleHIDALSService is in the collection): `OneiOSALSDevice.cpp`, not built.
+  original `AppleUSBALSService` (AppleHIDALSService is in the collection): `OneiOSALSDevice.cpp`, built into the
+  hosted kernel's HID archive against the collection's `IOHIDDevice` layout (section 7b) and started after the
+  touch screen and the buttons.
 
 ### The bridge (`runtime/bridges/brightness`)
 
@@ -483,9 +486,62 @@ Details and the phone test: `runtime/bridges/brightness/README.md`, `drivers/bri
 - [U] everything on the phone: the node's name and range, writing it in the session's namespace, the sensor's
   `enable` file, the counts in known light.
 - [U] everything in iOS: no session reaches backboardd yet.
-- The HID light sensor device is not built; auto-brightness has no input until it is. A rear sensor is a poor
-  input for it in any case (dark when the phone lies face up).
+- The HID light sensor device is built and starts (`ONEIOS ALS: on` in a PC boot) and `AppleUSBALSService`
+  attaches to it; no reading has gone through, and whether CoreBrightness uses its events is [U]. A rear sensor is a poor
+  input for auto-brightness in any case (dark when the phone lies face up).
 - iOS's `IOMFBBrightnessLevel` on the framebuffer is not handled here (the display driver is UniXNU-droidvm's).
+
+## 7b. Touch screen and buttons (fable-hid, 2026-11-11)
+
+Details, the layout header's evidence and the log lines: `kernel/patches/oneios-hosted/hid/README.md`.
+
+### The phone
+
+- `/dev/input/event5` the touchscreen (multitouch protocol B: slots, tracking ids, `ABS_MT_POSITION_X/Y`),
+  `event0` gpio-keys, `event2` the power key, `event4` volume down (from the owner's phone; the axis ranges were
+  not read [U]).
+- No Home key and no ringer switch.
+
+### The path
+
+1. xnuhost (`runtime/xnuhost/src/input.c`) opens every event device that has multitouch positions or one of the
+   three side keys, **read only and without `EVIOCGRAB`**, and puts the events, unchanged, on one virtio-input
+   device (`/arm-io/input-0`) with the panel's own axis ranges in its configuration. The switch's Volume Up +
+   Volume Down watcher reads the same key devices beside it.
+2. In the kernel, UniXNU-droidvm's `DroidVMVirtioInput.c` (staged with `OneiOSSideKeys.inc`) reads the queue: the
+   finger set goes to the digitizer, a side key's state to the buttons.
+3. Two HID devices of UniXNU's `NativeHidInput`, subclasses of the collection's original `IOHIDDevice`
+   (`OriginalHidDeviceABI.h`): "OneiOS touch screen" (Digitizer / Touch Screen, ten fingers, each axis 0..32767,
+   Built-In, DisplayIntegrated) and "OneiOS buttons" (Consumer Menu, Power, Volume Increment and Decrement,
+   Telephony Ring Enable, a boot keyboard).
+4. Apple's IOHIDFamily and IOHIDEventDriver, unchanged in `kernel.kc`, parse the reports and make the HID events
+   backboardd reads.
+
+Coordinates: each axis of the panel's range is scaled to the digitizer's full range, which iOS maps to the whole
+display, so the panel's range covers the guest's mode (the panel's own 1440 x 3120 by default) when the guest's
+frame fills the panel. Home is the swipe up from the bottom edge: a finger that lands in the bottom 4 % starts on the edge, and
+edge contacts carry the edge flag SpringBoard's gestures need.
+
+### Keys
+
+| Key | evdev code | iOS usage |
+|---|---|---|
+| Power | `KEY_POWER` 116 | Consumer / Power |
+| Volume up | `KEY_VOLUMEUP` 115 | Consumer / Volume Increment |
+| Volume down | `KEY_VOLUMEDOWN` 114 | Consumer / Volume Decrement |
+| (none on this phone) | `KEY_HOMEPAGE` 172 | Consumer / Menu (Home) |
+| (none on this phone) | `KEY_MUTE` 113, each press flips it | Telephony / Ring Enable (the ringer switch) |
+
+The side keys stay ungrabbed: iOS and the switch's watcher both see every press, including the two of the
+Volume Up + Volume Down chord that ends the session.
+
+### Missing, unknown
+
+- [U] everything on the phone: the touchscreen's axis ranges and rate, whether it reports while One UI's framework
+  is stopped, palm rejection, the feel of the edge band.
+- [U] whether iOS 27 reads Ring Enable = 1 as "ring"; nothing sets it on this phone.
+- A guest frame that does not fill the panel (letterboxed) needs an offset in the transport's scaling; not written.
+- No pen, no trackpad, no motion sensors (the transport's code for them is compiled and finds no such device).
 
 ## 8. Sources
 

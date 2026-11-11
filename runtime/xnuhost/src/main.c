@@ -315,6 +315,7 @@ static int boot(void)
   if (!input || !xh_virtio_gpu_create_3d(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, fb_width, fb_height, gpu3d)) return -1;
   kinds[ndev++] = XL_DEV_GPU;
   if (config.input && xh_input_start(input, fb_width, fb_height)) LOGE("input: could not start; continuing without");
+  if (xh_input_script_start(input, config.input_script)) return -1;
 
   static xl_machine machine;
   machine.chip_id = 0x8150;
@@ -650,6 +651,7 @@ int main(int argc, char **argv)
   if (camera) br_camera_close(camera);      // the helper closes the camera and exits
   if (brightness) br_bright_close(brightness);      // One UI's backlight level again, the light sensor as it was
   if (net_up) net_script("down");
+  xh_input_script_stop();
   xh_input_stop();
   xh_display_close();
   sync();                                   // the Data store's pages

@@ -25,7 +25,10 @@ DEST=${REF_DIR:-$REPO/external}
 #                   scripts/data/gpu-metal-vulkan-inputs.json and adreno-compiler-inputs.json. userland/metal/build.sh
 #                   patches copies of them (patches/metal2vulkan, patches/mesa of Droid-VM-UniXNU); these stay as fetched.
 # NativeMobileDisplay  the IOMobileFramebuffer backend (GopFramebuffer fork), at the kernel base's drivers/GopFramebuffer.
-# NativeHidInput    UniXNU/ShengHidInput at the commit UniXNU-droidvm's feeds.toml pins: touch, buttons, keyboard HID.
+# NativeHidInput    UniXNU/ShengHidInput at the commit UniXNU-droidvm's ipados27 build-droidvm-hid-input.py pins (its
+#                   arm64e source): touch, buttons, keyboard HID. kernel/patches/oneios-hosted/hid compiles it.
+# IOHIDFamily       Apple's source of the family at the OS profile's tag (IOHIDFamily-2238.120.5): the public
+#                   IOHIDDevice.h that kernel/patches/oneios-hosted/hid/OriginalHidDeviceABI.h is reduced from. Read only.
 # ownervisor, applebox  the owner debug shell and tools of the guest (UniXNU-droidvm's feeds.toml pin; applebox head).
 # droidvm-meta-repo PROGRESS.md, plans/ (IOS_DRM2KGSL_MIGRATION, IOS_VIRTIO_GPU_SURVEY, IPADOS27_BUMP), todo/: the
 #                   record of iPadOS 27 with Metal on an SM8650 / Adreno 750 phone.
@@ -41,7 +44,8 @@ NativeMetal          https://github.com/Droid-VM/NativeMetal.git          b0d6a0
 metal2vulkan         https://github.com/steelbrain/metal2vulkan.git       624bab3918de5b978e1101517abca2b4fa426565 development
 mesa-droidvm         https://github.com/Droid-VM/mesa.git                 cecc0e96d7193c72356a31abb0cc589e4fc0415e droidvm
 NativeMobileDisplay  https://github.com/Droid-VM/NativeMobileDisplay.git  ed08bd437b93772d4c41d74633af12446918f18a wip/hackintosh
-NativeHidInput       https://github.com/UniXNU/ShengHidInput.git          5f3a37cec0c3fc4234b10726b25489a55f0d77ef main
+NativeHidInput       https://github.com/UniXNU/ShengHidInput.git          24f1f3fbed6feff42e1ca02e2ce386a5c3c36da8 main
+IOHIDFamily          https://github.com/apple-oss-distributions/IOHIDFamily.git e31e90a24c27ad6cbe981650d12a1a4124065b03 main
 ownervisor           https://github.com/Droid-VM/ownervisor.git           65fc2c7037f494a238f4263f528a68ff21e87406 main
 applebox             https://github.com/Droid-VM/applebox.git             6e3b47149e0e460636e7a95bba9d48e12170a925 main
 droidvm-meta-repo    https://github.com/Droid-VM/droidvm-meta-repo.git    a18ec72392721e34fbe98216a8be1ee3acc41ddc wip/hackintosh

@@ -668,7 +668,7 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   if the kernel needs a hook. First check that the IOMobileFramebuffer kext you subclass is in the collection's
   closure (`out/.../kernel.kc.prelink.json` "closure"); if it is not, say which root to add (fable-prelink).
   Expected: `backboardd` finds an IOMobileFramebuffer, xnuhost's display gets frames that are not the console.
-- **Q4b (free): touch and buttons.** `external/NativeHidInput` + `build-droidvm-hid-input.py` with the
+- **Q4b (done, q4b-hid; note at the end of this queue): touch and buttons.** `external/NativeHidInput` + `build-droidvm-hid-input.py` with the
   IOHIDDevice layout redone for v54 (`hid-device-24A446.json` is the iPad's), fed by xnuhost's virtio-input.
   Files: `kernel/patches/oneios-hosted/hid/` (new). The same layout header is what fable-brightness's
   `drivers/brightness/OneiOSALSDevice.cpp` waits for: write it where both can include it. Expected: a
@@ -754,6 +754,41 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   Q4a: **backboardd is spawned (pid 53) and never exits**: it runs and waits, while SpringBoard (3 times), chronod
   and liveactivitiesd die for want of its display; `iomfb_fdr_loader` exits 1. For Q5/Q6: `usermanagerd` dies with
   SIGSEGV twice (27 s and 40 s after its start); not looked at.
+
+- 2026-11-11, q4b-hid -> lead, fable-brightness, fable-prelink, all: **Q4b is in: touch, buttons, the v54
+  `IOHIDDevice` header, the light sensor's HID device.** `kernel/patches/oneios-hosted/hid/` (its README has the
+  files, the evidence, the log lines), no numbered patch: `oneios_drivers_start` ends with `oneios_hid_input_start`.
+  - **The header** is `hid/OriginalHidDeviceABI.h` (`-I kernel/patches/oneios-hosted/hid`): the collection's
+    `IOHIDDevice`, 0xd0 bytes, 207 slots. `hid/build-oneios-hid.py` checks it against the kernelcache's record
+    (`hid/IOHIDDevice-24A446-v54.json`, made by `hid/layout.py`) at every build: every slot's discriminator, every
+    override. A driver that subclasses `IOHIDDevice` must be built into that archive (its class registers after
+    IOHIDFamily loads; the build makes the stubs for the original functions and a signed table for calls by
+    qualified name). Do not `OSDynamicCast` to `IOHIDDevice` in such a source: the build refuses it.
+  - **fable-brightness:** `drivers/brightness/OneiOSALSDevice.cpp` compiles against the header (one change:
+    `handleReport(buffer, kIOHIDReportTypeInput, 0)`) and is built and started by the HID archive. In a PC boot:
+    `ONEIOS ALS: on`, then `oneios-hid: light sensor: OneiOSALSDevice(IOHIDInterface(AppleUSBALSService))`: the
+    original service attaches to a device that is not on USB. No report went through (no bridge on the PC), so
+    which fields it reads and whether CoreBrightness takes its events are still yours to find in a session. This
+    is AppleHIDALSService, not AppleEmbeddedLightSensor (the lead's warning above holds).
+  - **What a PC boot shows** (`--input-script runtime/xnuhost/tools/input-demo.script`, new in xnuhost): the
+    devices start 10 s in; their interfaces wait for driverkitd; the DriverKit event driver's process does not
+    start here, so 120 s later the kernel's `IOHIDEventDriver` takes both; then
+    `touch screen: 1 user client(s) on the event service: IOHIDEventServiceUserClient (pid 53, backboardd)` (and
+    the buttons'), and the scripted frames arrive: `touch screen: 444 HID events queued for the service's client(s),
+    0 dropped`, `21 contacts begun (10 at an edge)`, `buttons: 66 HID events queued`. Booted on main at `3202197`
+    plus this (display and key store in). Not shown: anything in user space acting on an event. Open: why
+    `com.apple.driverkit.AppleUserHIDDrivers` does not launch (two minutes without touch after driverkitd is up).
+  - **Side keys:** read ungrabbed by xnuhost as before; the kernel maps `KEY_POWER`, `KEY_VOLUMEUP`,
+    `KEY_VOLUMEDOWN` to Consumer usages (and `KEY_HOMEPAGE`, `KEY_MUTE` to Home and the ringer switch for a host
+    that has them). iOS sees both keys of the Volume Up + Volume Down chord too.
+  - **fable-prelink** fixed three pairs this needed (`1b19c9a`, `cf45ac2`); a collection older than those panics
+    with the HID archive. IOHIDFamily's seven imports still on the stub are in my message to that thread.
+  - **For everyone building from a worktree:** `kernel/linux/unixnu-layout.sh` run with another `ROOT` rewrites the
+    shared `out/toolchain/unixnu` with links through that worktree; when the worktree went away every build's
+    `xcrun nm` fell back to the host's nm ("file format not recognized" in the libpthread archive). I ran the
+    layout again from the main checkout at 05:10. And `tmux kill-session` does not end a qemu boot: my killed boot
+    ran on beside the next one on the same `--data`; kill your own qemu processes by their full command line (and
+    not everyone's: a `tmux kill-server` at 06:04 took my running boot with it).
 
 ### Rules for the parallel kernel work (lead, 2026-11-10)
 

@@ -10,7 +10,7 @@ backboardd yet. `OneiOSBacklight.cpp` compiles with the kernel's own flags (`dri
 |---|---|---|
 | `OneiOSBacklight.cpp` | the backlight service CoreBrightness drives; the host's light readings (`oneios_als_read`, `oneios_als_listen`) | built into `liboneiosdrivers.a` |
 | `oneios_als_hid.h` | the light sensor's HID report descriptor and report | host test (`test_als_hid.c`, run by `drivers/tests/host.sh`) |
-| `OneiOSALSDevice.cpp` | the HID device that carries the readings to the original `AppleUSBALSService` | **not built, never compiled** (needs the board's IOHIDDevice ABI header) |
+| `OneiOSALSDevice.cpp` | the HID device that carries the readings to the original `AppleUSBALSService` | built into the hosted kernel's HID archive (`kernel/patches/oneios-hosted/hid`, against its `OriginalHidDeviceABI.h`), not into `liboneiosdrivers.a` |
 
 ## The backlight service
 
@@ -68,12 +68,18 @@ an `IOHIDInterface` with usage page 0x20 (Sensor), usage 0x41 (Ambient Light), v
 Apple's USB displays. `OneiOSALSDevice.cpp` is a HID device of that shape (`oneios_als_hid.h`: one input field,
 illuminance in millilux), fed by `oneios_als_listen`.
 
-Not done, and why: it subclasses the collection's own `IOHIDDevice`, which needs that class's layout
-(`OriginalHidDeviceABI.h`, as `external/NativeHidInput`); no such header exists for 24A446 in this repository.
-Build it with the board's HID input and call `oneios_als_device_start()` after `oneios_drivers_start()`.
+It subclasses the collection's own `IOHIDDevice`, so it is built by `kernel/patches/oneios-hosted/hid/build-oneios-hid.py`
+against that folder's `OriginalHidDeviceABI.h` (the class's layout for 24A446 iPhone18,2), its class registers after
+IOHIDFamily has loaded, and `oneios_hid_input_start` (the last call of `oneios_drivers_start`) calls
+`oneios_als_device_start()` after the touch screen and the buttons are published.
 
-[U] whether `AppleUSBALSService` takes a device that is not on USB, which report fields it reads, and whether
-CoreBrightness uses its events for the built-in display. Until the device is in: the userland should set
+Seen in a PC boot (qemu-aarch64, 2026-11-11, no host sensor): `ONEIOS ALS: on`, then
+`oneios-hid: light sensor: OneiOSALSDevice(IOHIDInterface(AppleUSBALSService))`: the original service matches and
+attaches to a device that is not on USB. No report was sent (xnuhost had no bridge on the PC), so what the service
+does with one is still not seen.
+
+[U] which report fields `AppleUSBALSService` reads, and whether CoreBrightness uses its events for the built-in
+display. Until that is seen in a session: the userland should set
 `BKEnableALS` false in `com.apple.backboardd` (as the Mi A3's `root-brightness.py`), so backboardd does not
 wait for a sensor; auto-brightness is then off and the slider sets the level.
 
@@ -90,4 +96,4 @@ writes One UI's level back.
 2. The conformance line, and that nothing calls the original class's methods on the service.
 3. The request log: which keys iOS 27 sets from the slider, from Settings, and at idle (`FadePeriod`).
 4. That the panel follows (the host's `brightness:` lines in xnuhost's log).
-5. The light sensor's whole path, once `OneiOSALSDevice.cpp` is built.
+5. The light sensor's path past `AppleUSBALSService`: a report with the host's reading, and CoreBrightness using it.
