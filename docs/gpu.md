@@ -309,7 +309,7 @@ thread; none was seen.) Boot arguments:
 | Argument | |
 |---|---|
 | `oneios-gpu-metal=0` / `=1` | never / always publish. Not given: published when the host's virtio GPU offers 3D (`oneios_gpu3d_state` 3), so not on the PC. Droid-VM's `droidvm-gpu-metal` is read when this one is absent |
-| `droidvm-gpu-clients=a,b,...` or `*` | the processes besides `backboardd` granted the user client (DroidVMGpu.cpp `grantedProcesses`) |
+| `droidvm-gpu-clients=a,b,...` or `*` | the processes besides `backboardd` granted the user client (DroidVMGpu.cpp `grantedProcesses`). Not given: `WidgetRenderer_Default,*Poster*,iconservicesagent,SBRendererService`, the list of the image's `NativeAdrenoMetal.clients`; empty: `backboardd` alone |
 | `vgpu-3d=1` | what `GETPARAM(DEFAULT_3D)` answers the plug-in (DroidVMVirtioGpu3D.cpp reads it with default 0; `vgpu-3d=0` also turns the driver off) |
 | `oneios-adreno-selftest=1` | after the publish: IOKit's match of `IOAcceleratorES`, an in-kernel open with type `0x4149`, `GETPARAM(ABI_VERSION)` through the tunnel; two `oneios-adreno: selftest:` lines |
 
@@ -327,7 +327,7 @@ no `AGX*` user-client call from backboardd). Now:
   `out/userland/NativeAdrenoMetal.gpuaddon`, xnuhost passes it on, `native_ram_block_gpu_addon` in `gpu/OneiOSAdreno.cpp`
   finds it). The kernel writes its files into Data first, so a rebuilt plug-in needs no new seed. Its CDHashes must still be in
   the image's `overlay/userland/owner-trust.json`.
-- The grant was not the gate: `grantedProcesses` always names `backboardd`. `droidvm-gpu-clients=` is for the other processes.
+- The grant was not the gate for `backboardd`: `grantedProcesses` always names it. The other Metal clients are granted by default too (table below); before, `iconservicesagent` was refused on the phone and drew the icons on the CPU.
 
 Log lines (always on):
 
@@ -362,6 +362,12 @@ oneios-gpu-clients: backboardd 80 MiB, SpringBoard 12 MiB
 one or more for every frame CoreAnimation draws with Metal, with the time from submission to the GPU being done. While the
 screen changes (swipe on the lock screen) they should grow by about the frame rate; if the swaps grow and they do not,
 CoreAnimation draws on the CPU. A device that was made but never used shows contexts and blobs with no submits.
+
+`0xe00002d6` (`kIOReturnTimeout`) from the tunnel is mostly not a stall. Turnip's Darwin backend polls fences with a timeout of
+0 (`dw_wait_fence_raw(dev, fence, 0)` as it sweeps its retired buffers, and `vkGetFenceStatus`), and the tunnel answers an
+unsignalled fence that way; those are not counted. A real wait runs in 100 ms slices and sleeps on the device's interrupt, and
+only one that runs out is counted, as "fence timeouts" in the report. In `oneios-iouc` the polls show as status changes
+between `0x0` and `0xe00002d6` on the one tunnel selector.
 
 The plug-in's own path in backboardd, by its markers (`oneios-gpu-open` types `0x4147xxxx`): `6800`, `6801`, `6A..` (what the
 render server reads for its framebuffer format), `681x` (which cache folder served), `6802` device made, `6803` handed to

@@ -90,6 +90,13 @@ STAGED = (
     # the superclass link is the parent's link address until it is slid (OneiOSAdreno.cpp)
     ('    native_adreno_accelerator_static_init();\n    status = OSMetaClass::postModLoad(handle);\n',
      '    native_adreno_accelerator_static_init();\n    oneios_adreno_parent_slide();\n    status = OSMetaClass::postModLoad(handle);\n'),
+    # Without droidvm-gpu-clients the grant names the image's Metal clients too, not backboardd alone: the list roottweak
+    # writes to NativeAdrenoMetal.clients. iconservicesagent was refused on the phone and drew the icons on the CPU.
+    # droidvm-gpu-clients= (empty) is backboardd alone; a list replaces this one; "*" is every process.
+    ('    if (PE_parse_boot_argn("droidvm-gpu-clients", clients, sizeof clients - 1)) {\n',
+     '    if (!PE_parse_boot_argn("droidvm-gpu-clients", clients, sizeof clients - 1))\n'
+     '        strlcpy(clients, "WidgetRenderer_Default,*Poster*,iconservicesagent,SBRendererService", sizeof clients);\n'
+     '    {\n'),
 )
 
 
