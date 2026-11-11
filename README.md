@@ -19,6 +19,11 @@ reached backboardd only 233 s after they started (then 447 events, 11 contacts).
 Apple's kernel event driver at once (`kernel/patches/oneios-hosted/hid/README.md`, "Which event driver"); built,
 not yet run on the phone. Whether a swipe up unlocks is not known.
 
+Second phone session (2026-11-11, with the Metal plug-in mounted): touch attached at once, the battery was
+published, backboardd opened the AGX device user client, and the kernel then died in a data abort: a wrong pair in
+the collection (`IOMemoryDescriptor::setOwnership` bound to `CreateMapping`, `kernel/prelink/README.md`). Corrected;
+the collection builds; not yet run on the phone.
+
 On the PC (xnuhost under `qemu-aarch64`, 8 vCPUs, the real iOS 27.0.1 `24A446` image set, `kernel.kc` with the
 iPhone18,2 kexts), the boot gets through:
 

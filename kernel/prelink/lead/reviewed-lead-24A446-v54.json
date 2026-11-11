@@ -2682,13 +2682,13 @@
   },
   {
    "original": "0xfffffe000b34e6e4",
-   "native_symbol": "__ZN18IOMemoryDescriptor13CreateMappingEyyyyyPP11IOMemoryMapPFiP15OSMetaClassBase5IORPCE",
+   "native_symbol": "__ZN18IOMemoryDescriptor12setOwnershipEP4taskij",
    "check": {
     "address": "0xfffffe000b34e6e4",
     "size": 628,
     "sha256": "d0c67201293779ae356a7085a21f80fa1eca789861331e0adf9083e0b04c902d"
    },
-   "evidence": "By the order of the kexts' import tables (__auth_got is in the alphabetical order of the imported symbols): in the 4 kext(s) that import this function (AGXG18P, AppleH16ANEInterface, IOGPUFamily, IOSurface) its slot lies between the slots of __ZN18IOMemoryDescriptor11withOptionsEPvjjP4taskjP8IOMapper and __ZN18IOMemoryDescriptor13getPageCountsEPyS0_, and __ZN18IOMemoryDescriptor13CreateMappingEyyyyyPP11IOMemoryMapPFiP15OSMetaClassBase5IORPCE is the only exported kernel function between those names that no other original function is paired with."
+   "evidence": "IOMemoryDescriptor::setOwnership(task_t, int, IOOptionBits). Its code: kIOReturnNotAttached when bit 18 of the flags at +32 (kIOMemoryRemote) is set, kIOReturnUnsupported when the enable byte (iokit_iomd_setownership_enabled) is clear, the recursive lock when bit 20 (kIOMemoryThreadSafe) is set, then for a descriptor with a memory reference a loop that calls mach_memory_entry_ownership(entry, x1, x2, x3) for each entry (memoryReferenceSetOwnership inlined), else the two OSDynamicCasts (IOSubMemoryDescriptor, IOMultiMemoryDescriptor) and a call of itself on the inner descriptors. The import tables agree: in the 4 kexts that import it (AGXG18P, AppleH16ANEInterface, IOGPUFamily, IOSurface) its slot lies between __ZN18IOMemoryDescriptor10setContext / 11withOptions and __ZN18IOMemoryDescriptor13getPageCounts. Corrected on 2026-11-11: it was paired with IOMemoryDescriptor::CreateMapping (the DriverKit wrapper, 7 arguments) because 0xfffffe000b34e6a8 then held the name setOwnership, and CreateMapping was the one free name in the range. IOGPUFamily calls it with (descriptor, task, tag, options): under the wrong pair CreateMapping_Impl stored its result through a NULL map pointer, the kernel data abort of the phone's run of 2026-11-11 (backboardd, AGX device user client)."
   },
   {
    "original": "0xfffffe000b40830c",

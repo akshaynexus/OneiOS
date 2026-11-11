@@ -169,9 +169,15 @@ and 18 data targets are unpaired; `kernel.kc.build.json` lists them per kext.
   `cluster_push`, `ifnet_hdrlen`/`ifnet_set_hdrlen`, `ifaddr_findbestforaddr`, `ml_get_max_cpu_number`,
   `IODMAEventSource::dmaEventSource` (and its metaclass object), `ml_page_protection_type`,
   `kern_packet_trace_event`, and the lead's (`rootdev`, `set/getMapperOptions`, `task_is_app_suspended`).
-  **Still out of order and left** (2026-11-11): `IOMemoryDescriptor::setOwnership` at `0xfffffe000b34e6a8` (two
-  tables put it among names after `IOBufferMemoryDescriptor`; probably another class's `setOwnership`, not
-  decided), `OSAction::SetAbortedHandler`/`Create_Impl` (DriverKit, not used here), the data `gIOCommandPoolSizeKey`
+  **`setOwnership`, decided by a panic** (lead, 2026-11-11): `0xfffffe000b34e6a8` is
+  `IOGeneralMemoryDescriptor::setOwnership` (it tests the memory reference and continues in its super's), and the
+  function after it, `0xfffffe000b34e6e4`, is `IOMemoryDescriptor::setOwnership` (the lock, a loop of
+  `mach_memory_entry_ownership`, the two casts). The second had been paired with `IOMemoryDescriptor::CreateMapping`
+  because the first held its name and `CreateMapping` was the one free name in the range. On the phone IOGPUFamily
+  called it for backboardd's first Metal resources: `CreateMapping_Impl` ran with (descriptor, task, tag, options)
+  and stored through a NULL `map`, a kernel data abort. A name left out of order is a wrong call waiting for its
+  first caller: none is to be left for a function with arguments.
+  **Still out of order and left**: `OSAction::SetAbortedHandler`/`Create_Impl` (DriverKit, not used here), the data `gIOCommandPoolSizeKey`
   and `gIOKitDebug` (one table each), and 17 of the matcher's `pure-leaf` pairs: functions whose whole body is
   `ret` or `mov w0, #N; ret` given to some other function with the same body. Those return what Apple's returned
   whatever their name. One of them is deliberately left: `0xfffffe000ab827b8` returns 0 and is imported by 17

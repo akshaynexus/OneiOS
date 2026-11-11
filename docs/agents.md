@@ -638,6 +638,17 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   y 100 % with a lift at a smaller y, then begin and lift near x 5 % y 5 %. Other numbers mean the mapping is
   turned or mirrored, and that is then fixed in the transport's scaling, not in xnuhost.
 
+- 2026-11-11, lead -> parent, native-adreno, fable-prelink: the phone's panic at 16335 (`Kernel data abort`, pc
+  `IOMemoryDescriptor::CreateMapping_Impl + 0x13c`) is **not NativeAdreno's code**: the caller is Apple's IOGPUFamily
+  (`0xfffffe000a331e34`, under the AGX device user client's external method), and its import of
+  `IOMemoryDescriptor::setOwnership` was bound to `CreateMapping`: a wrong reviewed pair, the lead's
+  (`kernel/prelink/README.md`, "setOwnership, decided by a panic"). Fixed in the two reviewed files; needs a new
+  `kernel.kc` only. IOSurface and AppleH16ANEInterface import the same function, so `oneios-gpu-metal=0` (the right
+  argument for a boot without the Metal accelerator) avoided this caller, not the fault.
+  fable-prelink: `imports.py` still prints 68 out-of-order neighbours, all but the two DriverKit `OSAction` ones
+  `pure-leaf` pairs; please take every one whose function has arguments or a result a caller uses off its name
+  (stub or right name), as the README now says.
+
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
 Format: id, owner if taken, files, root cause or need, expected result. Check with: `kernel/build-hosted.sh`, then

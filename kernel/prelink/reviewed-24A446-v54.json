@@ -4087,13 +4087,13 @@
   },
   {
    "original": "0xfffffe000b34e6a8",
-   "native_symbol": "__ZN18IOMemoryDescriptor12setOwnershipEP4taskij",
+   "native_symbol": "__ZN25IOGeneralMemoryDescriptor12setOwnershipEP4taskij",
    "check": {
     "address": "0xfffffe000b34e6a8",
     "size": 60,
     "sha256": "59cde4c3d8a33f414b51be9e3db2a03c199f6f8fe817b95ba8a2868740cabc2d"
    },
-   "evidence": "Returns kIOReturnNotAttached (0xe00002d9) when bit 18 of the flags at +32 (kIOMemoryRemote) is set, kIOReturnUnsupported (0xe00002c7) when a global enable byte is clear or the reserved pointer at +40 is NULL, else continues in the function that follows: IOMemoryDescriptor::setOwnership(task_t, int, IOOptionBits), the two tests of the source in that order. IOSurface calls it."
+   "evidence": "Returns kIOReturnNotAttached (0xe00002d9) when bit 18 of the flags at +32 (kIOMemoryRemote) is set, kIOReturnUnsupported (0xe00002c7) when a global enable byte is clear or the reserved pointer at +40 is NULL, else continues in the function that follows (its super's setOwnership): IOGeneralMemoryDescriptor::setOwnership(task_t, int, IOOptionBits), the three tests of the source in that order. Corrected by the lead on 2026-11-11: it was paired with IOMemoryDescriptor::setOwnership, which has no test of the reserved pointer before its lock and is the function that follows (0xfffffe000b34e6e4). Both kexts that import it (IOSurface at 0xfffffe00082fe688, IOGPUFamily at 0xfffffe00083835e8) have its slot after an IOBufferMemoryDescriptor symbol (__ZN24...) and before __ZN5OSSet...: __ZN25IOGeneralMemoryDescriptor... sorts there, __ZN18IOMemoryDescriptor... does not."
   },
   {
    "original": "0xfffffe000ac2a224",
