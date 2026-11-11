@@ -18,7 +18,7 @@ diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_mac
 + * oneios-ubt. The saved state of a thread that is in user mode on another CPU right now is its last entry's.
 + */
 +#define HOSTED_UBT_THREADS 160
-+#define HOSTED_UBT_FRAMES  18
++#define HOSTED_UBT_FRAMES  40
 +struct hosted_ubt { thread_t thread; task_t task; uint64_t pc, lr, fp; };
 +static char hosted_ubt_names[128];
 +static uint32_t hosted_ubt_at = 420, hosted_ubt_every;
