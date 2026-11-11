@@ -10,6 +10,7 @@ import java.lang.reflect.Method;
 
 public final class OneiOSDisplay {
     private static native long nOpen(String socket, int waitMs);
+    private static native boolean nHello(long handle, int width, int height, int hz);
     private static native int[] nInfo(long handle);                    // width, height, stride, format
     private static native int[] nFit(int sw, int sh, int dw, int dh);  // x, y, w, h
     private static native int nRun(long handle, Object surface, int format);
@@ -59,14 +60,17 @@ public final class OneiOSDisplay {
         SC = Class.forName("android.view.SurfaceControl");
         TX = Class.forName("android.view.SurfaceControl$Transaction");
 
-        // The frame first: without xnuhost's socket there is nothing to show and no layer is made.
+        // The socket first: without xnuhost there is nothing to show and no layer is made.
         long handle = nOpen(socket, wait * 1000);
         if (handle == 0) return 3;
-        int[] guest = nInfo(handle);
-        log("guest frame " + guest[0] + "x" + guest[1] + ", stride " + guest[2]);
 
+        // Then the panel, then the frame: in a session xnuhost sizes the guest's frame from this report.
         Object transaction = TX.getConstructor().newInstance();
         int[] panel = panel(transaction, takeover && projection, takeover, logical);
+        log("reporting the panel to xnuhost: " + panel[0] + "x" + panel[1] + " at " + panel[2] + " Hz");
+        if (!nHello(handle, panel[0], panel[1], panel[2])) { nClose(handle); return 3; }
+        int[] guest = nInfo(handle);
+        log("guest frame " + guest[0] + "x" + guest[1] + ", stride " + guest[2]);
         if (hz <= 0) hz = panel[2];
         int[] fit = nFit(guest[0], guest[1], panel[0], panel[1]);
         log("panel " + panel[0] + "x" + panel[1] + " at " + hz + " Hz; the frame at " + fit[0] + "," + fit[1] + " " + fit[2] + "x" + fit[3]);

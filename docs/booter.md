@@ -37,7 +37,7 @@ xnuhost --selftest            # on the phone: page size, address bits, PAC keys 
 | `DIR/identity.adt` | optional | the device's own decoded device tree: model, target-type, board name and `/product` are taken from it |
 | `DIR/xnuhost.conf` | optional | `key=value` lines: `boot-args`, `disk`, `disk-rw`, `data-store`, `scale`, `scale-fixup`, `text-fixup`; the command line wins |
 | `DIR/overlay/userland/xnuhost.conf` | optional | the same, written by the userland hook: `scale=3` or `scale=2`, the UI scale the image's Data seed was made for (`docs/userland.md` "The screen") |
-| `--width W --height H`, `--hz N` | the panel's native mode | the guest's display mode (section 2.8); for a PC run or another panel |
+| `--width W --height H`, `--hz N` (or `width=`, `height=`, `hz=` in the image set's `xnuhost.conf`) | the display helper's report of the panel | the guest's display mode (section 2.8); for a PC run or another panel |
 | `--scale 2\|3` (`--set scale=2`) | the image set's, else 3 | the UI scale: pixels per point |
 | `DIR/os.img`, `systemos.img`, `app.img` | as present | read-only disks, in this order |
 | `--data DIR` | none | `data.img`: the Data store, sparse, created on the first start; `unique-chip-id` |
@@ -269,19 +269,29 @@ Linux's page cache and a sparse file: the store is a raw image.
   a root SurfaceControl layer, which needs the framework's classes (OneOS draws its boot status that way,
   with a dex run by `app_process`). xnuhost therefore keeps the frame in a memfd and serves it on
   `<session>/display.sock` (`SOCK_SEQPACKET`): `hello {"XHD1", width, height, stride, format 1 = B,G,R,X}`
-  with the memfd as `SCM_RIGHTS`, then `flush {"XHDF", x, y, w, h}` per changed rectangle. The helper that
+  with the memfd as `SCM_RIGHTS`, then `flush {"XHDF", x, y, w, h}` per changed rectangle. The helper sends one
+  message the other way, straight after it connects: `panel {"XHDP", width, height, hz, 0}`. The helper that
   owns the layer and copies from the memfd is `runtime/display` (`bin/oneios-display`, started by the fork's
   switch on One UI's side; its README has the phone test). Not run on a phone yet.
-- **The mode is the panel's native one.** The guest's frame (the boot framebuffer, the virtio-gpu scanout,
-  `display.sock`'s hello, the touch range) is the size of the panel's largest mode, at that mode's highest
-  refresh rate: 1440x3120 at 120 Hz on the Galaxy S24 Ultra. In a session (`--mode takeover`) xnuhost reads the
-  connected connector's mode list from `/dev/dri/card0` (`GETRESOURCES`, `GETCONNECTOR`; no DRM master, nothing
-  set) and takes the largest, not the current one: One UI's resolution setting may run the panel at 1080x2340,
-  and the display helper's `--takeover` puts it in the native mode. Where the list cannot be read, and in a bench
-  run (whose host display is a monitor), it is 1440x3120 at 120 Hz. `--width W --height H` and `--hz N` override.
-  The log says which: `display: the panel's native mode is ...` or `... were not read (...): 1440x3120 at 120 Hz
-  assumed`, then `display: shm, guest frame 1440x3120 at 120 Hz, @3x (480x1040 points)`. The read from
-  `/dev/dri/card0` has not run on the phone.
+- **The mode is the one surfaceflinger runs the panel in.** The guest's frame (the boot framebuffer, the virtio-gpu
+  scanout, `display.sock`'s hello, the touch range) is decided in this order, and each configured value wins on its own:
+  1. `--width`, `--height`, `--hz`, else `width=`, `height=`, `hz=` in the image set's `xnuhost.conf` or its
+     `overlay/userland/xnuhost.conf`. With all three given, the panel is not asked at all.
+  2. In a session on the `shm` back end, the helper's `panel` report: xnuhost listens first, waits up to 10 s for the
+     helper to connect and 8 s for the report, and only then makes the frame. The helper's `--takeover` asks for the
+     panel's native mode first, so this is that mode, or the active one if surfaceflinger refused. The S24 Ultra in
+     QHD+: 1440x3120 at 120 Hz.
+  3. The largest mode of the connected built-in panel's connector in `/dev/dri/card0` (LVDS, eDP, DSI or DPI only).
+     The Virtual (writeback) connectors report "connected" with modes up to 5120x2560, and DSI-1's list need not hold
+     the mode One UI runs, so this is a fallback.
+  4. 1440x3120 at 120 Hz, also what a bench run (whose host display is a monitor) assumes, without waiting.
+
+  The log says which: `display: the mode is the configured one ...`, `display: the display helper reports the panel at
+  1440x3120, 120 Hz`, `display: the built-in panel's largest DRM mode is ...`, or `... were not read (...): 1440x3120 at
+  120 Hz assumed`, then `display: shm, guest frame 1440x3120 at 120 Hz, @3x (480x1040 points)`. The stride of the frame
+  is the width times 4 (5760 bytes); the `stride` in the helper's `first frame posted` line is the layer buffer's, in
+  pixels, and is whatever gralloc aligned the width to. Tested on the PC against a stand-in helper
+  (`tests/test_display_mode.c`); not yet run on the phone.
 - **The UI scale** is `scale`: 3 (default, 480x1040 points) or 2 (720x1560 points), from `--scale`/`--set
   scale=`, else `xnuhost.conf` of the image set, else its `overlay/userland/xnuhost.conf` (the userland hook's),
   else 3. The pixels are the same either way. One value goes to every place that states it:

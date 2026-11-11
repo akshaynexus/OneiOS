@@ -48,7 +48,9 @@ NDK's `ANativeWindow` on that `Surface`, from the mapped memfd straight into the
 
 ## What it does
 
-- **Protocol.** Connects to `display.sock` (waiting for it to appear, `--wait`), takes the hello and the memfd,
+- **Protocol.** Connects to `display.sock` (waiting for it to appear, `--wait`), works out the panel (below), sends
+  `panel {"XHDP", width, height, hz, 0}`, the mode the layers will be placed in, from which xnuhost sizes the guest's
+  frame in a session (`docs/booter.md` 2.8), then takes the hello and the memfd and
   maps the frame read-only. The session folder is writable by the guest, so nothing is trusted: the path must be
   a socket (not a link), the sizes are bounded, the stride must cover a row, the frame must fit in the memfd,
   flush rectangles are clipped, unknown messages are ignored.

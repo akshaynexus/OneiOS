@@ -122,6 +122,10 @@ $(A)/xnuhost: $(SRC:%=$(A)/%.o) $(A)/kctx.o $(A)/arch.o $(patsubst ../loader/src
 $(H)/test_xnuhost: tests/test_xnuhost.c $(PORTABLE:%=src/%.c) $(HDR)
 	@mkdir -p $(H)
 	$(CC) -std=gnu11 -O1 -g $(WARN) $(INC) -fsanitize=address,undefined tests/test_xnuhost.c $(PORTABLE:%=src/%.c) ../loader/src/adt.c ../loader/src/boot.c -lpthread -o $@
+# The real display.c (tests of test_xnuhost replace it) against a stand-in helper on the real socket.
+$(H)/test_display_mode: tests/test_display_mode.c src/display.c src/config.c src/log.c $(HDR)
+	@mkdir -p $(H)
+	$(CC) -std=gnu11 -O1 -g $(WARN) $(INC) -fsanitize=address,undefined tests/test_display_mode.c src/display.c src/config.c src/log.c -lpthread -o $@
 # The image set (imageset.c) on stand-in files; ONEIOS_IMAGE_SET=DIR adds a real set's lists and trust caches.
 $(H)/test_imageset: tests/test_imageset.c src/imageset.c $(HDR)
 	@mkdir -p $(H)
@@ -154,8 +158,9 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	    [ $$code = 3 ] && [ "$$(grep -c 'TESTKERNEL: restart' $(A)/restart.log)" = 9 ] || { tail -5 $(A)/restart.log; echo "check-arm64: restart: exit $$code"; false; }; }; fi
 
 # The tests create devices and never free them: leak detection off, the other checks on.
-test: $(H)/test_xnuhost $(H)/test_imageset $(TEST_DRM2KGSL) check-arm64
+test: $(H)/test_xnuhost $(H)/test_display_mode $(H)/test_imageset $(TEST_DRM2KGSL) check-arm64
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_xnuhost
+	ASAN_OPTIONS=detect_leaks=0 $(H)/test_display_mode
 	$(if $(TEST_DRM2KGSL),ASAN_OPTIONS=detect_leaks=0 $(TEST_DRM2KGSL))
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_imageset
 

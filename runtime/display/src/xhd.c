@@ -55,6 +55,12 @@ int xhd_connect(const char *path, int wait_ms, const volatile int *stop)
   }
 }
 
+int xhd_send_panel(int fd, uint32_t width, uint32_t height, uint32_t hz)
+{
+  struct xhd_message m = { { 'X', 'H', 'D', 'P' }, width, height, hz, 0 };
+  return send(fd, &m, sizeof m, MSG_NOSIGNAL) < 0 ? -errno : 0;
+}
+
 int xhd_recv_hello(int fd, struct xhd_frame *frame, int timeout_ms)
 {
   memset(frame, 0, sizeof *frame);

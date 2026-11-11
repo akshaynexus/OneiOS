@@ -13,6 +13,8 @@
 // One SOCK_SEQPACKET message, little-endian:
 //   hello  { "XHD1", width, height, stride, format } + the frame memfd (SCM_RIGHTS)
 //   flush  { "XHDF", x, y, w, h }
+// and from the helper, straight after connecting (xnuhost waits for it before it sizes the frame in a session):
+//   panel  { "XHDP", width, height, hz, 0 }
 struct xhd_message { char magic[4]; uint32_t a, b, c, d; };
 
 struct xhd_rect { uint32_t x, y, w, h; };            // w == 0: empty
@@ -30,6 +32,8 @@ int xhd_check_hello(const struct xhd_message *m, size_t length, off_t memfd_size
 // Connect to the socket at path, waiting up to wait_ms for it to appear; *stop != 0 ends the wait.
 // Refuses anything that is not a socket (a link included). Returns the fd or -errno.
 int xhd_connect(const char *path, int wait_ms, const volatile int *stop);
+// Tell xnuhost the panel's mode. 0 or -errno.
+int xhd_send_panel(int fd, uint32_t width, uint32_t height, uint32_t hz);
 // Receive the hello and map the frame. 0 or -errno.
 int xhd_recv_hello(int fd, struct xhd_frame *frame, int timeout_ms);
 void xhd_frame_close(struct xhd_frame *frame);

@@ -83,8 +83,12 @@ typedef struct { unsigned width, height, hz; } xh_panel_mode;
 // The panel's native mode among the modes of its connector: the largest, at its highest refresh rate. Not the
 // current one: One UI's resolution setting may run the panel at 1080x2340.
 bool xh_panel_native(const xh_panel_mode *modes, unsigned count, xh_panel_mode *native);
-// The guest's mode: --width/--height and hz where given, else the panel's native mode (NULL: not readable), else
-// 1440x3120 at 120 Hz.
+// Whether a DRM connector of this type (DRM_MODE_CONNECTOR_*) can be the built-in panel.
+bool xh_panel_connector(unsigned type);
+// The display helper's report on display.sock: { "XHDP", width, height, hz, 0 }. false: not a usable one.
+bool xh_panel_report(const void *message, size_t length, xh_panel_mode *panel);
+// The guest's mode: width, height and hz where configured (command line, then the image set's xnuhost.conf), else
+// the mode of the panel (NULL: not known), else 1440x3120 at 120 Hz.
 xh_panel_mode xh_display_mode(const xh_config *c, const xh_panel_mode *panel);
 // Adds the display driver's two switches to the kernel's command line unless it already has them:
 // offline-legacy-unit-scale=SCALE (/chosen display-scale) and sheng-vsync=HZ (the vsync tick and, above 60 Hz,

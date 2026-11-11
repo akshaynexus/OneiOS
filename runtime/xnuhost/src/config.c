@@ -209,6 +209,9 @@ int xh_config_finish(xh_config *c)
   // The userland hook's settings of this image (the UI scale its Data seed was made for), under the same rule.
   if (snprintf(path, sizeof path, "%s/overlay/userland/xnuhost.conf", c->image) < (int)sizeof path && xh_config_file(&from_image, path)) return -1;
   if (!*c->boot_args) strcpy(c->boot_args, from_image.boot_args);
+  if (!c->width) c->width = from_image.width;
+  if (!c->height) c->height = from_image.height;
+  if (!c->hz) c->hz = from_image.hz;
   if (!c->scale) c->scale = from_image.scale ? from_image.scale : 3;
   if (c->scale_fixup < 0) c->scale_fixup = from_image.scale_fixup < 0 ? 1 : from_image.scale_fixup;
   if (!c->text_fixups_length) { memcpy(c->text_fixups, from_image.text_fixups, sizeof c->text_fixups); c->text_fixups_length = from_image.text_fixups_length; }
@@ -268,6 +271,23 @@ bool xh_panel_native(const xh_panel_mode *modes, unsigned count, xh_panel_mode *
     if (!found || area > best || (area == best && m->width == native->width && m->hz > native->hz)) { *native = *m; found = true; }
   }
   return found;
+}
+
+bool xh_panel_connector(unsigned type)
+{
+  // DRM_MODE_CONNECTOR_LVDS, eDP, DSI, DPI. A phone's Virtual connectors (the writeback ones) report "connected"
+  // with modes up to 5120x2560, and DisplayPort is whatever monitor is plugged in.
+  return type == 7 || type == 14 || type == 16 || type == 17;
+}
+
+bool xh_panel_report(const void *message, size_t length, xh_panel_mode *panel)
+{
+  struct { char magic[4]; uint32_t width, height, hz, unused; } m;
+  if (length != sizeof m) return false;
+  memcpy(&m, message, sizeof m);
+  if (memcmp(m.magic, "XHDP", 4) || !m.width || !m.height || m.width > 16384 || m.height > 16384) return false;
+  *panel = (xh_panel_mode){ m.width, m.height, m.hz };
+  return true;
 }
 
 xh_panel_mode xh_display_mode(const xh_config *c, const xh_panel_mode *panel)

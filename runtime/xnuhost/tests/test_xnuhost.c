@@ -975,6 +975,19 @@ static void test_config(const char *dir)
   native = (xh_panel_mode){ 1440, 3120, 120 };
   mode = xh_display_mode(&c, &native);
   CHECK(mode.width == 1320 && mode.height == 2868 && mode.hz == 60);
+  // the connector of the panel: not the Virtual (writeback, 5120x2560) ones of the S24 Ultra, not DisplayPort
+  CHECK(xh_panel_connector(16) && xh_panel_connector(14) && !xh_panel_connector(15) && !xh_panel_connector(10) && !xh_panel_connector(11));
+  // the helper's report of the panel, and the mode it gives a guest with nothing configured
+  struct { char magic[4]; uint32_t a, b, c, d; } report = { { 'X', 'H', 'D', 'P' }, 1440, 3120, 120, 0 };
+  native = (xh_panel_mode){ 0, 0, 0 };
+  CHECK(xh_panel_report(&report, sizeof report, &native) && native.width == 1440 && native.height == 3120 && native.hz == 120);
+  CHECK(!xh_panel_report(&report, sizeof report - 1, &native));
+  report.a = 0;
+  CHECK(!xh_panel_report(&report, sizeof report, &native));
+  report.a = 16385;
+  CHECK(!xh_panel_report(&report, sizeof report, &native));
+  report.a = 1440; report.magic[3] = 'Q';
+  CHECK(!xh_panel_report(&report, sizeof report, &native));
   // the display driver's switches on the kernel's command line: added once, a given value stays
   char args[128] = "-v debug=0x8";
   CHECK(xh_display_boot_args(args, sizeof args, 3, 120) == 0 && !strcmp(args, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120"));
@@ -992,10 +1005,16 @@ static void test_config(const char *dir)
   snprintf(overlay, sizeof overlay, "%s/overlay/userland", image); mkdir(overlay, 0700);
   snprintf(overlay, sizeof overlay, "%s/overlay/userland/xnuhost.conf", image);
   f = fopen(overlay, "w");
-  fputs("scale=2\n", f);
+  fputs("scale=2\nwidth=1440\nheight=3120\nhz=120\n", f);
   fclose(f);
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 7, argv3) == 0 && xh_config_finish(&c) == 0 && c.scale == 2);
+  CHECK(c.width == 1440 && c.height == 3120 && c.hz == 120);                                         // the image's mode, over any panel
+  native = (xh_panel_mode){ 5120, 2560, 60 };
+  mode = xh_display_mode(&c, &native);
+  CHECK(mode.width == 1440 && mode.height == 3120 && mode.hz == 120);
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 13, mode1) == 0 && xh_config_finish(&c) == 0 && c.width == 1320 && c.hz == 60); // the command line's wins
   char *scale3[] = { "xnuhost", "--image", image, "--set", "scale=3", "--text-fixup", "file.01,10,aa,bb" };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 7, scale3) == 0 && xh_config_finish(&c) == 0 && c.scale == 3 && c.text_fixups_length == 17);

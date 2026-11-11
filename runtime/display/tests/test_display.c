@@ -161,6 +161,18 @@ static void *serve(void *arg)
   return NULL;
 }
 
+static void test_panel_report(void)
+{
+  int pair[2];
+  CHECK(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, pair) == 0);
+  CHECK(xhd_send_panel(pair[0], 1440, 3120, 120) == 0);
+  struct xhd_message m;
+  CHECK(recv(pair[1], &m, sizeof m, 0) == (ssize_t)sizeof m);
+  CHECK(!memcmp(m.magic, "XHDP", 4) && m.a == 1440 && m.b == 3120 && m.c == 120 && m.d == 0);
+  close(pair[0]);
+  close(pair[1]);
+}
+
 static void test_protocol(const char *dir)
 {
   struct server s = { .delay_ms = 300, .width = 64, .height = 48 };
@@ -299,6 +311,7 @@ int main(int argc, char **argv)
   test_rects();
   test_hello_check();
   test_copy();
+  test_panel_report();
   test_protocol(dir);
   if (argc > 1) test_displayctl(argv[1], dir);
   rmdir(dir);

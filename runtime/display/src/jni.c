@@ -49,15 +49,21 @@ JNIEXPORT jlong JNICALL Java_OneiOSDisplay_nOpen(JNIEnv *env, jclass type, jstri
   if (fd < 0) fprintf(stderr, "oneios-display: %s: %s\n", path, stopping ? "stopped while waiting" : strerror(-fd));
   (*env)->ReleaseStringUTFChars(env, socket_path, path);
   if (fd < 0) { free(c); return 0; }
-  int error = xhd_recv_hello(fd, &c->frame, 10000);
-  if (error) {
-    fprintf(stderr, "oneios-display: no usable hello from xnuhost: %s\n", strerror(-error));
-    close(fd);
-    free(c);
-    return 0;
-  }
   c->fd = fd;
+  c->frame.memfd = -1;
   return (jlong)(intptr_t)c;
+}
+
+// Reports the panel's mode, then takes xnuhost's hello. JNI_FALSE: no usable hello (nClose is still the caller's).
+JNIEXPORT jboolean JNICALL Java_OneiOSDisplay_nHello(JNIEnv *env, jclass type, jlong handle, jint width, jint height, jint hz)
+{
+  (void)env; (void)type;
+  struct context *c = (struct context *)(intptr_t)handle;
+  int error = xhd_send_panel(c->fd, (uint32_t)width, (uint32_t)height, (uint32_t)hz);
+  if (error) fprintf(stderr, "oneios-display: the panel's mode could not be sent: %s\n", strerror(-error));
+  error = xhd_recv_hello(c->fd, &c->frame, 10000);
+  if (error) fprintf(stderr, "oneios-display: no usable hello from xnuhost: %s\n", strerror(-error));
+  return error ? JNI_FALSE : JNI_TRUE;
 }
 
 JNIEXPORT jintArray JNICALL Java_OneiOSDisplay_nInfo(JNIEnv *env, jclass type, jlong handle)
