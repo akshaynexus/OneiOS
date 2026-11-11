@@ -194,6 +194,65 @@ extern "C" int native_ram_block_gpu_addon(const uint8_t **data, uint64_t *bytes)
     return 1;
 }
 
+// The tunnel's own counters (DroidVMVirtioGpu3D.cpp), printed as they change: whether the processes that hold a Metal
+// device give the GPU work, and how much. One line every oneios-gpu-report seconds (default 10, 0: off) while any changed:
+//   oneios-gpu-report: 10 s: submits +612 (fenced +600), render server frames +598 (mean 3100 us, max ever 41000 us,
+//     <1/<2/<4/<8/<16/<32 ms +0/+12/+400/+150/+30/+6, longer +0), contexts +0, blobs +14, maps +3, fence timeouts +0,
+//     refusals +0, clients 3, live blobs 210 (96 MiB)
+// and every sixth line the processes that hold GPU memory: oneios-gpu-clients: backboardd 80 MiB, SpringBoard 12 MiB.
+// "render server frames" are backboardd's fenced submissions, one or more per frame CoreAnimation draws on the GPU: if the
+// screen changes and they do not grow, CoreAnimation is not drawing with Metal.
+extern "C" {
+extern volatile uint64_t droidvm_virtgpu_stats[8], droidvm_virtgpu_rs_fences[3], droidvm_virtgpu_rs_fence_hist[10];
+extern volatile uint64_t droidvm_virtgpu_live[4], droidvm_virtgpu_last_refusal[4];
+struct DroidVMClientMemory { char name[16]; uint64_t pageBytes, userBytes; uint32_t sizes[8]; };
+extern DroidVMClientMemory droidvm_virtgpu_client_memory[64];
+}
+namespace {
+void report(void *, wait_result_t)
+{
+    uint32_t every = 10;
+    PE_parse_boot_argn("oneios-gpu-report", &every, sizeof every);
+    if (!every) return;
+    uint64_t was[8] = {}, fences[3] = {}, hist[10] = {};
+    for (unsigned line = 0;; ) {
+        IOSleep(every * 1000);
+        uint64_t now[8], rs[3], h[10];
+        for (unsigned i = 0; i < 8; i++) now[i] = droidvm_virtgpu_stats[i];
+        for (unsigned i = 0; i < 3; i++) rs[i] = droidvm_virtgpu_rs_fences[i];
+        for (unsigned i = 0; i < 10; i++) h[i] = droidvm_virtgpu_rs_fence_hist[i];
+        bool changed = rs[0] != fences[0];
+        for (unsigned i = 1; i < 8; i++) changed |= now[i] != was[i];
+        if (changed) {
+            const uint64_t frames = rs[0] - fences[0];
+            IOLog("oneios-gpu-report: %u s: submits +%llu (fenced +%llu), render server frames +%llu (mean %llu us, max ever %llu us, "
+                  "<1/<2/<4/<8/<16/<32 ms +%llu/+%llu/+%llu/+%llu/+%llu/+%llu, longer +%llu), contexts +%llu, blobs +%llu, maps +%llu, "
+                  "fence timeouts +%llu, refusals +%llu (last op %llu status %#llx), clients %llu, live blobs %llu (%llu MiB)\n",
+                  every, now[4] - was[4], now[5] - was[5], frames, frames ? (rs[1] - fences[1]) / frames : 0, rs[2],
+                  h[0] - hist[0], h[1] - hist[1], h[2] - hist[2], h[3] - hist[3], h[4] - hist[4], h[5] - hist[5],
+                  (h[6] + h[7] + h[8] + h[9]) - (hist[6] + hist[7] + hist[8] + hist[9]), now[1] - was[1], now[2] - was[2],
+                  now[3] - was[3], now[6] - was[6], now[7] - was[7], droidvm_virtgpu_last_refusal[0], droidvm_virtgpu_last_refusal[1],
+                  now[0], droidvm_virtgpu_live[2] + droidvm_virtgpu_live[3], (droidvm_virtgpu_live[0] + droidvm_virtgpu_live[1]) >> 20);
+            if (line++ % 6 == 0) {
+                char text[480];
+                size_t at = 0;
+                text[0] = 0;
+                for (unsigned i = 0; i < 64 && at + 40 < sizeof text; i++) {
+                    const DroidVMClientMemory &c = droidvm_virtgpu_client_memory[i];
+                    const uint64_t mib = (c.pageBytes + c.userBytes) >> 20;
+                    if (!c.name[0] || !(c.pageBytes + c.userBytes)) continue;
+                    at += snprintf(text + at, sizeof text - at, "%s%.16s %llu MiB", at ? ", " : "", c.name, mib);
+                }
+                IOLog("oneios-gpu-clients: %s\n", at ? text : "none");
+            }
+        }
+        memcpy(was, now, sizeof was);
+        memcpy(fences, rs, sizeof fences);
+        memcpy(hist, h, sizeof hist);
+    }
+}
+}  // namespace
+
 void oneios_adreno_start(void)
 {
     if (oneios_adreno_stage) return;
@@ -208,4 +267,6 @@ void oneios_adreno_start(void)
     PE_parse_boot_argn("oneios-adreno-selftest", &test, sizeof test);
     thread_t thread = nullptr;
     if (test && kernel_thread_start(selftest, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+    thread_t reporter = nullptr;
+    if (kernel_thread_start(report, nullptr, &reporter) == KERN_SUCCESS) thread_deallocate(reporter);
 }

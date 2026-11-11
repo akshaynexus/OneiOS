@@ -348,6 +348,26 @@ plug-in's `Info.plist` visible too. `oneios-gpu-open` is one line per open of an
 plug-in's progress markers arrive the same way, as open types `0x4147xxxx` answered unsupported by design: `0x6800` entered,
 `0x6801` Turnip found, `0x6802` device made, `0x6803` handed to Metal's discovery, `0x68f1` no Turnip, `0x68f2` no device.
 
+**Is CoreAnimation drawing on the GPU?** (`gpu/OneiOSAdreno.cpp`, `report`). `oneios-iouc` cannot say: it prints the first
+call of each class and selector only, stops at 600 lines, and every Turnip op goes through one selector with the op in the
+payload. The tunnel's own counters (`DroidVMVirtioGpu3D.cpp`) are printed instead, every `oneios-gpu-report` seconds
+(default 10, `0` off) while one changed:
+
+```
+oneios-gpu-report: 10 s: submits +612 (fenced +600), render server frames +598 (mean 3100 us, max ever 41000 us, <1/<2/<4/<8/<16/<32 ms ...), contexts +0, blobs +14, maps +3, fence timeouts +0, refusals +0 (...), clients 3, live blobs 210 (96 MiB)
+oneios-gpu-clients: backboardd 80 MiB, SpringBoard 12 MiB
+```
+
+"render server frames" are backboardd's fenced submissions (the tunnel counts the compositor's, `droidvm_virtgpu_rs_fences`):
+one or more for every frame CoreAnimation draws with Metal, with the time from submission to the GPU being done. While the
+screen changes (swipe on the lock screen) they should grow by about the frame rate; if the swaps grow and they do not,
+CoreAnimation draws on the CPU. A device that was made but never used shows contexts and blobs with no submits.
+
+The plug-in's own path in backboardd, by its markers (`oneios-gpu-open` types `0x4147xxxx`): `6800`, `6801`, `6A..` (what the
+render server reads for its framebuffer format), `681x` (which cache folder served), `6802` device made, `6803` handed to
+Metal; 3 s later its scanout thread opens type `0x4148` (`6700`, `6701`, `6702`). So an open of type `0x4148` by
+backboardd already means the device was made.
+
 **The user-client interface** (what `NativeAdrenoMetal.bundle` and Turnip's vdrm backend call; nothing here differs
 from Droid-VM's, the header is `external/NativeAdreno/DroidVMVirtgpuABI.h`):
 
