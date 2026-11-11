@@ -220,7 +220,18 @@ def stage_hid(out):
         ('        self->buttons=static_cast<uint8_t>(uintptr_t(mask)&0xe);\n',
          '        self->buttons=static_cast<uint8_t>(uintptr_t(mask)&0x1f);   // OneiOS: Home and the ringer switch too\n'),
         ('static const int32_t kEdgeX=48*65536/3048,kEdgeY=48*65536/2032;',
-         f'static const int32_t kEdgeX={edge_x},kEdgeY={edge_y};   // OneiOS: {EDGE_PIXELS} px of {PANEL[0]} x {PANEL[1]}'),
+         f'static const int32_t kEdgeX={edge_x},kEdgeY={edge_y};   // OneiOS: {EDGE_PIXELS} px of {PANEL[0]} x {PANEL[1]}\n'
+         '// OneiOS: where the last contact began and where the last one lifted, for the log (OneiOSHidInput.cpp).\n'
+         'extern "C" {extern volatile int32_t oneios_touch_last[4];}'),
+        ('        native_touch_edge_stats[1]=native_touch_edge_stats[1]+1;\n',
+         '        native_touch_edge_stats[1]=native_touch_edge_stats[1]+1;\n'
+         '        oneios_touch_last[0]=x;oneios_touch_last[1]=y;   // OneiOS\n'),
+        ('    if(!touch && (mask&kMaskTouch))fromEdge[index]=false;',
+         '    if(!touch && (mask&kMaskTouch)) {   // OneiOS: where the contact lifted, for the log\n'
+         '        oneios_touch_last[2]=call<int32_t,uint32_t,IOOptionBits>(child,kGetFixed,kDivGetFixed,kX,0);\n'
+         '        oneios_touch_last[3]=call<int32_t,uint32_t,IOOptionBits>(child,kGetFixed,kDivGetFixed,kY,0);\n'
+         '    }\n'
+         '    if(!touch && (mask&kMaskTouch))fromEdge[index]=false;'),
         ('return OSString::withCString(touchOnly?"Offline touch digitizer":"Offline HID input probe");',
          'return OSString::withCString(touchOnly?"OneiOS touch screen":"OneiOS buttons");'),
         # The event driver can change under a device: the collection tries the DriverKit driver first

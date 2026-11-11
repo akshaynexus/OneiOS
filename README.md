@@ -14,6 +14,11 @@ How to build and test it: [docs/building.md](docs/building.md).
 
 **Experimental. On the phone (S24 Ultra, 2026-11-11) the boot reaches launchd, backboardd and SpringBoard, and backboardd's first frames are on the panel: the Apple boot logo at 1440x3120. Whether it goes on to SpringBoard's own screen is not yet seen.**
 
+Touch on the phone: in that session the DriverKit event driver was waited for, so the touch screen and the buttons
+reached backboardd only 233 s after they started (then 447 events, 11 contacts). The kernel now gives both to
+Apple's kernel event driver at once (`kernel/patches/oneios-hosted/hid/README.md`, "Which event driver"); built,
+not yet run on the phone. Whether a swipe up unlocks is not known.
+
 On the PC (xnuhost under `qemu-aarch64`, 8 vCPUs, the real iOS 27.0.1 `24A446` image set, `kernel.kc` with the
 iPhone18,2 kexts), the boot gets through:
 

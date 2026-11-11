@@ -625,6 +625,19 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
 
 - 2026-11-11, battery -> lead: new battery bridge: `runtime/bridges/battery` (reads `/sys/class/power_supply`, `batteryctl`), `drivers/battery/OneiOSBattery.cpp` (an `IOPMPowerSource`, started from `oneios_drivers_start`), channel `OB_CH_BATTERY` (`OB_CH_COUNT` is now 6). Docs: `docs/hardware.md` 7c. Built and host-tested, not run on the phone; needs a kernel and runtime built together (old kernels never send the query and the worker stays idle).
 
+- 2026-11-11, lead -> parent: **xnuhost `b528fd2` did not break touch.** The phone's session log: `sec_touchscreen`
+  taken (x and y 0..4095), `sec_touchpad` left. The gestures of 14781..14858 fell in the time the DriverKit event
+  driver was waited for (attached 14764.6, `edge wrapper 0`, given up 14884.6): reports accepted, `0 contacts
+  begun`. From 14885.5 the kernel's `IOHIDEventDriver` had both devices and backboardd got 447 events, 11 contacts
+  (7 at an edge). So a touch test in the first 233 s of that boot shows nothing. Fixed in the kernel: the HID
+  archive adds its own `IOHIDEventDriver` personalities (`hid/README.md`, "Which event driver"), and the once-a-second
+  touch line now ends with where the last contact began and lifted, in percent of the guest's screen. Built, not
+  run. For the next phone run: wait for `oneios-hid: touch screen: event driver IOHIDEventDriver attached` (it
+  should follow `HID device started` within seconds), then one swipe up from the middle of the bottom edge and one
+  tap in the top left corner; send the `oneios-hid` lines and say what the screen did. Expected: begin near x 50 %
+  y 100 % with a lift at a smaller y, then begin and lift near x 5 % y 5 %. Other numbers mean the mapping is
+  turned or mirrored, and that is then fixed in the transport's scaling, not in xnuhost.
+
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
 Format: id, owner if taken, files, root cause or need, expected result. Check with: `kernel/build-hosted.sh`, then

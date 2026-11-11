@@ -11,7 +11,8 @@ start is called from `oneios_drivers_start` (`drivers/bridge/OneiOSBridge.c`, a 
    -> NativeHidInput (staged) x 2, under the collection's IOHIDDevice
         "OneiOS touch screen"   Digitizer / Touch Screen, 10 fingers, Built-In, DisplayIntegrated
         "OneiOS buttons"        Consumer Menu (Home), Power, Volume +/-, Telephony Ring Enable, boot keyboard
-   -> Apple's IOHIDInterface -> IOHIDEventDriver (unchanged, in kernel.kc) -> backboardd
+   -> Apple's IOHIDInterface -> IOHIDEventDriver (unchanged, in kernel.kc; matched by two personalities
+      this archive adds to the catalogue, see "Which event driver") -> backboardd
  OneiOSALSDevice (drivers/brightness)   Sensor / Ambient Light, same parent class, same archive
 ```
 
@@ -111,15 +112,45 @@ offset here. Ten fingers by slot and tracking id; a finger that comes down in th
 (the Home swipe); edge contacts carry `kIOHIDDigitizerEventFromEdgeTip` (NativeHidInput's wrapper of the event
 driver's dispatch), without which SpringBoard's edge gestures ignore them.
 
+## Which event driver (lead, 2026-11-11)
+
+The collection would give an `IOHIDInterface` of a Consumer or Digitizer device to the DriverKit event driver
+(`AppleUserHIDEventDriver` of `com.apple.AppleUserHIDDrivers.dext`, `DeviceUsagePairs` with pages 12 and 13), and
+defers its own kernel personalities (`IOMatchDefer`) until the IOKit daemon has sent every plist. On the S24 Ultra
+(session of 2026-11-11, devices started at 14652.6):
+
+| Time | Log |
+|---|---|
+| 14652.65 | `IOHIDInterface(...): matching deferred by IOHIDEventDriver` |
+| 14764.6 | `DK: AppleUserHIDEventDriver-... waiting for server com.apple.driverkit.AppleUserHIDDrivers-...`; `AppleUserHIDEventService attached`, `edge wrapper 0` |
+| 14781..14858 | gestures: reports accepted, `0 contacts begun`, nothing queued for backboardd |
+| 14884.6 | `DK: ... failed to launch server` (the kernel's 120 s check-in limit, `kIOUserServerCheckInTimeoutMSecs`) |
+| 14885.5 | `IOHIDEventDriver attached`, `edge wrapper 3`, backboardd's user client |
+| 14896.5 | the DriverKit driver's process is there (pid 160): 12 s too late |
+| 14927.. | `46 HID events queued for the service's client(s)` ... `447`, `11 contacts begun (7 at an edge)` |
+
+So touch and buttons were dead for the first 233 s of that boot, and a test in that time shows nothing.
+`oneios_hid_personalities` (in `OneiOSHidInput.cpp`, called when the classes are registered) adds two personalities
+to the catalogue: `IOHIDEventDriver` on `IOHIDInterface`, `IOProbeScore` 100000, no `IOMatchDefer`, one with
+`Transport` `SPI` and usage page 13 (the touch screen), one with `Transport` `Virtual` and usage page 12 (the
+buttons). They match as the DriverKit personality does (`IOHIDDevice::matchPropertyTable`), start first, and take
+the match category, so neither the DriverKit personality nor Apple's deferred ones start for these two devices.
+The light sensor (`Virtual`, Sensor page) is not matched by them. An iPhone's own touch screen and buttons are
+kernel event services too (the multitouch and button kexts), not DriverKit ones. `oneios-hid-driverkit=1` adds
+nothing (the old order). Why the DriverKit driver's process needs more than 120 s is not looked at; nothing here
+uses it.
+
 ## Build, boot arguments, log
 
 Built by `kernel/build-hosted.sh` (needs `external/NativeHidInput` at 24f1f3f or later: `scripts/setup/get-references.sh
 NativeHidInput`, after removing an older checkout). Boot arguments: `oneios-hid=0` starts nothing; `oneios-hid-log=0`
-silences the state lines; `droidvm-input=0` leaves xnuhost's input device alone.
+silences the state lines; `oneios-hid-driverkit=1` adds no personalities; `droidvm-input=0` leaves xnuhost's input
+device alone.
 
 Console lines (`guest` lines of xnuhost's log), in the order of a good start:
 
 ```
+oneios-hid: IOHIDEventDriver personalities added for the touch screen and the buttons: the kernel's event driver takes them when they start, the DriverKit one is not waited for
 droidvm input /arm-io/input-0: OneiOS touchscreen, touch
 oneios-hid: virtio-input: 1 device(s) in the device tree, 1 started
 oneios-hid: buttons: HID device started under IOHIDResource
@@ -128,14 +159,18 @@ oneios-hid: touch screen: event driver IOHIDEventDriver attached (registry id 0x
 oneios-hid: touch screen: Digitizer/Touch Screen, Built-In, DisplayIntegrated published on the event service; edge wrapper 3
 oneios-hid: touch screen: 1 user client(s) on the event service: IOHIDEventServiceUserClient (pid N, backboardd)
 oneios-hid: touch screen: N HID events queued for the service's client(s), 0 dropped
-oneios-hid: touch screen: N virtio-input events, N frames, N finger sets, N HID reports (last result 0x0), N contacts begun (N at an edge)
+oneios-hid: touch screen: N virtio-input events, N frames, N finger sets, N HID reports (last result 0x0), N contacts begun (N at an edge); the last began at x 49.8% y 100.0%, the last lift was at x 51.2% y 41.0%
 ```
+
+The two positions are what Apple's event driver put in its events (read by the edge wrapper, 0 % at the left and
+at the top of the guest's screen): a swipe up from the middle of the bottom edge begins near x 50 % y 100 % and
+lifts at a smaller y. A begin that is not where the finger came down is a mapping fault (axes swapped or turned).
 
 The user client line is how the kernel shows that backboardd took the service: it names the process that opened
 it. "HID events queued" is the count each such user client keeps of the events Apple's event driver handed it
-(its `DebugState`), read once a second while reports arrive. Between the two "event driver" lines of a boot in
-which the DriverKit driver does not come up (`AppleUserHIDEventService`, then `IOHIDEventDriver` 120 s later) the
-reports are accepted and go nowhere.
+(its `DebugState`), read once a second while reports arrive. With `oneios-hid-driverkit=1`, between the two
+"event driver" lines (`AppleUserHIDEventService`, then `IOHIDEventDriver` 120 s later) the reports are accepted
+and go nowhere, and `contacts begun` stays 0.
 
 ## Tested, not tested (2026-11-11)
 
@@ -172,3 +207,12 @@ loads can deadlock (class-loading lock against the kext lock; native-adreno met 
 A kernel with **no `oneios-hid` line at all** was built without the call: its `drivers/` came from another checkout
 (`docs/building.md` 2, `ONEIOS_REPO`). That, not a hang, is what the first testing image's kernel had.
 Tested: five 70 s boots with `--input-script`, both devices start in each.
+
+## The phone (lead, 2026-11-11)
+
+Read from the session log of the S24 Ultra (xnuhost `b528fd2`): xnuhost took `/dev/input/event8 "sec_touchscreen"`
+(x 0..4095, y 0..4095) and left `event9 "sec_touchpad"`; both devices started 0.6 s into the boot; the table under
+"Which event driver" is that session. Once the kernel's driver had the device, backboardd was sent 447 events and
+11 contacts began, 7 of them at an edge. Whether the lock screen moved in that time was not recorded.
+The personalities and the two positions in the log are built (kernel `xnu.macho` links) and **not run**: no boot
+on the PC since the owner moved all boots to the phone.

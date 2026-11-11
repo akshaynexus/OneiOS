@@ -18,8 +18,9 @@
 // IOAESAccelerator, the bound metaclass is compared with the live one after adding the slide, and each owned
 // metaclass gets the live one as its superclass before the module load is finished.
 //
-// Boot arguments: oneios-hid=0 starts nothing; oneios-hid-log=0 keeps the once-a-second state line quiet
+// Boot arguments: oneios-hid-driverkit=1 adds no personalities (oneios_hid_personalities); oneios-hid=0 starts nothing; oneios-hid-log=0 keeps the once-a-second state line quiet
 // (default 1: it is how a boot shows that backboardd opened the digitizer and that events arrive).
+#include <IOKit/IOCatalogue.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
@@ -56,6 +57,9 @@ extern volatile uint64_t droidvm_input_events, droidvm_input_frames, droidvm_inp
 extern volatile uint64_t oneios_hid_key_events, oneios_hid_button_reports;
 // NativeHidInput's: the wrapper of the event driver's dispatch ([0] 3 = installed), contacts begun and at an edge.
 extern volatile uint32_t native_touch_edge_install[3], native_touch_edge_stats[4];
+// Where the last contact began ([0] x, [1] y) and where the last one lifted ([2], [3]), as the event driver's
+// events carry them: 16.16 shares of the screen, 0 at the left and at the top. Written by the staged edge wrapper.
+volatile int32_t oneios_touch_last[4];
 
 // What the two sources share (kits/sheng/TouchProbe.cpp and DroidVMStubs.c on their own boards): the finger set
 // the transport publishes for the digitizer, a seqlock (odd while written).
@@ -290,10 +294,17 @@ native_hid_live_checkpoint(IOService *device)
 			IOLog("oneios-hid: %s: %llu HID events queued for the service's client(s), %llu dropped\n", what, queued, dropped);
 		}
 		if (touch) {
+			// Tenths of a percent of the screen, from the left and from the top.
+			int at[4];
+			for (unsigned i = 0; i < 4; i++) {
+				at[i] = (int)(((int64_t)oneios_touch_last[i] * 1000) >> 16);
+			}
 			IOLog("oneios-hid: touch screen: %llu virtio-input events, %llu frames, %llu finger sets, %llu HID reports "
-			    "(last result 0x%x), %u contacts begun (%u at an edge)\n", droidvm_input_events, droidvm_input_frames,
+			    "(last result 0x%x), %u contacts begun (%u at an edge); the last began at x %d.%d%% y %d.%d%%, "
+			    "the last lift was at x %d.%d%% y %d.%d%%\n", droidvm_input_events, droidvm_input_frames,
 			    droidvm_input_published, reports, native_hid_input_results[6], native_touch_edge_stats[1],
-			    native_touch_edge_stats[2]);
+			    native_touch_edge_stats[2], at[0] / 10, at[0] % 10, at[1] / 10, at[1] % 10, at[2] / 10, at[2] % 10,
+			    at[3] / 10, at[3] % 10);
 		} else {
 			IOLog("oneios-hid: buttons: %llu key events, %llu button states, %llu HID reports (last result 0x%x)\n",
 			    oneios_hid_key_events, oneios_hid_button_reports, reports, native_hid_input_results[4]);
@@ -373,6 +384,74 @@ publish(IOService *device, IOService *resource, const char *what)
 	return true;
 }
 
+// Apple's kernel event driver for the two devices, at once. The collection's own personalities for an
+// IOHIDInterface are deferred (IOMatchDefer) until the IOKit daemon has sent every plist, and the DriverKit one
+// (AppleUserHIDEventDriver of com.apple.AppleUserHIDDrivers, any Consumer or Digitizer device) is then tried
+// first: the kernel waits 120 s for that driver's process to check in, and on the S24 Ultra the process came up
+// 12 s after that wait ended. The kernel's IOHIDEventDriver took the devices 233 s after they started; until then
+// every report was accepted and went nowhere (the phone's session of 2026-11-11: the gestures of that time gave
+// "0 contacts begun"). An iPhone's own touch screen and buttons are not DriverKit devices either: their event
+// services are kernel drivers of the multitouch and button kexts.
+//
+// So the catalogue gets two personalities of its own, not deferred, with a probe score above Apple's (3000 at
+// most): IOHIDEventDriver on the IOHIDInterface of a device with this transport and usage page. They are matched
+// as the DriverKit personality is (DeviceUsagePairs, and Transport, by IOHIDDevice::matchPropertyTable); the light
+// sensor (Virtual, Sensor page) is not among them and keeps AppleUSBALSService. The first driver that starts
+// takes the match category: the DriverKit personality and Apple's deferred ones are not started for these two.
+// oneios-hid-driverkit=1 leaves the catalogue alone (the old order).
+static void
+oneios_hid_personalities(void)
+{
+	static const struct { const char *transport; uint32_t page; } devices[] = {
+		{"SPI", 0x0d},          // the touch screen (NativeHidInput::newTransportString)
+		{"Virtual", 0x0c},      // the buttons
+	};
+	uint32_t driverkit = 0;
+	PE_parse_boot_argn("oneios-hid-driverkit", &driverkit, sizeof(driverkit));
+	OSArray *drivers = driverkit ? nullptr : OSArray::withCapacity(2);
+	if (!drivers) {
+		IOLog("oneios-hid: no personalities added: the collection's own order (DriverKit first) decides the event driver\n");
+		return;
+	}
+	bool made = true;
+	for (const auto &device : devices) {
+		OSDictionary *personality = OSDictionary::withCapacity(8), *pair = OSDictionary::withCapacity(1);
+		OSArray *pairs = OSArray::withCapacity(1);
+		OSString *bundle = OSString::withCString("com.apple.iokit.IOHIDEventDriver"), *driver = OSString::withCString("IOHIDEventDriver");
+		OSString *provider = OSString::withCString("IOHIDInterface"), *transport = OSString::withCString(device.transport);
+		OSNumber *page = OSNumber::withNumber(device.page, 32), *score = OSNumber::withNumber(100000, 32);
+		if (personality && pair && pairs && bundle && driver && provider && transport && page && score) {
+			pair->setObject("DeviceUsagePage", page);
+			pairs->setObject(pair);
+			personality->setObject("CFBundleIdentifier", bundle);
+			personality->setObject("IOClass", driver);
+			personality->setObject("IOProviderClass", provider);
+			personality->setObject("Transport", transport);
+			personality->setObject("DeviceUsagePairs", pairs);
+			personality->setObject("IOProbeScore", score);
+			drivers->setObject(personality);
+		} else {
+			made = false;
+		}
+		OSSafeReleaseNULL(personality);
+		OSSafeReleaseNULL(pair);
+		OSSafeReleaseNULL(pairs);
+		OSSafeReleaseNULL(bundle);
+		OSSafeReleaseNULL(driver);
+		OSSafeReleaseNULL(provider);
+		OSSafeReleaseNULL(transport);
+		OSSafeReleaseNULL(page);
+		OSSafeReleaseNULL(score);
+	}
+	// No nub matching: no HID device of ours exists yet.
+	const bool added = made && gIOCatalogue && gIOCatalogue->addDrivers(drivers, false);
+	drivers->release();
+	IOLog(added ? "oneios-hid: IOHIDEventDriver personalities added for the touch screen and the buttons: the kernel's "
+	    "event driver takes them when they start, the DriverKit one is not waited for\n"
+	    : "oneios-hid: the IOHIDEventDriver personalities were not added: the DriverKit event driver is tried first "
+	    "(the kernel's takes over after its 120 s)\n");
+}
+
 // The kexts and the classes. On the caller's thread (the board's late start, bsd_init's), not on a thread of its
 // own: OSMetaClass::preModLoad takes the class-loading lock and keeps it until postModLoad, which looks the kext
 // up under the kext lock; a kext that another thread loads meanwhile holds the kext lock and waits for the
@@ -431,6 +510,7 @@ oneios_hid_register(void)
 		return false;
 	}
 	oneios_hid_stage = 3;
+	oneios_hid_personalities();
 	IOLog("oneios-hid: IOHIDFamily and IOHIDEventDriver loaded, the device classes registered below IOHIDDevice; "
 	    "the devices start when IOHIDResource is there\n");
 	return true;
