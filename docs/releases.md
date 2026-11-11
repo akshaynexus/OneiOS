@@ -95,6 +95,8 @@ placeholder), `kernel` (null without one). `files` lists every file except `runt
   version has a suffix).
 - Neither downloads anything of Apple's. Actions are pinned by commit.
 
+**The 3D GPU in a release.** `release.yml` fetches Droid-VM's virglrenderer (`scripts/setup/get-references.sh virglrenderer`) before packaging, and refuses to publish a package whose `xnuhost` or `gpuctl` was built without drm2kgsl. Without that checkout both build 2D-only and only say so at run time: runtime 0.1.1 was published that way and its GPU check failed on the phone with "this build has no drm2kgsl". 0.1.2 is the first release with the check.
+
 ## The kernel in a release
 
 The kernel is not built in the release job. A build machine builds it (`kernel/README.md`), and:

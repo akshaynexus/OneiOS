@@ -45,8 +45,22 @@ jobs:
           gh release download "$ktag" --repo "$GITHUB_REPOSITORY" --pattern 'xnu-*.tar.zst' --dir out/kernel/dl
           echo "$ksha  $(ls out/kernel/dl/xnu-*.tar.zst)" | sha256sum -c -
           zstd -dc out/kernel/dl/xnu-*.tar.zst | tar -x -C out/kernel/current
+      - name: Sources the runtime links (Droid-VM's virglrenderer for drm2kgsl, the 3D GPU)
+        # Without this checkout xnuhost and gpuctl build 2D-only and say so at run time (runtime 0.1.1's GPU check
+        # failed on the phone with "this build has no drm2kgsl"). A release must have it.
+        run: |
+          set -euo pipefail
+          scripts/setup/get-references.sh virglrenderer
+          test -f external/virglrenderer/src/drm/drm2kgsl/drm2kgsl_renderer.c || { echo "virglrenderer checkout has no drm2kgsl"; exit 1; }
       - name: Package
         run: runtime/package.sh "$VERSION"
+      - name: The package's xnuhost and gpuctl have drm2kgsl
+        run: |
+          set -euo pipefail
+          d=$(mktemp -d); zstd -dc out/release/oneios-runtime-$VERSION-arm64.tar.zst | tar -x -C "$d"
+          for b in bin/xnuhost bin/gpuctl; do
+            if strings "$d/$b" | grep -q 'this build has no drm2kgsl'; then echo "$b was built without drm2kgsl"; exit 1; fi
+          done
       - name: Release
         run: |
           set -euo pipefail
