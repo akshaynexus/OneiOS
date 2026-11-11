@@ -204,3 +204,29 @@ half-float conversion, retirement), the vsync tick with a client, a blank frame,
 video being written (it is made at start; nothing drew into it), whether QuartzCore takes @3x, the blob scanout,
 anything on the phone. xnuhost's two changes are covered by its unit tests (`make -C runtime/xnuhost test`:
 13189 checks).
+
+## Power: why no frame was shown, and the fix (lead, 2026-11-11)
+
+Found with `oneios-iouc=backboardd` and `oneios-display-report=N` (`docs/building.md` 5) on the PC and on the phone,
+and by reading the family's code in the 24A446 v54 kernelcache:
+
+- backboardd registers for vsync (selector 72) and submits swaps (4 begin, 5 submit, 6 wait: all succeed, 64 and
+  more on the PC), and the backend was never asked to validate or kick one: `kicks 0`, `swaps validated 0`.
+- The family's `swap_submit` (0xfffffe000a18c63c) queues a swap only while the display object's word at +7180 is
+  not 0. Otherwise it releases the swap and returns success (0xfffffe000a18cfcc).
+- That word is the power state. One function writes it, the family's `setPowerState` (0xfffffe000a1915f4, through
+  the gated setter at 0xfffffe000a18a428), which the power manager calls. The word beside it, +7184, is what
+  `NativeLegacyDisplay`'s start announces.
+- The backend registers two power states and asks for state 1 at start. Under this kernel the power manager never
+  calls back: `pm stage 2 calls 2 callbacks 0`, `+7180 0 +7184 1`, the same on the PC and on the S24 Ultra.
+  **Why it does not call is not known.**
+- User space cannot switch it on: the user client's power request (selector 12, 0xfffffe000a17c6e0) answers
+  `kIOReturnUnsupported` unless the display object's byte at +140 is set, which only a platform subclass does.
+
+The fix, in `OneiOSDisplay.cpp` (`oneios_display_power_on`, at the end of the late probe): the power manager gets
+2 seconds; if it has not called, `setPowerState(1, display)` is called on the display, the same virtual with the
+same arguments. Log: `oneios-display: power: ...; the family's power word was 0 and is 1`.
+`oneios-display-power=0` leaves it out. The offset 7180 is this kernelcache's.
+
+Built. **Not booted**: the owner's PC boots are stopped and the phone run is the test. Not known: whether anything
+else in the family asks the power manager for the state (IOService's own `getPowerState()` still says 0).

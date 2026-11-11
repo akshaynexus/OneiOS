@@ -47,6 +47,8 @@ extern volatile uint32_t native_legacy_stage, native_legacy_init_result, native_
 extern volatile uint32_t native_legacy_surface_found, native_legacy_dt_attached, native_legacy_object_size, native_legacy_parent_match;
 extern volatile int native_legacy_meta_status, native_legacy_surface_status, native_legacy_unit_scale_status, native_legacy_pm_status;
 extern volatile uint32_t native_legacy_chosen_scale, native_legacy_pm_stage;
+extern volatile uint32_t native_legacy_pm_callbacks;
+extern volatile uint64_t native_legacy_object;
 extern volatile uint64_t native_legacy_gop_physical, native_legacy_gop_bytes;
 extern volatile uint32_t native_legacy_gop_width, native_legacy_gop_height;
 extern volatile uint32_t droidvm_virtio_display_state, droidvm_virtio_display_blob, droidvm_virtio_display_last_status;
@@ -66,6 +68,8 @@ void oneios_display_client_seen(IOReturn status, int pid, uint32_t type, IOUserC
 void oneios_display_frame_seen(unsigned kind, uint64_t width, uint64_t height);
 void oneios_display_swap_seen(bool accepted, unsigned reason);
 }
+
+static void oneios_display_power_on(void);
 
 static bool displayEnabled()
 {
@@ -160,6 +164,41 @@ void native_legacy_display_late_probe(void)
     IOLog("oneios-display: panel %ux%u at %#llx (%llu bytes); virtio scanout state %u (2 = presenting), %s resources\n",
           native_legacy_gop_width, native_legacy_gop_height, native_legacy_gop_physical, native_legacy_gop_bytes,
           droidvm_virtio_display_state, droidvm_virtio_display_blob ? "blob" : "2D");
+    oneios_display_power_on();
+}
+
+// The display is on: said to the family the way the power manager says it.
+//
+// The family's swap_submit (24A446 v54, 0xfffffe000a18c63c) queues a swap only while the display object's word at
+// +7180 is not 0; otherwise it releases the swap and answers success (0xfffffe000a18cfcc), so the compositor sees
+// every frame accepted and none is shown. That word is the power state, written by one function only: the family's
+// setPowerState (0xfffffe000a1915f4), which the power manager calls. The backend registers two power states and asks
+// for state 1 at its start (NativeLegacyDisplay::startDisplay, "logical PM": the panel has no power switch here, it
+// is lit by the host), and under this kernel the power manager never made that call: on the PC and on the phone
+// `pm stage 2, callbacks 0`, +7180 = 0, backboardd submitting swap after swap into nothing. (User space cannot do
+// it either: the user client's power request, selector 12, answers unsupported in this family unless a platform
+// subclass says it manages power.) Why the power manager does not call is not known yet.
+//
+// So after the start the display is given a moment to be called, and if it was not, setPowerState(1) is called on
+// it here: the virtual the power manager would call, with the same arguments; the backend's override passes it
+// to the family. Boot argument oneios-display-power=0 leaves this out.
+static void oneios_display_power_on(void)
+{
+    uint32_t wanted = 1;
+    PE_parse_boot_argn("oneios-display-power", &wanted, sizeof wanted);
+    IOService *display = reinterpret_cast<IOService *>(static_cast<uintptr_t>(native_legacy_object));
+    if (!wanted || !display || native_legacy_stage != 10 || native_legacy_pm_stage < 2) return;
+    for (unsigned waited = 0; waited < 20 && native_legacy_pm_callbacks == 0; waited++) IOSleep(100);
+    const uint32_t called = native_legacy_pm_callbacks;
+    uint32_t before = 0, after = 0;
+    memcpy(&before, reinterpret_cast<const unsigned char *>(display) + 7180, sizeof before);
+    IOReturn status = kIOReturnSuccess;
+    if (!called) status = display->setPowerState(1, display);
+    memcpy(&after, reinterpret_cast<const unsigned char *>(display) + 7180, sizeof after);
+    IOLog("oneios-display: power: %s; the family's power word was %u and is %u%s\n",
+          called ? "the power manager called setPowerState" : "the power manager did not call setPowerState in 2 s: called here",
+          before, after, after ? "" : " (STILL OFF: swaps will be dropped)");
+    (void)status;
 }
 
 // The first user clients, swaps and frames go to the log: they are how a boot shows that backboardd found the
