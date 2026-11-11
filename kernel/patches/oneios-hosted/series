@@ -64,3 +64,7 @@
 # bits 3..42; newfs_apfs died in objc's map_images at the first phone boot). The kernel signs nothing for user
 # space and every task thread runs with its keys off. oneios-user-pac=0|1 forces it.
 0027-user-pac-off-narrow-host.patch
+# lead: the user exception dump (sheng-exc-name) also prints the text the registers point at: the message of a
+# process that stops itself on an assertion (SpringBoard in FrontBoardServices on the phone), when no crash report
+# is written.
+0028-exception-text.patch

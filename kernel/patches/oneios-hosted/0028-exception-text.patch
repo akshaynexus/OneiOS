@@ -1,0 +1,43 @@
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -1023,6 +1023,39 @@
+ 				printf("sheng-exc: insn@pc-16 %08x %08x %08x %08x | %08x %08x %08x %08x\n",
+ 				    insn[0], insn[1], insn[2], insn[3], insn[4], insn[5], insn[6], insn[7]);
+ 			}
++#if XNU_HOSTED
++			/*
++			 * OneiOS hosted (0028): the text a register points at. A process that stops itself on an assertion
++			 * (brk after the call that formats the message: FrontBoardServices, BaseBoard, libdispatch) still has
++			 * the message in a register, as a C string or inside the string object (its characters start 17 bytes
++			 * in); with no corpse and no crash report it is the only place that says why. Printable runs of 12
++			 * characters or more, from the faulting thread's own map.
++			 */
++			if (thread == current_thread()) {
++				static const unsigned char sheng_text_regs[] = { 0, 1, 2, 3, 8, 19, 20, 21, 22, 23, 24, 25, 26 };
++				for (unsigned t = 0; t < sizeof(sheng_text_regs); t++) {
++					uint64_t at = get_saved_state_reg(ss, sheng_text_regs[t]) & 0x0000007fffffffffULL;
++					for (unsigned skip = 0; skip <= 17 && at >= 0x100000000ULL; skip += 17) {
++						char text[201];
++						unsigned n = 0;
++						if (copyin((user_addr_t)(at + skip), text, 200) != 0) {
++							break;
++						}
++						while (n < 200 && ((text[n] >= 0x20 && text[n] < 0x7f) || text[n] == '\n')) {
++							if (text[n] == '\n') {
++								text[n] = ' ';
++							}
++							n++;
++						}
++						text[n] = 0;
++						if (n >= 12) {
++							printf("sheng-exc: x%u%s -> \"%s\"\n", sheng_text_regs[t], skip ? "+17" : "", text);
++							break;
++						}
++					}
++				}
++			}
++#endif /* XNU_HOSTED */
+ 			/* What the fault address maps to: physical page, managed DRAM or not, cache attributes. */
+ 			extern ppnum_t pmap_find_phys(pmap_t, addr64_t);
+ 			extern unsigned int pmap_cache_attributes(ppnum_t);
