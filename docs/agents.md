@@ -1407,3 +1407,8 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   `/private/var/oneios/addons/Extensions`. `0031-gpu-addon-mount.patch` turns it on by default and takes the seed's
   folder (or a boot's `kernel.kc.gpuaddon`), with `oneios-gpu-addon:`, `oneios-gpu-plugin:` and `oneios-gpu-open:` log lines
   (`docs/gpu.md` 5.1). Needs only a new `kernel.kc`. Compiled and linked; not run, phone run next.
+- 2026-11-11, amfi -> lead: **App cryptex daemons crash-looped on AMFI launch constraints.** `c[1]p[1]m[1]e[1]` is constraint category 1's self
+  constraint not matched (the fields are decoded in `kernel/prelink/README.md`). It requires the program on the root volume or an authorized authapfs
+  volume; the App cryptex is neither because this guest has no personalized manifest. `0032-app-cryptex-authenticated.patch` makes that one mount, already
+  checked read-only on the host-verified device, answer `FSIOC_AUTH_FS`. Launch type, validation category, parent and signatures stay as they were. Needs a
+  new kernel and `kernel.kc`, no boot argument. Compiled; not run on the phone.

@@ -102,6 +102,23 @@ not start.
   stack check assumes 16 KiB-aligned stacks.
 - Launch constraints are the kernel's: `zzyc-owner-skip-launch-constraints.patch` (boot argument `sheng-no-lc=1`)
   and `/chosen/amfi-only-platform-code`. Nothing in the collection changes for them.
+- AMFI's log line `Launch Constraint Violation (enforcing), error info: c[C]p[P]m[M]e[E]` (LaunchConstraintPolicy.cpp,
+  read from the 24A446 kernelcache): C is whose trust cache category was checked (1 the launched process, 2 its parent,
+  3 the responsible process), P which constraint of that category failed (1 self, 2 parent, 3 responsible), M the kind
+  of failure (1 `Constraint not matched`), and E the category for such a failure (255 where none applies). So
+  `c[1]p[1]m[1]e[1]` is "the launched process's category 1, its self constraint did not match". The boot argument
+  `amfi_enforce_launch_constraints` can only turn enforcement on in this build (a zero value is ignored), so there is no
+  boot argument that relaxes it, and this build leaves AMFI's switches alone.
+- App cryptex (`0032-app-cryptex-authenticated.patch`, kernel side, no collection change): the trust cache's App
+  entries are category 1 (14 programs) and 2 (20). The self constraint of both is `on-system-volume` (`MNT_ROOTFS`) or
+  `on-authorized-authapfs-volume`, which is `VNOP_IOCTL(vp, FSIOC_AUTH_FS, {NULL, 0})`, and category 1 also needs
+  launch type 1 and validation category 1. App daemons fail it here: the App volume is not the root, and APFS would need
+  a root hash authorized by a personalized Image4 manifest, which this guest does not have. The patch makes the ioctl
+  answer success for that one mount (the volume `oneios_cryptex_views` has just checked to be read-only on the block
+  device xnuhost verifies chunk by chunk; `Cryptexes/App` is an APFS mount, not bindfs, so the program's vnode has
+  that mount). Everything else stays: AMFI still evaluates launch type, validation category, the parent constraint
+  and the trust cache entry, signature checks are unchanged, and no other volume answers differently. It is a
+  deliberate relaxation for a personal guest, on the same footing as the software key store: not a security boundary.
 
 ## State (2026-11-11)
 

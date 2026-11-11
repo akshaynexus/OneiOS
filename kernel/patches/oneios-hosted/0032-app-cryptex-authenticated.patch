@@ -1,0 +1,88 @@
+--- a/bsd/kern/oneios_hosted_root.c
++++ b/bsd/kern/oneios_hosted_root.c
+@@ -1020,6 +1020,42 @@
+ 
+ /* ---- the launch policy ---- */
+ 
++/*
++ * OneiOS hosted (0032): the App cryptex counts as an authenticated volume for AMFI's launch constraints.
++ *
++ * The trust cache gives every program of the App cryptex constraint category 1 or 2, and AMFI's self constraint for
++ * both needs on-system-volume (MNT_ROOTFS) or on-authorized-authapfs-volume: FSIOC_AUTH_FS on the program's vnode,
++ * which APFS answers from a root hash authorized by a personalized Image4 manifest. This guest has no such manifest
++ * (no Secure Enclave, no signed ticket), so its daemons failed with "c[1]p[1]m[1]e[1]" and crash-looped. What the
++ * manifest proves is true here by another path: the volume was just checked to be read-only on the block device
++ * whose every chunk xnuhost verifies against the image set's hashes (oneios_cryptex_views below). So that one volume
++ * answers yes. The other facts of the constraints (launch type, validation category, the parent, the trust cache
++ * entry) stay AMFI's, signature checks are untouched, and no other volume is affected.
++ */
++static fsid_t oneios_app_cryptex_fsid;
++static volatile int oneios_app_cryptex_known;    /* set once, before launchd's first exec, then read only */
++
++bool oneios_app_cryptex_authenticated(vnode_t vp);
++bool
++oneios_app_cryptex_authenticated(vnode_t vp)
++{
++	static volatile int logged;
++
++	mount_t mp = vnode_mount(vp);
++	if (!oneios_app_cryptex_known || mp == NULL || !(vfs_flags(mp) & MNT_RDONLY)) {
++		return false;
++	}
++	fsid_t *fsid = &vfs_statfs(mp)->f_fsid;
++	if (fsid->val[0] != oneios_app_cryptex_fsid.val[0] || fsid->val[1] != oneios_app_cryptex_fsid.val[1]) {
++		return false;
++	}
++	if (!logged) {
++		logged = 1;
++		printf("OneiOS: AMFI launch constraints: App cryptex volume answered as authenticated (FSIOC_AUTH_FS)\n");
++	}
++	return true;
++}
++
+ /* The App cryptex (app.img) at /private/preboot/Cryptexes/App, and the SystemOS volume, already the upper layer
+  * of the root union, by its cryptex path: /System and /usr bound over /private/preboot/Cryptexes/OS (not as unions:
+  * a lookup there stays on SystemOS). The mount points are folders of the Data volume shown over the root's empty
+@@ -1077,6 +1113,10 @@
+ 	if (!(vfs_flags(mp) & MNT_RDONLY) || actual != device || !native_verified_block_root_authorized(actual)) {
+ 		error = EAUTH;
+ 	}
++	if (!error) {
++		oneios_app_cryptex_fsid = vfs_statfs(mp)->f_fsid;
++		oneios_app_cryptex_known = 1;
++	}
+ 	vnode_put(vp);
+ 	if (!error) {
+ 		oneios_cryptex_stage = 5;
+--- a/bsd/vfs/kpi_vfs.c
++++ b/bsd/vfs/kpi_vfs.c
+@@ -137,6 +137,10 @@
+ #endif
+ 
+ #include <sys/sdt.h>
++#if XNU_HOSTED
++#include <sys/fsctl.h>
++extern bool oneios_app_cryptex_authenticated(vnode_t vp);
++#endif /* XNU_HOSTED */
+ 
+ #define ESUCCESS 0
+ #undef mount_t
+@@ -4244,6 +4248,18 @@
+ 		return 0;
+ 	}
+ 
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted (0032): the App cryptex, verified by the host, is an authenticated volume to AMFI's launch
++	 * constraints (bsd/kern/oneios_hosted_root.c says why). Only the plain question, with no vnode to authenticate
++	 * against; this ioctl is refused from user space before it gets here.
++	 */
++	if (command == FSIOC_AUTH_FS && data != NULL && ((fsioc_auth_fs_t *)data)->authvp == NULLVP &&
++	    oneios_app_cryptex_authenticated(vp)) {
++		return 0;
++	}
++#endif /* XNU_HOSTED */
++
+ 	a.a_desc = &vnop_ioctl_desc;
+ 	a.a_vp = vp;
+ 	a.a_command = command;

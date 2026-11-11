@@ -78,3 +78,7 @@
 # turns it off) and takes the Data seed's folder (/private/var/oneios/addons/Extensions) unless a GPU addon of this boot
 # (kernel.kc.gpuaddon) was written to /private/var/ngpu; its result and every open of an AGX service are logged.
 0031-gpu-addon-mount.patch
+# amfi: the App cryptex volume (read-only, on the host-verified block device) answers FSIOC_AUTH_FS, the
+# on-authorized-authapfs-volume fact of AMFI's launch constraints: its daemons have constraint category 1 or 2 in the
+# trust cache and crash-looped with "c[1]p[1]m[1]e[1]". No other volume changes, no other launch-constraint fact changes.
+0032-app-cryptex-authenticated.patch

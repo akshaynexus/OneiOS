@@ -144,6 +144,19 @@ Changed (all `#if XNU_HOSTED`):
 - `pe_serial.c`: the host console; `debug.c`: `panic` -> xnuhost's log and `halt(XH_HALT_PANIC)`.
 - `kalloc.c`: a kernel with no fixed or variable type views (stock clang, no kext) no longer asserts.
 
+## 0032-app-cryptex-authenticated.patch (amfi, 2026-11-11)
+
+App cryptex daemons (`webinspectord`, `webbookmarksd`) crash-looped: AMFI's self constraint for their
+trust cache category (1 or 2) needs the program on the root volume or on an authorized authapfs volume, and the App
+volume is neither here (no personalized manifest, so APFS cannot authorize its root hash). The volume is read-only on
+the block device xnuhost verifies chunk by chunk, which `oneios_cryptex_views` has just checked, so `VNOP_IOCTL`
+answers `FSIOC_AUTH_FS` with success for that mount (`oneios_app_cryptex_authenticated` in
+`bsd/kern/oneios_hosted_root.c`; compared by fsid, read-only, only when no vnode is passed to authenticate against).
+User space cannot ask this ioctl. Other volumes go to APFS unchanged; AMFI still evaluates every other fact.
+At the first answer the kernel logs
+`OneiOS: AMFI launch constraints: App cryptex volume answered as authenticated (FSIOC_AUTH_FS)`. Full notes:
+`kernel/prelink/README.md`, "AMFI and launch constraints". Compiled; not yet run on the phone.
+
 ## Written and never run
 
 `hosted_user_fill`, `hosted_pmap_task`, the user and nested-pmap flushes, `hosted_copy_user_pages`: compiled,
