@@ -26,6 +26,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 | Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp` (unchanged) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | host built and tested with a fake back end; AAudio as root without system_server is [U] |
 | Camera | `drivers/camera`: the `oneios,camera` transport, `/dev/oneios-camera`; `userland/camera`: the capture plug-in (its device object not written) | `runtime/bridges/camera`: helper `oneios-camera` (provider HAL in a session, Camera2 NDK with One UI), ring, device, `camctl` | host and kernel sides built and host-tested; iOS shows no camera yet; one phone run (2026-11-11): cameraserver lists 4 cameras and opens one for a root client, no frame arrived (no binder threads in the process: fixed, the fix not yet run on the phone); the HAL back end never run (section 7) |
 | Backlight and light sensor | `drivers/brightness`: the backlight service (port of iOSPlus10's `AppleARMBacklight`), the light readings; the HID light sensor device, built into the hosted kernel's HID archive | `runtime/bridges/brightness`: the backlight sysfs node, `als_rear` by evdev, `brightctl` | both built; host tested; in a PC boot the HID device starts and Apple's `AppleUSBALSService` attaches to it; never run on the phone or in a session (section 7a) |
+| Battery | `drivers/battery`: an `IOPMPowerSource` powerd reads | `runtime/bridges/battery`: Android's `power_supply` nodes, polled, changes sent over the bridge channel; `batteryctl` | both built; host tested with a fake sysfs; never run on the phone or in a session (section 7c) |
 | Touch screen and buttons | `kernel/patches/oneios-hosted/hid`: UniXNU's NativeHidInput (digitizer, buttons) under the collection's `IOHIDDevice`, UniXNU-droidvm's virtio-input transport with the side keys | xnuhost's `input.c` (evdev, no grab) and `virtio_input.c`; `input_script.c` for a host with no panel | built; in a PC boot backboardd opens both services and scripted touches and keys are queued for it as HID events; never run on the phone (section 7b) |
 
 Common pieces:
@@ -34,9 +35,9 @@ Common pieces:
   `oneios,bridge`, carrying small messages (haptic requests, HCI packets). Guest end `drivers/bridge/OneiOSBridge.c`,
   host end `runtime/bridges/devices/bridge_dev.c`. Devices that already have a virtio driver in UniXNU-droidvm
   (network, sound) use standard virtio devices instead.
-- **Tests**: `runtime/bridges/tests/host.sh` (CI runs it): 184 checks (and 48 in `brightness/`) with ASan and UBSan, the virtio devices driven
+- **Tests**: `runtime/bridges/tests/host.sh` (CI runs it): 198 checks (and 48 in `brightness/`, 57 in `battery/`) with ASan and UBSan, the virtio devices driven
   through xnuhost's real transport (`runtime/xnuhost/src/virtio.c`) by a guest made of plain memory; then the Android
-  build. `drivers/build.py --check` compiles the ten kernel sources with the kernel build's own compile records
+  build. `drivers/build.py --check` compiles the kernel sources with the kernel build's own compile records
   (xnu-12377, arm64e, `-Wall -Wextra -Werror`); the archive's 292 undefined symbols all resolve in `xnu.macho`.
 - **On the phone**: `runtime/bridges/build/android/bridgectl` (static) tries each bridge without xnuhost:
   `bridgectl cpu|haptic|haptic-pattern|bt|net|audio`. It is the first thing to run when the phone is attached.
@@ -542,6 +543,46 @@ Volume Up + Volume Down chord that ends the session.
 - [U] whether iOS 27 reads Ring Enable = 1 as "ring"; nothing sets it on this phone.
 - A guest frame that does not fill the panel (letterboxed) needs an offset in the transport's scaling; not written.
 - No pen, no trackpad, no motion sensors (the transport's code for them is compiled and finds no such device).
+
+## 7c. Battery (battery bridge, 2026-11-11)
+
+Details and the phone test: `runtime/bridges/battery/README.md`, `drivers/battery/README.md`.
+
+- **Before this**: iOS showed a near-empty battery with no charging state. [I] nothing published an `IOPMPowerSource`
+  under the hosted kernel (none of the classes that do has its hardware here); no log or registry dump confirmed it.
+- **Route**: `runtime/bridges/battery` reads `/sys/class/power_supply/` in xnuhost (read only, one normal-priority
+  thread, every 3 s only while iOS listens); `OB_CH_BATTERY` carries one `struct ob_battery_state`, at once for a
+  change of level or charging state, the rest at most every 30 s; `drivers/battery/OneiOSBattery.cpp` publishes it.
+- [F 24A446 `powerd`, disassembled] it matches `IOServiceMatching("IOPMPowerSource")`, and its reader needs
+  `BatteryInstalled` = true, `CurrentCapacity` and `MaxCapacity`.
+
+| Android node | iOS key | Mapping |
+|---|---|---|
+| `battery/capacity` | `CurrentCapacity` (`MaxCapacity` = 100) | percent, clamped to 0..100 |
+| `battery/status` | `IsCharging`, `FullyCharged` | Charging -> IsCharging; Full, or Not charging at 100 % on power -> FullyCharged |
+| `usb,ac,wireless,pogo /online` (any > 0), or status Charging/Full | `ExternalConnected`, `ExternalChargeCapable`, `AppleRawExternalConnected` | never `otg` (a device on the port draws power from the phone) |
+| `battery/present` | `BatteryInstalled` | missing: taken as present |
+| `battery/temp` (tenths C) | `Temperature` (hundredths C [I]) | x 10 |
+| `battery/voltage_now` | `Voltage` (mV) | numbers >= 100000 are µV, others mV |
+| `battery/current_now` | `Amperage`, `InstantAmperage` (mA, + into the battery) | unit learned from size (>= 20000 is µA, sticky), sign from `status` |
+| `battery/charge_full`, `charge_full_design` | `NominalChargeCapacity`, `AppleRawMaxCapacity`, `DesignCapacity` | numbers >= 100000 are µAh, others mAh; 5000 mAh if neither exists |
+| computed: `charge_full` x percent | `AppleRawCurrentCapacity` | percent is the source of truth for the level |
+| `battery/cycle_count` or Samsung's `battery_cycle` | `CycleCount` | |
+| computed: remaining mAh / current | `TimeRemaining` (minutes) | 0xFFFF while unknown |
+
+### Missing, unknown
+
+- [F owner's phone, 2026-11-11, on USB] supplies: `ac battery max77775-charger max77775-fuelgauge max77775-otg mfc-charger
+  otg pca9481-charger pogo sec-direct-charger usb wireless`. `usb/online`=1, `ac`, `wireless`, `pogo` 0; `battery/online`=19 is
+  a cable type and is not read. `capacity`=100, `status`=Full, `temp`=389, `voltage_now`=4294000 (µV), `current_now`=74,
+  `charge_full` and `charge_full_design`=5000000 (µAh), `cycle_count` empty, `battery_cycle`=1103.
+- [U] `current_now`'s unit: 74 fits both 74 mA and 74 µA at Full. A reading of 20000 or more under load settles it (the
+  learned unit); until then the number is taken as mA. Its sign in charging and discharging is not read either; the
+  status gives it. `batteryctl` prints them; `ONEIOS_BATTERY_SUPPLIES`, `ONEIOS_BATTERY_MAH` and
+  `ONEIOS_BATTERY_CURRENT_UNIT` override.
+- [U] that SpringBoard's status bar and BatteryCenter follow `powerd` here, which is the point of the first session.
+- [U] that `/sys/class/power_supply` is visible in xnuhost's session namespace (it is read from there).
+- Battery health: `powerd`'s `AppleSmartBatteryPack` paths (health, per-cell data) find nothing and stay off.
 
 ## 8. Sources
 

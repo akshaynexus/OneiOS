@@ -95,7 +95,7 @@ and why, and the original functions still on the panic stub. Details: [kernel/pr
 ```sh
 runtime/build.sh --test           # host unit tests of the loader and xnuhost, then the Android binary on qemu-aarch64
 runtime/build.sh STAGE            # -> STAGE/bin/xnuhost (static), the bridges' helpers, the display helper,
-                                  #    and the phone checks (gpuctl, bridgectl, brightctl, displayctl, camctl)
+                                  #    and the phone checks (gpuctl, bridgectl, brightctl, batteryctl, displayctl, camctl)
 runtime/package.sh 0.1.0-dev      # -> out/release/oneios-runtime-0.1.0-dev-arm64.tar.zst + .sha256 + runtime.json
 ```
 
@@ -191,7 +191,7 @@ One UI's. How the screen runs them and what it tests: the fork's `docs/oneios.md
 
 Or by hand, from `STAGE/bin` pushed to `/data/local/tmp`, as root: `gpuctl` (or one step of it:
 `gpuctl nodes|routes|probe|submit|large`, [gpu.md](gpu.md) section 4), `displayctl test`,
-`bridgectl cpu|haptic|haptic-pattern|bt|audio`, `brightctl info|levels|als`, `camctl --backend ndk list|capture`.
+`bridgectl cpu|haptic|haptic-pattern|bt|audio`, `brightctl info|levels|als`, `batteryctl [watch S]`, `camctl --backend ndk list|capture`.
 Each tool's README has its exact commands and what a pass looks like. **None of this has run on the phone yet.**
 
 **Getting the image set onto the phone:** it is about 11 GB and never published. Serve it from the PC privately

@@ -24,7 +24,7 @@ struct ob_header {
   uint32_t length;                       // payload bytes after the header
 };
 
-enum { OB_CH_CONTROL = 0, OB_CH_HAPTIC = 1, OB_CH_HCI = 2, OB_CH_CAMERA = 3, OB_CH_BRIGHTNESS = 4, OB_CH_COUNT = 5 };
+enum { OB_CH_CONTROL = 0, OB_CH_HAPTIC = 1, OB_CH_HCI = 2, OB_CH_CAMERA = 3, OB_CH_BRIGHTNESS = 4, OB_CH_BATTERY = 5, OB_CH_COUNT = 6 };
 
 // ---- control ----------------------------------------------------------------------------------
 // guest -> host OB_CTL_HELLO { u32 version }; host -> guest OB_CTL_HELLO { u32 version, u32 channels }
@@ -77,6 +77,24 @@ struct ob_bright_state {
 struct ob_bright_als {
   uint32_t millilux;
   uint32_t clear, ir, uv;                // the sensor's channel counts
+};
+
+// ---- battery (drivers/battery, runtime/bridges/battery) ---------------------------------------
+enum {
+  OB_BATTERY_QUERY = 1,                  // guest -> host: no payload; the host answers OB_BATTERY_STATE, then reports changes
+  OB_BATTERY_STATE = 2,                  // host -> guest: struct ob_battery_state
+};
+enum { OB_BATTERY_PRESENT = 1u, OB_BATTERY_PLUGGED = 2u, OB_BATTERY_CHARGING = 4u, OB_BATTERY_FULL = 8u };   // ob_battery_state.flags
+#define OB_BATTERY_UNKNOWN INT32_MIN     // temp_deci_c, current_ma
+struct ob_battery_state {
+  uint32_t flags;                        // OB_BATTERY_*
+  uint32_t percent;                      // 0..100
+  int32_t  temp_deci_c;                  // tenths of a degree Celsius, or OB_BATTERY_UNKNOWN
+  uint32_t voltage_mv;                   // 0 = unknown
+  int32_t  current_ma;                   // into the battery > 0, out of it < 0, or OB_BATTERY_UNKNOWN
+  uint32_t full_mah, design_mah;         // never 0
+  uint32_t cycles;                       // 0 = unknown
+  int32_t  minutes;                      // to empty, or to full while charging; -1 = unknown
 };
 
 #endif

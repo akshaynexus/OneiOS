@@ -10,15 +10,17 @@ XNUHOST := ../xnuhost
 WARN := -Wall -Wextra -Werror
 INC := -Iinclude -I../../drivers/bridge -I$(XNUHOST)/src -I$(XNUHOST)/include
 CFLAGS ?= -O2 -g
-CORE := cpu/topology haptics/haptic net/net bt/hci bt/hidl_parcel bt/hci_hidl audio/backend brightness/brightness
+CORE := cpu/topology haptics/haptic net/net bt/hci bt/hidl_parcel bt/hci_hidl audio/backend brightness/brightness battery/battery
 DEVICES := devices/bridge_dev devices/virtio_net devices/virtio_snd
-HDR := $(wildcard include/bridges/*.h bt/*.h audio/*.h brightness/*.h ../../drivers/bridge/*.h $(XNUHOST)/src/xnuhost.h)
+HDR := $(wildcard include/bridges/*.h bt/*.h audio/*.h brightness/*.h battery/*.h ../../drivers/bridge/*.h $(XNUHOST)/src/xnuhost.h)
 A := build/android
 H := build/host
 
-all: $(A)/libonebridges.a $(A)/oneios-audio $(A)/bridgectl brightctl
+all: $(A)/libonebridges.a $(A)/oneios-audio $(A)/bridgectl brightctl batteryctl
 brightctl:
 	$(MAKE) -C brightness NDK="$(NDK)"
+batteryctl:
+	$(MAKE) -C battery NDK="$(NDK)"
 
 $(A)/%.o: %.c $(HDR)
 	@mkdir -p $(dir $@)
@@ -40,7 +42,8 @@ $(H)/test_bridges: tests/test_bridges.c $(CORE:%=%.c) $(DEVICES:%=%.c) $(XNUHOST
 test: $(H)/test_bridges
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_bridges   # the devices live as long as xnuhost: the transport has no destroy
 	$(MAKE) -C brightness test
+	$(MAKE) -C battery test
 
 clean:
 	rm -rf build
-.PHONY: all test clean brightctl
+.PHONY: all test clean brightctl batteryctl

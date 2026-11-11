@@ -323,6 +323,7 @@ void oneios_drivers_start(void) {
     oneios_vibrator_start();
     oneios_bt_start();
     oneios_backlight_start();
+    oneios_battery_start();
     oneios_camera_start();
     oneios_hid_input_start();   // after the backlight: the light sensor's device listens to its readings
 }

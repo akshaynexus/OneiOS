@@ -533,6 +533,71 @@ static void test_bridge_device(const char *tmp)
   br_haptic_close(haptic);
 }
 
+// The battery channel: the hello's bit, the first state on the query, a change pushed by the worker, no more after a reset.
+static void write_node(const char *dir, const char *name, const char *text)
+{
+  char path[520];
+  snprintf(path, sizeof path, "%s/%s", dir, name);
+  FILE *f = fopen(path, "w");
+  if (f) { fputs(text, f); fclose(f); }
+}
+
+static void test_bridge_battery(const char *tmp)
+{
+  char root[400], dir[440], usb[440];
+  snprintf(root, sizeof root, "%s/power_supply", tmp);
+  snprintf(dir, sizeof dir, "%s/battery", root);
+  snprintf(usb, sizeof usb, "%s/usb", root);
+  mkdir(root, 0755); mkdir(dir, 0755); mkdir(usb, 0755);
+  write_node(dir, "capacity", "42\n");
+  write_node(dir, "status", "Discharging\n");
+  write_node(dir, "present", "1\n");
+  write_node(dir, "temp", "311\n");
+  write_node(dir, "voltage_now", "3900000\n");
+  write_node(dir, "current_now", "-500000\n");
+  write_node(dir, "charge_full", "5000000\n");
+  write_node(usb, "online", "0\n");
+  br_battery_options options = { .dir = root, .poll_ms = 10 };
+  br_battery *battery = br_battery_open(&options);
+  CHECK(battery != NULL);
+  br_bridge_config config = { .battery = battery };
+  xh_virtio *dev = br_bridge_create(0, 42, &config);
+  CHECK(dev != NULL);
+  guest g;
+  guest_up(&g, dev, 2, 0);
+  static uint8_t rx[4][OB_MAX_MESSAGE];
+  for (unsigned i = 0; i < 4; i++) post1(&g, OB_QUEUE_RX, rx[i], OB_MAX_MESSAGE, true);
+  struct ob_ctl_hello hello = { OB_PROTO_VERSION, 0 };
+  send_message(&g, OB_CH_CONTROL, OB_CTL_HELLO, &hello, sizeof hello);
+  CHECK(reap(&g, OB_QUEUE_RX) == 16);
+  memcpy(&hello, rx[0] + 8, 8);
+  CHECK(hello.channels & (1u << OB_CH_BATTERY));
+
+  send_message(&g, OB_CH_BATTERY, OB_BATTERY_QUERY, NULL, 0);
+  CHECK(reap(&g, OB_QUEUE_RX) == 8 + (int)sizeof(struct ob_battery_state));
+  struct ob_header header;
+  struct ob_battery_state state;
+  memcpy(&header, rx[1], 8); memcpy(&state, rx[1] + 8, sizeof state);
+  CHECK(header.channel == OB_CH_BATTERY && header.type == OB_BATTERY_STATE && header.length == sizeof state);
+  CHECK(state.flags == OB_BATTERY_PRESENT && state.percent == 42 && state.temp_deci_c == 311 && state.voltage_mv == 3900 && state.current_ma == -500);
+  CHECK(state.full_mah == 5000 && state.design_mah == 5000 && state.minutes == 252);
+
+  write_node(dir, "status", "Charging\n");
+  write_node(usb, "online", "1\n");
+  int got = -1;
+  for (int i = 0; i < 400 && got < 0; i++) { got = reap(&g, OB_QUEUE_RX); if (got < 0) usleep(5000); }
+  CHECK(got == 8 + (int)sizeof(struct ob_battery_state));
+  memcpy(&state, rx[2] + 8, sizeof state);
+  CHECK((state.flags & (OB_BATTERY_PLUGGED | OB_BATTERY_CHARGING)) == (OB_BATTERY_PLUGGED | OB_BATTERY_CHARGING) && state.current_ma == 500);
+
+  // A reset stops the updates: the guest is gone, nothing queues for it.
+  w32(&g, 0x70, 0);
+  write_node(dir, "capacity", "43\n");
+  usleep(60000);
+  CHECK(reap(&g, OB_QUEUE_RX) == -1);
+  br_battery_close(battery);
+}
+
 // The brightness channel: the hello's bit, the state answer, a set that reaches the panel's node.
 static void test_bridge_brightness(const char *tmp)
 {
@@ -720,6 +785,7 @@ int main(void)
   test_bt(tmp);
   test_bridge_device(tmp);
   test_bridge_brightness(tmp);
+  test_bridge_battery(tmp);
   test_net_device();
   test_snd_device();
   char cmd[300];

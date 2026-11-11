@@ -43,6 +43,9 @@ void oneios_bt_start(void);
 // drivers/brightness
 void oneios_backlight_start(void);
 
+// drivers/battery
+void oneios_battery_start(void);
+
 // drivers/camera (its own virtio device, "oneios,camera"; camera/oneios_camera.h)
 void oneios_camera_start(void);
 // The host's last ambient light reading. False until one has come.

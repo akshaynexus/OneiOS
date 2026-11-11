@@ -198,6 +198,7 @@ static br_cpu_plan cpu_plan;
 static br_haptic *haptic;
 static br_camera *camera;          // the camera helper process (runtime/bridges/camera, bin/oneios-camera)
 static br_bright *brightness;     // the panel's backlight and the light sensor (runtime/bridges/brightness)
+static br_battery *battery;       // the phone's battery for iOS (runtime/bridges/battery)
 static bool net_up;
 
 static void bridge_log(int level, const char *line) { xh_log(level == 0 ? XH_LOG_ERROR : level == 1 ? XH_LOG_INFO : XH_LOG_DEBUG, "%s", line); }
@@ -356,7 +357,8 @@ static int boot(void)
     bool hidl = !strcmp(config.bluetooth, "hidl");
     haptic = br_haptic_open(NULL);
     brightness = br_bright_open(NULL);
-    br_bridge_config bridge = { .haptic = haptic, .hci_factory = hidl ? br_hci_open_hidl : NULL, .brightness = brightness };
+    battery = br_battery_open(NULL);
+    br_bridge_config bridge = { .haptic = haptic, .hci_factory = hidl ? br_hci_open_hidl : NULL, .brightness = brightness, .battery = battery };
     if (br_bridge_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &bridge)) kinds[ndev++] = XL_DEV_BRIDGE;
     if (hidl && br_bt_address("/mnt/vendor/efs/bluetooth/bt_addr", machine.bt_mac) == 0) {
       machine.bt_transport = 3;                     // the phone's controller, H4 over the bridge
@@ -652,6 +654,7 @@ int main(int argc, char **argv)
   if (haptic) br_haptic_close(haptic);      // stops the motor
   if (camera) br_camera_close(camera);      // the helper closes the camera and exits
   if (brightness) br_bright_close(brightness);      // One UI's backlight level again, the light sensor as it was
+  if (battery) br_battery_close(battery);           // read only: the worker stops
   if (net_up) net_script("down");
   xh_input_script_stop();
   xh_input_stop();

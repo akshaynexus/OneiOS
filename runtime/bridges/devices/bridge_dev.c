@@ -102,6 +102,14 @@ static void bright_als(void *ctx, const br_als_sample *sample)
   to_guest(ctx, OB_CH_BRIGHTNESS, OB_BRIGHT_ALS, &als, sizeof als);
 }
 
+static void battery_send(void *ctx, const br_battery_sample *b)
+{
+  struct ob_battery_state state = { (b->present ? OB_BATTERY_PRESENT : 0) | (b->plugged ? OB_BATTERY_PLUGGED : 0) |
+                                        (b->charging ? OB_BATTERY_CHARGING : 0) | (b->full ? OB_BATTERY_FULL : 0),
+                                    b->percent, b->temp_deci_c, b->voltage_mv, b->current_ma, b->full_mah, b->design_mah, b->cycles, b->minutes };
+  to_guest(ctx, OB_CH_BATTERY, OB_BATTERY_STATE, &state, sizeof state);
+}
+
 static void from_guest(bridge_state *s, const struct ob_header *h, const uint8_t *payload)
 {
   switch (h->channel) {
@@ -109,7 +117,8 @@ static void from_guest(bridge_state *s, const struct ob_header *h, const uint8_t
     if (h->type == OB_CTL_HELLO) {
       struct ob_ctl_hello hello = { OB_PROTO_VERSION, 1u << OB_CH_CONTROL | (s->config.haptic ? 1u << OB_CH_HAPTIC : 0) |
                                                        (s->config.hci_factory ? 1u << OB_CH_HCI : 0) |
-                                                       (s->config.brightness ? 1u << OB_CH_BRIGHTNESS : 0) };
+                                                       (s->config.brightness ? 1u << OB_CH_BRIGHTNESS : 0) |
+                                                       (s->config.battery ? 1u << OB_CH_BATTERY : 0) };
       to_guest(s, OB_CH_CONTROL, OB_CTL_HELLO, &hello, sizeof hello);
     }
     break;
@@ -138,6 +147,14 @@ static void from_guest(bridge_state *s, const struct ob_header *h, const uint8_t
     } else if (h->type == OB_BRIGHT_QUERY) {
       bright_state(s);
       br_bright_listen(s->config.brightness, bright_als, s);      // light readings from now on
+    }
+    break;
+  case OB_CH_BATTERY:
+    if (s->config.battery && h->type == OB_BATTERY_QUERY) {
+      br_battery_sample sample;
+      (void)br_battery_query(s->config.battery, &sample);         // on a failed read: the last good sample
+      battery_send(s, &sample);
+      br_battery_listen(s->config.battery, battery_send, s);      // changes from now on
     }
     break;
   }
@@ -172,6 +189,7 @@ static void bridge_reset(xh_virtio *dev)
   while (s->count) { free(s->backlog[s->head].payload); s->head = (s->head + 1) % BACKLOG; s->count--; }
   br_haptic_stop(s->config.haptic);                  // a guest that resets (or panics into a reset) leaves no motor running
   if (s->hci) br_hci_close(s->hci);
+  if (s->config.battery) br_battery_listen(s->config.battery, NULL, NULL);  // no reads and no backlog for a guest that is gone
 }
 
 static uint32_t bridge_config_read(xh_virtio *dev, uint32_t offset, unsigned size)

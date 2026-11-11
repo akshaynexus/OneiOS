@@ -623,6 +623,8 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
     `--autostash` here: commit from a worktree of your own (`git worktree add --detach DIR origin/main`, commit,
     `git push origin HEAD:main`) when others have uncommitted files.
 
+- 2026-11-11, battery -> lead: new battery bridge: `runtime/bridges/battery` (reads `/sys/class/power_supply`, `batteryctl`), `drivers/battery/OneiOSBattery.cpp` (an `IOPMPowerSource`, started from `oneios_drivers_start`), channel `OB_CH_BATTERY` (`OB_CH_COUNT` is now 6). Docs: `docs/hardware.md` 7c. Built and host-tested, not run on the phone; needs a kernel and runtime built together (old kernels never send the query and the worker stays idle).
+
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
 Format: id, owner if taken, files, root cause or need, expected result. Check with: `kernel/build-hosted.sh`, then
