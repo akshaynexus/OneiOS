@@ -81,6 +81,12 @@ $(H)/test_drm2kgsl: tests/test_drm2kgsl.c src/gpu3d.c src/gpu3d_kgsl.c src/gpu3d
 	$(CC) -std=gnu11 -O1 -g $(WARN) -Wno-unused-parameter -U_FORTIFY_SOURCE $(HOST_C11) -fsanitize=address,undefined -DXH_DRM2KGSL=1 -Isrc $(VIRGL_INC) \
 	  tests/test_drm2kgsl.c src/gpu3d.c src/gpu3d_kgsl.c $(H)/drm2kgsl/*.o -Wl,--wrap=ioctl -Wl,--wrap=open -lpthread -lm -o $@
 TEST_DRM2KGSL := $(H)/test_drm2kgsl
+# The same renderer through many create/attach/detach/unref cycles, failed blobs and a reset: every fd and KGSL object back, and
+# LeakSanitizer finding nothing (tests/test_gpu_leaks.c; CYCLES=N for more cycles).
+$(H)/test_gpu_leaks: tests/test_gpu_leaks.c $(H)/test_drm2kgsl
+	$(CC) -std=gnu11 -O1 -g $(WARN) -Wno-unused-parameter -U_FORTIFY_SOURCE $(HOST_C11) -fsanitize=address,undefined -DXH_DRM2KGSL=1 -Isrc $(VIRGL_INC) \
+	  tests/test_gpu_leaks.c src/gpu3d.c src/gpu3d_kgsl.c $(H)/drm2kgsl/*.o -Wl,--wrap=ioctl -Wl,--wrap=open -lpthread -lm -o $@
+TEST_GPU_LEAKS := $(H)/test_gpu_leaks
 endif
 
 # ---- the task stub: a flat, position-independent blob ----
@@ -158,10 +164,11 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	    [ $$code = 3 ] && [ "$$(grep -c 'TESTKERNEL: restart' $(A)/restart.log)" = 9 ] || { tail -5 $(A)/restart.log; echo "check-arm64: restart: exit $$code"; false; }; }; fi
 
 # The tests create devices and never free them: leak detection off, the other checks on.
-test: $(H)/test_xnuhost $(H)/test_display_mode $(H)/test_imageset $(TEST_DRM2KGSL) check-arm64
+test: $(H)/test_xnuhost $(H)/test_display_mode $(H)/test_imageset $(TEST_DRM2KGSL) $(TEST_GPU_LEAKS) check-arm64
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_xnuhost
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_display_mode
 	$(if $(TEST_DRM2KGSL),ASAN_OPTIONS=detect_leaks=0 $(TEST_DRM2KGSL))
+	$(if $(TEST_GPU_LEAKS),ASAN_OPTIONS=detect_leaks=1 $(TEST_GPU_LEAKS))
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_imageset
 
 clean:

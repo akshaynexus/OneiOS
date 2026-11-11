@@ -1,0 +1,82 @@
+--- a/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-11 15:01:16.310423821 +0530
++++ b/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-11 15:06:44.551411218 +0530
+@@ -2779,18 +2779,21 @@
+    }
+ 
+    struct kgsl_object *obj = kgsl_object_from_blob_id(kctx, blob_id);
++   /* ONEIOS: the lookup takes the object out of the blob table; every failure below frees it,
++    * or it (and a chunked BO's KGSL objects and dma-bufs) would be reachable from nowhere. */
+    if (!obj) {
+       drm_err("No object for blob_id %" PRIu64, blob_id);
+       return -ENOENT;
+    }
+ 
+    if (obj->exported) {
+-      drm_err("Already exported!");
++      drm_err("Already exported!");   /* ONEIOS: not freed here: an exported object is a resource's too (res_id table) */
+       return -EINVAL;
+    }
+ 
+    if (obj->blob_size != blob_size) {
+       drm_err("Invalid blob size 0x%" PRIx64 " != 0x%" PRIx64, obj->blob_size, blob_size);
++      kgsl_renderer_free_object(dctx, &obj->base);   /* ONEIOS: retrieved, so ours */
+       return -EINVAL;
+    }
+ 
+@@ -2816,11 +2819,13 @@
+          drm_err("guest-alloc blob_id=%" PRIu64 ": %u chunks hold 0x%" PRIx64 " of 0x%" PRIx64 " bytes",
+                  blob_id, n, total, obj->blob_size);
+          kgsl_chunks_drop(dctx->fd, chunks, n);
++         kgsl_renderer_free_object(dctx, &obj->base);   /* ONEIOS: retrieved, so ours */
+          return -EINVAL;
+       }
+       uint32_t kgsl_flags = kgsl_guest_memflags(obj->flags & (MSM_BO_CACHED_COHERENT | MSM_BO_CACHED), obj->blob_size);
+       if (kgsl_chunks_import(dctx->fd, chunks, n, kgsl_flags)) {
+          kgsl_chunks_drop(dctx->fd, chunks, n);
++         kgsl_renderer_free_object(dctx, &obj->base);   /* ONEIOS: retrieved, so ours */
+          return -ENOMEM;
+       }
+       obj->chunks = chunks;
+@@ -2832,6 +2837,7 @@
+       if (bret) {
+          drm_err("guest-alloc bind failed blob_id=%" PRIu64 " iova=0x%" PRIx64 " (%u chunks)",
+                  blob_id, obj->iova, n);
++         kgsl_renderer_free_object(dctx, &obj->base);   /* ONEIOS: retrieved, so ours */
+          return bret;
+       }
+       drm_dbg("guest-alloc completed blob_id=%" PRIu64 " chunks=%u iova=0x%" PRIx64,
+@@ -2840,6 +2846,7 @@
+       if (kctx->pending_guest_fd < 0) {
+          drm_err("guest-alloc blob_id=%" PRIu64 " has no dma-buf from the VMM; "
+                  "is udmabuf enabled and CREATE_GUEST_HANDLE set?", blob_id);
++         kgsl_renderer_free_object(dctx, &obj->base);   /* ONEIOS: retrieved, so ours */
+          return -ENOENT;
+       }
+       int gfd = kctx->pending_guest_fd;
+@@ -2850,6 +2857,7 @@
+       uint32_t mem_id = kgsl_import_dmabuf(dctx->fd, gfd, kgsl_flags);
+       if (!mem_id) {
+          close(gfd);
++         kgsl_renderer_free_object(dctx, &obj->base);   /* ONEIOS: retrieved, so ours */
+          return -ENOMEM;
+       }
+       obj->mem_id = mem_id;
+@@ -2859,6 +2867,7 @@
+       if (bret) {
+          drm_err("guest-alloc bind failed blob_id=%" PRIu64 " iova=0x%" PRIx64,
+                  blob_id, obj->iova);
++         kgsl_renderer_free_object(dctx, &obj->base);   /* ONEIOS: retrieved, so ours */
+          return bret;
+       }
+       drm_dbg("guest-alloc completed blob_id=%" PRIu64 " mem_id=%u iova=0x%" PRIx64,
+@@ -3052,6 +3061,10 @@
+       kgsl_chunks_drop(dctx->fd, kctx->pending_chunks, kctx->pending_nr_chunks);
+       kctx->pending_chunks = NULL;
+    }
++   if (kctx->pending_guest_fd >= 0) {   /* ONEIOS: a dma-buf parked for a get_blob that never came */
++      close(kctx->pending_guest_fd);
++      kctx->pending_guest_fd = -1;
++   }
+ 
+    drm_context_deinit(dctx); /* frees remaining objects via free_object */
+ 

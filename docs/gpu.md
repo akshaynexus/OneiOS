@@ -149,6 +149,15 @@ are descriptors of xnuhost and go with it at SIGKILL; drm2kgsl's fence threads a
   is bound only to its size, one longer is refused with nothing left imported, a second context imports both chunks
   and binds them at its own address on `GEM_SET_IOVA`, and at the end every chunk is unbound and freed (only the
   VBO is left). 26 checks. It models KGSL from its source; it is not KGSL.
+- `tests/test_gpu_leaks.c` (`build/host/test_gpu_leaks`, LeakSanitizer on): the same renderer and stand-in through 30 cycles
+  each of 72 MiB, 16 KiB and 1100-page context blobs (create, upload, attach to a second context, its own GPU address there,
+  detach, unref), display blobs in two contexts, contexts destroyed with their own, others' and display resources attached,
+  blobs whose `get_blob` fails, and a reset; open fds and live KGSL objects must come back each time. It found two leaks
+  (fixed by `drm2kgsl/patches/0003-free-objects-of-a-failed-get-blob.patch`): a `get_blob` that failed after taking its
+  object out of the blob table left the object, its KGSL objects and its udmabufs reachable from nowhere (+2 fds and 2 KGSL
+  objects for a chunked blob, +1 and 1 single; a guest reaches it with a GEM_NEW at a GPU address outside its range or a
+  size unlike the blob's), and a context destroyed with a dma-buf still parked for a `get_blob` kept that fd. 956 checks.
+  `CYCLES=N` for more. Not covered off the phone: KGSL itself, submits and fences, the guest's driver and Metal.
 - The loader's `drm-host-pool` property (`runtime/loader` tests).
 - `check-arm64`: the Android binary with the 3D code linked still boots the test kernel under `qemu-aarch64` (2D:
   no KGSL there).
