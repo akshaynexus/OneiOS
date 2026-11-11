@@ -1,0 +1,139 @@
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+--- a/osfmk/arm64/hosted/hosted_machine.c
++++ b/osfmk/arm64/hosted/hosted_machine.c
+@@ -583,3 +583,122 @@
+ 		printf("\n");
+ 	}
+ }
++
++#if XNU_HOSTED
++/*
++ * OneiOS hosted, a debugging aid for a user process that neither dies nor does what it should (a backboardd that
++ * opens the framebuffer and never draws): where its threads are. Boot arguments:
++ *   oneios-ubt=NAME[,NAME...]   the processes (as proc_best_name gives them)
++ *   oneios-ubt-at=SECONDS       when, after the kernel's late start (default 420)
++ *   oneios-ubt-every=SECONDS    then again every so often (default: once)
++ * For each thread of those processes: its scheduler state (1 wait, 4 runnable), the saved user pc and lr, and the
++ * return addresses up the frame pointers, read from the task's map. scripts/debug/dsc.py names them. Off without
++ * oneios-ubt. The saved state of a thread that is in user mode on another CPU right now is its last entry's.
++ */
++#define HOSTED_UBT_THREADS 160
++#define HOSTED_UBT_FRAMES  18
++struct hosted_ubt { thread_t thread; task_t task; uint64_t pc, lr, fp; };
++static char hosted_ubt_names[128];
++static uint32_t hosted_ubt_at = 420, hosted_ubt_every;
++static struct hosted_ubt hosted_ubt_found[HOSTED_UBT_THREADS];
++
++static bool
++hosted_ubt_wanted(const char *name)
++{
++	size_t length = strlen(name);
++	for (const char *at = hosted_ubt_names; *at;) {
++		const char *end = strchr(at, ',');
++		size_t n = end ? (size_t)(end - at) : strlen(at);
++		if (n == length && !strncmp(at, name, n)) {
++			return true;
++		}
++		at += n + (end ? 1 : 0);
++	}
++	return false;
++}
++
++static void
++hosted_ubt_dump(void)
++{
++	unsigned count = 0;
++	thread_t t;
++
++	lck_mtx_lock(&tasks_threads_lock);
++	queue_iterate(&threads, t, thread_t, threads) {
++		task_t task = t->t_tro != NULL ? get_threadtask(t) : TASK_NULL;
++		void *bsd = task != TASK_NULL && task != kernel_task ? get_bsdtask_info(task) : NULL;
++		if (bsd == NULL || count >= HOSTED_UBT_THREADS || !hosted_ubt_wanted(proc_best_name((struct proc *)bsd))) {
++			continue;
++		}
++		arm_saved_state_t *state = get_user_regs(t);
++		if (state == NULL) {
++			continue;
++		}
++		task_reference(task);
++		thread_reference(t);
++		hosted_ubt_found[count++] = (struct hosted_ubt){ .thread = t, .task = task,
++			                                         .pc = get_saved_state_pc(state), .lr = get_saved_state_lr(state), .fp = get_saved_state_fp(state) };
++	}
++	lck_mtx_unlock(&tasks_threads_lock);
++	printf("oneios-ubt: %u thread(s) of %s\n", count, hosted_ubt_names);
++	for (unsigned i = 0; i < count; i++) {
++		struct hosted_ubt *u = &hosted_ubt_found[i];
++		void *bsd = get_bsdtask_info(u->task);
++		char line[HOSTED_UBT_FRAMES * 16 + 1];
++		size_t used = 0;
++		vm_map_t map = get_task_map_reference(u->task);
++		uint64_t fp = u->fp;
++		line[0] = 0;
++		for (int depth = 0; map != VM_MAP_NULL && depth < HOSTED_UBT_FRAMES && fp != 0 && (fp & 7) == 0; depth++) {
++			uint64_t pair[2];
++			if (vm_map_read_user(map, (vm_map_address_t)fp, pair, sizeof(pair)) != KERN_SUCCESS) {
++				break;
++			}
++			used += (size_t)snprintf(line + used, sizeof(line) - used, " 0x%llx", pair[1] & 0x7fffffffffffULL);
++			if (pair[0] <= fp) {
++				break;
++			}
++			fp = pair[0];
++		}
++		if (map != VM_MAP_NULL) {
++			vm_map_deallocate(map);
++		}
++		printf("oneios-ubt: %s[%d] thread 0x%llx state 0x%x: 0x%llx 0x%llx%s\n", bsd ? proc_best_name((struct proc *)bsd) : "?",
++		    bsd ? proc_pid((struct proc *)bsd) : 0, (unsigned long long)thread_tid(u->thread), u->thread->state,
++		    u->pc & 0x7fffffffffffULL, u->lr & 0x7fffffffffffULL, line);
++		thread_deallocate(u->thread);
++		task_deallocate(u->task);
++	}
++}
++
++static void
++hosted_ubt_thread(__unused void *arg, __unused wait_result_t result)
++{
++	uint32_t wait = hosted_ubt_at;
++	for (;;) {
++		assert_wait_timeout((event_t)&hosted_ubt_at, THREAD_UNINT, wait * 1000, NSEC_PER_MSEC);
++		(void)thread_block(THREAD_CONTINUE_NULL);
++		hosted_ubt_dump();
++		if (hosted_ubt_every == 0) {
++			break;
++		}
++		wait = hosted_ubt_every;
++	}
++	thread_terminate(current_thread());
++}
++
++void hosted_user_backtrace_start(void);
++void
++hosted_user_backtrace_start(void)
++{
++	thread_t thread = THREAD_NULL;
++	if (!PE_parse_boot_argn("oneios-ubt", hosted_ubt_names, sizeof(hosted_ubt_names)) || hosted_ubt_names[0] == 0) {
++		return;
++	}
++	(void)PE_parse_boot_argn("oneios-ubt-at", &hosted_ubt_at, sizeof(hosted_ubt_at));
++	(void)PE_parse_boot_argn("oneios-ubt-every", &hosted_ubt_every, sizeof(hosted_ubt_every));
++	if (kernel_thread_start(hosted_ubt_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++#endif /* XNU_HOSTED */
+diff --git a/osfmk/arm64/oneios_host.c b/osfmk/arm64/oneios_host.c
+--- a/osfmk/arm64/oneios_host.c
++++ b/osfmk/arm64/oneios_host.c
+@@ -87,6 +87,9 @@
+ 	oneios_gpu3d_start();
+ 	/* before the first user process: launchd looks the AppleKeyStore service up in its early boot tasks */
+ 	oneios_keystore_start();
++	/* 0026: the user backtraces asked for with oneios-ubt=NAME,... (off without it) */
++	extern void hosted_user_backtrace_start(void);
++	hosted_user_backtrace_start();
+ #endif /* XNU_HOSTED */
+ }
+ 

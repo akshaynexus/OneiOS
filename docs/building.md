@@ -149,6 +149,11 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   not published on a host without 3D unless asked). About ten seconds in: `droidvm-gpu: Metal accelerator stage 5
   status 0` and two `oneios-adreno: selftest:` lines (IOKit's match, the plug-in's open and one call;
   [gpu.md](gpu.md) 5.1). No 3D call can run here: qemu has no KGSL.
+- A user process that neither dies nor does its job: boot arguments `oneios-ubt=NAME[,NAME...]`
+  (`oneios-ubt-at=SECONDS`, default 420; `oneios-ubt-every=SECONDS` to repeat) make the kernel print where every
+  thread of those processes is (`oneios-ubt:` lines: scheduler state, saved pc and lr, the return addresses up the
+  frame pointers; `0026`). Give a long line's addresses to `scripts/debug/dsc.py` for the slide, then name the rest
+  with `--slide`.
 - What the PC cannot show: seccomp (qemu-user has none; a marked trap instruction stands in), real timing, the
   phone's GPU, panel, HALs, SELinux and KernelSU.
 

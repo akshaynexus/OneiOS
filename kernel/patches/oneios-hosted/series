@@ -56,3 +56,6 @@
 # made is tried again before the panic; hosted_mapcheck=1 (a debugging record of every task's host mappings).
 # 0025-README.md. Goes with xnuhost's task.c of the same commit (one task creation at a time, waits by the clock).
 0025-text-fixup-once.patch
+# lead: a debugging aid. oneios-ubt=NAME,... prints, oneios-ubt-at seconds in, where every thread of those user
+# processes is (saved pc, lr, and the return addresses up its frame pointers). Off without the boot argument.
+0026-user-backtrace.patch
