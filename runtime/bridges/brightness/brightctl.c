@@ -35,6 +35,7 @@ static br_bright *open_bridge(bool no_als)
   if ((text = getenv("ONEIOS_BRIGHT_MIN"))) o.floor = (uint32_t)strtoul(text, NULL, 10);
   if ((text = getenv("ONEIOS_ALS_SCALE"))) o.als_millilux_per_count = (uint32_t)strtoul(text, NULL, 10);
   o.no_als = no_als;
+  o.touch_dir = getenv("ONEIOS_TSP_DIR") ? getenv("ONEIOS_TSP_DIR") : "/nonexistent";      // the phone test leaves the touch IC alone
   return br_bright_open(&o);
 }
 

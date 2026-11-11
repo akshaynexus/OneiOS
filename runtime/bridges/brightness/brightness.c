@@ -30,6 +30,7 @@
 #endif
 
 #define STEP_MS 16u
+#define TOUCH_MAX 4u
 #define ALS_STALE_MS 3000u                 // no report for this long: the sensor was turned off under us
 
 // ---- the curve ----------------------------------------------------------------------------------
@@ -119,6 +120,11 @@ struct br_bright {
   uint32_t level;                         // where the fade is now
   uint64_t started_ms;
   uint32_t written;                       // the node's value written last
+  // touch IC (Samsung's sec input class): its power state follows the display's
+  char touch[TOUCH_MAX][200];             // each IC's `enabled` file
+  bool touch_on;                          // the worker's, after open
+  bool touch_sleep;                       // level 0 puts the IC to sleep
+  unsigned touch_failures;
   // light sensor
   int als_fd;
   char als_enable[260];
@@ -161,12 +167,60 @@ static int write_text(const char *path, const char *text)
   return n < 0 ? -1 : 0;
 }
 
+void (*br_bright_trace)(const char *what, const char *value);
+
 static void panel_write(br_bright *b, uint32_t value)
 {
   char text[16];
   int n = snprintf(text, sizeof text, "%u\n", value);
   if (value == __atomic_load_n(&b->written, __ATOMIC_RELAXED)) return;
+  if (br_bright_trace) { char plain[16]; snprintf(plain, sizeof plain, "%u", value); br_bright_trace("panel", plain); }
   if (pwrite(b->fd, text, (size_t)n, 0) == n) __atomic_store_n(&b->written, value, __ATOMIC_RELAXED);
+}
+
+// The touch ICs: every <dir>/tsp*/enabled whose input/name is sec_touchscreen. Not the pen (sec_e-pen), not the
+// touchpad, whatever their folders are called.
+static unsigned touch_find(const char *dir, char nodes[TOUCH_MAX][200])
+{
+  DIR *d = opendir(dir);
+  if (!d) return 0;
+  struct dirent *e;
+  unsigned n = 0;
+  while (n < TOUCH_MAX && (e = readdir(d))) {
+    if (strncmp(e->d_name, "tsp", 3)) continue;
+    char path[200], name[40] = "";
+    snprintf(path, sizeof path, "%.120s/%.40s/input/name", dir, e->d_name);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) continue;
+    ssize_t got = read(fd, name, sizeof name - 1);
+    close(fd);
+    if (got <= 0) continue;
+    name[strcspn(name, "\r\n")] = 0;
+    if (strcmp(name, "sec_touchscreen")) continue;
+    snprintf(path, sizeof path, "%.120s/%.40s/enabled", dir, e->d_name);
+    if (access(path, W_OK)) continue;
+    snprintf(nodes[n++], 200, "%s", path);
+  }
+  closedir(d);
+  return n;
+}
+
+// What One UI's input HAL writes at a panel power change: "<display state>,<event>", state 2 on / 1 off, event 0
+// early then 1 late. On: only after the backlight is not 0. A write that fails is logged (the first three) and
+// nothing else changes.
+static void touch_power(br_bright *b, bool on)
+{
+  for (unsigned i = 0; i < TOUCH_MAX && b->touch[i][0]; i++) {
+    for (unsigned event = 0; event < 2; event++) {
+      char text[8];
+      snprintf(text, sizeof text, "%u,%u", on ? 2u : 1u, event);
+      if (br_bright_trace) br_bright_trace("touch", text);
+      snprintf(text, sizeof text, "%u,%u\n", on ? 2u : 1u, event);
+      if (write_text(b->touch[i], text) && b->touch_failures++ < 3)
+        br_log(0, "brightness: touch: %s <- %c,%u: %s", b->touch[i], on ? '2' : '1', event, strerror(errno));
+    }
+  }
+  b->touch_on = on;
 }
 
 // Samsung's panel first ("panel"), then Qualcomm's name, then whatever is there.
@@ -201,9 +255,13 @@ static void *panel_worker(void *arg)
     b->level = br_bright_fade_at(b->from, b->target, elapsed > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed, b->fade_ms);
     if (b->level == b->target) b->pending = false;
     uint32_t value = br_bright_map(b->level, b->linear, b->info.floor, b->info.ceiling);
-    bool more = b->pending;
+    bool more = b->pending, lit = b->target != 0, risen = b->level != 0;
     pthread_mutex_unlock(&b->lock);
+    // iOS's level crosses 0 (it sleeps or wakes the display): the touch IC goes with it. Off: the IC first, then
+    // the backlight. On: the backlight first (in a fade up, the first step above the lowest level).
+    if (!lit && b->touch_on && b->touch_sleep) touch_power(b, false);
     panel_write(b, value);                 // outside the lock: br_bright_set never waits for the panel
+    if (lit && risen && !b->touch_on) touch_power(b, true);
     if (more) usleep(STEP_MS * 1000u);
     pthread_mutex_lock(&b->lock);
   }
@@ -317,6 +375,8 @@ br_bright *br_bright_open(const br_bright_options *options)
     o.floor = env_u32("ONEIOS_BRIGHT_MIN", 0);
     o.max_nits = env_u32("ONEIOS_BRIGHT_NITS", 0);
     o.als_millilux_per_count = env_u32("ONEIOS_ALS_SCALE", 0);
+    o.start_percent = env_u32("ONEIOS_BRIGHT_START", 0);
+    o.no_touch_off = env_u32("ONEIOS_TSP_OFF", 1) == 0;
   }
   br_bright *b = calloc(1, sizeof *b);
   if (!b) return NULL;
@@ -333,14 +393,32 @@ br_bright *br_bright_open(const br_bright_options *options)
     b->info.floor = o.floor ? o.floor : 1;
     if (b->info.floor > b->info.ceiling) b->info.floor = b->info.ceiling;
     b->written = b->info.saved;
-    b->level = b->target = level_of(b->info.saved, b->info.floor, b->info.ceiling);
+    b->info.start = b->info.saved;
+    if (b->info.saved == 0) {
+      // One UI left the panel off (the switch blanks it). iOS takes the level it finds as its own, so 0 would be a
+      // session at the dimmest setting: start from the middle of the slider, and light the panel now.
+      uint32_t percent = o.start_percent && o.start_percent <= 100 ? o.start_percent : 50;
+      b->info.start = br_bright_map(BR_BRIGHT_FULL * percent / 100, false, b->info.floor, b->info.ceiling);
+      panel_write(b, b->info.start);
+    }
+    b->level = b->target = level_of(b->info.start, b->info.floor, b->info.ceiling);
     if (pthread_create(&b->panel_thread, NULL, panel_worker, b) == 0) b->info.panel = true;
     else { close(b->fd); b->fd = -1; }
   }
+  int panel_errno = errno;
+  // The touch IC, before the worker can run: One UI may have left it off, and nothing in a session wakes it.
+  const char *touch_dir = o.touch_dir ? o.touch_dir : "/sys/class/sec";
+  b->info.touch_nodes = touch_find(touch_dir, b->touch);
+  b->touch_sleep = !o.no_touch_off;
+  if (b->info.touch_nodes) {
+    touch_power(b, true);
+    br_log(1, "brightness: touch: %u IC%s under %s (%s) woken; %s", b->info.touch_nodes, b->info.touch_nodes > 1 ? "s" : "", touch_dir, b->touch[0],
+           b->touch_sleep ? "asleep while iOS's level is 0, woken when it is not" : "kept awake at level 0 (ONEIOS_TSP_OFF=0)");
+  } else br_log(1, "brightness: touch: no sec_touchscreen IC under %s: its power state is left alone", touch_dir);
   if (b->info.panel)
-    br_log(1, "brightness: panel on: %s, %u..%u of %u (One UI left %u), the slider squared", b->info.node, b->info.floor, b->info.ceiling,
-           b->info.max_brightness, b->info.saved);
-  else br_log(0, "brightness: panel off: no writable backlight device under %s: %s", dir, strerror(errno));
+    br_log(1, "brightness: panel on: %s, %u..%u of %u (One UI left %u%s), the slider squared", b->info.node, b->info.floor, b->info.ceiling,
+           b->info.max_brightness, b->info.saved, b->info.saved ? "" : ": iOS starts from the start level");
+  else br_log(0, "brightness: panel off: no writable backlight device under %s: %s", dir, strerror(panel_errno));
 
   if (!o.no_als) als_open(b, &o);
   if (!b->info.panel && !b->info.als) { br_bright_close(b); return NULL; }
@@ -387,8 +465,11 @@ void br_bright_close(br_bright *b)
   pthread_mutex_unlock(&b->lock);
   if (b->info.panel) {
     pthread_join(b->panel_thread, NULL);
-    panel_write(b, b->info.saved);         // One UI's own value; system_server sets it again when it starts
+    // One UI's own value; system_server sets it again when it starts. If that was 0, the start value: the return's
+    // screen needs a lit panel.
+    panel_write(b, b->info.start);
   }
+  if (b->info.touch_nodes) touch_power(b, true);     // after the backlight; the return finds the IC awake
   if (b->als_running) pthread_join(b->als_thread, NULL);
   if (b->als_enabled_here) (void)write_text(b->als_enable, "0\n");
   if (b->als_fd >= 0) close(b->als_fd);

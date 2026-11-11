@@ -3,6 +3,8 @@
 // conversion, and the session on a fake backlight device (a folder). No phone.
 #define _GNU_SOURCE
 #include "brightness.h"
+#include <pthread.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -96,6 +98,163 @@ static unsigned get(const char *dir, const char *name)
   return v;
 }
 
+// ---- the touch IC follows the display ------------------------------------------------------------
+static char trace[4096];
+static pthread_mutex_t trace_lock = PTHREAD_MUTEX_INITIALIZER;
+static void on_trace(const char *what, const char *value)
+{
+  pthread_mutex_lock(&trace_lock);
+  size_t used = strlen(trace);
+  snprintf(trace + used, sizeof trace - used, "%s%c:%s", used ? " " : "", what[0], value);
+  pthread_mutex_unlock(&trace_lock);
+}
+static bool trace_is(const char *want)
+{
+  pthread_mutex_lock(&trace_lock);
+  bool same = !strcmp(trace, want);
+  if (!same) printf("  trace: %s\n  want:  %s\n", trace, want);
+  trace[0] = 0;
+  pthread_mutex_unlock(&trace_lock);
+  return same;
+}
+
+static void touch_node(const char *sec, const char *folder, const char *name, bool enabled_is_folder)
+{
+  char path[400];
+  snprintf(path, sizeof path, "%s/%s", sec, folder); mkdir(path, 0755);
+  snprintf(path, sizeof path, "%s/%s/input", sec, folder); mkdir(path, 0755);
+  put(path, "name", name);
+  snprintf(path, sizeof path, "%s/%s", sec, folder);
+  if (enabled_is_folder) { strcat(path, "/enabled"); mkdir(path, 0755); }
+  else put(path, "enabled", "0,0\n");
+}
+
+static void test_touch(void)
+{
+  char tmp[] = "/tmp/oneios-touch-XXXXXX", panel[300], sec[300], tsp[340], nosec[300];
+  CHECK(mkdtemp(tmp) != NULL);
+  snprintf(panel, sizeof panel, "%s/panel", tmp);
+  snprintf(sec, sizeof sec, "%s/sec", tmp);
+  snprintf(tsp, sizeof tsp, "%s/tsp", sec);
+  snprintf(nosec, sizeof nosec, "%s/nosec", tmp);
+  mkdir(panel, 0755); mkdir(sec, 0755); mkdir(nosec, 0755);
+  put(panel, "max_brightness", "255\n"); put(panel, "brightness", "100\n");
+  touch_node(sec, "tsp", "sec_touchscreen\n", false);
+  touch_node(sec, "tsp_pen", "sec_e-pen\n", false);              // a tsp* folder that is not the touchscreen
+  touch_node(sec, "sec_epen", "sec_touchscreen\n", false);       // the right name under a folder that is not tsp*
+  touch_node(sec, "tsp_pad", "sec_touchpad\n", false);
+  br_bright_trace = on_trace;
+
+  br_bright_options o = { .backlight_dir = tmp, .touch_dir = sec, .no_als = true };
+  br_bright *b = br_bright_open(&o);
+  CHECK(b != NULL);
+  if (b) {
+    br_bright_info i;
+    br_bright_info_get(b, &i);
+    // The start: the one touchscreen is woken, the panel (lit by One UI) is not written.
+    CHECK(i.touch_nodes == 1 && i.start == 100 && trace_is("t:2,0 t:2,1"));
+    CHECK(get(tsp, "enabled") == 2);
+    // A level change with the display on touches the panel only.
+    br_bright_set(b, BR_BRIGHT_FULL, false, 0); usleep(80000);
+    CHECK(trace_is("p:255"));
+    // iOS sleeps the display: the IC first (1,0 then 1,1), then the backlight; and only once.
+    br_bright_set(b, 0, false, 0); usleep(80000);
+    CHECK(trace_is("t:1,0 t:1,1 p:1") && get(tsp, "enabled") == 1);
+    br_bright_set(b, 0, false, 0); usleep(80000);
+    CHECK(trace_is(""));
+    // iOS wakes it: the backlight first, then 2,0 and 2,1.
+    br_bright_set(b, BR_BRIGHT_FULL, false, 0); usleep(80000);
+    CHECK(trace_is("p:255 t:2,0 t:2,1") && get(tsp, "enabled") == 2);
+    // The pen's and the touchpad's nodes were never written.
+    CHECK(get(sec, "tsp_pen/enabled") == 0 && get(sec, "sec_epen/enabled") == 0 && get(sec, "tsp_pad/enabled") == 0);
+    // Closed while the display sleeps: One UI's level, then the IC awake again.
+    br_bright_set(b, 0, false, 0); usleep(80000);
+    CHECK(trace_is("t:1,0 t:1,1 p:1"));
+    br_bright_close(b);
+    CHECK(trace_is("p:100 t:2,0 t:2,1") && get(tsp, "enabled") == 2);
+  }
+  // A fade to 0: the IC sleeps at the start of the fade; a fade up from 0: awake after the first step.
+  b = br_bright_open(&o);
+  if (b) {
+    trace_is("t:2,0 t:2,1");
+    br_bright_set(b, 0, false, 100); usleep(200000);
+    pthread_mutex_lock(&trace_lock);
+    CHECK(!strncmp(trace, "t:1,0 t:1,1 p:", 14) && strstr(trace, " p:1") && !strstr(trace, "t:2"));
+    trace[0] = 0;
+    pthread_mutex_unlock(&trace_lock);
+    br_bright_set(b, BR_BRIGHT_FULL, false, 100); usleep(200000);
+    pthread_mutex_lock(&trace_lock);
+    CHECK(!strncmp(trace, "p:", 2) && strstr(trace, " t:2,0 t:2,1 p:") && !strstr(trace, "t:1"));
+    trace[0] = 0;
+    pthread_mutex_unlock(&trace_lock);
+    br_bright_close(b);
+    trace_is("p:100 t:2,0 t:2,1");
+  }
+  // ONEIOS_TSP_OFF=0: level 0 leaves the IC awake.
+  o.no_touch_off = true;
+  b = br_bright_open(&o);
+  if (b) {
+    trace_is("t:2,0 t:2,1");
+    br_bright_set(b, 0, false, 0); usleep(80000);
+    CHECK(trace_is("p:1"));
+    br_bright_close(b);
+    trace_is("p:100 t:2,0 t:2,1");
+  }
+  o.no_touch_off = false;
+  // One UI left the panel at 0: iOS starts from the middle of the slider (a quarter of the light), the panel is
+  // lit before the IC is woken, and the close leaves it lit.
+  put(panel, "brightness", "0\n");
+  b = br_bright_open(&o);
+  CHECK(b != NULL);
+  if (b) {
+    br_bright_info i;
+    br_bright_info_get(b, &i);
+    CHECK(i.saved == 0 && i.start == 64 && get(panel, "brightness") == 64 && trace_is("p:64 t:2,0 t:2,1"));
+    CHECK(br_bright_level(b) > 32000 && br_bright_level(b) < 33500);
+    br_bright_set(b, 0, false, 0); usleep(80000);
+    trace_is("t:1,0 t:1,1 p:1");
+    br_bright_close(b);
+    CHECK(trace_is("p:64 t:2,0 t:2,1") && get(panel, "brightness") == 64);
+  }
+  o.start_percent = 100;
+  put(panel, "brightness", "0\n");
+  b = br_bright_open(&o);
+  if (b) { CHECK(get(panel, "brightness") == 255); br_bright_close(b); }
+  o.start_percent = 0;
+  put(panel, "brightness", "100\n");
+  trace_is(trace);
+  // A phone without the node: no touch writes, the panel works.
+  o.touch_dir = nosec;
+  b = br_bright_open(&o);
+  CHECK(b != NULL);
+  if (b) {
+    br_bright_info i;
+    br_bright_info_get(b, &i);
+    CHECK(i.touch_nodes == 0);
+    br_bright_set(b, 0, false, 0); usleep(80000);
+    br_bright_set(b, BR_BRIGHT_FULL, false, 0); usleep(80000);
+    br_bright_close(b);
+    CHECK(trace_is("p:1 p:255 p:100"));
+  }
+  // A write that fails (the file cannot be opened for writing): tried, logged, and the panel still follows.
+  touch_node(nosec, "tsp", "sec_touchscreen\n", true);
+  b = br_bright_open(&o);
+  CHECK(b != NULL);
+  if (b) {
+    br_bright_info i;
+    br_bright_info_get(b, &i);
+    CHECK(i.touch_nodes == 1 && trace_is("t:2,0 t:2,1"));
+    br_bright_set(b, 0, false, 0); usleep(80000);
+    br_bright_set(b, BR_BRIGHT_FULL, false, 0); usleep(80000);
+    CHECK(trace_is("t:1,0 t:1,1 p:1 p:255 t:2,0 t:2,1") && get(panel, "brightness") == 255);
+    br_bright_close(b);
+  }
+  br_bright_trace = NULL;
+  char command[400];
+  snprintf(command, sizeof command, "rm -rf %s", tmp);
+  CHECK(system(command) == 0);
+}
+
 static void test_session(void)
 {
   char tmp[] = "/tmp/oneios-bright-XXXXXX", panel[300], other[300], empty[300];
@@ -169,6 +328,7 @@ int main(void)
   test_curve();
   test_als();
   test_session();
+  test_touch();
   printf("brightness: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

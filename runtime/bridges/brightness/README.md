@@ -9,7 +9,7 @@ panel. The phone's light sensor goes the other way.
 **Never run on the phone.** Host tests pass; the first run is `brightctl` below.
 
 ```sh
-make test          # 48 checks: the curve, the fade, the sensor's events, a session on a fake backlight device
+make test          # 74 checks: the curve, the fade, the sensor's events, a session and the touch IC on a fake sysfs
 make               # build/android/brightctl
 ```
 
@@ -41,11 +41,47 @@ assumed: the node is found and its range is read at open.
 - Fades (`FadePeriod`): the worker walks the level in 16 ms steps. `br_bright_set` never waits for the panel.
 - iOS is told the top is 500 nits (`ONEIOS_BRIGHT_NITS`) [I]; it uses the number for its own model only.
 
-## Restore
+## Start and restore
 
 `br_bright_open` reads One UI's value; `br_bright_close` (xnuhost's SIGTERM path) writes it back and takes at
 most 300 ms. After a SIGKILL the panel keeps iOS's last level, at least the floor; One UI's system_server sets
 its own level when it starts again.
+
+**One UI's value 0** (seen on the phone, 2026-11-11: the switch leaves the panel blank, `One UI left 0`). iOS
+takes the level it finds as its own, so it started at the dimmest setting. Now the bridge lights the panel at
+open to the middle of the slider (`ONEIOS_BRIGHT_START` percent, default 50: a quarter of the light) and tells
+iOS that level. The close then writes that value, not 0, so the return's screen has a lit panel.
+
+## The touch IC follows the display
+
+Found on the phone (2026-11-11): when iOS's level goes to 0 (the lock screen's idle timeout) Samsung's touch IC
+is off (`/sys/class/sec/tsp/enabled` 0) and stays off when the level rises: touch is dead for the rest of the
+session, the keys work. One UI's input HAL tells the IC about every panel power change; nothing in a session
+did. A plain `1` does nothing. What works (the parent, on the phone; the fork's `guest_start.sh` and
+`oneos_switch.sh` write the same): `<display state>,<event>` with state 2 on / 1 off and event 0 early / 1 late.
+
+The bridge is the one place that sees iOS's level cross 0, so it writes them, from the panel's worker:
+
+| When | Writes, in order |
+|---|---|
+| the bridge opens | (the backlight, only if One UI left 0), `2,0`, `2,1` |
+| iOS's level becomes 0 | `1,0`, `1,1`, then the backlight (at the start of a fade to 0) |
+| iOS's level leaves 0 | the backlight, then `2,0`, `2,1` (in a fade up: after the first step above the lowest level) |
+| the bridge closes (SIGTERM) | the backlight, `2,0`, `2,1` |
+
+- Which nodes: every `/sys/class/sec/tsp*/enabled` whose `input/name` is `sec_touchscreen`. Never the pen's or the
+  touchpad's, whatever the folder is called; nothing under `/sys/power`. No such node: one log line, the panel
+  works as before. A write that fails is logged (the first three) and nothing else changes.
+- The backlight itself is still never 0 (level 0 is the lowest setting), so "after the backlight is not 0" holds
+  for every wake.
+- **After a SIGKILL of xnuhost nothing here runs.** The IC keeps its last state, asleep if iOS's display slept.
+  It is woken by One UI's side: the return restarts the framework, and its input HAL writes `2,0`, `2,1` when
+  the display comes on [I: that is the sequence this copies; not checked after a killed session]. The fork's
+  return scripts do not write the node themselves.
+- `ONEIOS_TSP_OFF=0`: the IC is never put to sleep (only the wakes are written). The first thing to try if touch
+  dies with the display on: iOS's `brightness` 0 is taken as "display asleep", and whether the slider's bottom
+  can also send 0 is not known.
+- `brightctl` does not touch the IC.
 
 ## The light sensor
 
@@ -72,7 +108,7 @@ Done in `runtime/xnuhost/src/main.c`: `br_bright_open(NULL)` beside `br_haptic_o
 
 It grabs no input device, has no realtime thread, writes nothing under `/sys/power`, starts no process.
 
-Needed in the session's namespace (oneos): `/sys/class/backlight/` writable, `/sys/class/input/` writable for the
+Needed in the session's namespace (oneos): `/sys/class/sec/tsp*/enabled` writable, `/sys/class/backlight/` writable, `/sys/class/input/` writable for the
 sensor's `enable`, `/dev/input/event*` as today.
 
 ## The phone test: `brightctl`

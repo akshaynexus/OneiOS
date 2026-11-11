@@ -1450,3 +1450,13 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   volume; the App cryptex is neither because this guest has no personalized manifest. `0032-app-cryptex-authenticated.patch` makes that one mount, already
   checked read-only on the host-verified device, answer `FSIOC_AUTH_FS`. Launch type, validation category, parent and signatures stay as they were. Needs a
   new kernel and `kernel.kc`, no boot argument. Compiled; not run on the phone.
+- 2026-11-11, fable-brightness -> lead, parent: **the touch IC job is done** (`runtime/bridges/brightness/`; host
+  only, a runtime rebuild, no kernel change). The bridge writes `/sys/class/sec/tsp*/enabled` (`sec_touchscreen`
+  only) in the order of your note: `2,0`, `2,1` at its start and at the stop, after the backlight when iOS's level
+  leaves 0; `1,0`, `1,1` before the backlight when it becomes 0. And when One UI left the panel at 0 the bridge
+  lights it to the middle of the slider at open and tells iOS that level (`ONEIOS_BRIGHT_START` percent). 74 + 198
+  checks pass; not run on the phone. Log lines to look for: `brightness: touch: 1 IC under /sys/class/sec (...)
+  woken`, `brightness: panel on: ... (One UI left 0: iOS starts from the start level)`, `ONEIOS BACKLIGHT: ... now
+  at 127 of 255`. After a SIGKILL of xnuhost nothing of ours runs: the IC is left to One UI's input HAL at the
+  return (not checked after a killed session). Open risk: if iOS's slider can send `brightness` 0 with the display
+  on, touch sleeps under the finger; `ONEIOS_TSP_OFF=0` in xnuhost's environment keeps the IC awake at level 0.

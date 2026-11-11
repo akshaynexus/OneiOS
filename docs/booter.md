@@ -311,6 +311,12 @@ Linux's page cache and a sparse file: the store is a raw image.
 - **`none`.** Frame in memory only.
 - **Input** is read from evdev directly and not grabbed, so the switch's Volume Up + Volume Down watcher
   keeps working beside it. The guest's side is `kernel/patches/oneios-hosted/hid` (`docs/hardware.md` 7b).
+- **The touch IC's power state** is the brightness bridge's (`runtime/bridges/brightness/README.md`, "The touch IC
+  follows the display"): Samsung's IC is off while the panel is blank and One UI's input HAL, which wakes it, is
+  not there in a session. The bridge writes `/sys/class/sec/tsp*/enabled` (`sec_touchscreen` only): `2,0`, `2,1`
+  at its start, after the backlight when iOS's level leaves 0, and at the stop; `1,0`, `1,1` before the backlight
+  when the level becomes 0. Without it touch is dead after iOS's first display sleep. After a SIGKILL of xnuhost
+  the IC is woken by One UI's own input HAL when the return brings the framework back.
 - **`--input-script FILE`** (`input-script=FILE`; `src/input_script.c`, whose head has the format): touches and
   key presses from a text file, on the same virtio-input device, for a host with no touchscreen (the PC under
   qemu) and for repeatable checks. `abs` lines give the device its axes before the guest starts (a device

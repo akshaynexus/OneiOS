@@ -48,6 +48,9 @@ typedef struct {
   const char *input_dir;                  // NULL: /dev/input
   const char *input_sysfs;                // NULL: /sys/class/input
   const char *als_name;                   // NULL: als_rear
+  const char *touch_dir;                  // NULL: /sys/class/sec (the touch IC's power state, README.md)
+  uint32_t start_percent;                 // 0: 50. The slider's start when One UI left the panel at 0 (ONEIOS_BRIGHT_START)
+  bool     no_touch_off;                  // the IC is not put to sleep at level 0 (ONEIOS_TSP_OFF=0)
   uint32_t ceiling;                       // 0: br_bright_ceiling(max_brightness)   (ONEIOS_BRIGHT_MAX)
   uint32_t floor;                         // 0: 1                                   (ONEIOS_BRIGHT_MIN)
   uint32_t max_nits;                      // 0: 500, what iOS is told the top is    (ONEIOS_BRIGHT_NITS)
@@ -65,9 +68,14 @@ typedef struct {
   uint32_t max_brightness, floor, ceiling;
   uint32_t saved;                         // One UI's value, read at open and written back at close
   uint32_t max_nits;
+  uint32_t start;                         // the node's value iOS starts from: saved, or the start level when saved is 0
+  unsigned touch_nodes;                   // touch ICs found (sec_touchscreen)
 } br_bright_info;
 
 typedef struct br_bright br_bright;
+
+// For the tests: called for every write, in order: ("panel", value) and ("touch", "2,0" ...). NULL on the phone.
+extern void (*br_bright_trace)(const char *what, const char *value);
 
 // Opens the panel's node and the light sensor. options NULL: the phone's paths, with the environment
 // variables above. NULL (with a log line) when neither is there. The light sensor is turned on
@@ -82,7 +90,7 @@ uint32_t br_bright_current(br_bright *b);
 uint32_t br_bright_level(br_bright *b);
 // fn runs on the sensor's thread. One listener; NULL removes it.
 void br_bright_listen(br_bright *b, br_als_fn fn, void *ctx);
-// Writes One UI's value back, turns the sensor off if this session turned it on. Within 300 ms.
+// Writes One UI's value back (the start value when that was 0), wakes the touch IC, turns the sensor off if this session turned it on. Within 300 ms.
 void br_bright_close(br_bright *b);
 
 #endif
