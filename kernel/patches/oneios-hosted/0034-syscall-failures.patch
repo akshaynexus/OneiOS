@@ -1,0 +1,114 @@
+diff --git a/bsd/dev/arm/systemcalls.c b/bsd/dev/arm/systemcalls.c
+--- a/bsd/dev/arm/systemcalls.c
++++ b/bsd/dev/arm/systemcalls.c
+@@ -44,6 +44,90 @@
+ extern void
+ unix_syscall(struct arm_saved_state * regs, thread_t thread_act, struct proc * proc);
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0034), a debugging aid: the file system calls of named processes that fail, with the path.
++ * The guest's user-space log is not on the console, so a daemon that cannot make or open what it needs (the
++ * phone, 2026-11-11: no application on the home screen, installd and containermanagerd busy for minutes) says
++ * nothing. Boot arguments:
++ *   oneios-sysfail=NAME[,NAME...]   the processes, by name ("*": every process); off without it
++ *   oneios-sysfail-enoent=1         also the calls that fail with ENOENT (left out: dyld and the preferences
++ *                                   look for many files that are not there)
++ *   oneios-sysfail-max=N            at most N lines (default 800)
++ * One line per failed call that takes a path:
++ *   oneios-sysfail: installd[99] mkdir(/private/var/installd/Library) -> errno 13
++ */
++static char hosted_sysfail_names[128];
++static int hosted_sysfail_state = -1;
++static uint32_t hosted_sysfail_enoent, hosted_sysfail_lines, hosted_sysfail_max = 800;
++
++static void
++hosted_sysfail(struct proc *p, unsigned short code, int error, const uint64_t *args)
++{
++	if (hosted_sysfail_state < 0) {
++		(void)PE_parse_boot_argn("oneios-sysfail-enoent", &hosted_sysfail_enoent, sizeof(hosted_sysfail_enoent));
++		(void)PE_parse_boot_argn("oneios-sysfail-max", &hosted_sysfail_max, sizeof(hosted_sysfail_max));
++		hosted_sysfail_state = PE_parse_boot_argn("oneios-sysfail", hosted_sysfail_names, sizeof(hosted_sysfail_names)) &&
++		    hosted_sysfail_names[0];
++	}
++	if (hosted_sysfail_state == 0 || error <= 0 || error == EINTR || error == EAGAIN ||
++	    (error == ENOENT && !hosted_sysfail_enoent) || hosted_sysfail_lines >= hosted_sysfail_max || p == NULL) {
++		return;
++	}
++	const char *call = NULL;
++	unsigned at = 0;        /* which argument is the path */
++	switch (code) {
++	case SYS_open: case SYS_open_nocancel: call = "open"; break;
++	case SYS_open_dprotected_np: case SYS_guarded_open_dprotected_np: call = "open_dprotected"; break;
++	case SYS_openat: case SYS_openat_nocancel: call = "openat"; at = 1; break;
++	case SYS_openat_dprotected_np: call = "openat_dprotected"; at = 1; break;
++	case SYS_mkdir: call = "mkdir"; break;
++	case SYS_mkdirat: call = "mkdirat"; at = 1; break;
++	case SYS_rmdir: call = "rmdir"; break;
++	case SYS_unlink: call = "unlink"; break;
++	case SYS_unlinkat: call = "unlinkat"; at = 1; break;
++	case SYS_rename: call = "rename"; break;
++	case SYS_renameat: call = "renameat"; at = 1; break;
++	case SYS_link: call = "link"; break;
++	case SYS_symlink: call = "symlink"; at = 1; break;
++	case SYS_clonefileat: call = "clonefileat"; at = 1; break;
++	case SYS_access: call = "access"; break;
++	case SYS_faccessat: call = "faccessat"; at = 1; break;
++	case SYS_stat64: call = "stat"; break;
++	case SYS_lstat64: call = "lstat"; break;
++	case SYS_fstatat64: call = "fstatat"; at = 1; break;
++	case SYS_getattrlist: call = "getattrlist"; break;
++	case SYS_getattrlistat: call = "getattrlistat"; at = 1; break;
++	case SYS_setattrlist: call = "setattrlist"; break;
++	case SYS_setxattr: call = "setxattr"; break;
++	case SYS_chmod: call = "chmod"; break;
++	case SYS_chown: call = "chown"; break;
++	case SYS_fsctl: call = "fsctl"; break;
++	default: return;
++	}
++	const char *name = proc_best_name(p);
++	const size_t length = strlen(name);
++	bool wanted = false;
++	for (const char *list = hosted_sysfail_names; *list && !wanted;) {
++		const char *end = strchr(list, ',');
++		const size_t n = end ? (size_t)(end - list) : strlen(list);
++		wanted = (n == 1 && list[0] == '*') || (n == length && !strncmp(list, name, n));
++		list += n + (end ? 1 : 0);
++	}
++	if (!wanted) {
++		return;
++	}
++	char path[192];
++	size_t copied = 0;
++	if (copyinstr((user_addr_t)args[at], path, sizeof(path), &copied) != 0 && copied < sizeof(path)) {
++		strlcpy(path, "?", sizeof(path));
++	}
++	path[sizeof(path) - 1] = 0;
++	hosted_sysfail_lines++;        /* racy: a line more or less */
++	printf("oneios-sysfail: %s[%d] %s(%s) -> errno %d\n", name, proc_pid(p), call, path, error);
++}
++#endif /* XNU_HOSTED */
++
+ static int      arm_get_syscall_args(uthread_t, struct arm_saved_state *, const struct sysent *);
+ static int      arm_get_u32_syscall_args(uthread_t, arm_saved_state32_t *, const struct sysent *);
+ static void     arm_prepare_u32_syscall_return(const struct sysent *, arm_saved_state_t *, uthread_t, int);
+@@ -180,6 +264,9 @@
+ 	AUDIT_SYSCALL_ENTER(code, proc, uthread);
+ 	error = (*(callp->sy_call))(proc, &uthread->uu_arg[0], &(uthread->uu_rval[0]));
+ 	AUDIT_SYSCALL_EXIT(code, proc, uthread, error);
++#if XNU_HOSTED
++	hosted_sysfail(proc, code, error, &uthread->uu_arg[0]);        /* 0034 */
++#endif
+ 
+ #if CONFIG_MACF
+ skip_syscall:
+@@ -260,6 +347,9 @@
+ #endif /* DEBUG || DEVELOPMENT */
+ 
+ 	AUDIT_SYSCALL_EXIT(code, proc, uthread, error);
++#if XNU_HOSTED
++	hosted_sysfail(proc, code, error, &uthread->uu_arg[0]);        /* 0034 */
++#endif
+ 
+ 	/*
+ 	 * Get index into sysent table

@@ -144,6 +144,32 @@ Changed (all `#if XNU_HOSTED`):
 - `pe_serial.c`: the host console; `debug.c`: `panic` -> xnuhost's log and `halt(XH_HALT_PANIC)`.
 - `kalloc.c`: a kernel with no fixed or variable type views (stock clang, no kext) no longer asserts.
 
+## 0034-syscall-failures.patch and 0035-staged-apps-on.patch (lead, 2026-11-11)
+
+Found on the phone: SpringBoard reached the Home Screen with an empty Dock and no icon, the App Library was empty,
+and on unlock SpringBoard died in an assertion of FrontBoardServices, `Invalid condition not satisfying:
+processIdentity` (`+[FBSSceneClientIdentity identityForProcessIdentity:]` with nil, called from SpringBoard's scene
+request for Spotlight while the lock screen's views appeared: named with `scripts/debug/dsc.py` from the `sheng-exc`
+backtrace).
+
+- **0035.** The removable system apps (Camera, Photos, Safari, Messages, Weather, ...: 52 bundles) are not in the
+  sealed `/Applications`. They ship in the OS volume's `/private/var/staged_system_apps`, and a restore's data
+  migration installs them. The Data seed marks that migration done and carries no copy; UniXNU's kernel shows the
+  folder over `/Applications` as a read-only union (`native_staged_apps_union`, bindfs, before Data covers
+  `/private/var`), but only with `owner-staged-apps=1`, which its boards pass and xnuhost does not. Under
+  `XNU_HOSTED` it is now on unless `owner-staged-apps=0`, and says how far it got:
+  `oneios-apps: /private/var/staged_system_apps shown over /Applications: stage 5 of 5, status 0`.
+  The LaunchServices database is already dropped at every boot (`native_ls_store_drop`, since 0031 made the addon
+  path run), so lsd registers what the view shows.
+  **Not shown by this:** why Settings, Phone and the other apps of the sealed `/Applications` were missing too
+  (UniXNU's note for the same state is "the Home Screen showed Settings alone"), and whether the assertion goes
+  with the apps there. Built; not run.
+- **0034**, a debugging aid, off without its argument: `oneios-sysfail=NAME[,NAME...]` (`*`: every process) prints
+  each file system call of those processes that fails, with the path:
+  `oneios-sysfail: installd[99] mkdir(/private/var/installd/Library) -> errno 13`. `ENOENT` is left out unless
+  `oneios-sysfail-enoent=1`; at most `oneios-sysfail-max` lines (800). The guest's user-space log is not on the
+  console; this is what shows a daemon that cannot make or open what it needs.
+
 ## 0032-app-cryptex-authenticated.patch (amfi, 2026-11-11)
 
 App cryptex daemons (`webinspectord`, `webbookmarksd`) crash-looped: AMFI's self constraint for their

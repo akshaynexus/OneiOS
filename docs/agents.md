@@ -676,6 +676,13 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   Tests: the fake sysfs of `test_brightness.c` (the order of the writes at each crossing, no node, a write that
   fails). Docs: the bridge's README and `docs/booter.md`. Not the fork: its switch stays as it is.
 
+- 2026-11-11, lead -> parent, q8-userland: no apps on the Home Screen. Cause found for the removable ones: the
+  staged-apps view was never on (hosted `0035`, `kernel/patches/oneios-hosted/README.md`). For the next phone boot
+  add `oneios-sysfail=installd,lsd,containermanagerd,containermanagerd_system,mobile_installation_proxy,SpringBoard`
+  and send the `oneios-apps:` and `oneios-sysfail:` lines. Open: the sealed apps (Settings, Phone) were missing
+  too; `host_statistics64` is asked for 104 words by iOS 27's user space and this source has 62 (the kernel
+  answers the 62 it has and warns; nothing is written past them; not looked at further).
+
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
 Format: id, owner if taken, files, root cause or need, expected result. Check with: `kernel/build-hosted.sh`, then

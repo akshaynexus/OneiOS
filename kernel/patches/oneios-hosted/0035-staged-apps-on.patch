@@ -1,0 +1,38 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -9068,13 +9068,34 @@
+ static void
+ native_staged_apps_union(proc_t p, user_addr_t scratch)
+ {
++#if XNU_HOSTED
++	/*
++	 * OneiOS (0035): on unless owner-staged-apps=0. The Data seed marks the data migration done and carries no
++	 * copy of the apps (docs/userland.md, "staged-apps"), so without this view the guest has Settings and the
++	 * services of /Applications and none of Camera, Photos, Safari, Messages, ...: an empty Home Screen and Dock on
++	 * the phone (2026-11-11). UniXNU asks its boards to pass owner-staged-apps=1; xnuhost passes no such argument.
++	 */
++	uint32_t enabled = 1;
++	(void)PE_parse_boot_argn("owner-staged-apps", &enabled, sizeof(enabled));
++	if (enabled != 1) {
++		printf("oneios-apps: off (owner-staged-apps=%u): the removable system apps are not shown in /Applications\n", enabled);
++		return;
++	}
++#else
+ 	uint32_t enabled = 0;
+ 	if (!PE_parse_boot_argn("owner-staged-apps", &enabled, sizeof(enabled)) || enabled != 1) {
+ 		return;
+ 	}
++#endif
+ 	static const char source[] = "/private/var/staged_system_apps", point[] = "/Applications";
+ 	native_gpu_addon_mount(p, scratch, 0x800, source, sizeof(source), point, sizeof(point), "/Applications/Preferences.app/Info.plist",
+ 	    "/Applications/Weather.app/Info.plist", &native_staged_union_stage, &native_staged_union_status);
++#if XNU_HOSTED
++	/* Stage 5: both an app of the sealed /Applications and one of the staged folder are found through the view. */
++	printf("oneios-apps: /private/var/staged_system_apps shown over /Applications: stage %d of 5, status %d%s\n",
++	    native_staged_union_stage, native_staged_union_status,
++	    native_staged_union_stage == 5 ? "" : " (the removable system apps will be missing)");
++#endif
+ }
+ 
+ static int

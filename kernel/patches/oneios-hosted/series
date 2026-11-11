@@ -85,3 +85,10 @@
 # native-adreno: the accelerator's grant (NativeSandboxGrantProcess) decides the open for the processes it names even with
 # the class chains adopted: the iPhone's profiles refused iconservicesagent (no icons on the home screen).
 0033-gpu-grant-decides.patch
+# lead, a debugging aid (off without its boot argument): oneios-sysfail=NAME,... prints the file system calls of
+# those processes that fail, with the path and the errno. The guest's user-space log is not on the console.
+0034-syscall-failures.patch
+# lead: the removable system apps (Camera, Photos, Safari, ...: the OS volume's /private/var/staged_system_apps) are
+# shown over /Applications unless owner-staged-apps=0. UniXNU's view wanted owner-staged-apps=1, which xnuhost never
+# passes: the phone's Home Screen and Dock were empty.
+0035-staged-apps-on.patch

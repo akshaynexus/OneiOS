@@ -165,6 +165,9 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
 - IOKit calls of a process: `oneios-iouc=NAME[,NAME...]` logs which user client methods those processes call and
   what they return (`oneios-iouc: backboardd[53] IOMobileFramebufferUserClient selector 5 -> 0x0 (call 1)`: the
   first call of each class and selector, each change of status, and calls 16, 64, 256, ...; `0029`).
+- File system calls that fail: `oneios-sysfail=NAME[,NAME...]` (`*` for every process) prints each failing call
+  that takes a path, with the path and the errno (`oneios-sysfail: installd[99] mkdir(...) -> errno 13`); `ENOENT`
+  only with `oneios-sysfail-enoent=1`; `0034`.
 - The display backend's counters: `oneios-display-report=SECONDS` prints, every so often, the vsync tick, swaps
   validated, accepted and refused, the backend's kick statistics, the power state the family's swap path tests
   (`display +7180`), the power manager's calls, and the last swaps' timeline (`0030`).
