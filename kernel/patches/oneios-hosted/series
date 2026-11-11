@@ -82,3 +82,6 @@
 # on-authorized-authapfs-volume fact of AMFI's launch constraints: its daemons have constraint category 1 or 2 in the
 # trust cache and crash-looped with "c[1]p[1]m[1]e[1]". No other volume changes, no other launch-constraint fact changes.
 0032-app-cryptex-authenticated.patch
+# native-adreno: the accelerator's grant (NativeSandboxGrantProcess) decides the open for the processes it names even with
+# the class chains adopted: the iPhone's profiles refused iconservicesagent (no icons on the home screen).
+0033-gpu-grant-decides.patch

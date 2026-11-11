@@ -1,0 +1,33 @@
+diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
+--- a/iokit/Kernel/IOUserClient.cpp
++++ b/iokit/Kernel/IOUserClient.cpp
+@@ -4534,7 +4534,17 @@
+ 	/* Once the native GPU driver's user client stands where Apple's does in the class chain (DroidVMGpu.cpp, through
+ 	 * OSMetaClassAdoptSuperclass), the sandbox decides who opens it, as for Apple's (droidvm-gpu-sandbox-first.patch): its
+ 	 * grant then stands in for the message filter below alone, whose rules name the original user client's methods. */
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted (0033): the grant decides for the processes it names, whether the class chains were adopted or not.
++	 * With both adopted (droidvm_gpu_sandbox_decides) the iPhone's own profiles still refused iconservicesagent every open
++	 * of this accelerator (0xe00002e2 on the phone with its name in the grant), and the home screen had no icons.
++	 * Processes the grant does not name are left to the sandbox, as before.
++	 */
++	if (!native_sandbox_grant(service)
++#else
+ 	if (!(native_sandbox_grant(service) && !droidvm_gpu_sandbox_decides)
++#endif
+ 	    && mac_iokit_check_open_service(kauth_cred_get(), service, connect_type) != 0) {
+ #if XNU_HOSTED
+ 		hosted_gpu_open_note(service, connect_type, kIOReturnNotPermitted, NULL);
+@@ -4698,7 +4708,11 @@
+ 			}
+ #if CONFIG_MACF
+ 			/* The service's grant (native_sandbox_grant) stands in for the sandbox's verdict on the render server's open. */
++#if XNU_HOSTED
++			else if (!native_sandbox_grant(service)
++#else
+ 			else if (!(native_sandbox_grant(service) && !droidvm_gpu_sandbox_decides)
++#endif
+ 			    && 0 != mac_iokit_check_open(kauth_cred_get(), client, connect_type)) {
+ 				IOLog("IOUC %s failed MACF in process %s\n",
+ 				    client->getMetaClass()->getClassName(), creatorNameCStr);
