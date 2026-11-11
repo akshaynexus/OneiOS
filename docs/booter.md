@@ -237,6 +237,11 @@ and feature handshake) at `0x0a000000 + n * 0x1000`, SPI `32 + n`, in this order
 | Bridge channel, network, sound | `runtime/bridges` (the bridges agent's; `docs/hardware.md`) | haptics and Bluetooth HCI; a tap with built-in DHCP; an AAudio helper process | `drivers/bridge`, `DroidVMVirtioNet.c`, `DroidVMVirtioSnd.c` |
 | CPU frequency | `runtime/bridges` | a plain MMIO window per vCPU at `0x09000000` (`/arm-io/cpufreq`) | `DroidVMCpufreq.c` |
 
+A task trap that no page-in can resolve is logged by xnuhost itself with the registers (`tasks: pid N (tid T):
+trap kind K signal S far ... esr ... insn ...; pc ... lr ... sp ... fp ... x0 ...`): a fault address outside what an
+iOS task may use (below 4 GiB or at and above the stub region), an undefined instruction, a breakpoint; the first 64
+of a run. It shows a process's fatal fault when the kernel does not log that process (`sheng-exc-name`).
+
 Read-only images are checked on read (`imageset.c`, `xh_verify_range`): each 1 MiB chunk is read whole and its
 SHA-256 compared with `<image>.hashes` the first time a read touches it. The chunk is read and hashed outside the
 image's lock, in a buffer of the reading thread, so several vCPUs check different chunks at once (the guest reads

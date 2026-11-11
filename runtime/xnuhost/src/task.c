@@ -704,6 +704,19 @@ int64_t xh_thread_run(xh_vcpu *v, uint64_t handle, struct xh_user_state *state, 
     state->pc += 4;
   }
   v->stat_traps++;
+  // A trap no fault handler of the kernel can resolve by mapping a page: a data or instruction address outside
+  // what an iOS task may use (a pointer that kept its authentication code, a wild jump), an undefined instruction,
+  // a breakpoint. They are rare and end the process: said here with the registers, for a boot where the kernel
+  // does not log that process's exceptions (the first 64 of a run).
+  static unsigned told;
+  bool outside = trap->kind == XH_TRAP_FAULT && (trap->far < 0x100000000ull || trap->far >= T.base);
+  if ((outside || trap->kind == XH_TRAP_ILLEGAL || trap->kind == XH_TRAP_BRK) && __atomic_fetch_add(&told, 1, __ATOMIC_RELAXED) < 64)
+    LOGI("tasks: pid %d (tid %u): trap kind %u signal %u far 0x%llx esr 0x%llx access %u insn 0x%x; pc 0x%llx lr 0x%llx sp 0x%llx fp 0x%llx "
+         "x0 0x%llx x1 0x%llx x2 0x%llx x3 0x%llx x8 0x%llx x16 0x%llx x17 0x%llx", t->pid, __atomic_load_n(&tp->tid, __ATOMIC_ACQUIRE),
+         trap->kind, trap->signo, (unsigned long long)trap->far, (unsigned long long)trap->esr, trap->access, trap->insn,
+         (unsigned long long)state->pc, (unsigned long long)state->x[30], (unsigned long long)state->sp, (unsigned long long)state->x[29],
+         (unsigned long long)state->x[0], (unsigned long long)state->x[1], (unsigned long long)state->x[2], (unsigned long long)state->x[3],
+         (unsigned long long)state->x[8], (unsigned long long)state->x[16], (unsigned long long)state->x[17]);
   return 0;
 }
 
