@@ -170,6 +170,24 @@ backtrace).
   `oneios-sysfail-enoent=1`; at most `oneios-sysfail-max` lines (800). The guest's user-space log is not on the
   console; this is what shows a daemon that cannot make or open what it needs.
 
+## 0036-icon-store-generation.patch and 0037-lsd-first-boot.patch (lead, 2026-11-11)
+
+- **0036.** iconservicesagent keeps the icons it drew in
+  `.../systemgroup.com.apple.lsd.iconscache/Library/Caches/com.apple.IconsCache/<UUID>/*.isdata`, keyed by build and
+  language only: an icon drawn while its GPU open was refused (before 0033) or while no app was registered (before
+  0035) stays blank. After iOSPlus10's `userland/metal/plugin/icon_store_rule.h`: a stamp `.oneios-generation-N` in
+  that folder; when it is not `ONEIOS_ICON_GENERATION` (1) or `oneios-icons-generation=N`, every `.isdata` goes
+  before launchd and the stamp is written. Raise the number only when what draws icons changes: redrawing some 500
+  icons costs minutes. A store that does not exist yet is left alone. Console: `oneios-icons: the drawn-icon store
+  had another generation: N icons removed, now generation 1`, then `... has generation 1: kept` on later boots.
+- **0037.** lsd drops the apps of every volume but the system's own the first time it starts after a boot
+  (`_LSServerCleanEphemeralMobileContainersForFirstBoot`), unless the POSIX semaphore `com.apple.lsd.firstboot`
+  exists. The staged-apps view of 0035 is a volume of its own, so from the second boot of a Data store on its apps
+  would be gone. The semaphore is made before launchd (Droid-VM's `DroidVMLaunchPolicy.c`,
+  `mark_lsd_first_boot_done`), only while the view is on: `oneios-apps: lsd's first-boot semaphore made (0)`.
+
+Both built; not run.
+
 ## 0032-app-cryptex-authenticated.patch (amfi, 2026-11-11)
 
 App cryptex daemons (`webinspectord`, `webbookmarksd`) crash-looped: AMFI's self constraint for their

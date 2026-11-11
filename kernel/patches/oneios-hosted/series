@@ -92,3 +92,9 @@
 # shown over /Applications unless owner-staged-apps=0. UniXNU's view wanted owner-staged-apps=1, which xnuhost never
 # passes: the phone's Home Screen and Dock were empty.
 0035-staged-apps-on.patch
+# lead: iconservicesagent's drawn icons are dropped once when the store's generation is not this kernel's (icons drawn
+# while the GPU open was refused or no apps were registered stayed blank: the store is keyed by build and language).
+0036-icon-store-generation.patch
+# lead: lsd's first-boot semaphore is made before launchd (Droid-VM's mark_lsd_first_boot_done): without it lsd drops
+# the apps of the staged-apps view from the second boot of a Data store on.
+0037-lsd-first-boot.patch

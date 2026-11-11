@@ -1,0 +1,51 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8717,6 +8717,39 @@
+ 		kfree_data(files, 128 * 64);
+ 	}
+ }
++/*
++ * OneiOS (0037): lsd's first-boot semaphore, after Droid-VM's DroidVMLaunchPolicy.c (mark_lsd_first_boot_done). The
++ * first time lsd starts after a boot it drops the apps of every volume but the system's own
++ * (_LSServerCleanEphemeralMobileContainersForFirstBoot); the removable system apps are shown through a view of their
++ * own (0035, bindfs), so from the second boot of a Data store on they would be gone. lsd skips that work when the
++ * POSIX named semaphore com.apple.lsd.firstboot exists (it makes it itself once the work is done; it lives until the
++ * next boot). Made here, before launchd, readable by lsd's user. Only while the staged-apps view is on. Never fatal.
++ */
++volatile int oneios_lsd_firstboot_status = -1;
++static void
++oneios_lsd_first_boot_done(proc_t p, user_addr_t scratch)
++{
++	uint32_t staged = 1;
++	(void)PE_parse_boot_argn("owner-staged-apps", &staged, sizeof(staged));
++	if (staged != 1) {
++		return;
++	}
++	static const char name[] = "com.apple.lsd.firstboot";
++	user_addr_t sem = 0;
++	int32_t result = 0;
++	int error = copyout(name, scratch + 0xc00, sizeof(name));
++	if (!error) {
++		struct sem_open_args request = {.name = scratch + 0xc00, .oflag = O_CREAT, .mode = 0444, .value = 0};
++		error = sem_open(p, &request, &sem);
++	}
++	if (!error) {
++		struct sem_close_args close_request = {.sem = sem};
++		error = sem_close(p, &close_request, &result);
++	}
++	oneios_lsd_firstboot_status = error;
++	printf("oneios-apps: lsd's first-boot semaphore %s (%d): lsd keeps the removable system apps it registered\n",
++	    error ? "not made" : "made", error);
++}
+ #endif /* XNU_HOSTED */
+ static void
+ native_ls_store_drop(proc_t p, user_addr_t scratch)
+@@ -8854,6 +8887,7 @@
+ 	native_ls_store_drop(p, scratch);
+ #if XNU_HOSTED
+ 	oneios_icon_store_refresh(p, scratch);        /* 0036 */
++	oneios_lsd_first_boot_done(p, scratch);       /* 0037 */
+ #endif
+ }
+ 

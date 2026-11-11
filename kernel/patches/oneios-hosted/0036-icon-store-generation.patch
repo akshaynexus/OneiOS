@@ -1,0 +1,124 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8614,6 +8614,110 @@
+ 	vnode_put(vp);
+ 	return error;
+ }
++#if XNU_HOSTED
++/*
++ * OneiOS (0036): iconservicesagent's store of drawn icons (com.apple.IconsCache/<UUID>/*.isdata) is keyed by the
++ * build and the language only, so an icon drawn while the drawing stack was broken stays as it was drawn: on this
++ * Data store, boots whose iconservicesagent was refused the GPU (0xe00002e2, before 0033) or saw no apps (before
++ * 0035). After iOSPlus10's icon_store_rule.h: the store carries a generation, a file ".oneios-generation-N" beside
++ * the UUID folders; when it is not this kernel's (ONEIOS_ICON_GENERATION, or oneios-icons-generation=N), every
++ * .isdata goes and iconservicesagent draws each icon again at its next use (minutes of CPU and GPU for some 500
++ * icons: raise the number only when what draws icons changes, not for each build). A store that does not exist
++ * yet is left alone and not stamped. Never fatal; one console line.
++ */
++#define ONEIOS_ICON_GENERATION 1
++volatile int oneios_icon_store_status = -1;
++static void
++oneios_icon_store_refresh(proc_t p, user_addr_t scratch)
++{
++	static const char base[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.lsd.iconscache/Library/Caches/"
++	    "com.apple.IconsCache";
++	static const char stamp_prefix[] = ".oneios-generation-";
++	uint32_t generation = ONEIOS_ICON_GENERATION;
++	(void)PE_parse_boot_argn("oneios-icons-generation", &generation, sizeof(generation));
++	vfs_context_t ctx = vfs_context_current();
++	char *path = kalloc_data(256, Z_WAITOK);
++	char (*dirs)[64] = kalloc_data(32 * 64, Z_WAITOK);
++	char (*files)[64] = kalloc_data(128 * 64, Z_WAITOK);
++	vnode_t vp = NULLVP;
++	unsigned ndirs = 0, removed = 0;
++	if (!path || !dirs || !files) {
++		oneios_icon_store_status = -ENOMEM;
++		goto done;
++	}
++	snprintf(path, 256, "%s/%s%u", base, stamp_prefix, generation);
++	if (vnode_lookup(path, 0, &vp, ctx) == 0) {
++		vnode_put(vp);
++		oneios_icon_store_status = 0;
++		printf("oneios-icons: the drawn-icon store has generation %u: kept\n", generation);
++		goto done;
++	}
++	if (native_ls_store_names(base, "", dirs, 32, &ndirs)) {
++		oneios_icon_store_status = -ENOENT;
++		printf("oneios-icons: no drawn-icon store yet: nothing to drop\n");
++		goto done;
++	}
++	for (unsigned i = 0; i < ndirs; ++i) {
++		if (dirs[i][0] == '.') {
++			continue;
++		}
++		/* Each pass lists the folder from its start again; the entries unlinked before are gone from it. */
++		for (unsigned pass = 0; pass < 64; ++pass) {
++			unsigned n = 0, gone = 0;
++			snprintf(path, 256, "%s/%s", base, dirs[i]);
++			if (native_ls_store_names(path, "", files, 128, &n) || !n) {
++				break;
++			}
++			for (unsigned j = 0; j < n; ++j) {
++				const size_t length = strlen(files[j]);
++				if (length <= 7 || strcmp(files[j] + length - 7, ".isdata")) {
++					continue;
++				}
++				snprintf(path, 256, "%s/%s/%s", base, dirs[i], files[j]);
++				struct unlink_args request = {.path = scratch + 0xc00};
++				int32_t result = 0;
++				if (!copyout(path, request.path, strlen(path) + 1) && !unlink(p, &request, &result)) {
++					gone++;
++				}
++			}
++			removed += gone;
++			if (!gone) {
++				break;
++			}
++		}
++	}
++	/* The stamps of other generations, then this one's. */
++	unsigned nstamps = 0;
++	if (!native_ls_store_names(base, stamp_prefix, files, 8, &nstamps)) {
++		for (unsigned j = 0; j < nstamps; ++j) {
++			snprintf(path, 256, "%s/%s", base, files[j]);
++			struct unlink_args request = {.path = scratch + 0xc00};
++			int32_t result = 0;
++			if (!copyout(path, request.path, strlen(path) + 1)) {
++				(void)unlink(p, &request, &result);
++			}
++		}
++	}
++	snprintf(path, 256, "%s/%s%u", base, stamp_prefix, generation);
++	int error = vnode_open(path, O_CREAT | FWRITE | O_NOFOLLOW, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH, 0, &vp, ctx);
++	if (!error) {
++		(void)vnode_close(vp, FWRITE, ctx);
++	}
++	oneios_icon_store_status = error ? -error : (int)removed;
++	printf("oneios-icons: the drawn-icon store had another generation: %u icons removed, now generation %u%s\n", removed,
++	    generation, error ? " (the stamp could not be written: dropped again next boot)" : "");
++done:
++	if (path) {
++		kfree_data(path, 256);
++	}
++	if (dirs) {
++		kfree_data(dirs, 32 * 64);
++	}
++	if (files) {
++		kfree_data(files, 128 * 64);
++	}
++}
++#endif /* XNU_HOSTED */
+ static void
+ native_ls_store_drop(proc_t p, user_addr_t scratch)
+ {
+@@ -8748,6 +8852,9 @@
+ 	native_cryptex_os_view(p, scratch);
+ 	native_gestalt_cache_drop(p, scratch);
+ 	native_ls_store_drop(p, scratch);
++#if XNU_HOSTED
++	oneios_icon_store_refresh(p, scratch);        /* 0036 */
++#endif
+ }
+ 
+ /* The deletable system apps (Weather, Notes, Calendar, ...) ship in the OS volume's /private/var/staged_system_apps. A restore copies

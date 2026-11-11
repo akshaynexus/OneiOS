@@ -27,7 +27,8 @@ the collection builds; not yet run on the phone.
 Later sessions (2026-11-11): with the corrected collection and the Metal plug-in's grant the phone reaches the
 lock screen and, after unlock, the Home Screen, composited on the GPU at 40 to 60 frames a second; touch works.
 The Home Screen had no apps and SpringBoard died once on unlock (an assertion about a missing process identity):
-the removable system apps were never shown in `/Applications`. Hosted `0035` shows them; built, not yet run.
+the removable system apps were never shown in `/Applications`. Hosted `0035` shows them, `0037` keeps them
+registered after the first boot of a Data store, `0036` drops icons drawn blank by earlier boots; built, not yet run.
 
 On the PC (xnuhost under `qemu-aarch64`, 8 vCPUs, the real iOS 27.0.1 `24A446` image set, `kernel.kc` with the
 iPhone18,2 kexts), the boot gets through:

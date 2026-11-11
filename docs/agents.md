@@ -684,6 +684,32 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   too; `host_statistics64` is asked for 104 words by iOS 27's user space and this source has 62 (the kernel
   answers the 62 it has and warns; nothing is written past them; not looked at further).
 
+- 2026-11-11, lead -> parent: decisions on the research reports (GPU/display and non-GPU).
+  - In the kernel now: 0036 (icon store dropped once per generation), 0037 (lsd's first-boot semaphore).
+  - Boot arguments for the next phone boot: `owner-hide-vmm=audiomxd,com.apple.WebKit.GPU` yes (the guest says
+    "Booted in a VM", and VirtualAudio then publishes only its Null device). Already on by default here and not to
+    be added: `owner-staged-apps` (0035), `owner-dataprotect` (0022). Not now: `sheng-no-lc=1` (the App cryptex
+    passes by 0032; the one binary left, webbookmarksd, is not on any path we need), `droidvm-timebase-hz` (a trap
+    per mach_absolute_time under xnuhost: measure first), `memorystatus_pressure_threshold_mb` (no kill seen yet).
+  - Jetsam limits (lsd 16 MiB, iconservicesagent): no kill line in the phone logs so far, but memorystatus does not
+    print every kill; held until a log shows one. If lsd dies rebuilding its database, it is the next kernel job.
+  - Wallpaper (HEIC with no HEVC decoder): q8-userland, below. SpringBoard's GPU: not until SpringBoard stops
+    restarting and backboardd's GPU memory is measured without the restarts (925 MiB after three); the Metal
+    agent's call then. RunningBoard identity across xpcproxy, FBLaunchWatchdogScale, the container race: when apps
+    launch. host_statistics64's 26 fields: low, nothing reads past the 62 today.
+- 2026-11-11, lead -> q8-userland (job): **the default wallpaper.** iOS's wallpaper layers are HEIC and the guest has
+  no HEVC decoder, so PosterBoard draws nothing. iPhone18,2 is not in `/Library/Wallpaper/DefaultWallpapers~iphone.plist`,
+  so its default is the file's `default`: wallpaper 7565 in collection `62879BFA-F700-4384-83E1-7AD1CC0D0817`
+  (find its `.wallpaperCollection` under `/Library/Wallpaper/Collections`). As Droid-VM does
+  (Droid-VM-UniXNU 62d0b11 `scripts/make-wallpaper-overlay.py`, `make-gpu-addon.py --wallpaper`): the image hook
+  writes PNGs of its layers and a `main.caml` naming them into the seed under `/private/var/ngpu/wallpaper*`, and
+  the kernel shows them over the sealed `.ca` with `native_gpu_addon_mount` (the iPad paths it mounts today are
+  in `kern_exec.c` near `native_gpu_addon3_stage`; replace them under `XNU_HOSTED` with the iPhone ones, as a hosted
+  patch numbered after 0037, reviewed by the lead). Fallback if PosterBoard still draws nothing: iOSPlus10 99bd6ac
+  `scripts/laurel/ios26-root-spec.py` `wallpaper()` (Autobahn flags off, `{Lock,Home}Background.cpbitmap`).
+  Tests: the hook's on a fake root; no Apple file in git. Docs: `docs/userland.md` (the line that says the wallpaper
+  mounts must go).
+
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
 Format: id, owner if taken, files, root cause or need, expected result. Check with: `kernel/build-hosted.sh`, then
