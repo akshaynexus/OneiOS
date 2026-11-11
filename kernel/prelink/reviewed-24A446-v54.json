@@ -26,6 +26,76 @@
  ],
  "functions": [
   {
+   "original": "0xfffffe000b3597a8",
+   "native_symbol": "_PEGetModelName",
+   "check": {
+    "address": "0xfffffe000b3597a8",
+    "size": 84,
+    "sha256": "b3f29790402bb351559e7a78a130f5c8e20a8eb748c7be3259b1edf8466edc7c"
+   },
+   "evidence": "iokit/Kernel/IOPlatformExpert.cpp: shifts its two arguments up, loads gIOPlatform and calls its virtual method at vtable offset 1448, which in this kernel's IOPlatformExpert vtable is getModelName(char *, int); returns false without a platform expert: PEGetModelName(char *name, int maxLength). IOMobileGraphicsFamily, its DCP variant, IOUSBHostFamily and IOThunderboltFamily import it between OSObject_typed_operator_new (or OSTestAndClear) and PE_i_can_has_debugger, where that name sorts; the vtable slot decides between it and PEGetMachineName, which sorts in the same place."
+  },
+  {
+   "original": "0xfffffe000b335ec4",
+   "native_symbol": "__ZN28IOFilterInterruptEventSource26filterInterruptEventSourceEP8OSObjectPFvS1_P22IOInterruptEventSourceiEPFbS1_PS_EP9IOServicei",
+   "check": {
+    "address": "0xfffffe000b335ec4",
+    "size": 212,
+    "sha256": "100ce73077f5d0756e26c6260b9c0fbf2251739d21f03f88eb1df8ed18073906"
+   },
+   "evidence": "iokit/Kernel/IOFilterInterruptEventSource.cpp: a five-argument factory (owner, action, filter, provider, index) between IOFilterInterruptEventSource's and IOTimerEventSource's functions in the kernel. In 27 import tables it lies after every IOBufferMemoryDescriptor and IOInterruptEventSource name and before OSSet, OSData, OSArray and IOMapper: a name of a class of 25 to 49 letters, which among five-argument factories is IOFilterInterruptEventSource::filterInterruptEventSource. (The order rule had first given this name to 0xfffffe000b3351d8, which is IODMAEventSource::dmaEventSource.)"
+  },
+  {
+   "original": "0xfffffe000b350780",
+   "native_symbol": "__ZN23IOMultiMemoryDescriptor15withDescriptorsEPP18IOMemoryDescriptorjjb",
+   "check": {
+    "address": "0xfffffe000b350780",
+    "size": 308,
+    "sha256": "db27896dbac5841c7eb454a0f38ecaf0af4e23d52643bf67f1f23e6c13118735"
+   },
+   "evidence": "iokit/Kernel/IOMultiMemoryDescriptor.cpp: a four-argument factory after IOMultiMemoryDescriptor's structors in the kernel. In seven import tables (IOSurface, IOBiometricFamily, AppleUSBAudio and others) it lies after IOInterruptEventSource::interruptEventSource and IOSubMemoryDescriptor::withSubRange and before IOBufferMemoryDescriptor: a name of a 23-letter class, and withDescriptors(descriptors, count, direction, asReference) is IOMultiMemoryDescriptor's four-argument factory."
+  },
+  {
+   "original": "0xfffffe000b3490e8",
+   "native_symbol": "__ZN18IOMemoryDescriptor26ktraceEmitPhysicalSegmentsEv",
+   "check": {
+    "address": "0xfffffe000b3490e8",
+    "size": 308,
+    "sha256": "02beac2ec510582b9f6ad4d7c6047340aed2a4e980218eff4230206a0873fd18"
+   },
+   "evidence": "iokit/Kernel/IOMemoryDescriptor.cpp: one argument; returns at once unless the kdebug code 0x05410004 is enabled, then asks the descriptor for its preparation ID (slot 160) and its length (slot 176) and walks its physical segments, kIOReturnBadArgument otherwise: IOMemoryDescriptor::ktraceEmitPhysicalSegments(). IOSurface imports it between IOMemoryDescriptor::createMappingInTask and OSCollectionIterator, where '26ktraceEmitPhysicalSegments' sorts."
+  },
+  {
+   "original": "0xfffffe000b386e00",
+   "native_symbol": "__ZN17IOSharedDataQueue11withEntriesEjj",
+   "check": {
+    "address": "0xfffffe000b386e00",
+    "size": 172,
+    "sha256": "d6ef2a1e5ebec33f0b3c30deb610458c56e4dacbedcf2074733994125c4d76bb"
+   },
+   "evidence": "iokit/Kernel/IOSharedDataQueue.cpp: a two-argument factory: allocates from a metaclass object, calls the init slot 136 with both arguments, releases on failure; directly before IOSharedDataQueue::setQueueSize and getQueueSize in the kernel. In the import tables (IOGPUFamily, AppleARMPlatform, RTBuddy, IOCECFamily and two more) it lies after IONVRAMController's destructor and IOSimpleReporter::setValue and before IODTPlatformExpert and IOMemoryDescriptor: a name of a 17-letter class, and withEntries(numEntries, entrySize) is IOSharedDataQueue's two-argument factory."
+  },
+  {
+   "original": "0xfffffe000b34f304",
+   "native_symbol": "__ZN11IOMemoryMap9wireRangeEjyy",
+   "check": {
+    "address": "0xfffffe000b34f304",
+    "size": 368,
+    "sha256": "3794b0fbe1ae3bbca1d6dea6f975e2ed94f9c86c694e60bf901de97f745837ec"
+   },
+   "evidence": "iokit/Kernel/IOMemoryDescriptor.cpp: (this, options, offset, length): adds the offset to the map's address (+40), rounds the end up to a 16 KiB page and wires the range: IOMemoryMap::wireRange(uint32_t, mach_vm_size_t, mach_vm_size_t). IOGPUFamily, IOMobileGraphicsFamily and three others import it directly after IOMemoryMap::getPhysicalAddress and before OSMetaClass's constructor, where '9wireRange' sorts."
+  },
+  {
+   "original": "0xfffffe000ac24ef4",
+   "native_symbol": "_thread_set_allocation_name",
+   "check": {
+    "address": "0xfffffe000ac24ef4",
+    "size": 84,
+    "sha256": "15e9c81465efac6623f23e50ec9ccfe028aa75f4b8d009b2ad9962c2639727a8"
+   },
+   "evidence": "osfmk/kern/thread.c: takes the current thread's read-only part (signed, at +336) and its allocation name at +192; returns the old name, and stores the new one when the new one is NULL or there was none: thread_set_allocation_name(kern_allocation_name_t). In the import tables of IOGPUFamily and five other kexts it sits between thread_policy_set (or thread_deallocate) and thread_set_thread_name, where that name sorts. IOGPUFamily also imports kern_allocation_name_release."
+  },
+  {
    "original": "0xfffffe000b386eac",
    "native_symbol": "__ZN17IOSharedDataQueue12setQueueSizeEj",
    "check": {

@@ -32,6 +32,16 @@ def fileset_entries(data):
     return out
 
 
+def inside(path, root=None):
+    """PATH relative to the repository when it lies in it, else as given (out/ may be a link in a worktree)."""
+    path = Path(path).resolve()
+    root = root or Path(__file__).resolve().parents[2]
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('work', 'kernel', 'kernelcache', 'reviewed', 'xnuprelink', 'output'):
@@ -58,7 +68,7 @@ def main():
             'kernelcache': {'path': str(Path(args.kernelcache).resolve()), 'sha256': sha(args.kernelcache),
                             'what': 'iPhone18,2 iOS 27.0.1 (24A446) kernelcache.release.v54, decoded'},
             'reference_kernel': {'path': str(Path(args.reference).resolve()), 'sha256': sha(args.reference)} if args.reference else None,
-            'reviewed': {'path': str(Path(args.reviewed).resolve().relative_to(root)), 'sha256': sha(args.reviewed)},
+            'reviewed': {'path': inside(args.reviewed), 'sha256': sha(args.reviewed)},
         },
         'tools': {
             'oneios': git(root, 'rev-parse', 'HEAD'),

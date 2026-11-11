@@ -239,14 +239,15 @@ member `AGXAccelerator::superClass` keeps the parent's unslid link address (noth
 1. **Anything on the phone.** Run `gpuctl` first; then `xnuhost --gpu 3d` with a kernel that has `0005` and
    `vgpu-selftest=1` in the boot arguments.
 2. **The Metal user client in the kernel: linked and opened in the kernel on the PC** (section 5.1). Left: an open
-   from a user process, and every call that needs the host's renderer. Kernel imports of the kexts on Metal's path
-   that are still on the panic stub (2026-11-11; fable-prelink's to pair, `unmapped.py --target` describes each):
-   IOGPUFamily `0xfffffe000ac24ef4` (reads the current thread), `0xfffffe000b34f304` (among IOMemoryDescriptor's,
-   also imported by IOMobileGraphicsFamily), `0xfffffe000b386e00` (before `IOCircularDataQueueCreateWithEntries`);
-   IOSurface `0xfffffe000b3490e8` (among IOGeneralMemoryDescriptor's), `0xfffffe000b350780` (after
-   IOMultiMemoryDescriptor's); IOMobileGraphicsFamily `0xfffffe000b335ec4` (five arguments, between
-   IOFilterInterruptEventSource and IOTimerEventSource), `0xfffffe000b3597a8` (a platform-expert call before
-   `PEHaltRestartInternal`). NativeAdreno itself calls kext code only through the two bound stubs; the plug-in's
+   from a user process, and every call that needs the host's renderer. The seven kernel imports of the kexts on Metal's path
+   that were on the panic stub are paired (2026-11-11, fable-prelink, `kernel/prelink/README.md`): IOGPUFamily's
+   `thread_set_allocation_name`, `IOMemoryMap::wireRange` (also IOMobileGraphicsFamily's) and
+   `IOSharedDataQueue::withEntries`; IOSurface's `IOMemoryDescriptor::ktraceEmitPhysicalSegments` and
+   `IOMultiMemoryDescriptor::withDescriptors`; IOMobileGraphicsFamily's
+   `IOFilterInterruptEventSource::filterInterruptEventSource` and `PEGetModelName`. Paired from the import order
+   and the code; no caller has reached them in a boot yet. IOGPUFamily, IOSurface and IOMobileGraphicsFamily have
+   no import on the stub now.
+   NativeAdreno itself calls kext code only through the two bound stubs; the plug-in's
    IOSurface use and IOGPUFamily's own user clients can reach the others.
 3. **The Metal plug-in running.** It is built and placed (section 7); nothing has loaded it. The kernel side publishes
    `MetalPluginName = NativeAdrenoMetal`, `MetalPluginClassName = NativeAdrenoMetalDevice`; the interface and the

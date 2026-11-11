@@ -131,8 +131,8 @@ Debugging: `qemu-aarch64 -g PORT` and gdb (`set architecture aarch64`, `target r
 is at 0x2000004000, so an original address A is at A - 0xfffffe0007004000 + 0x2000004000.
 
 Pairing: the matcher with the reference, the inferred pairs (order, structors and factories, slots, kernel class
-objects), 617 functions and 27 data reviewed by hand here, the lead's and fable-user's records (below), and
-50 carried over from XnuPrelink's iPad fixture. 221 original functions that kexts reference are on the panic stub
+objects), 624 functions and 27 data reviewed by hand here, the lead's and fable-user's records (below), and
+50 carried over from XnuPrelink's iPad fixture. 214 original functions that kexts reference are on the panic stub
 and 18 data targets are unpaired; `kernel.kc.build.json` lists them per kext.
 
 ## Records of several agents, and the import-order check
@@ -168,6 +168,13 @@ and 18 data targets are unpaired; `kernel.kc.build.json` lists them per kext.
   `addReporterLegend(IOReporter *, const char *, const char *)`: IOHIDFamily's source names the call, and with the
   wrong one `IOHIDDevice::start` failed (fable-hid, 2026-11-11). A pair chosen among several candidates by argument
   count alone is a guess until a caller or the kext's source confirms it.
+- Metal's path (2026-11-11): the seven imports of IOGPUFamily, IOSurface and IOMobileGraphicsFamily that
+  `docs/gpu.md` listed are paired (`thread_set_allocation_name`, `IOMemoryMap::wireRange`,
+  `IOSharedDataQueue::withEntries`, `IOMemoryDescriptor::ktraceEmitPhysicalSegments`,
+  `IOMultiMemoryDescriptor::withDescriptors`, `IOFilterInterruptEventSource::filterInterruptEventSource`,
+  `PEGetModelName`); the five that Q4a noted for IOMobileGraphicsFamily and IOSurface are among them. Those three
+  kexts have no import on the stub now. Each record says what in the code decided among the names the import
+  order allowed; none was reached by a caller in a boot of mine.
 - Pairing ahead of the boot: for an unpaired import, the names between its neighbours in every table that has it
   are the candidates (`imports.py` prints them); the code picks among them. A boot on the PC costs about ten
   minutes to the first user process, so a batch is paired this way and then confirmed with one boot.
