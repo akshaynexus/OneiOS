@@ -23,13 +23,14 @@ from pathlib import Path
 
 TREE = Path.cwd()
 DEVICE = Path(os.environ.get('UNIXNU_DEVICE') or sys.exit('build-oneios-board: UNIXNU_DEVICE is not set (run through the kernel build)'))
-REPO = DEVICE.resolve().parents[1]
+REPO = Path(os.environ.get('ONEIOS_REPO') or DEVICE.resolve().parents[1])
 RECORDS = TREE / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'
 CPUFREQ = REPO / 'external/UniXNU-droidvm/package/DroidVMCpufreq.c'
 
 
 def main():
     build = REPO / 'drivers/build.py'
+    print(f'oneios-board: drivers/ of {REPO}' + ('' if os.environ.get('ONEIOS_REPO') else ' (found from the device directory: ONEIOS_REPO is not set)'), flush=True)
     for path in (build, CPUFREQ, RECORDS / 'osfmk/DEVELOPMENT/startup.o.json'):
         if not path.is_file():
             sys.exit(f'build-oneios-board: {path} missing')

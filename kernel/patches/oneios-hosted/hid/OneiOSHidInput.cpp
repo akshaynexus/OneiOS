@@ -373,8 +373,14 @@ publish(IOService *device, IOService *resource, const char *what)
 	return true;
 }
 
-static void
-oneios_hid_thread(void *, wait_result_t)
+// The kexts and the classes. On the caller's thread (the board's late start, bsd_init's), not on a thread of its
+// own: OSMetaClass::preModLoad takes the class-loading lock and keeps it until postModLoad, which looks the kext
+// up under the kext lock; a kext that another thread loads meanwhile holds the kext lock and waits for the
+// class-loading lock in its own preModLoad. native-adreno met that deadlock with its own registration; this one
+// was not seen to hang, but it ran on its own thread beside bsd_init's kext loads. Everything that loads kexts or
+// registers classes at the late start runs on that one thread, one after the other, and says so in the log.
+static bool
+oneios_hid_register(void)
 {
 	// The family and the event driver's kext, with its personalities: nothing matches a HID device before.
 	OSReturn status = OSKextLoadKextWithIdentifier("com.apple.iokit.IOHIDFamily");
@@ -384,7 +390,7 @@ oneios_hid_thread(void *, wait_result_t)
 	if (status != kOSReturnSuccess || !live) {
 		oneios_hid_stage = 0x40;
 		IOLog("oneios-hid: no IOHIDFamily (load status 0x%x; the kernel is not in a kernel collection): no touch, no buttons\n", status);
-		return;
+		return false;
 	}
 	status = OSKext::loadKextWithIdentifier("com.apple.iokit.IOHIDEventDriver", true, false, kOSKextExcludeNone,
 	    kOSKextExcludeNone, nullptr);
@@ -397,14 +403,15 @@ oneios_hid_thread(void *, wait_result_t)
 		oneios_hid_stage = 0x81;
 		IOLog("oneios-hid: the live IOHIDDevice (%p, %u bytes) is not the bound one (%p, %u bytes): the bindings are for "
 		    "another kernel collection; nothing started\n", live, live->getClassSize(), bound, oneios_hid_parent_size);
-		return;
+		return false;
 	}
 	oneios_hid_stage = 2;
 
 	void *module = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
 	if (!module) {
 		oneios_hid_stage = 0x82;
-		return;
+		IOLog("oneios-hid: the kernel's module could not be opened for class registration\n");
+		return false;
 	}
 	oneios_hid_static_init();
 	oneios_als_static_init();
@@ -421,10 +428,18 @@ oneios_hid_thread(void *, wait_result_t)
 	if (!linked || OSMetaClass::postModLoad(module)) {
 		oneios_hid_stage = 0x82;
 		IOLog("oneios-hid: the classes did not register below IOHIDDevice (%p)\n", bound);
-		return;
+		return false;
 	}
 	oneios_hid_stage = 3;
+	IOLog("oneios-hid: IOHIDFamily and IOHIDEventDriver loaded, the device classes registered below IOHIDDevice; "
+	    "the devices start when IOHIDResource is there\n");
+	return true;
+}
 
+// The long part, on a thread of its own: the wait for IOHIDResource, then the devices.
+static void
+oneios_hid_thread(void *, wait_result_t)
+{
 	OSDictionary *match = IOService::serviceMatching("IOHIDResource");
 	IOService *resource = nullptr;
 	// IOHIDResource matches on IOResources, whose matching ends when the root volume is found: minutes on a first start.
@@ -457,6 +472,9 @@ oneios_hid_input_start(void)
 	PE_parse_boot_argn("oneios-hid", &enabled, sizeof(enabled));
 	PE_parse_boot_argn("oneios-hid-log", &oneios_hid_log, sizeof(oneios_hid_log));
 	if (!enabled || oneios_hid_stage) {
+		return;
+	}
+	if (!oneios_hid_register()) {
 		return;
 	}
 	// Its own thread: the wait for IOHIDResource is long, and the board's late start is bsd_init's.

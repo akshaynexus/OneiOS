@@ -641,10 +641,12 @@ int main(int argc, char **argv)
          (unsigned long long)g_vcpu[i].stat_irqs, (unsigned long long)g_vcpu[i].stat_timer, (unsigned long long)g_vcpu[i].stat_sgi,
          (unsigned long long)g_vcpu[i].stat_reraised, (unsigned long long)g_vcpu[i].stat_mmio, (unsigned long long)g_vcpu[i].stat_sysreg,
          (unsigned long long)g_vcpu[i].stat_traps);
-  // Debugging aid: XNUHOST_DUMP=FILE writes the first 64 MiB of the kernel's window at the stop.
+  // Debugging aid: XNUHOST_DUMP=FILE writes the first 64 MiB of the kernel's window at the stop (XNUHOST_DUMP_MB=N
+  // for more: a kernel collection's data is past 64 MiB).
   if (getenv("XNUHOST_DUMP")) {
     FILE *dump = fopen(getenv("XNUHOST_DUMP"), "wb");
-    if (dump) { fwrite(g_mem.host, 1, g_mem.size < (64u << 20) ? g_mem.size : (64u << 20), dump); fclose(dump); }
+    uint64_t limit = (uint64_t)(getenv("XNUHOST_DUMP_MB") ? strtoul(getenv("XNUHOST_DUMP_MB"), NULL, 0) : 64) << 20;
+    if (dump) { fwrite(g_mem.host, 1, g_mem.size < limit ? g_mem.size : limit, dump); fclose(dump); }
   }
   xh_tasks_shutdown();
   if (haptic) br_haptic_close(haptic);      // stops the motor

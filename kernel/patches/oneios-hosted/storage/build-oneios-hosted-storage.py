@@ -24,7 +24,7 @@ from pathlib import Path
 
 TREE = Path.cwd()
 DEVICE = Path(os.environ.get('UNIXNU_DEVICE') or sys.exit('build-oneios-hosted-storage: UNIXNU_DEVICE is not set (run through kernel/build-hosted.sh)'))
-REPO = DEVICE.resolve().parents[1]
+REPO = Path(os.environ.get('ONEIOS_REPO') or DEVICE.resolve().parents[1])
 SOURCES = REPO / 'kernel/patches/oneios-hosted/storage'
 RECORDS = TREE / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'
 # The pin of the OS profile's IOStorageFamily source (IOStorageFamily-337.100.1), as UniXNU-droidvm's board.

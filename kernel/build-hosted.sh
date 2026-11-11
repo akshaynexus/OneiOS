@@ -27,6 +27,10 @@ stage_sources
 # The device repository of this build: the committed one, the hosted defconfig, and the hosted series last.
 # (two levels below the repository, as kernel/device is: the board's archive script finds drivers/ from there)
 DEVICE=$ROOT/out/hosted-device$SUFFIX
+# The archive scripts take their sources (drivers/, kernel/patches/oneios-hosted/*) from this checkout, named here:
+# found from DEVICE's resolved path they came from another checkout whenever out/ is a link into it (a worktree
+# whose out/ points at the shared checkout built that checkout's older drivers/ into its kernel: no touch).
+export ONEIOS_REPO=$ROOT
 rm -rf "$DEVICE"; mkdir -p "$DEVICE"
 git -C "$ROOT" archive HEAD kernel/device | tar -x -C "$DEVICE" --strip-components=2
 cp "$ROOT/kernel/device/configs/oneios_hosted_defconfig" "$DEVICE/configs/"

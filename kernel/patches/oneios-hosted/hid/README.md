@@ -160,3 +160,15 @@ Not shown: that backboardd or SpringBoard acts on an event (no user-space log wa
 The two minutes before the kernel's driver takes over are spent waiting for the DriverKit driver's process;
 why it does not start is not looked at. Nothing has run on the phone: the real panel's axis ranges, the side
 keys' devices and the chord beside iOS are untested.
+
+## Where the start runs (lead, 2026-11-11)
+
+`oneios_hid_input_start` loads IOHIDFamily and IOHIDEventDriver and registers the device classes on the caller's
+thread (the board's late start, bsd_init's thread), then logs `oneios-hid: IOHIDFamily and IOHIDEventDriver loaded,
+the device classes registered below IOHIDDevice; ...`. Only the wait for IOHIDResource and the devices' start are on
+a thread of their own. Reason: class registration (`preModLoad` .. `postModLoad`) on a thread beside bsd_init's kext
+loads can deadlock (class-loading lock against the kext lock; native-adreno met it). It was not seen to hang here.
+
+A kernel with **no `oneios-hid` line at all** was built without the call: its `drivers/` came from another checkout
+(`docs/building.md` 2, `ONEIOS_REPO`). That, not a hang, is what the first testing image's kernel had.
+Tested: five 70 s boots with `--input-script`, both devices start in each.

@@ -56,6 +56,12 @@ scripts/bg.sh kernel-hosted env HOSTED_OUT=me kernel/build-hosted.sh
 # -> out/kernel/current-hosted-me/xnu.macho (the hosted kernel: board series + kernel/patches/oneios-hosted/series)
 ```
 
+- The kernel is built from the checkout whose `kernel/build-hosted.sh` you run: its `drivers/` and
+  `kernel/patches/oneios-hosted/*` (the script exports `ONEIOS_REPO`). Before 2026-11-11 the archive scripts
+  found the repository from the build directory's resolved path, so a worktree whose `out/` is a link into
+  another checkout built **that** checkout's sources (the first testing image's kernel had the shared checkout's
+  older `drivers/`: `oneios_drivers_start` without the HID start, no touch). A quick check of a built kernel:
+  `llvm-objdump -d --disassemble-symbols=_oneios_drivers_start xnu.macho | grep oneios_hid_input_start`.
 - `HOSTED_OUT=<name>` gives you your own tree and output; without it the build uses the default tree
   (`out/kernel-hosted`, `out/kernel/current-hosted/`), which belongs to the lead.
 - The build compiles UniXNU's sources from `external/` (`scripts/setup/get-references.sh`): among them
