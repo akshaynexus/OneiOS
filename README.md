@@ -12,7 +12,7 @@ How to build and test it: [docs/building.md](docs/building.md).
 
 ## Status
 
-**Experimental. iOS does not boot to the home screen yet. On the phone (first boots, 2026-11-11) the kernel comes up and the first user process dies; the fix (`0027`) is not yet run there.**
+**Experimental. On the phone (S24 Ultra, 2026-11-11) the boot reaches launchd, backboardd and SpringBoard, and backboardd's first frames are on the panel: the Apple boot logo at 1440x3120. Whether it goes on to SpringBoard's own screen is not yet seen.**
 
 On the PC (xnuhost under `qemu-aarch64`, 8 vCPUs, the real iOS 27.0.1 `24A446` image set, `kernel.kc` with the
 iPhone18,2 kexts), the boot gets through:

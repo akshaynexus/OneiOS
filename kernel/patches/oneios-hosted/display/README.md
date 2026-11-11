@@ -228,5 +228,5 @@ The fix, in `OneiOSDisplay.cpp` (`oneios_display_power_on`, at the end of the la
 same arguments. Log: `oneios-display: power: ...; the family's power word was 0 and is 1`.
 `oneios-display-power=0` leaves it out. The offset 7180 is this kernelcache's.
 
-Built. **Not booted**: the owner's PC boots are stopped and the phone run is the test. Not known: whether anything
+Run on the phone (S24 Ultra, `a472a41`): `power: the power manager did not call setPowerState in 2 s: called here; the family's power word was 0 and is 1`, then swap submits (selector 5) for the first time and the Apple boot logo on the panel (screen capture and the glass). Not run on the PC. Not known: whether anything
 else in the family asks the power manager for the state (IOService's own `getPowerState()` still says 0).
