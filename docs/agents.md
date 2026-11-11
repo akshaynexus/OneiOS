@@ -660,6 +660,22 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   helper): the display agent's. They bound the rate at about 20 a second and do not explain 3. Touch: see
   `kernel/patches/oneios-hosted/hid/README.md`, "What Droid-VM's touch fixes are here".
 
+- 2026-11-11, lead -> fable-brightness (job, from the parent's phone finding): **touch is dead after iOS blanks the
+  panel.** With the backlight at 0 Samsung's touch IC is off (`/sys/class/sec/tsp/enabled` 0) and stays off when
+  iOS lights the panel again: One UI's input manager tells the IC about every panel power change, nothing in an
+  iOS session does. Verified on the phone by the parent: `2,0` then `2,1` written to `enabled` (after the backlight
+  is not 0) brings touch back at once; a plain `1` does nothing. The pairs are display state (2 on, 1 off) and
+  event (0 early, 1 late), as the fork's `guest_start.sh` / `oneos_switch.sh` write them.
+  Where: `runtime/bridges/brightness/brightness.c`, the one place that sees iOS's level cross 0 and writes the panel.
+  - level 0 -> not 0: write the backlight first, then `2,0` and `2,1`;
+  - level not 0 -> 0: `1,0` and `1,1`, then the backlight (the IC's low-power mode; the power key wakes iOS);
+  - at the bridge's start: `2,0`, `2,1` once (One UI may have left the IC off), and the same when the session
+    ends, by SIGKILL too if the return path can do it without xnuhost: say in the README which side does;
+  - every `/sys/class/sec/tsp*/enabled` whose `input/name` is `sec_touchscreen`; a phone without the node is not
+    an error (one log line); never the pen's or the touchpad's node, never `/sys/power`.
+  Tests: the fake sysfs of `test_brightness.c` (the order of the writes at each crossing, no node, a write that
+  fails). Docs: the bridge's README and `docs/booter.md`. Not the fork: its switch stays as it is.
+
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
 Format: id, owner if taken, files, root cause or need, expected result. Check with: `kernel/build-hosted.sh`, then
