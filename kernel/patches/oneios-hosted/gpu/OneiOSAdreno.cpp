@@ -195,16 +195,23 @@ extern "C" int native_ram_block_gpu_addon(const uint8_t **data, uint64_t *bytes)
 }
 
 // The tunnel's own counters (DroidVMVirtioGpu3D.cpp), printed as they change: whether the processes that hold a Metal
-// device give the GPU work, and how much. One line every oneios-gpu-report seconds (default 10, 0: off) while any changed:
-//   oneios-gpu-report: 10 s: submits +612 (fenced +600), render server frames +598 (mean 3100 us, max ever 41000 us,
-//     <1/<2/<4/<8/<16/<32 ms +0/+12/+400/+150/+30/+6, longer +0), contexts +0, blobs +14, maps +3, fence timeouts +0,
-//     refusals +0, clients 3, live blobs 210 (96 MiB)
-// and every sixth line the processes that hold GPU memory: oneios-gpu-clients: backboardd 80 MiB, SpringBoard 12 MiB.
-// "render server frames" are backboardd's fenced submissions, one or more per frame CoreAnimation draws on the GPU: if the
-// screen changes and they do not grow, CoreAnimation is not drawing with Metal.
+// device give the GPU work, how much, and what GPU memory they hold. Every oneios-gpu-report seconds (default 10, 0: off)
+// while any changed, three lines, each short enough for the kernel's log (IOLog cuts a line at 256 bytes, which cut the
+// one long line this was before 2026-11-11 just before its memory figures):
+//   oneios-gpu-report: 10 s: submits +612 (fenced +600); frames +598 mean 3100 us max ever 41000 us;
+//     <1/<2/<4/<8/<16/<32 ms +0/+12/+400/+150/+30/+6 longer +0; fence timeouts +0; refusals +0 (op 0 0x0)
+//   oneios-gpu-memory: blobs +14 closed +9 (deferred +2, waiting 3); live 210: own 150 (64 MiB), wired 60 (32 MiB);
+//     contexts +0 clients 3
+//   oneios-gpu-clients: backboardd 40+20 MiB, iconservicesagent 16+0 MiB
+// "frames" are backboardd's fenced submissions, one or more per frame CoreAnimation draws on the GPU, with the time from
+// submission to the GPU being done. "own" blobs are pages this driver allocated (Turnip's buffers, textures): GPU memory
+// that exists because of the client. "wired" blobs are the caller's own pages wired for the GPU (CREATE_BLOB_USER: an
+// IOSurface or a no-copy buffer imported, often another process's window): those pages are the surface's and are counted
+// again wherever the surface is. In the clients line the two are own+wired per process. A leak shows as "own" or the
+// live count growing while blobs closed lag behind blobs made, through screens that come back to the same state.
 extern "C" {
 extern volatile uint64_t droidvm_virtgpu_stats[8], droidvm_virtgpu_rs_fences[3], droidvm_virtgpu_rs_fence_hist[10];
-extern volatile uint64_t droidvm_virtgpu_live[4], droidvm_virtgpu_last_refusal[4];
+extern volatile uint64_t droidvm_virtgpu_live[4], droidvm_virtgpu_last_refusal[4], droidvm_virtgpu_closes[4];
 struct DroidVMClientMemory { char name[16]; uint64_t pageBytes, userBytes; uint32_t sizes[8]; };
 extern DroidVMClientMemory droidvm_virtgpu_client_memory[64];
 }
@@ -214,41 +221,54 @@ void report(void *, wait_result_t)
     uint32_t every = 10;
     PE_parse_boot_argn("oneios-gpu-report", &every, sizeof every);
     if (!every) return;
-    uint64_t was[8] = {}, fences[3] = {}, hist[10] = {};
-    for (unsigned line = 0;; ) {
+    uint64_t was[8] = {}, fences[3] = {}, hist[10] = {}, closed[2] = {}, live[4] = {};
+    for (;;) {
         IOSleep(every * 1000);
-        uint64_t now[8], rs[3], h[10];
+        uint64_t now[8], rs[3], h[10], cl[3], lv[4];
         for (unsigned i = 0; i < 8; i++) now[i] = droidvm_virtgpu_stats[i];
         for (unsigned i = 0; i < 3; i++) rs[i] = droidvm_virtgpu_rs_fences[i];
         for (unsigned i = 0; i < 10; i++) h[i] = droidvm_virtgpu_rs_fence_hist[i];
-        bool changed = rs[0] != fences[0];
-        for (unsigned i = 1; i < 8; i++) changed |= now[i] != was[i];
-        if (changed) {
+        for (unsigned i = 0; i < 3; i++) cl[i] = droidvm_virtgpu_closes[i];
+        for (unsigned i = 0; i < 4; i++) lv[i] = droidvm_virtgpu_live[i];
+        bool work = rs[0] != fences[0], memory = memcmp(lv, live, sizeof lv) != 0 || cl[0] != closed[0];
+        for (unsigned i = 1; i < 8; i++) work |= now[i] != was[i];
+        if (work) {
             const uint64_t frames = rs[0] - fences[0];
-            IOLog("oneios-gpu-report: %u s: submits +%llu (fenced +%llu), render server frames +%llu (mean %llu us, max ever %llu us, "
-                  "<1/<2/<4/<8/<16/<32 ms +%llu/+%llu/+%llu/+%llu/+%llu/+%llu, longer +%llu), contexts +%llu, blobs +%llu, maps +%llu, "
-                  "fence timeouts +%llu, refusals +%llu (last op %llu status %#llx), clients %llu, live blobs %llu (%llu MiB)\n",
+            IOLog("oneios-gpu-report: %u s: submits +%llu (fenced +%llu); frames +%llu mean %llu us max ever %llu us; "
+                  "<1/<2/<4/<8/<16/<32 ms +%llu/+%llu/+%llu/+%llu/+%llu/+%llu longer +%llu; fence timeouts +%llu; refusals +%llu (op %llu %#llx)\n",
                   every, now[4] - was[4], now[5] - was[5], frames, frames ? (rs[1] - fences[1]) / frames : 0, rs[2],
                   h[0] - hist[0], h[1] - hist[1], h[2] - hist[2], h[3] - hist[3], h[4] - hist[4], h[5] - hist[5],
-                  (h[6] + h[7] + h[8] + h[9]) - (hist[6] + hist[7] + hist[8] + hist[9]), now[1] - was[1], now[2] - was[2],
-                  now[3] - was[3], now[6] - was[6], now[7] - was[7], droidvm_virtgpu_last_refusal[0], droidvm_virtgpu_last_refusal[1],
-                  now[0], droidvm_virtgpu_live[2] + droidvm_virtgpu_live[3], (droidvm_virtgpu_live[0] + droidvm_virtgpu_live[1]) >> 20);
-            if (line++ % 6 == 0) {
-                char text[480];
-                size_t at = 0;
-                text[0] = 0;
-                for (unsigned i = 0; i < 64 && at + 40 < sizeof text; i++) {
-                    const DroidVMClientMemory &c = droidvm_virtgpu_client_memory[i];
-                    const uint64_t mib = (c.pageBytes + c.userBytes) >> 20;
-                    if (!c.name[0] || !(c.pageBytes + c.userBytes)) continue;
-                    at += snprintf(text + at, sizeof text - at, "%s%.16s %llu MiB", at ? ", " : "", c.name, mib);
+                  (h[6] + h[7] + h[8] + h[9]) - (hist[6] + hist[7] + hist[8] + hist[9]), now[6] - was[6], now[7] - was[7],
+                  droidvm_virtgpu_last_refusal[0], droidvm_virtgpu_last_refusal[1]);
+        }
+        if (work || memory) {
+            IOLog("oneios-gpu-memory: blobs +%llu closed +%llu (deferred +%llu, waiting %llu); live %llu: own %llu (%llu MiB), "
+                  "wired %llu (%llu MiB); contexts +%llu clients %llu\n",
+                  now[2] - was[2], cl[0] - closed[0], cl[1] - closed[1], cl[2], lv[2] + lv[3], lv[2], lv[0] >> 20, lv[3], lv[1] >> 20,
+                  now[1] - was[1], now[0]);
+        }
+        if (memory) {
+            // The clients holding GPU memory, own+wired MiB, in lines of at most ~200 bytes.
+            char text[200];
+            size_t at = 0;
+            for (unsigned i = 0; i < 64; i++) {
+                const DroidVMClientMemory &c = droidvm_virtgpu_client_memory[i];
+                if (!c.name[0] || !(c.pageBytes + c.userBytes)) continue;
+                char one[64];
+                const int n = snprintf(one, sizeof one, "%.16s %llu+%llu MiB", c.name, c.pageBytes >> 20, c.userBytes >> 20);
+                if (at && at + 2 + size_t(n) >= sizeof text) {
+                    IOLog("oneios-gpu-clients: %s\n", text);
+                    at = 0;
                 }
-                IOLog("oneios-gpu-clients: %s\n", at ? text : "none");
+                at += snprintf(text + at, sizeof text - at, "%s%s", at ? ", " : "", one);
             }
+            IOLog("oneios-gpu-clients: %s\n", at ? text : "none");
         }
         memcpy(was, now, sizeof was);
         memcpy(fences, rs, sizeof fences);
         memcpy(hist, h, sizeof hist);
+        memcpy(closed, cl, sizeof closed);
+        memcpy(live, lv, sizeof live);
     }
 }
 }  // namespace

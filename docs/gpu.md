@@ -89,6 +89,16 @@ Two changes to Droid-VM's `drm2kgsl_renderer.c` at the pin, marked `ONEIOS` in t
    `GEM_SET_IOVA` as a whole, and freed chunk by chunk (unbind, free, close). With one dma-buf everything goes the
    way it went.
 
+### 2.2 `drm2kgsl/patches/0002-power-constraint-from-the-first-frame.patch`
+
+drm2kgsl runs a compositor queue's submissions at the GPU's highest level (a KGSL power constraint) only while it submits at
+`DRM2KGSL_PWR_CONSTRAINT_MIN_RATE` a second, 60 upstream. iOS's render server draws sparse frames when the screen changes
+little (1-5 in 10 s at the lock screen), and each ran at the governor's idle clock: 22-31 ms from submission to done. With the
+rate 0 (the environment variable, phone, 2026-11-11) frames took 8-10 ms at 40-60 a second. The patch makes 0 the default; the
+variable still overrides it. Only queues that ask are constrained (the render server's: `context N: constrained ...` in the
+log), and only while each of their submissions runs. drm2kgsl's matching vCPU clamp looks for threads named `crosvm_vcpu*`;
+xnuhost's are `xnu-cpuN`, so it does nothing here.
+
 To change it: edit a copy of the pinned file, `diff -u` against the original into `drm2kgsl/patches/`, `make`.
 A new pin of virglrenderer that the patch no longer applies to stops the build (`patch -F0`).
 
@@ -354,9 +364,23 @@ payload. The tunnel's own counters (`DroidVMVirtioGpu3D.cpp`) are printed instea
 (default 10, `0` off) while one changed:
 
 ```
-oneios-gpu-report: 10 s: submits +612 (fenced +600), render server frames +598 (mean 3100 us, max ever 41000 us, <1/<2/<4/<8/<16/<32 ms ...), contexts +0, blobs +14, maps +3, fence timeouts +0, refusals +0 (...), clients 3, live blobs 210 (96 MiB)
-oneios-gpu-clients: backboardd 80 MiB, SpringBoard 12 MiB
+oneios-gpu-report: 10 s: submits +612 (fenced +600); frames +598 mean 3100 us max ever 41000 us; <1/<2/<4/<8/<16/<32 ms +0/+12/+400/+150/+30/+6 longer +0; fence timeouts +0; refusals +0 (op 0 0x0)
+oneios-gpu-memory: blobs +14 closed +9 (deferred +2, waiting 3); live 210: own 150 (64 MiB), wired 60 (32 MiB); contexts +0 clients 3
+oneios-gpu-clients: backboardd 40+20 MiB, iconservicesagent 16+0 MiB
 ```
+
+Three lines because IOLog cuts a line at 256 bytes: the first phone runs lost the memory figures that way. "own" blobs are
+pages the driver allocated (Turnip's buffers and textures): memory that exists for that client. "wired" blobs are the caller's
+own pages wired for the GPU (`CREATE_BLOB_USER`: an IOSurface or a no-copy buffer imported, often another process's window
+surface); those pages belong to the surface and are counted again wherever it is imported. The clients line gives own+wired
+MiB per process; the memory line comes whenever the live counts change, the clients line too.
+
+Reading a leak: "own" or the live count rising across screens that come back to the same state, while "closed" lags "blobs".
+The phone's numbers before this split (backboardd 20 -> 383 -> 431 -> 460 -> 543 -> 925 MiB in 16 min, 2026-11-11) mixed both
+kinds; the steps at 543 and 925 came after SpringBoard restarts (it aborted on `processIdentity`, not a GPU fault). The
+plug-in keeps each imported surface while anything else in backboardd still retains it and lets it go at the next import, a
+command buffer's completion or memory pressure (`NativeBridgeMetalFrontend.mm`, `surfaceBuffer`), and trims the runtime's
+empty blocks every 2 s; whether a dead SpringBoard's windows are let go is what "wired" after a restart will show.
 
 "render server frames" are backboardd's fenced submissions (the tunnel counts the compositor's, `droidvm_virtgpu_rs_fences`):
 one or more for every frame CoreAnimation draws with Metal, with the time from submission to the GPU being done. While the
