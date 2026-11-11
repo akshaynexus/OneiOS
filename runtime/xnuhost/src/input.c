@@ -56,6 +56,7 @@ int xh_input_start(xh_virtio *dev, unsigned width, unsigned height)
 {
   (void)width; (void)height;
   target = dev;
+  bool have_touch = false;
   for (unsigned i = 0; i < 32 && nfds < MAX_DEVICES; i++) {
     char path[32], name[64] = "";
     snprintf(path, sizeof path, "/dev/input/event%u", i);
@@ -67,16 +68,34 @@ int xh_input_start(xh_virtio *dev, unsigned width, unsigned height)
     ioctl(fd, EVIOCGNAME(sizeof name - 1), name);
     bool touch = bit(abs, ABS_MT_POSITION_X) && bit(abs, ABS_MT_POSITION_Y);
     bool keys = bit(key, KEY_VOLUMEDOWN) || bit(key, KEY_VOLUMEUP) || bit(key, KEY_POWER);
-    if (!touch && !keys) { close(fd); continue; }
+    // One touchscreen: the multitouch device that is the screen itself (INPUT_PROP_DIRECT). The S24 Ultra also has
+    // "sec_touchpad", a multitouch pointer device with the same axes: its events went into the same guest device as
+    // the screen's (one slot state for two sources) and its ranges replaced the screen's. Not taken.
     if (touch) {
-      // The guest gets the panel's own coordinate ranges and scales them to its frame.
-      static const unsigned axes[] = { ABS_MT_SLOT, ABS_MT_TRACKING_ID, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_PRESSURE, ABS_MT_TOUCH_MAJOR };
-      for (unsigned a = 0; a < sizeof axes / sizeof *axes; a++) {
-        struct input_absinfo info;
-        if (bit(abs, axes[a]) && ioctl(fd, EVIOCGABS(axes[a]), &info) == 0) xh_virtio_input_set_abs(dev, axes[a], info.minimum, info.maximum, info.resolution);
+      unsigned long props[(INPUT_PROP_MAX + 8 * sizeof(long)) / (8 * sizeof(long))] = { 0 };
+      bool direct = ioctl(fd, EVIOCGPROP(sizeof props), props) >= 0 && bit(props, INPUT_PROP_DIRECT);
+      if (!direct || have_touch) {
+        LOGI("input: %s \"%s\": multitouch, not taken (%s)", path, name, direct ? "a touchscreen is already taken" : "not the screen: no INPUT_PROP_DIRECT");
+        touch = false;
       }
     }
-    LOGI("input: %s \"%s\"%s%s", path, name, touch ? " touch" : "", keys ? " keys" : "");
+    if (!touch && !keys) { close(fd); continue; }
+    char ranges[96] = "";
+    if (touch) {
+      have_touch = true;
+      // The guest gets the panel's own coordinate ranges and scales them to its frame.
+      static const unsigned axes[] = { ABS_MT_SLOT, ABS_MT_TRACKING_ID, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_PRESSURE, ABS_MT_TOUCH_MAJOR };
+      struct input_absinfo x = { 0 }, y = { 0 };
+      for (unsigned a = 0; a < sizeof axes / sizeof *axes; a++) {
+        struct input_absinfo info;
+        if (!bit(abs, axes[a]) || ioctl(fd, EVIOCGABS(axes[a]), &info)) continue;
+        xh_virtio_input_set_abs(dev, axes[a], info.minimum, info.maximum, info.resolution);
+        if (axes[a] == ABS_MT_POSITION_X) x = info;
+        if (axes[a] == ABS_MT_POSITION_Y) y = info;
+      }
+      snprintf(ranges, sizeof ranges, " (x %d..%d, y %d..%d)", x.minimum, x.maximum, y.minimum, y.maximum);
+    }
+    LOGI("input: %s \"%s\"%s%s%s", path, name, touch ? " touch" : "", ranges, keys ? " keys" : "");
     is_touch[nfds] = touch;
     fds[nfds++] = (struct pollfd){ .fd = fd, .events = POLLIN };
   }
