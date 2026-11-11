@@ -313,6 +313,41 @@ thread; none was seen.) Boot arguments:
 | `vgpu-3d=1` | what `GETPARAM(DEFAULT_3D)` answers the plug-in (DroidVMVirtioGpu3D.cpp reads it with default 0; `vgpu-3d=0` also turns the driver off) |
 | `oneios-adreno-selftest=1` | after the publish: IOKit's match of `IOAcceleratorES`, an in-kernel open with type `0x4149`, `GETPARAM(ABI_VERSION)` through the tunnel; two `oneios-adreno: selftest:` lines |
 
+**How iOS finds the plug-in (`0031-gpu-addon-mount.patch`).** Metal loads
+`/System/Library/Extensions/<MetalPluginName>.bundle`. That folder is on the sealed system volume, so UniXNU's
+`native_gpu_addon_prepare` shows a Data folder over it as a read-only bindfs union, after the Data seed is unpacked and
+before launchd. Before 0031 that never happened here: the mount wanted `sheng-gpu-addon=1`, which no session passes, and
+looked in `/private/var/ngpu/addons`, while the image hook places the bundle in `/private/var/oneios/addons/Extensions`.
+Nothing logged it, so `backboardd` simply had no Metal device and CoreAnimation composited on the CPU (phone, 2026-11-11:
+no `AGX*` user-client call from backboardd). Now:
+
+- The mount is on by default in the hosted kernel; `sheng-gpu-addon=0` turns it off.
+- The source is the Data seed's folder, or `/private/var/ngpu/addons` if a GPU addon was handed to this boot:
+  `kernel.kc.gpuaddon` beside the kernel (`userland/metal/build.sh addon` makes it as
+  `out/userland/NativeAdrenoMetal.gpuaddon`, xnuhost passes it on, `native_ram_block_gpu_addon` in `gpu/OneiOSAdreno.cpp`
+  finds it). The kernel writes its files into Data first, so a rebuilt plug-in needs no new seed. Its CDHashes must still be in
+  the image's `overlay/userland/owner-trust.json`.
+- The grant was not the gate: `grantedProcesses` always names `backboardd`. `droidvm-gpu-clients=` is for the other processes.
+
+Log lines (always on):
+
+```
+oneios-gpu-addon: boot addon: -1 files (-1 none), 0 written, 0 unchanged, 0 failed, last error 0
+oneios-gpu-addon: /private/var/oneios/addons/Extensions over /System/Library/Extensions: stage 5, status 0 (...)
+oneios-gpu-plugin: backboardd[53] code signature of NativeAdrenoMetal: error 0
+oneios-gpu-plugin: backboardd[53] library validation of NativeAdrenoMetal: error 0
+oneios-gpu-open: backboardd[53] AGXAccelerator type 0x4149 -> 0x0, AGXDeviceUserClient
+```
+
+Reading them, in order: `oneios-gpu-addon` stage 5 means iOS can see the plug-in; `oneios-gpu-plugin` is dyld loading it (no
+line: nobody tried, or the vnode had no name; an error on the first line is the trust cache, on the second AMFI's library
+validation); `oneios-gpu-open` with `0x41476800` is the plug-in's code running in that process.
+
+Stages of the mount: 1 source found, 2 mounting, 3 mounted, 4 the sealed `AGXMetalG18P.bundle` visible through it, 5 the
+plug-in's `Info.plist` visible too. `oneios-gpu-open` is one line per open of an `AGX*` service, at most 400 per boot. The
+plug-in's progress markers arrive the same way, as open types `0x4147xxxx` answered unsupported by design: `0x6800` entered,
+`0x6801` Turnip found, `0x6802` device made, `0x6803` handed to Metal's discovery, `0x68f1` no Turnip, `0x68f2` no device.
+
 **The user-client interface** (what `NativeAdrenoMetal.bundle` and Turnip's vdrm backend call; nothing here differs
 from Droid-VM's, the header is `external/NativeAdreno/DroidVMVirtgpuABI.h`):
 
@@ -390,7 +425,7 @@ member `AGXAccelerator::superClass` keeps the parent's unslid link address (noth
 Built on the Linux PC with the iOS cross toolchain ([building.md](building.md) section 9); no Mac.
 
 ```sh
-scripts/bg.sh metal userland/metal/build.sh      # stage, turnip, plugin, finish (each also runs alone)
+scripts/bg.sh metal userland/metal/build.sh      # stage, turnip, plugin, finish, addon (each also runs alone)
 ```
 
 **What it builds**, all for `arm64e-apple-ios27.0`:
@@ -462,7 +497,7 @@ has it on the iPad; it only reads inside QuartzCore's image.
 both binaries (every library has a stub of 24A446 and every bound import is exported by it; Turnip's 5633 weak
 entrypoints are bound to itself); the image hook places the bundle and `owner-trust.json` lists both CDHashes
 (sizes and hashes: `out/userland/NativeAdrenoMetal.build.json`).
-**Not verified:** anything at run time. No guest has loaded the bundle: no boot has been made from an image set
-that carries it with a kernel that trusts its CDHashes, and SpringBoard is not up. Whether dyld and AMFI of this guest accept the binaries, whether the
+**Not verified:** anything at run time. No guest has loaded the bundle: until `0031-gpu-addon-mount.patch` no kernel
+showed it to iOS (section 5.1), and that patch has compiled but not run. Whether dyld and AMFI of this guest accept the binaries, whether the
 writes above have the effect they have on the iPad, and whether MetalCheck passes are all open.
 

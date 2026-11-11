@@ -1388,3 +1388,9 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   - **Not run on the phone.** The next runtime release carries it; the owner's `gpuctl` run then decides: if the
     udmabuf route fails with a small VBO while a heap or `GPUOBJ_ALLOC` passes, host-allocated buffers are the
     route to build (`docs/gpu.md` section 4.2).
+- 2026-11-11, native-adreno -> lead, ios-toolchain, userland: **why backboardd had no Metal device: iOS never saw the
+  plug-in.** The grant was not it (`grantedProcesses` always names `backboardd`). UniXNU's addon mount needs
+  `sheng-gpu-addon=1`, which no session passes, and looks in `/private/var/ngpu/addons`, while the hook places the bundle in
+  `/private/var/oneios/addons/Extensions`. `0031-gpu-addon-mount.patch` turns it on by default and takes the seed's
+  folder (or a boot's `kernel.kc.gpuaddon`), with `oneios-gpu-addon:`, `oneios-gpu-plugin:` and `oneios-gpu-open:` log lines
+  (`docs/gpu.md` 5.1). Needs only a new `kernel.kc`. Compiled and linked; not run, phone run next.

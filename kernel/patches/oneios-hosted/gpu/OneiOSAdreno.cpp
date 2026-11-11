@@ -32,6 +32,9 @@
 #include <kern/thread.h>
 #include <kern/task.h>
 #include <pexpert/pexpert.h>
+#include <IOKit/IODeviceTreeSupport.h>
+#include <machine/machine_routines.h>
+extern "C" uint64_t gPhysBase, gPhysSize;
 #include "DroidVMVirtgpuABI.h"
 
 extern vm_offset_t vm_kernel_slide;
@@ -163,6 +166,33 @@ void selftest(void *, wait_result_t)
     st[0] = called ? 0x84 : 5;
 }
 }  // namespace
+
+// The GPU addon handed over by the loader (xnuhost's <kernel>.gpuaddon sidecar, format NGPUADD2, built by
+// userland/metal/build.sh): UniXNU's Data path (kern_exec.c native_gpu_addon_prepare) writes it into
+// /private/var/ngpu before its addon mount, so a rebuilt plug-in does not need a new Data seed. This is
+// RamBlock's native_ram_block_gpu_addon; storage/ has a weak answer of "none" for a kernel without this archive.
+extern "C" int native_ram_block_gpu_addon(const uint8_t **data, uint64_t *bytes)
+{
+    if (!data || !bytes) return 0;
+    *data = nullptr;
+    *bytes = 0;
+    IORegistryEntry *map = IORegistryEntry::fromPath("/chosen/memory-map", gIODTPlane);
+    if (!map) return 0;
+    uint64_t physical = 0, size = 0;
+    if (OSData *range = OSDynamicCast(OSData, map->getProperty("GpuAddon"))) {
+        if (range->getLength() == 16) {
+            memcpy(&physical, range->getBytesNoCopy(), 8);
+            memcpy(&size, static_cast<const uint8_t *>(range->getBytesNoCopy()) + 8, 8);
+        }
+    }
+    map->release();
+    if (!size || size > (uint64_t(64) << 20) || (physical & 4095) || physical < gPhysBase || size > gPhysSize ||
+        physical - gPhysBase > gPhysSize - size) return 0;
+    *data = reinterpret_cast<const uint8_t *>(ml_static_ptovirt(physical));
+    if (!*data) return 0;
+    *bytes = size;
+    return 1;
+}
 
 void oneios_adreno_start(void)
 {

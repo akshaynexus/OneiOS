@@ -1,0 +1,165 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8678,17 +8678,50 @@
+ static void
+ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+ {
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted (0031): the addon mount is on unless sheng-gpu-addon=0. Without it the Metal plug-in is not under
++	 * /System/Library/Extensions, Metal's discovery finds no bundle for the accelerator's MetalPluginName, no process
++	 * gets a device, and backboardd composites on the CPU. Nothing else in the boot says so, so no boot argument is needed.
++	 */
++	uint32_t enabled = 1;
++	PE_parse_boot_argn("sheng-gpu-addon", &enabled, sizeof(enabled));
++	if (enabled == 0) {
++		printf("oneios-gpu-addon: off (sheng-gpu-addon=0): no Metal plug-in, backboardd composites on the CPU\n");
++		return;
++	}
++#else
+ 	uint32_t enabled = 0;
+ 	if (!PE_parse_boot_argn("sheng-gpu-addon", &enabled, sizeof(enabled)) || enabled != 1) {
+ 		return;
+ 	}
++#endif
+ 	native_gpu_addon_install(p, scratch);
+ 	static const char extensions_source[] = "/private/var/ngpu/addons", extensions_point[] = "/System/Library/Extensions";
+ 	static const char daemons_source[] = "/private/var/ngpu/daemons", daemons_point[] = "/System/Library/LaunchDaemons";
++#if XNU_HOSTED
++	/*
++	 * Which folder: the addon of this boot (kernel.kc.gpuaddon, written to /private/var/ngpu above) if there was one,
++	 * else the Data seed's (the image hook's metal-plugin tweak, /private/var/oneios/addons/Extensions). The sealed
++	 * entry looked for through the union is the iPhone18,2 image's own driver.
++	 */
++	static const char seed_source[] = "/private/var/oneios/addons/Extensions";
++	const int from_addon = native_gpu_addon_files > 0;
++	native_gpu_addon_mount(p, scratch, 0x400, from_addon ? extensions_source : seed_source,
++	    from_addon ? sizeof(extensions_source) : sizeof(seed_source), extensions_point, sizeof(extensions_point),
++	    "/System/Library/Extensions/AGXMetalG18P.bundle",
++	    "/System/Library/Extensions/NativeAdrenoMetal.bundle/Info.plist", &native_gpu_addon_stage,
++	    &native_gpu_addon_status);
++	printf("oneios-gpu-addon: boot addon: %d files (-1 none), %d written, %d unchanged, %d failed, last error %d\n",
++	    native_gpu_addon_files, native_gpu_addon_written, native_gpu_addon_same, native_gpu_addon_failed, native_gpu_addon_error);
++	printf("oneios-gpu-addon: %s over %s: stage %d, status %d (stage 5 status 0: mounted, the sealed driver and the plug-in both visible)\n",
++	    from_addon ? extensions_source : seed_source, extensions_point, native_gpu_addon_stage, native_gpu_addon_status);
++#else
+ 	native_gpu_addon_mount(p, scratch, 0x400, extensions_source, sizeof(extensions_source), extensions_point,
+ 	    sizeof(extensions_point), "/System/Library/Extensions/AGXMetalG17G.bundle",
+ 	    "/System/Library/Extensions/NativeAdrenoMetal.bundle/Info.plist", &native_gpu_addon_stage,
+ 	    &native_gpu_addon_status);
++#endif
+ 	native_gpu_addon_mount(p, scratch, 0x600, daemons_source, sizeof(daemons_source), daemons_point, sizeof(daemons_point),
+ 	    "/System/Library/LaunchDaemons/com.apple.backboardd.plist",
+ 	    "/System/Library/LaunchDaemons/org.blu-sharky.adrenoprobed.plist", &native_gpu_addon2_stage, &native_gpu_addon2_status);
+diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
+--- a/iokit/Kernel/IOUserClient.cpp
++++ b/iokit/Kernel/IOUserClient.cpp
+@@ -4479,6 +4479,30 @@
+ 	return client && 0 == strcmp(client->getMetaClass()->getClassName(), "AGXDeviceUserClient");
+ }
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0031), a boot's record of who opens the GPU: one line per open of an AGX service, with the type and
++ * the answer (at most 400 lines, always on: the question "did this process even ask?" must not need a rebuild):
++ *   oneios-gpu-open: backboardd[53] AGXAccelerator type 0x4149 -> 0x0, AGXDeviceUserClient
++ * Type 0x4149 is the Metal plug-in's connection. Types 0x4147xxxx are the plug-in's progress markers, answered
++ * kIOReturnUnsupported by design (NativeAdrenoMetalPlugin.mm: 0x6800 entered, 0x6801 Turnip found, 0x6802 device
++ * made, 0x6803 returned to Metal's discovery, 0x68f1 no Turnip, 0x68f2 no device).
++ */
++static void
++hosted_gpu_open_note(IOService * service, uint32_t type, IOReturn res, IOUserClient * client)
++{
++	static SInt32 lines = 0;
++	const char * cls = service->getMetaClass()->getClassName();
++	if (strncmp(cls, "AGX", 3) || lines >= 400 || OSIncrementAtomic(&lines) >= 400) {
++		return;
++	}
++	char name[33] = {};
++	proc_name(proc_selfpid(), name, sizeof(name));
++	IOLog("oneios-gpu-open: %s[%d] %s type %#x -> %#x%s%s\n", name, proc_selfpid(), cls, type, res, client ? ", " : "",
++	    client ? client->getMetaClass()->getClassName() : "");
++}
++#endif
++
+ kern_return_t
+ is_io_service_open_extended(
+ 	io_object_t _service,
+@@ -4512,6 +4536,9 @@
+ 	 * grant then stands in for the message filter below alone, whose rules name the original user client's methods. */
+ 	if (!(native_sandbox_grant(service) && !droidvm_gpu_sandbox_decides)
+ 	    && mac_iokit_check_open_service(kauth_cred_get(), service, connect_type) != 0) {
++#if XNU_HOSTED
++		hosted_gpu_open_note(service, connect_type, kIOReturnNotPermitted, NULL);
++#endif
+ 		return kIOReturnNotPermitted;
+ 	}
+ #endif
+@@ -4715,6 +4742,10 @@
+ 		}
+ 	}while (false);
+ 
++#if XNU_HOSTED
++	hosted_gpu_open_note(service, connect_type, res, client);
++#endif
++
+ 	*connection = client;
+ 	*result = res;
+ 
+diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
+--- a/bsd/kern/kern_descrip.c
++++ b/bsd/kern/kern_descrip.c
+@@ -2876,6 +2876,32 @@
+ 	return sys_fcntl_outdrop(p, fd, fp, vp, error);
+ }
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0031): dyld's two steps of loading the Metal plug-in, so the log tells "never tried" (no line) from
++ * "the signature was refused" (error on the first) and "library validation refused it" (error on the second):
++ *   oneios-gpu-plugin: backboardd[53] code signature of NativeAdrenoMetal: error 0
++ *   oneios-gpu-plugin: backboardd[53] library validation of NativeAdrenoMetal: error 0
++ * At most 64 lines. A vnode without a name prints nothing.
++ */
++static void
++hosted_gpu_plugin_note(vnode_t vp, const char *what, int error)
++{
++	static int lines;
++	const char *file = vnode_getname(vp);
++	if (!file) {
++		return;
++	}
++	if (lines < 64 && (!strncmp(file, "NativeAdrenoMetal", 17) || !strncmp(file, "libvulkan_freedreno", 19))) {
++		char process[33] = {};
++		lines++;
++		proc_selfname(process, sizeof(process));
++		printf("oneios-gpu-plugin: %s[%d] %s of %s: error %d\n", process, proc_selfpid(), what, file, error);
++	}
++	vnode_putname(file);
++}
++#endif
++
+ int
+ sys_fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
+ {
+@@ -4241,6 +4267,9 @@
+ 			    blob_add_flags,
+ 			    &blob,
+ 			    csblob_add_flags);
++#if XNU_HOSTED
++			hosted_gpu_plugin_note(vp, "code signature", error);
++#endif
+ 
+ 			/* ubc_blob_add() has consumed "kernel_blob_addr" if it is zeroed */
+ 			if (error) {
+@@ -4449,6 +4478,9 @@
+ #if CONFIG_MACF
+ 		error = mac_file_check_library_validation(p, fg, lv.lv_file_start,
+ 		    (user_long_t)lv.lv_error_message, lv.lv_error_message_size);
++#if XNU_HOSTED
++		hosted_gpu_plugin_note((vnode_t)fg_get_data(fg), "library validation", error);
++#endif
+ #endif
+ 
+ 		break;

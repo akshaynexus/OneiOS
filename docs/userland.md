@@ -269,7 +269,8 @@ scale (3.27 would give 440 points) is not something UIKit has. So 3 stays the de
 - `launch_policy.service_manager`: start `/private/var/oneios/bin/oneios-init` once and give its task
   launchd's bootstrap port (droidvm `spawn_service_manager`, `droidvm_fix_ownervisor_bootstrap`).
 - `launch_policy.force_enabled`: disabled jobs that will run anyway.
-- `addon_mounts`: read-only bind mounts after Data is mounted (the Metal plugin over `/System/Library/Extensions`).
+- `addon_mounts`: read-only bind mounts after Data is mounted (the Metal plugin over `/System/Library/Extensions`:
+  `kernel/patches/oneios-hosted/0031-gpu-addon-mount.patch`, on without a boot argument, `docs/gpu.md` 5.1).
 - `app_cryptex`, `staged_apps`: the two views of section 3.
 - `kernel_features`: launch policy, service manager, no launch constraints for owner binaries, owner
   trust module, data-protection class in an xattr, the key-store stand-in (no passcode, wrap/unwrap),

@@ -160,6 +160,8 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   thread of those processes is (`oneios-ubt:` lines: scheduler state, saved pc and lr, the return addresses up the
   frame pointers; `0026`). Give a long line's addresses to `scripts/debug/dsc.py` for the slide, then name the rest
   with `--slide`.
+- Who opens the GPU, and whether the Metal plug-in's folder was mounted: `oneios-gpu-addon:` and `oneios-gpu-open:` lines,
+  always on (`docs/gpu.md` 5.1).
 - IOKit calls of a process: `oneios-iouc=NAME[,NAME...]` logs which user client methods those processes call and
   what they return (`oneios-iouc: backboardd[53] IOMobileFramebufferUserClient selector 5 -> 0x0 (call 1)`: the
   first call of each class and selector, each change of status, and calls 16, 64, 256, ...; `0029`).

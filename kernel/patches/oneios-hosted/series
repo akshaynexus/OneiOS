@@ -74,3 +74,7 @@
 # lead: a debugging aid. oneios-display-report=SECONDS prints the display backend's counters (vsync ticks, swaps
 # validated and refused, transfers, retirements, the family's state words). Off without the boot argument.
 0030-display-report.patch
+# native-adreno: the Metal plug-in reaches iOS. UniXNU's addon mount is on without its boot argument (sheng-gpu-addon=0
+# turns it off) and takes the Data seed's folder (/private/var/oneios/addons/Extensions) unless a GPU addon of this boot
+# (kernel.kc.gpuaddon) was written to /private/var/ngpu; its result and every open of an AGX service are logged.
+0031-gpu-addon-mount.patch

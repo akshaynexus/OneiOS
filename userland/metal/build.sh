@@ -2,7 +2,7 @@
 # Build the Metal plug-in, NativeAdrenoMetal.bundle, for iOS 27 arm64e on Linux (no Mac), for this guest's shared cache.
 #
 #   scripts/bg.sh metal userland/metal/build.sh            everything (about 25 minutes the first time)
-#   userland/metal/build.sh stage|turnip|plugin|finish     one step
+#   userland/metal/build.sh stage|turnip|plugin|finish|addon   one step
 #
 # What is built (docs/gpu.md section 7, docs/userland.md 7.1):
 #   libvulkan_freedreno.dylib   Mesa's Turnip (external/mesa-droidvm cecc0e9 + Droid-VM-UniXNU patches/mesa, the list of
@@ -12,6 +12,7 @@
 #   NativeAdrenoMetal           external/NativeMetal b0d6a07: the plug-in and the Metal frontend, linked with the bridge
 #                               (GpuScanoutPresenter.h includes the wire header of external/NativeMobileDisplay)
 #   -> out/userland/NativeAdrenoMetal.bundle (Info.plist, NativeAdrenoMetal, libvulkan_freedreno.dylib, oneios-target)
+#      out/userland/NativeAdrenoMetal.gpuaddon: the bundle as the kernel.kc.gpuaddon sidecar (build.sh addon makes it alone)
 #      out/userland/NativeAdrenoMetal.build.json: the SDK and stubs used, the pins, sizes and CDHashes
 #
 # How: the kernel base's own build scripts (Droid-VM-UniXNU scripts/build-turnip-darwin.py, build-adreno-metal-bridge.py,
@@ -184,12 +185,46 @@ EOF
   say "bundle $bundle; record $OUT/NativeAdrenoMetal.build.json"
 }
 
+# The bundle as a GPU addon: the sidecar kernel.kc.gpuaddon (format NGPUADD2, the format of Droid-VM-UniXNU's
+# make-gpu-addon.py). xnuhost hands it to the kernel, which writes it into /private/var/ngpu before its addon mount
+# (0031-gpu-addon-mount.patch), so the Data store survives a rebuilt plug-in. The bundle's CDHashes must be in the
+# image's overlay/userland/owner-trust.json all the same; this is for changing the plug-in without a new Data seed.
+addon() {
+  local bundle=$OUT/NativeAdrenoMetal.bundle
+  [ -f "$bundle/NativeAdrenoMetal" ] || { echo "metal: no bundle in $OUT: run the build first" >&2; exit 1; }
+  python3 -I - "$bundle" "$OUT/NativeAdrenoMetal.gpuaddon" <<'EOF2'
+import os, struct, sys, zlib
+bundle, output = sys.argv[1:3]
+files = []
+for current, dirs, names in os.walk(bundle):
+    dirs.sort()
+    for name in sorted(names):
+        path = os.path.join(current, name)
+        rel = os.path.relpath(path, bundle).replace(os.sep, '/')
+        files.append(('addons/NativeAdrenoMetal.bundle/' + rel, 0o755 if os.access(path, os.X_OK) else 0o644, open(path, 'rb').read()))
+files.append(('addons/NativeAdrenoMetal.publish', 0o644, b'1\n'))
+def pad(data):
+    return data + bytes(-len(data) % 8)
+body = b''
+for name, mode, data in files:
+    encoded = name.encode() + b'\0'
+    assert len(encoded) <= 160
+    packed = zlib.compress(data, 9)
+    body += struct.pack('<IIQQ', len(encoded), mode, len(data), len(packed)) + pad(encoded) + pad(packed)
+blob = b'NGPUADD2' + struct.pack('<IIQ', len(files), 0, 24 + len(body)) + body
+assert len(blob) <= 64 << 20, 'over xnuhost\'s 64 MiB limit for the sidecar'
+open(output, 'wb').write(blob)
+print(f'metal: {output}: {len(files)} files, {len(blob)} bytes')
+EOF2
+}
+
 say "SDK $IOS_SDK_VERSION ($IOS_SDK); stubs $([ -f "$IOS_TBD/usr/lib/libSystem.B.tbd" ] && echo "$IOS_TBD" || echo "none: the SDK's own"); target $IOS_TARGET"
 case "${1:-all}" in
   stage) stage ;;
   turnip) turnip ;;
   plugin) plugin ;;
-  finish) finish ;;
-  all) stage; turnip; plugin; finish ;;
+  finish) finish; addon ;;
+  addon) addon ;;
+  all) stage; turnip; plugin; finish; addon ;;
   *) sed -n '2,6p' "$0"; exit 2 ;;
 esac
