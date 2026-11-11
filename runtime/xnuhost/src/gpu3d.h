@@ -66,7 +66,19 @@ void xh_virtio_gpu_idle(xh_virtio *dev);
 typedef void (*xh_gpu3d_log)(int level, const char *line);      // 0 error, 1 info, 2 debug
 xh_gpu3d *xh_gpu3d_kgsl_open(int ram_fd, uint64_t ram_phys, uint64_t ram_size, void *pool_host, uint64_t pool_pa,
                              uint64_t pool_size, xh_gpu3d_log log, const char **why);
-// gpu3d.c: a udmabuf over guest physical segments of the RAM memfd (adjacent segments are joined). -1 and errno on
-// failure (EINVAL: a segment outside the RAM or not whole pages, or the memfd without F_SEAL_SHRINK).
+// gpu3d.c: guest physical segments of the RAM memfd as dma-bufs (/dev/udmabuf). The kernel caps one udmabuf at
+// size_limit_mb MiB and list_limit runs of pages (64 and 1024 by default, and on the Galaxy S24 Ultra), so a blob
+// becomes as many udmabufs ("chunks") as it needs, in the blob's order: a chunk ends where the next page would pass
+// either limit. Adjacent segments are joined. The limits used are the kernel's (/sys/module/udmabuf/parameters) but
+// never more than 64 MiB and 1024, so every host splits a blob the way the phone does.
+typedef struct { int fd; uint64_t size; } xh_gpu_chunk;
+// The chunks of a blob: their count (1 or more) and `*out` (malloc'ed; the caller closes the fds and frees it), or -1
+// and errno (EINVAL: a segment outside the RAM or not whole pages, or the memfd without F_SEAL_SHRINK).
+int xh_gpu3d_udmabufs(int ram_fd, uint64_t ram_phys, uint64_t ram_size, const xh_gpu_entry *entries, unsigned n, xh_gpu_chunk **out);
+void xh_gpu3d_chunks_free(xh_gpu_chunk *chunks, unsigned n);
+// One udmabuf of segments that fit one (E2BIG when they need more).
 int xh_gpu3d_udmabuf(int ram_fd, uint64_t ram_phys, uint64_t ram_size, const xh_gpu_entry *entries, unsigned n);
+// The limits in use: bytes and runs per udmabuf. Setting them is for the tests (0, 0 reads the kernel's again).
+void xh_gpu3d_udmabuf_limits(uint64_t *bytes, unsigned *runs);
+void xh_gpu3d_udmabuf_set_limits(uint64_t bytes, unsigned runs);
 #endif

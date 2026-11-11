@@ -44,9 +44,18 @@ vpath %.c $(sort $(dir $(addprefix $(VIRGL)/,$(DRM2KGSL_SRC))))
 $(A)/drm2kgsl/%.o: %.c drm2kgsl/config.h
 	@mkdir -p $(A)/drm2kgsl
 	$(ANDROID_CC) -std=gnu11 -O2 -g -w $(VIRGL_INC) -c $< -o $@
+# drm2kgsl_renderer.c is compiled from a copy with drm2kgsl/patches applied (in name order): the checkout stays at its pin.
+DRM2KGSL_PATCHES := $(sort $(wildcard drm2kgsl/patches/*.patch))
+$(A)/drm2kgsl/patched/drm2kgsl_renderer.c: $(VIRGL)/src/drm/drm2kgsl/drm2kgsl_renderer.c $(DRM2KGSL_PATCHES)
+	@mkdir -p $(A)/drm2kgsl/patched
+	cp $< $@.tmp
+	for p in $(DRM2KGSL_PATCHES); do patch -s --no-backup-if-mismatch -F0 $@.tmp < $$p || exit 1; done
+	mv $@.tmp $@
+$(A)/drm2kgsl/drm2kgsl_renderer.o: $(A)/drm2kgsl/patched/drm2kgsl_renderer.c drm2kgsl/config.h
+	$(ANDROID_CC) -std=gnu11 -O2 -g -w $(VIRGL_INC) -c $< -o $@
 $(A)/libdrm2kgsl.a: $(DRM2KGSL_OBJ)
 	rm -f $@ && $(TOOLS)/llvm-ar rcs $@ $^
-$(A)/gpu3d_kgsl.o: src/gpu3d_kgsl.c src/gpu3d.h drm2kgsl/config.h
+$(A)/gpu3d_kgsl.o: src/gpu3d_kgsl.c src/gpu3d.h drm2kgsl/config.h drm2kgsl/oneios_drm2kgsl.h
 	@mkdir -p $(A)
 	$(ANDROID_CC) -std=gnu11 $(CFLAGS) -Wall -Wextra -Werror -Wno-unused-parameter -Isrc $(VIRGL_INC) -c $< -o $@
 endif
@@ -60,6 +69,19 @@ $(A)/gpu3d.o: $(A)/gpu3d.mode
 # gpuctl: the renderer alone, for a check on the phone (tools/gpuctl.c).
 $(A)/gpuctl: tools/gpuctl.c $(A)/gpu3d.o $(GPU3D) src/gpu3d.h
 	$(ANDROID_CC) -std=gnu11 $(CFLAGS) $(WARN) -Wno-unused-parameter -Isrc -static -o $@ tools/gpuctl.c $(A)/gpu3d.o $(GPU3D) -lm
+
+# The renderer with the patched drm2kgsl on the build host, against a stand-in for KGSL's memory ioctls (tests/test_drm2kgsl.c).
+ifneq ($(GPU3D),)
+# drm2kgsl/host_c11.h: mesa's C11 threads shim beside a new glibc
+HOST_C11 := -include drm2kgsl/host_c11.h
+$(H)/test_drm2kgsl: tests/test_drm2kgsl.c src/gpu3d.c src/gpu3d_kgsl.c src/gpu3d.h drm2kgsl/oneios_drm2kgsl.h $(A)/drm2kgsl/patched/drm2kgsl_renderer.c
+	@mkdir -p $(H)/drm2kgsl
+	for f in $(A)/drm2kgsl/patched/drm2kgsl_renderer.c $(addprefix $(VIRGL)/,$(filter-out %/drm2kgsl_renderer.c,$(DRM2KGSL_SRC))); do \
+	  $(CC) -std=gnu11 -O1 -g -w -U_FORTIFY_SOURCE $(HOST_C11) $(VIRGL_INC) -c $$f -o $(H)/drm2kgsl/$$(basename $$f .c).o || exit 1; done
+	$(CC) -std=gnu11 -O1 -g $(WARN) -Wno-unused-parameter -U_FORTIFY_SOURCE $(HOST_C11) -fsanitize=address,undefined -DXH_DRM2KGSL=1 -Isrc $(VIRGL_INC) \
+	  tests/test_drm2kgsl.c src/gpu3d.c src/gpu3d_kgsl.c $(H)/drm2kgsl/*.o -Wl,--wrap=ioctl -Wl,--wrap=open -lpthread -lm -o $@
+TEST_DRM2KGSL := $(H)/test_drm2kgsl
+endif
 
 # ---- the task stub: a flat, position-independent blob ----
 STUB_FLAGS := -O2 -ffreestanding -fno-builtin -fno-stack-protector -fpie -fvisibility=hidden -mgeneral-regs-only \
@@ -132,8 +154,9 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	    [ $$code = 3 ] && [ "$$(grep -c 'TESTKERNEL: restart' $(A)/restart.log)" = 9 ] || { tail -5 $(A)/restart.log; echo "check-arm64: restart: exit $$code"; false; }; }; fi
 
 # The tests create devices and never free them: leak detection off, the other checks on.
-test: $(H)/test_xnuhost $(H)/test_imageset check-arm64
+test: $(H)/test_xnuhost $(H)/test_imageset $(TEST_DRM2KGSL) check-arm64
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_xnuhost
+	$(if $(TEST_DRM2KGSL),ASAN_OPTIONS=detect_leaks=0 $(TEST_DRM2KGSL))
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_imageset
 
 clean:

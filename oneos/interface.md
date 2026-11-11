@@ -50,7 +50,9 @@ change these only together with the fork's `OneiosChecks.kt`:
 - the file names above, and `bin/oneios-audio` as `bridgectl audio`'s argument, `bin/oneios-display` beside
   `displayctl`;
 - exit code 0 for a pass; and the last line `ok` (bridgectl, gpuctl), `displayctl: ok`, `brightctl: ok`;
-  `FAILED at: ...` (gpuctl); `brightctl info`'s `panel: ...` line and `levels`' `restored N`; camctl's
+  `FAILED at: ...` (gpuctl; run with no argument it now also does `routes` and `large`, which add lines before the
+  last one, `PASS`/`FAIL` per memory route among them, and pin about 100 MiB for a few seconds: same exit code and
+  last line); `brightctl info`'s `panel: ...` line and `levels`' `restored N`; camctl's
   `back end: NAME, N cameras`, `frames: N read, M missed`, `picture: ...`, `wrote FILE.png`, and the failure
   lines of its README's table;
 - `displayctl` makes its folder under `$TMPDIR`; `camctl --out FILE.png`;

@@ -11,7 +11,7 @@ and `out/`.
 
 | Tool | For | Notes |
 |---|---|---|
-| python3 3.11+, zstd, tmux, git, curl | everything | |
+| python3 3.11+, zstd, tmux, git, curl, patch | everything | `patch`: xnuhost's Makefile applies `runtime/xnuhost/drm2kgsl/patches` to a copy of drm2kgsl |
 | clang (stock, recent) | the kernel | the kernel build uses stock clang plus xnu-linux-toolchain's ld64 (set up by the kernel scripts, no root) |
 | Android NDK 28.2 | xnuhost, the helpers, the phone tools | `$HOME/Android/Sdk/ndk/28.2.13676358`, or `$NDK` / `$ANDROID_NDK_HOME` |
 | Android SDK build-tools (`d8`) and a JDK (`javac`) | the display helper's dex | |
@@ -162,7 +162,8 @@ Every check has a time limit (10 to 45 s); a tool that has not finished is ended
 sensor's enable file and the display test's layer are put back. The checks start no session and stop nothing of
 One UI's. How the screen runs them and what it tests: the fork's `docs/oneios.md`, "Hardware checks".
 
-Or by hand, from `STAGE/bin` pushed to `/data/local/tmp`, as root: `gpuctl`, `displayctl test`,
+Or by hand, from `STAGE/bin` pushed to `/data/local/tmp`, as root: `gpuctl` (or one step of it:
+`gpuctl nodes|routes|probe|submit|large`, [gpu.md](gpu.md) section 4), `displayctl test`,
 `bridgectl cpu|haptic|haptic-pattern|bt|audio`, `brightctl info|levels|als`, `camctl --backend ndk list|capture`.
 Each tool's README has its exact commands and what a pass looks like. **None of this has run on the phone yet.**
 

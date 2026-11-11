@@ -468,6 +468,22 @@ static unsigned gpu3d_send(driver *d, xh_virtio *dev, unsigned words, unsigned e
   return n;
 }
 
+// The chunks of a blob over a memfd whose page N begins with the byte N: `want` chunks of pages[i] pages, the first
+// page of each being first[i] and the following ones `step` pages apart. Closes and frees them.
+static bool chunks_are(int count, xh_gpu_chunk *chunks, int want, const uint8_t *pages, const uint8_t *first, unsigned step)
+{
+  bool ok = count == want;
+  for (int i = 0; ok && i < count; i++) {
+    uint64_t size = (uint64_t)pages[i] * 0x1000;
+    uint8_t *view = chunks[i].size == size && lseek(chunks[i].fd, 0, SEEK_END) == (off_t)size ? mmap(NULL, size, PROT_READ, MAP_SHARED, chunks[i].fd, 0) : MAP_FAILED;
+    if (view == MAP_FAILED) { ok = false; break; }
+    for (unsigned p = 0; p < pages[i]; p++) if (view[p * 0x1000] != (uint8_t)(first[i] + p * step)) ok = false;
+    munmap(view, size);
+  }
+  if (count > 0) xh_gpu3d_chunks_free(chunks, (unsigned)count);
+  return ok;
+}
+
 static void test_virtio_gpu3d(void)
 {
   static xh_gpu3d b = { .capset_count = fake_capset_count, .capset_info = fake_capset_info, .capset = fake_capset, .ctx_create = fake_ctx_create,
@@ -708,6 +724,71 @@ static void test_virtio_gpu3d(void)
     if (buf >= 0) close(buf);
     errno = 0;
     CHECK(xh_gpu3d_udmabuf(bare, GUEST_PA, 1 << 20, three, 3) == -1 && errno == EINVAL);
+    // A blob past udmabuf's limits is several udmabufs in a row. With the limits set to 8 pages and 3 runs:
+    xh_gpu3d_udmabuf_set_limits(0x8000, 3);
+    xh_gpu_chunk *chunks = NULL;
+    // 20 pages in one run: 8 + 8 + 4, by size
+    xh_gpu_entry run = { GUEST_PA + 100 * 0x1000, 20 * 0x1000, 0 };
+    static const uint8_t run_pages[] = { 8, 8, 4 }, run_first[] = { 100, 108, 116 };
+    int count = xh_gpu3d_udmabufs(ram_fd, GUEST_PA, 1 << 20, &run, 1, &chunks);
+    CHECK(chunks_are(count, chunks, 3, run_pages, run_first, 1));
+    // 7 pages, every second one: 3 + 3 + 1, by runs
+    xh_gpu_entry apart[7];
+    for (unsigned i = 0; i < 7; i++) apart[i] = (xh_gpu_entry){ GUEST_PA + (10 + 2 * i) * 0x1000, 0x1000, 0 };
+    static const uint8_t apart_pages[] = { 3, 3, 1 }, apart_first[] = { 10, 16, 22 };
+    count = xh_gpu3d_udmabufs(ram_fd, GUEST_PA, 1 << 20, apart, 7, &chunks);
+    CHECK(chunks_are(count, chunks, 3, apart_pages, apart_first, 2));
+    // two adjacent segments joined (4 pages, one run), then 6 pages: the second run is cut where the first udmabuf is full
+    xh_gpu_entry mixed[3] = { { GUEST_PA + 30 * 0x1000, 0x2000, 0 }, { GUEST_PA + 32 * 0x1000, 0x2000, 0 }, { GUEST_PA + 40 * 0x1000, 0x6000, 0 } };
+    count = xh_gpu3d_udmabufs(ram_fd, GUEST_PA, 1 << 20, mixed, 3, &chunks);
+    CHECK(count == 2 && chunks[0].size == 0x8000 && chunks[1].size == 0x2000 && lseek(chunks[0].fd, 0, SEEK_END) == 0x8000 && lseek(chunks[1].fd, 0, SEEK_END) == 0x2000);
+    if (count == 2) {
+      uint8_t *a = mmap(NULL, 0x8000, PROT_READ, MAP_SHARED, chunks[0].fd, 0), *b2 = mmap(NULL, 0x2000, PROT_READ, MAP_SHARED, chunks[1].fd, 0);
+      CHECK(a != MAP_FAILED && b2 != MAP_FAILED && a[0] == 30 && a[0x3000] == 33 && a[0x4000] == 40 && a[0x7000] == 43 && b2[0] == 44 && b2[0x1000] == 45);
+      munmap(a, 0x8000); munmap(b2, 0x2000);
+    }
+    if (count > 0) xh_gpu3d_chunks_free(chunks, (unsigned)count);
+    // exactly the limit is one udmabuf; one page more is not one
+    xh_gpu_entry full = { GUEST_PA + 50 * 0x1000, 0x8000, 0 }, over = { GUEST_PA + 50 * 0x1000, 0x9000, 0 };
+    buf = xh_gpu3d_udmabuf(ram_fd, GUEST_PA, 1 << 20, &full, 1);
+    CHECK(buf >= 0 && lseek(buf, 0, SEEK_END) == 0x8000);
+    if (buf >= 0) close(buf);
+    errno = 0;
+    CHECK(xh_gpu3d_udmabuf(ram_fd, GUEST_PA, 1 << 20, &over, 1) == -1 && errno == E2BIG);
+    // a bad segment anywhere in the list: nothing is made
+    xh_gpu_entry bad[2] = { { GUEST_PA + 0x1000, 0x1000, 0 }, { GUEST_PA + (1 << 20), 0x1000, 0 } };
+    errno = 0;
+    CHECK(xh_gpu3d_udmabufs(ram_fd, GUEST_PA, 1 << 20, bad, 2, &chunks) == -1 && errno == EINVAL && !chunks);
+    // The limits in use without a setting: the kernel's, never above 64 MiB and 1024 runs (the phone's). 72 MiB in one
+    // run is 64 + 8 on any host; 1100 separate pages are 1024 + 76.
+    uint64_t bytes = 0;
+    unsigned runs = 0;
+    xh_gpu3d_udmabuf_set_limits(0, 0);
+    xh_gpu3d_udmabuf_limits(&bytes, &runs);
+    CHECK(bytes && bytes <= (64u << 20) && runs && runs <= 1024);
+    int big_fd = (int)syscall(SYS_memfd_create, "test-big", 2u);
+    CHECK(big_fd >= 0 && ftruncate(big_fd, 96 << 20) == 0 && fcntl(big_fd, 1033, 2) == 0);
+    if (bytes == (64u << 20) && runs == 1024) {
+      xh_gpu_entry big = { GUEST_PA + (8 << 20), 72 << 20, 0 };
+      count = xh_gpu3d_udmabufs(big_fd, GUEST_PA, 96 << 20, &big, 1, &chunks);
+      CHECK(count == 2 && chunks[0].size == (64u << 20) && chunks[1].size == (8u << 20) && lseek(chunks[0].fd, 0, SEEK_END) == (64 << 20) && lseek(chunks[1].fd, 0, SEEK_END) == (8 << 20));
+      if (count == 2) {                                                                                  // the second begins where the first ends
+        uint8_t *a = mmap(NULL, 64 << 20, PROT_READ | PROT_WRITE, MAP_SHARED, chunks[0].fd, 0), *b2 = mmap(NULL, 8 << 20, PROT_READ | PROT_WRITE, MAP_SHARED, chunks[1].fd, 0);
+        uint8_t *all = mmap(NULL, 96 << 20, PROT_READ | PROT_WRITE, MAP_SHARED, big_fd, 0);
+        CHECK(a != MAP_FAILED && b2 != MAP_FAILED && all != MAP_FAILED);
+        a[(64 << 20) - 1] = 0x11; b2[0] = 0x22; b2[(8 << 20) - 1] = 0x33;
+        CHECK(all[(72 << 20) - 1] == 0x11 && all[72 << 20] == 0x22 && all[(80 << 20) - 1] == 0x33);
+        munmap(a, 64 << 20); munmap(b2, 8 << 20); munmap(all, 96 << 20);
+      }
+      if (count > 0) xh_gpu3d_chunks_free(chunks, (unsigned)count);
+      static xh_gpu_entry many[1100];
+      for (unsigned i = 0; i < 1100; i++) many[i] = (xh_gpu_entry){ GUEST_PA + (uint64_t)i * 0x2000, 0x1000, 0 };
+      count = xh_gpu3d_udmabufs(big_fd, GUEST_PA, 96 << 20, many, 1100, &chunks);
+      CHECK(count == 2 && chunks[0].size == 1024 * 0x1000 && chunks[1].size == 76 * 0x1000);
+      if (count > 0) xh_gpu3d_chunks_free(chunks, (unsigned)count);
+      printf("virtio-gpu 3D: blobs past udmabuf's limits (64 MiB, 1024 runs) split and checked on this host\n");
+    } else printf("virtio-gpu 3D: this host's udmabuf limits are %llu MiB and %u runs: the 64 MiB split is not checked\n", (unsigned long long)(bytes >> 20), runs);
+    close(big_fd);
     munmap(ram, 1 << 20); close(ram_fd); close(bare);
     printf("virtio-gpu 3D: udmabuf checked on this host\n");
   } else printf("virtio-gpu 3D: no /dev/udmabuf here (%s): the real import is not checked\n", strerror(errno));

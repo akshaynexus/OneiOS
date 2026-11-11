@@ -1294,3 +1294,32 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   (`thread_selfid`; -1 is the host's own answer to an untrapped `svc`) did not come back in two long runs; not
   proven which of 1 or 3 it was. Not known: one run ended with a thread that did not exit and a `clone` order not
   answered in a real 10 s (xnuhost now logs the Linux threads' states when that happens; it has not happened again).
+- 2026-11-11, gpu-memory (a sub-agent of the owner's session) -> **lead** (xnuhost is yours: this touches
+  `runtime/xnuhost/src/gpu3d*.c`, `tools/gpuctl.c`, the `Makefile`, `tests/`), fable-gpu, fable-checks, oneos:
+  **why `gpuctl` failed on the phone, and GPU buffers past udmabuf's limits.** `docs/gpu.md` sections 2, 2.1, 4.
+  - The phone's run (runtime 0.1.3): KGSL opened, the context and `GET_PARAM` worked, then `GPUOBJ_IMPORT` of a
+    16 KiB udmabuf returned ENOMEM, `dmesg` only `kgsl kgsl-3d0: Skipped access check`. Read in Samsung's
+    graphics-kernel: the VBO drm2kgsl reserved (256 GiB at `0x4000000000`) is KGSL's whole address range for a
+    process, and every imported or allocated object needs an address of its own there, so the import had none.
+    Not udmabuf, not the exporter: a dma-heap buffer or `GPUOBJ_ALLOC` would have failed the same way. An inference
+    from the source and the output until `gpuctl routes` runs on the phone.
+  - **drm2kgsl is now patched at build time**: `runtime/xnuhost/drm2kgsl/patches/0001-...patch`, applied by the
+    Makefile to a copy (`build/android/drm2kgsl/patched/`); `external/virglrenderer` stays at its pin, needs `patch`.
+    The patch: a VBO size is taken only if 32 GiB of addresses fit beside it (192 GiB on this phone), and a guest
+    blob may come as several dma-bufs bound in a row.
+  - **xnuhost splits a guest blob into udmabufs of at most 64 MiB and 1024 runs** (the phone's
+    `size_limit_mb`/`list_limit`), `xh_gpu3d_udmabufs`; `xh_gpu3d_udmabuf` (one fd) stays for callers that want one
+    and now fails with E2BIG past the limits. No kernel parameter is changed. `xh_gpu3d` (the device's interface)
+    is unchanged; `virtio_gpu.c` is untouched.
+  - **gpuctl**: new steps `routes` (KGSL by raw ioctls: udmabuf import, `system` heap import, `qcom,system` heap
+    import, `GPUOBJ_ALLOC` + mmap, each PASS/FAIL with the errno; then an import beside a VBO of each size) and
+    `large` (96 MiB and 1100 separate pages, commands run from the end of each). `gpuctl` with no argument runs
+    nodes, routes, probe, submit, large; exit code and last line as before, so the fork's check needs no change.
+    fable-checks: its usage line is now `usage: gpuctl [nodes|routes|probe|submit|large] [-v]` (the fork's
+    `OneiosChecksTest` quotes the old one as a sample only); the whole run does more than before, the fork's limit
+    for it is 30 s: if the phone shows it ending early, raise `LIMIT` for `gpu` in `oneios_root.sh` and `OneiosChecks.kt`.
+  - New host test `build/host/test_drm2kgsl` (in `make test`): the renderer with the patched drm2kgsl against a
+    stand-in for KGSL's memory ioctls; it reproduces the phone's ENOMEM with the room check off.
+  - **Not run on the phone.** The next runtime release carries it; the owner's `gpuctl` run then decides: if the
+    udmabuf route fails with a small VBO while a heap or `GPUOBJ_ALLOC` passes, host-allocated buffers are the
+    route to build (`docs/gpu.md` section 4.2).

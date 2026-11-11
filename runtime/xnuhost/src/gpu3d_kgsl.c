@@ -22,6 +22,7 @@
 #include "virgl_util.h"
 #include "drm_hw.h"
 #include "drm2kgsl/drm2kgsl_renderer.h"
+#include "oneios_drm2kgsl.h"
 
 typedef struct {
   xh_gpu3d base;
@@ -137,38 +138,96 @@ static int submit_fence(xh_gpu3d *b, uint32_t id, uint32_t ring, uint64_t fence)
   return ctx->submit_fence(ctx, 1 /* VIRGL_RENDERER_FENCE_FLAG_MERGEABLE */, ring, fence);
 }
 
+// ---- blobs of more than one udmabuf ---------------------------------------------------------------------------------
+// One udmabuf holds at most 64 MiB and 1024 runs of pages (gpu3d.c), so a larger or more scattered blob is several,
+// "chunks". virglrenderer's resource has room for one fd; the chunks of such a resource are kept here, by resource id,
+// for a second context that attaches it (drm2kgsl imports every chunk again). Only the device's thread comes here.
+typedef struct { uint32_t res; unsigned n; xh_gpu_chunk *chunks; } chunked;
+static chunked *chunked_list;
+static unsigned chunked_count, chunked_room;
+
+static chunked *chunked_find(uint32_t res)
+{
+  for (unsigned i = 0; i < chunked_count; i++) if (chunked_list[i].res == res) return &chunked_list[i];
+  return NULL;
+}
+
+static bool chunked_add(uint32_t res, xh_gpu_chunk *chunks, unsigned n)
+{
+  if (chunked_count == chunked_room) {
+    chunked *more = realloc(chunked_list, (chunked_room ? chunked_room * 2 : 16) * sizeof *more);
+    if (!more) return false;
+    chunked_list = more;
+    chunked_room = chunked_room ? chunked_room * 2 : 16;
+  }
+  chunked_list[chunked_count++] = (chunked){ .res = res, .n = n, .chunks = chunks };
+  return true;
+}
+
+static void chunked_remove(uint32_t res)
+{
+  chunked *c = chunked_find(res);
+  if (!c) return;
+  xh_gpu3d_chunks_free(c->chunks, c->n);
+  *c = chunked_list[--chunked_count];
+}
+
 static int create_blob(xh_gpu3d *b, uint32_t id, uint32_t res, uint32_t blob_mem, uint32_t flags, uint64_t blob_id,
                        uint64_t size, const xh_gpu_entry *entries, unsigned nentries)
 {
   kgsl *k = b->opaque;
   struct virgl_context_blob blob = { 0 };
   if (!res || virgl_resource_lookup(res)) return -EINVAL;
-  int guest_fd = -1;
+  xh_gpu_chunk *chunks = NULL;         // the guest's pages; with more than one chunk the list stays ours (chunked_add)
+  int nchunks = 0;
   if (nentries) {
-    guest_fd = xh_gpu3d_udmabuf(k->ram_fd, k->ram_phys, k->ram_size, entries, nentries);
-    if (guest_fd < 0) {
+    nchunks = xh_gpu3d_udmabufs(k->ram_fd, k->ram_phys, k->ram_size, entries, nentries, &chunks);
+    if (nchunks < 0) {
       int error = errno;
       say(0, "gpu: udmabuf over %u segments of a %llu byte blob: %s", nentries, (unsigned long long)size, strerror(error));
       return -error;
     }
+    if (nchunks > 1) say(2, "gpu: resource %u: %llu bytes in %u segments as %d udmabufs", res, (unsigned long long)size, nentries, nchunks);
   }
+  unsigned n = (unsigned)nchunks;
+  int first = n ? fcntl(chunks[0].fd, F_DUPFD_CLOEXEC, 0) : -1;       // the resource's own fd
+  if (n && first < 0) { xh_gpu3d_chunks_free(chunks, n); return -EMFILE; }
   if (blob_mem == XH_GPU_BLOB_GUEST) {
-    // The display's surface: known as a dma-buf, for a context that attaches it.
-    struct virgl_resource *r = virgl_resource_create_from_fd(res, VIRGL_RESOURCE_FD_DMABUF, guest_fd, NULL, 0, NULL);
-    if (!r) { close(guest_fd); return -ENOMEM; }
+    // The display's surface: known as a dma-buf (its first, when it is chunked), for a context that attaches it.
+    struct virgl_resource *r = n ? virgl_resource_create_from_fd(res, VIRGL_RESOURCE_FD_DMABUF, first, NULL, 0, NULL) : NULL;
+    if (!r || (n > 1 && !chunked_add(res, chunks, n))) {
+      if (r) virgl_resource_remove(res); else if (first >= 0) close(first);
+      xh_gpu3d_chunks_free(chunks, n);
+      return -ENOMEM;
+    }
+    if (n == 1) xh_gpu3d_chunks_free(chunks, n);
     r->map_info = VIRGL_RENDERER_MAP_CACHE_CACHED;
     r->map_size = size;
     return 0;
   }
+  if (first >= 0) close(first);          // a context's blob: get_blob gives the resource its fd
   struct virgl_context *ctx = virgl_context_lookup(id);
-  if (!ctx) { if (guest_fd >= 0) close(guest_fd); return -EINVAL; }
-  // The pages of a guest-allocated BO are parked in the context for the get_blob that follows (it takes the fd).
-  if (guest_fd >= 0 && (!ctx->set_guest_blob_fd || ctx->set_guest_blob_fd(ctx, blob_id, guest_fd))) { close(guest_fd); return -EINVAL; }
+  if (!ctx) { xh_gpu3d_chunks_free(chunks, n); return -EINVAL; }
+  // The pages of a guest-allocated BO are parked in the context for the get_blob that follows. It takes the fds it
+  // is given: copies of them, so that the chunk list above stays whole.
+  if (n) {
+    int fds[n];
+    uint64_t sizes[n];
+    bool ok = true;
+    for (unsigned i = 0; i < n; i++) { sizes[i] = chunks[i].size; if ((fds[i] = fcntl(chunks[i].fd, F_DUPFD_CLOEXEC, 0)) < 0) ok = false; }
+    if (!ok) for (unsigned i = 0; i < n; i++) if (fds[i] >= 0) close(fds[i]);
+    if (!ok || drm2kgsl_renderer_set_guest_blob_chunks(ctx, blob_id, fds, sizes, n)) { xh_gpu3d_chunks_free(chunks, n); return -EINVAL; }
+  }
   int r = ctx->get_blob(ctx, res, blob_id, size, flags & ~(uint32_t)XH_GPU_BLOB_FLAG_GUEST_HANDLE, &blob);
-  if (r) return r < 0 ? r : -r;
-  if (blob.type != VIRGL_RESOURCE_FD_DMABUF && blob.type != VIRGL_RESOURCE_FD_SHM) return -EINVAL;
+  if (r) { xh_gpu3d_chunks_free(chunks, n); return r < 0 ? r : -r; }
+  if (blob.type != VIRGL_RESOURCE_FD_DMABUF && blob.type != VIRGL_RESOURCE_FD_SHM) { xh_gpu3d_chunks_free(chunks, n); return -EINVAL; }
   struct virgl_resource *made = virgl_resource_create_from_fd(res, blob.type, blob.u.fd, NULL, 0, &blob.opaque_fd_metadata);
-  if (!made) { close(blob.u.fd); return -ENOMEM; }
+  if (!made || (n > 1 && !chunked_add(res, chunks, n))) {
+    if (made) virgl_resource_remove(res); else close(blob.u.fd);
+    xh_gpu3d_chunks_free(chunks, n);
+    return -ENOMEM;
+  }
+  if (n == 1) xh_gpu3d_chunks_free(chunks, n);
   made->map_info = blob.map_info;
   made->map_size = size;
   made->map_ptr = blob.map_ptr;
@@ -193,6 +252,15 @@ static int attach(xh_gpu3d *b, uint32_t id, uint32_t res, bool on)
   struct virgl_context *ctx = virgl_context_lookup(id);
   struct virgl_resource *r = virgl_resource_lookup(res);
   if (!ctx || !r) return -EINVAL;
+  chunked *c = on ? chunked_find(res) : NULL;
+  if (c) {
+    // A resource of several udmabufs: the context imports each (nothing, when it made the resource itself).
+    int fds[c->n];
+    uint64_t sizes[c->n];
+    for (unsigned i = 0; i < c->n; i++) { fds[i] = c->chunks[i].fd; sizes[i] = c->chunks[i].size; }
+    int error = drm2kgsl_renderer_attach_chunks(ctx, res, fds, sizes, c->n);
+    if (error) return error;
+  }
   if (on) ctx->attach_resource(ctx, r); else ctx->detach_resource(ctx, r);
   return 0;
 }
@@ -211,6 +279,7 @@ static void unref(xh_gpu3d *b, uint32_t res)
   struct virgl_context_foreach_args args = { .callback = detach_one, .data = r };
   virgl_context_foreach(&args);
   virgl_resource_remove(res);
+  chunked_remove(res);
 }
 
 xh_gpu3d *xh_gpu3d_kgsl_open(int ram_fd, uint64_t ram_phys, uint64_t ram_size, void *pool_host, uint64_t pool_pa,
@@ -226,6 +295,9 @@ xh_gpu3d *xh_gpu3d_kgsl_open(int ram_fd, uint64_t ram_phys, uint64_t ram_size, v
     if (fd < 0) { snprintf(reason, sizeof reason, "%s: %s", nodes[i], strerror(errno)); return NULL; }
     close(fd);
   }
+  uint64_t chunk_bytes;
+  unsigned chunk_runs;
+  xh_gpu3d_udmabuf_limits(&chunk_bytes, &chunk_runs);
   // One udmabuf of one page from the pool: the memfd is sealed against shrinking and the kernel takes it.
   xh_gpu_entry first = { .addr = pool_pa, .length = 4096 };
   int probe = xh_gpu3d_udmabuf(ram_fd, ram_phys, ram_size, &first, 1);
@@ -261,8 +333,10 @@ xh_gpu3d *xh_gpu3d_kgsl_open(int ram_fd, uint64_t ram_phys, uint64_t ram_size, v
                         .ctx_destroy = ctx_destroy, .submit = submit, .submit_fence = submit_fence, .create_blob = create_blob,
                         .map_blob = map_blob, .attach = attach, .unref = unref };
   the = &k->base;
-  say(1, "gpu: drm2kgsl on %s: chip 0x%llx (gpu id %u), GPU addresses 0x%llx + %llu GiB, %u priorities; pool %llu MiB",
+  say(1, "gpu: drm2kgsl on %s: chip 0x%llx (gpu id %u), GPU addresses 0x%llx + %llu GiB, %u priorities; pool %llu MiB; "
+      "guest pages in udmabufs of up to %llu MiB and %u runs",
       KGSL_DEVICE_NODE, (unsigned long long)k->capset.u.msm.chip_id, k->capset.u.msm.gpu_id, (unsigned long long)k->capset.u.msm.va_start,
-      (unsigned long long)(k->capset.u.msm.va_size >> 30), k->capset.u.msm.priorities, (unsigned long long)(pool_size >> 20));
+      (unsigned long long)(k->capset.u.msm.va_size >> 30), k->capset.u.msm.priorities, (unsigned long long)(pool_size >> 20),
+      (unsigned long long)(chunk_bytes >> 20), chunk_runs);
   return the;
 }

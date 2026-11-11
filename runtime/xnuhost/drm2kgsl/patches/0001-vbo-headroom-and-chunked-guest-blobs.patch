@@ -1,0 +1,388 @@
+--- a/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-11 05:43:09.417406619 +0530
++++ b/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-11 05:57:39.392402490 +0530
+@@ -379,9 +379,21 @@
+    struct msm_gem_new_run *runs;
+    uint32_t nr_runs;
+    uint8_t *map;
++   /* ONEIOS: a BO whose pages reached us as several dma-bufs, because one udmabuf holds at most
++    * size_limit_mb (64) MiB and list_limit (1024) runs of pages. Each chunk is its own KGSL object;
++    * the chunks are bound one after another at the BO's iova. mem_id and dmabuf_fd then mirror
++    * chunk 0 (so that mem_id != 0 still means "has backing"), and the chunks own the ids and fds. */
++   struct kgsl_chunk *chunks;
++   uint32_t nr_chunks;
+ };
+ DEFINE_CAST(drm_object, kgsl_object)
+ 
++struct kgsl_chunk {
++   uint32_t mem_id;
++   int fd;
++   uint64_t size;
++};
++
+ struct kgsl_context {
+    struct drm_context base;
+ 
+@@ -421,6 +433,9 @@
+     * (single) command thread; a second set before the first is consumed is a bug, not a queue,
+     * and is reported rather than silently dropping an fd. */
+    int pending_guest_fd;
++   /* ONEIOS: the same slot for a blob that comes as several dma-bufs (see kgsl_object.chunks). */
++   struct kgsl_chunk *pending_chunks;
++   uint32_t pending_nr_chunks;
+ 
+    /* The guest hands a guest-allocated BO's pages back to its own allocator once the resource
+     * is gone, so a stale VBO range of such a BO maps pages the guest has since given to something
+@@ -1072,10 +1087,63 @@
+    return 0;
+ }
+ 
++/* ONEIOS: a chunked BO: every chunk bound at its place in the BO's range, in one BIND_RANGES. */
++static int
++kgsl_vbo_bind_chunks(struct kgsl_context *kctx, struct kgsl_object *obj, uint64_t iova)
++{
++   if (!kgsl_iova_in_slice(kctx, iova, obj->blob_size)) {
++      drm_err("chunked BO iova 0x%" PRIx64 " (size 0x%" PRIx64 ") outside ctx slice %d",
++              iova, obj->blob_size, kctx->va_slice_idx);
++      if (!kgsl_relax_slice_checks())
++         return -EINVAL;
++   }
++   if (obj->blob_size > g_va_size || iova < kctx->vbo_base ||
++       iova - kctx->vbo_base > g_va_size - obj->blob_size) {
++      drm_err("iova 0x%" PRIx64 " (size 0x%" PRIx64 ") outside VBO", iova, obj->blob_size);
++      return -EINVAL;
++   }
++
++   struct kgsl_gpumem_bind_range *ranges = calloc(obj->nr_chunks, sizeof(*ranges));
++   if (!ranges)
++      return -ENOMEM;
++
++   uint64_t off = 0;
++   uint32_t n = 0;
++   for (uint32_t i = 0; i < obj->nr_chunks && off < obj->blob_size; i++) {
++      uint64_t len = MIN2(obj->chunks[i].size, obj->blob_size - off);
++      ranges[n++] = (struct kgsl_gpumem_bind_range) {
++         .child_offset = 0,
++         .target_offset = (iova + off) - kctx->vbo_base,
++         .length = len,
++         .child_id = obj->chunks[i].mem_id,
++         .op = KGSL_GPUMEM_RANGE_OP_BIND,
++      };
++      off += len;
++   }
++
++   struct kgsl_gpumem_bind_ranges req = {
++      .ranges = (uintptr_t)ranges,
++      .ranges_nents = n,
++      .ranges_size = sizeof(*ranges),
++      .id = kctx->vbo_id,
++      .flags = 0, /* synchronous */
++   };
++
++   int ret = kgsl_ioctl(kctx->base.fd, IOCTL_KGSL_GPUMEM_BIND_RANGES, &req);
++   int error = errno;
++   free(ranges);
++   if (ret) {
++      drm_err("BIND_RANGES(%u chunks @ 0x%" PRIx64 ") failed: %s", n, iova, strerror(error));
++      return -error;
++   }
++   return 0;
++}
++
+ static inline int
+ kgsl_vbo_bind(struct kgsl_context *kctx, struct kgsl_object *obj, uint64_t iova)
+ {
+-   int ret = kgsl_vbo_op(kctx, obj->mem_id, iova, obj->blob_size,
++   int ret = obj->nr_chunks ? kgsl_vbo_bind_chunks(kctx, obj, iova) :
++             kgsl_vbo_op(kctx, obj->mem_id, iova, obj->blob_size,
+                          KGSL_GPUMEM_RANGE_OP_BIND);
+    if (!ret)
+       obj->iova = iova;
+@@ -1210,6 +1278,23 @@
+    if (obj == kctx->arena)
+       kctx->arena = NULL;
+ 
++   /* ONEIOS: a chunked BO: the same order as below (unbind, free, close), per chunk. */
++   if (obj->nr_chunks) {
++      if (obj->map)
++         munmap(obj->map, obj->blob_size);
++      for (uint32_t i = 0; i < obj->nr_chunks; i++) {
++         if (kctx->unbind_freed && obj->guest_alloc)
++            kgsl_vbo_op(kctx, obj->chunks[i].mem_id, kctx->va_slice_base, kctx->va_slice_size,
++                        KGSL_GPUMEM_RANGE_OP_UNBIND);
++         kgsl_free_gpuobj(dctx->fd, obj->chunks[i].mem_id);
++         if (obj->chunks[i].fd >= 0)
++            close(obj->chunks[i].fd);
++      }
++      free(obj->chunks);
++      free(obj);
++      return;
++   }
++
+    if (obj->arena_backed) {
+       kgsl_free_gpuobj(dctx->fd, obj->mem_id);
+       kgsl_blob_arena_free(obj->arena_offset, obj->blob_size);
+@@ -1814,6 +1899,27 @@
+       return 0;
+    }
+ 
++   /* ONEIOS: a chunked BO: its dma-bufs one after another in one view. */
++   if (obj->nr_chunks) {
++      uint8_t *span = mmap(NULL, obj->blob_size, PROT_NONE,
++                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++      if (span == MAP_FAILED)
++         return -ENOMEM;
++      uint64_t off = 0;
++      for (uint32_t i = 0; i < obj->nr_chunks && off < obj->blob_size; i++) {
++         uint64_t len = MIN2(obj->chunks[i].size, obj->blob_size - off);
++         if (mmap(span + off, len, PROT_READ | PROT_WRITE,
++                  MAP_SHARED | MAP_FIXED, obj->chunks[i].fd, 0) == MAP_FAILED) {
++            drm_err("chunk mmap failed: %s", strerror(errno));
++            munmap(span, obj->blob_size);
++            return -ENOMEM;
++         }
++         off += len;
++      }
++      obj->map = span;
++      return 0;
++   }
++
+    uint8_t *map = mmap(NULL, obj->blob_size, PROT_READ | PROT_WRITE,
+                        MAP_SHARED, obj->dmabuf_fd, 0);
+    if (map == MAP_FAILED) {
+@@ -2411,7 +2517,7 @@
+       return VIRGL_RESOURCE_FD_INVALID;
+    }
+ 
+-   if (!obj->exportable)
++   if (!obj->exportable || obj->nr_chunks)     /* ONEIOS: no one fd is a chunked BO */
+       return VIRGL_RESOURCE_FD_INVALID;
+ 
+    /* An arena-backed BO must NOT export the arena fd itself.  On a crosvm
+@@ -2516,6 +2622,126 @@
+    return 0;
+ }
+ 
++/* ONEIOS: chunk helpers. Imports every chunk's dma-buf; on failure nothing stays imported and the
++ * fds are closed. `chunks` is owned by the caller until it is put in an object. */
++static void
++kgsl_chunks_drop(int fd, struct kgsl_chunk *chunks, uint32_t n)
++{
++   for (uint32_t i = 0; i < n; i++) {
++      if (chunks[i].mem_id)
++         kgsl_free_gpuobj(fd, chunks[i].mem_id);
++      if (chunks[i].fd >= 0)
++         close(chunks[i].fd);
++   }
++   free(chunks);
++}
++
++static int
++kgsl_chunks_import(int fd, struct kgsl_chunk *chunks, uint32_t n, uint32_t kgsl_flags)
++{
++   for (uint32_t i = 0; i < n; i++) {
++      chunks[i].mem_id = kgsl_import_dmabuf(fd, chunks[i].fd, kgsl_flags);
++      if (!chunks[i].mem_id)
++         return -ENOMEM;
++   }
++   return 0;
++}
++
++static struct kgsl_chunk *
++kgsl_chunks_new(const int *fds, const uint64_t *sizes, unsigned n, bool dup_fds, uint64_t *total)
++{
++   struct kgsl_chunk *chunks = calloc(n, sizeof(*chunks));
++   bool bad = !chunks;
++   *total = 0;
++   for (unsigned i = 0; i < n && chunks; i++) {
++      chunks[i].fd = dup_fds ? os_dupfd_cloexec(fds[i]) : fds[i];
++      chunks[i].size = sizes[i];
++      if (chunks[i].fd < 0 || !sizes[i] || (sizes[i] & 0xfff))
++         bad = true;
++      *total += sizes[i];
++   }
++   if (!bad)
++      return chunks;
++   for (unsigned i = 0; i < n; i++) {      /* fds given to us are closed here too */
++      int fd = chunks ? chunks[i].fd : dup_fds ? -1 : fds[i];
++      if (fd >= 0)
++         close(fd);
++   }
++   free(chunks);
++   return NULL;
++}
++
++/* ONEIOS: drm2kgsl_renderer_set_guest_blob_fd() for a blob whose pages come as `n` dma-bufs, in
++ * the blob's order, `sizes[i]` bytes each (whole pages). Takes the fds, also when it fails. With
++ * n == 1 it is set_guest_blob_fd(). Called by xnuhost (runtime/xnuhost/src/gpu3d_kgsl.c). */
++int drm2kgsl_renderer_set_guest_blob_chunks(struct virgl_context *vctx, uint64_t blob_id,
++                                            const int *fds, const uint64_t *sizes, unsigned n);
++int
++drm2kgsl_renderer_set_guest_blob_chunks(struct virgl_context *vctx, uint64_t blob_id,
++                                        const int *fds, const uint64_t *sizes, unsigned n)
++{
++   struct kgsl_context *kctx = to_kgsl_context(to_drm_context(vctx));
++
++   if (!n)
++      return -EINVAL;
++   if (kctx->pending_chunks) {
++      drm_err("guest blob chunks already pending (blob_id=%" PRIu64 "); dropping the stale ones",
++              blob_id);
++      kgsl_chunks_drop(kctx->base.fd, kctx->pending_chunks, kctx->pending_nr_chunks);
++      kctx->pending_chunks = NULL;
++      kctx->pending_nr_chunks = 0;
++   }
++   if (n == 1)
++      return drm2kgsl_renderer_set_guest_blob_fd(vctx, blob_id, fds[0]);
++
++   uint64_t total;
++   struct kgsl_chunk *chunks = kgsl_chunks_new(fds, sizes, n, false, &total);
++   if (!chunks)
++      return -ENOMEM;
++   kctx->pending_chunks = chunks;
++   kctx->pending_nr_chunks = n;
++   return 0;
++}
++
++/* ONEIOS: kgsl_renderer_attach_resource() for a resource another context (or the display) made
++ * from `n` dma-bufs: this context imports each and knows the resource by `res_id`; its iova comes
++ * with GEM_SET_IOVA. The fds stay the caller's. Nothing to do when the context has the resource. */
++int drm2kgsl_renderer_attach_chunks(struct virgl_context *vctx, uint32_t res_id, const int *fds,
++                                    const uint64_t *sizes, unsigned n);
++int
++drm2kgsl_renderer_attach_chunks(struct virgl_context *vctx, uint32_t res_id, const int *fds,
++                                const uint64_t *sizes, unsigned n)
++{
++   struct drm_context *dctx = to_drm_context(vctx);
++   struct kgsl_context *kctx = to_kgsl_context(dctx);
++
++   if (!n)
++      return -EINVAL;
++   if (kgsl_object_from_res_id(kctx, res_id))
++      return 0;
++
++   uint64_t total;
++   struct kgsl_chunk *chunks = kgsl_chunks_new(fds, sizes, n, true, &total);
++   if (!chunks)
++      return -ENOMEM;
++   if (kgsl_chunks_import(dctx->fd, chunks, n, 0)) {
++      kgsl_chunks_drop(dctx->fd, chunks, n);
++      return -ENOMEM;
++   }
++   struct kgsl_object *nobj = kgsl_object_create(chunks[0].mem_id, chunks[0].fd, 0, total, total);
++   if (!nobj) {
++      kgsl_chunks_drop(dctx->fd, chunks, n);
++      return -ENOMEM;
++   }
++   nobj->chunks = chunks;
++   nobj->nr_chunks = n;
++   if (kgsl_diag_enabled())
++      p_atomic_inc(&g_kgsl_diag.stats.dmabuf_imports);
++   drm_context_object_set_res_id(dctx, &nobj->base, res_id);
++   drm_dbg("chunked cross-ctx import res_id=%u chunks=%u size=0x%" PRIx64, res_id, n, total);
++   return 0;
++}
++
+ static int
+ drm2kgsl_renderer_get_blob(struct virgl_context *vctx, uint32_t res_id, uint64_t blob_id,
+                        uint64_t blob_size, uint32_t blob_flags,
+@@ -2573,7 +2799,40 @@
+     * Failing here is worth being loud about: the guest has committed to this iova and cannot
+     * retry with different pages, so a silent -ENOENT would surface much later as a GPU fault.
+     */
+-   if (obj->guest_alloc) {
++   if (obj->guest_alloc && kctx->pending_chunks) {
++      /* ONEIOS: the pages came as several dma-bufs: import each, bind them in a row. */
++      struct kgsl_chunk *chunks = kctx->pending_chunks;
++      uint32_t n = kctx->pending_nr_chunks;
++      uint64_t total = 0;
++      kctx->pending_chunks = NULL;
++      kctx->pending_nr_chunks = 0;
++      for (uint32_t i = 0; i < n; i++)
++         total += chunks[i].size;
++      if (total < obj->blob_size) {
++         drm_err("guest-alloc blob_id=%" PRIu64 ": %u chunks hold 0x%" PRIx64 " of 0x%" PRIx64 " bytes",
++                 blob_id, n, total, obj->blob_size);
++         kgsl_chunks_drop(dctx->fd, chunks, n);
++         return -EINVAL;
++      }
++      uint32_t kgsl_flags = kgsl_guest_memflags(obj->flags & (MSM_BO_CACHED_COHERENT | MSM_BO_CACHED), obj->blob_size);
++      if (kgsl_chunks_import(dctx->fd, chunks, n, kgsl_flags)) {
++         kgsl_chunks_drop(dctx->fd, chunks, n);
++         return -ENOMEM;
++      }
++      obj->chunks = chunks;
++      obj->nr_chunks = n;
++      obj->mem_id = chunks[0].mem_id;
++      obj->dmabuf_fd = chunks[0].fd;   /* the resource gets a dup of it below; the chunks own it */
++
++      int bret = kgsl_vbo_bind(kctx, obj, obj->iova);
++      if (bret) {
++         drm_err("guest-alloc bind failed blob_id=%" PRIu64 " iova=0x%" PRIx64 " (%u chunks)",
++                 blob_id, obj->iova, n);
++         return bret;
++      }
++      drm_dbg("guest-alloc completed blob_id=%" PRIu64 " chunks=%u iova=0x%" PRIx64,
++              blob_id, n, obj->iova);
++   } else if (obj->guest_alloc) {
+       if (kctx->pending_guest_fd < 0) {
+          drm_err("guest-alloc blob_id=%" PRIu64 " has no dma-buf from the VMM; "
+                  "is udmabuf enabled and CREATE_GUEST_HANDLE set?", blob_id);
+@@ -2785,6 +3044,11 @@
+    if (kctx->unbind_freed && kctx->va_slice_idx >= 0)
+       kgsl_vbo_op(kctx, 0, kctx->va_slice_base, kctx->va_slice_size, KGSL_GPUMEM_RANGE_OP_UNBIND);
+ 
++   if (kctx->pending_chunks) {          /* ONEIOS */
++      kgsl_chunks_drop(dctx->fd, kctx->pending_chunks, kctx->pending_nr_chunks);
++      kctx->pending_chunks = NULL;
++   }
++
+    drm_context_deinit(dctx); /* frees remaining objects via free_object */
+ 
+ 
+@@ -2805,6 +3069,33 @@
+  * down until the kernel accepts it.  Returns 0 and fills *out_id / *out_base /
+  * *out_size on success.
+  */
++/* ONEIOS: every object KGSL imports or allocates takes a GPU address of its own in the same range
++ * the VBO comes from (kgsl_mem_entry_attach_to_process -> kgsl_mmu_get_gpuaddr), bound into the VBO
++ * or not. A VBO that fills the range leaves none: on the Galaxy S24 Ultra (SM8650, range
++ * 0x4000000000..0x8000000000) the 256 GiB rung fits exactly, and every GPUOBJ_IMPORT after it
++ * returned ENOMEM with no kernel message. So a rung is taken only if a second reservation of
++ * DRM2KGSL_VBO_HEADROOM_GB (default 32; 0: no check) fits beside one of its size. Both are tried
++ * here without the zero page mapped over them (cheap where the kernel knows that flag) and
++ * released; the VBO itself is made after. */
++static bool
++kgsl_vbo_leaves_room(int fd, uint64_t size)
++{
++   uint64_t gb = 32;
++   kgsl_parse_u64_env("DRM2KGSL_VBO_HEADROOM_GB", &gb);
++   if (!gb)
++      return true;
++
++   struct kgsl_gpuobj_alloc vbo = { .size = size, .flags = KGSL_MEMFLAGS_VBO | KGSL_MEMFLAGS_VBO_NO_MAP_ZERO };
++   if (kgsl_ioctl(fd, IOCTL_KGSL_GPUOBJ_ALLOC, &vbo))
++      return false;
++   struct kgsl_gpuobj_alloc room = { .size = gb << 30, .flags = KGSL_MEMFLAGS_VBO | KGSL_MEMFLAGS_VBO_NO_MAP_ZERO };
++   bool fits = !kgsl_ioctl(fd, IOCTL_KGSL_GPUOBJ_ALLOC, &room);
++   if (fits)
++      kgsl_free_gpuobj(fd, room.id);
++   kgsl_free_gpuobj(fd, vbo.id);
++   return fits;
++}
++
+ static int
+ kgsl_alloc_vbo(int fd, uint32_t *out_id, uint64_t *out_base, uint64_t *out_size)
+ {
+@@ -2821,6 +3112,12 @@
+          .flags = KGSL_MEMFLAGS_VBO,
+       };
+ 
++      if (!kgsl_vbo_leaves_room(fd, vbo_size_ladder[i])) {   /* ONEIOS */
++         drm_log("VBO of 0x%" PRIx64 ": not granted, or no address room left beside it for imports",
++                 vbo_size_ladder[i]);
++         continue;
++      }
++
+       if (kgsl_ioctl(fd, IOCTL_KGSL_GPUOBJ_ALLOC, &req)) {
+          drm_dbg("GPUOBJ_ALLOC(VBO, size=0x%" PRIx64 ") failed: %s",
+                  vbo_size_ladder[i], strerror(errno));
