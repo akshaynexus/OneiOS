@@ -12,7 +12,7 @@ How to build and test it: [docs/building.md](docs/building.md).
 
 ## Status
 
-**Experimental. iOS does not boot to the home screen yet. Nothing has run on the phone yet.**
+**Experimental. iOS does not boot to the home screen yet. On the phone (first boots, 2026-11-11) the kernel comes up and the first user process dies; the fix (`0027`) is not yet run there.**
 
 On the PC (xnuhost under `qemu-aarch64`, 8 vCPUs, the real iOS 27.0.1 `24A446` image set, `kernel.kc` with the
 iPhone18,2 kexts), the boot gets through:

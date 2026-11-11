@@ -98,6 +98,18 @@ What that run showed is wrong or missing (none of it fixed yet unless a later li
   QuartzCore's `query_displays`, 40 s after backboardd opened the framebuffer). `display.sock` shows one flat colour,
   about two flushes a second; no swap from backboardd, no `session/ready`.
 
+- **The first phone boot (S24 Ultra, 2026-11-11)** got through the kernel, the root mount, the cryptexes, the
+  shared cache's hashing (5791 MiB in 23 s), 8 CPUs, the GPU, the HID devices, and stopped at the first user
+  process: `newfs_apfs failed: wait status 0xb`, `panic: offline scratch Data mount failed: 5`. With
+  `sheng-exc-name=newfs_apfs` in `IMAGE/xnuhost.conf`: a permission fault at `0x81f8d4ed30` in libobjc's
+  `realizeClassWithoutSwift` (from `map_images`), which takes a class's signed isa with a constant mask (`and x0,
+  x8, #0x7fffffffff8`). The phone's Linux has 39-bit user addresses, so the CPU's authentication code starts at
+  bit 39 and four bits of it survive that mask; under qemu-user (48 bits) and on an iPhone (47) none does. **0027**:
+  on a host narrower than 47 bits iOS user space runs without pointer authentication (`arm_user_jop_disabled()`
+  is true: the kernel signs nothing for user space; every task thread runs with its keys off through
+  `PR_PAC_SET_ENABLED_KEYS`). Built and booted on the PC, where it changes nothing (47 bits); **not yet run on the
+  phone**, and the PC cannot run the keys-off mode (qemu-user has no such prctl).
+
 Not reached: a swap from backboardd, a frame from SpringBoard, `session/ready`. Nothing here has run on the phone.
 
 ## What the patch does (files, functions)

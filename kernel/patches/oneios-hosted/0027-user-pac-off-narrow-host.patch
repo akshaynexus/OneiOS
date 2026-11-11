@@ -1,0 +1,91 @@
+diff --git a/osfmk/arm64/pcb.c b/osfmk/arm64/pcb.c
+--- a/osfmk/arm64/pcb.c
++++ b/osfmk/arm64/pcb.c
+@@ -1744,6 +1744,12 @@
+ boolean_t
+ arm_user_jop_disabled(void)
+ {
++#if XNU_HOSTED
++	/* 0027: on a host whose authentication codes would sit in bits iOS treats as address bits (hosted_machine.c) */
++	extern bool hosted_user_pac_off(void);
++	return hosted_user_pac_off();
++#else
+ 	return FALSE;
++#endif
+ }
+ #endif /* __has_feature(ptrauth_calls) */
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+--- a/osfmk/arm64/hosted/hosted_machine.c
++++ b/osfmk/arm64/hosted/hosted_machine.c
+@@ -692,6 +692,9 @@
+ hosted_user_backtrace_start(void)
+ {
+ 	thread_t thread = THREAD_NULL;
++	/* 0027: decided and said here, on bsd_init's thread: its first caller may have interrupts masked (no console) */
++	extern bool hosted_user_pac_off(void);
++	(void)hosted_user_pac_off();
+ 	if (!PE_parse_boot_argn("oneios-ubt", hosted_ubt_names, sizeof(hosted_ubt_names)) || hosted_ubt_names[0] == 0) {
+ 		return;
+ 	}
+@@ -702,3 +705,47 @@
+ 	}
+ }
+ #endif /* XNU_HOSTED */
++
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0027): user pointer authentication off on a host with a narrow user address space.
++ *
++ * A pointer's authentication code sits in the bits above the address: from bit 64 - T0SZ up to bit 54. iOS user
++ * code is built for the iPhone's 47-bit user addresses and does not always strip a signed pointer with the
++ * instruction: libobjc takes a class's signed isa with a constant mask (realizeClassWithoutSwift: `and x0, x8,
++ * #0x7fffffffff8`, bits 3..42), which is right when the code starts at bit 47 and under qemu-user (48 bits).
++ * The S24 Ultra's Linux gives user space 39 bits, so the CPU puts the code in bits 39..54 and that mask leaves
++ * four bits of it in the address: the first process of the first phone boot (newfs_apfs) died in objc's
++ * map_images with a fault at 0x81f8d4ed30, the metaclass 0x1f8d4ed30 with bit 39 of its code left in.
++ *
++ * The host's address width cannot be changed, so on such a host iOS user space runs without pointer
++ * authentication, the state XNU already has for it: arm_user_jop_disabled() is true, so the kernel signs nothing
++ * it hands to user space (the shared cache's pointers at page-in, dyld's pager, thread states, the signal
++ * trampoline's token), and every task thread runs with the four keys off (hosted_user.c; the host needs
++ * PR_PAC_SET_ENABLED_KEYS, XH_FEATURE_PAC_KEYS_OFF), where pac*, aut* and the authenticated branches are plain
++ * instructions. The kernel's own pointers stay signed. Boot argument oneios-user-pac=1 or =0 forces it either way.
++ */
++bool hosted_user_pac_off(void);
++bool
++hosted_user_pac_off(void)
++{
++	static int off = -1;
++	if (off < 0) {
++		uint32_t wanted = 0;
++		bool narrow = hosted_info.user_va_bits != 0 && hosted_info.user_va_bits < 47;
++		bool decided = narrow;
++		if (PE_parse_boot_argn("oneios-user-pac", &wanted, sizeof(wanted))) {
++			decided = wanted == 0;
++		}
++		off = decided;
++		if (decided) {
++			printf("hosted: iOS user space runs without pointer authentication: the host's user addresses are %u bits wide "
++			    "(%s)%s\n", hosted_info.user_va_bits,
++			    narrow ? "the codes would start below bit 47, inside what iOS code takes for the address" : "asked for with oneios-user-pac=0",
++			    (hosted_info.features & XH_FEATURE_PAC_KEYS_OFF) ? "" :
++			    "; THIS HOST CANNOT TURN A THREAD'S KEYS OFF (no PR_PAC_SET_ENABLED_KEYS): user code will fail its own checks");
++		}
++	}
++	return off != 0;
++}
++#endif /* XNU_HOSTED */
+diff --git a/osfmk/arm64/hosted/hosted_user.c b/osfmk/arm64/hosted/hosted_user.c
+--- a/osfmk/arm64/hosted/hosted_user.c
++++ b/osfmk/arm64/hosted/hosted_user.c
+@@ -160,7 +160,9 @@
+ 		thread->machine.hosted_thread = twin;
+ 	}
+ 	/* A task with user JOP disabled (plain arm64 code) runs with the keys off. */
+-	uint32_t pac = (thread->machine.arm_machine_flags & ARM_MACHINE_THREAD_DISABLE_USER_JOP) ? 0 : XH_PAC_ALL;
++	/* Or every task does, on a host where the codes cannot be used at all (0027, hosted_user_pac_off). */
++	extern bool hosted_user_pac_off(void);
++	uint32_t pac = ((thread->machine.arm_machine_flags & ARM_MACHINE_THREAD_DISABLE_USER_JOP) || hosted_user_pac_off()) ? 0 : XH_PAC_ALL;
+ 	if (thread->machine.hosted_pac != pac + 1) {
+ 		uint32_t old = hosted_irq_mask();
+ 		(void)HC(thread_set_pac, thread->machine.hosted_thread - 1, pac);

@@ -59,3 +59,8 @@
 # lead: a debugging aid. oneios-ubt=NAME,... prints, oneios-ubt-at seconds in, where every thread of those user
 # processes is (saved pc, lr, and the return addresses up its frame pointers). Off without the boot argument.
 0026-user-backtrace.patch
+# lead: on a host whose user addresses are narrower than 47 bits (the S24 Ultra: 39) iOS user space runs without
+# pointer authentication: the codes would sit in bits iOS code masks as address bits (libobjc's isa mask keeps
+# bits 3..42; newfs_apfs died in objc's map_images at the first phone boot). The kernel signs nothing for user
+# space and every task thread runs with its keys off. oneios-user-pac=0|1 forces it.
+0027-user-pac-off-narrow-host.patch

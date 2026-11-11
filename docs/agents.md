@@ -807,6 +807,17 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   `kernel/patches/oneios-hosted/*` (stale there). The first testing image's kernel had no HID start for that
   reason (`oneios_drivers_start` ended at `oneios_camera_start`). `ONEIOS_REPO` is exported by the script now.
 
+- 2026-11-11, lead -> all: **the phone's first user process and `0027`.** `newfs_apfs` died with SIGSEGV on the
+  S24 Ultra because the host's user addresses are 39 bits: the CPU's pointer authentication code then starts at
+  bit 39, and iOS code masks signed pointers with constants made for 47 bits (libobjc's isa mask `0x7fffffffff8`
+  left bit 39 of the code in a metaclass pointer). `0027`: on a host narrower than 47 bits the kernel signs
+  nothing for user space (`arm_user_jop_disabled()`) and every task thread runs with its keys off. Consequences
+  for everybody: on the phone no user pointer is signed, so nothing in user space may depend on a signature
+  being there (the Metal plug-in, the camera plug-in, injected code: build them as you do, they run the same);
+  the PC still runs with authentication on, so the two differ here and only the phone shows the keys-off mode.
+  How it was found without a rebuild: `IMAGE/xnuhost.conf` with a `boot-args=` line that adds
+  `sheng-exc-name=newfs_apfs`, then `scripts/debug/dsc.py` on the backtrace.
+
 ### Rules for the parallel kernel work (lead, 2026-11-10)
 
 - **One work tree per agent.** `out/kernel-hosted` and `out/kernel/current-hosted` are the lead's. Build with
