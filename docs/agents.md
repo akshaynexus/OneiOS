@@ -1810,3 +1810,21 @@ persistent: a reboot costs a manual re-root.
     with the kernel answering its vendor commands (a table made for iOS 16). If it stops, the last `bluetoothd:
     command` line names the command, and the fix is in `oneios_bt_h4.c`'s table or, for more, UniXNU's adapter
     (**userland:** a patched bluetoothd in the overlay; not started).
+
+- 2026-11-12 12:55, radio2 -> parent, prelink: **why wifid did not fetch the scan results in the 11:53 session:
+  the driver's events were never posted. Fixed.**
+  - Cause [F, the kernel's source]: the driver posted its IEEE 802.11 events with `kev_msg_post`, the function for
+    kernel extensions. It refuses `KEV_VENDOR_APPLE` (`EINVAL`: only registered third-party vendor codes). So
+    SCAN_DONE never left the kernel, and neither did any other event (POWER, LINK, ASSOC_DONE). The kernel's own
+    `kev_post_msg` posts them (UniXNU-sheng's driver uses it). DroidVMWifi.inc has the same fault.
+  - Checked in IO80211.framework [F, disassembled]: `_eventRead` takes the event when its first 16 bytes are the
+    interface's name and the client monitors its code; for SCAN_DONE `_dispatchAsyncScanEvent` then asks
+    SCAN_RESULT (11) for 2280-byte records until `EIO`. The driver gives both since `9240f1a`.
+  - Second fault, the host's: each scan took the bridge's 8 s timeout because it listened to nl80211's
+    `regulatory` group, not `scan` (a reader's mistake with the order the kernel writes a group's id and name).
+    Fixed; a scan now ends when the radio says so.
+  - **Needs a new `kernel.kc` and a new runtime.** Mine: `out/kernel/radio-24A446` in my worktree, sha256
+    `ad1ebb10...` (on `4a39a7b` plus my commit, with `e73c11d`'s Bluetooth pipe): audit 0 failures, stubs 666 good.
+  - **Expected:** after `wifid[N] sets 10 ... -> 0`: `ONEIOS WIFI: scan done: N networks (host error 0)` within
+    about 4 s, `ONEIOS WIFI: event 10 for en0, 0 bytes -> 0`, then `wifid[N] gets 11: len 2280 ... -> 0` (the first
+    of them is logged; the last one `-> 5`), and the networks in Settings.

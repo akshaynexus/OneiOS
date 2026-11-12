@@ -52,8 +52,12 @@ extern "C" const uint32_t oneios_net_controller_size, oneios_net_interface_size;
 extern "C" bool oneios_net_set_subtype(IONetworkInterface *interface, uint32_t subtype);
 extern char oneios_net_controller_meta[] __asm__("__ZN17IO80211Controller10gMetaClassE");
 extern char oneios_net_interface_meta[] __asm__("__ZN16IO80211Interface10gMetaClassE");
-// sys/kern_event.h declares kev_msg_post without C linkage; the symbol is the C one
-extern "C" errno_t oneios_kev_msg_post(struct kev_msg *event_msg) __asm__("_kev_msg_post");
+// The kernel's own event post. Not kev_msg_post, the one for kernel extensions: that one refuses every vendor code
+// that is not a registered third party's, KEV_VENDOR_APPLE among them (EINVAL), and with it no IEEE 802.11 event of
+// this driver ever reached wifid: it asked for a scan, the scan was done, and it never fetched the results (the
+// phone, 2026-11-12). UniXNU-sheng's driver posts with this function. (sys/kern_event.h declares it without C
+// linkage; the symbol is the C one.)
+extern "C" int oneios_kev_post_msg(struct kev_msg *event_msg) __asm__("_kev_post_msg");
 
 extern "C" {
 int droidvm_net_tx_frame(const void *frame, unsigned length);   // DroidVMVirtioNet.c
@@ -200,7 +204,11 @@ static void post_event(uint32_t code, const void *payload, size_t length) {
     struct kev_msg msg; memset(&msg, 0, sizeof msg);
     msg.vendor_code = KEV_VENDOR_APPLE; msg.kev_class = 6; msg.kev_subclass = 1; msg.event_code = code;
     msg.dv[0].data_length = static_cast<uint32_t>(16 + length); msg.dv[0].data_ptr = data;
-    oneios_kev_msg_post(&msg);
+    const int error = oneios_kev_post_msg(&msg);
+    static unsigned said;   // the first events with their outcome: an event that is not posted is a daemon that waits for ever
+    if (said < 24 || error) {
+        if (said < 64) { ++said; log("event %u for %s, %u bytes -> %d", code, reinterpret_cast<const char *>(data), static_cast<unsigned>(length), error); }
+    }
 }
 
 // ASSOC_DONE: with the join's result where the daemon reads one.

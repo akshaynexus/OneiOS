@@ -68,7 +68,8 @@ interface, and nothing ever asks for a scan (the first phone session). `docs/har
 
 `oneios-wifi=0` leaves the Wi-Fi out. The lines (`ONEIOS WIFI: ...`), in the order of a good boot: `classes
 registered below the collection's IOEthernetController and IOEthernetInterface; starting /arm-io/net`, `on: the
-phone's Wi-Fi, address ..; asking the host for its radio`, `the host has the phone's radio`, `the interface is enabled (en0 is up)`, `NAME[PID] gets|sets N: len .. val .. ->
+phone's Wi-Fi, address ..; asking the host for its radio`, `the host has the phone's radio`, `the interface is enabled (en0 is up)`, `event N for en0, M bytes -> error` (the
+first 24 events posted to the daemon, and any that fails: 10 is SCAN_DONE, 9 ASSOC_DONE, 4 LINK_CHANGED), `NAME[PID] gets|sets N: len .. val .. ->
 error` (each Apple80211 request with the process that made it, for the first 150, then a type's first, and every
 scan, join and leave), `NAME[PID]: interface request 0x..` (the first 24 other requests on en0), `NAME[PID] asks the
 interface for a user client of type 0x.. -> 0x..` (the first 8), `scan

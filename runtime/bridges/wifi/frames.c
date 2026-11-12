@@ -105,3 +105,26 @@ size_t br_wifi_segment(const uint8_t *frame, size_t length, uint16_t mss, bool c
   }
   return count;
 }
+
+// A generic netlink multicast group's attributes: CTRL_ATTR_MCAST_GRP_NAME (1, a string) and CTRL_ATTR_MCAST_GRP_ID
+// (2, 32 bits), each {length, type} then the value, padded to 4 bytes. Both are read before they are compared: the
+// kernel writes the id first, and a reader that kept "the last name seen" took the id of the group after the one it
+// wanted (the bridge then listened to nl80211's "regulatory" group for scan events and never got one).
+bool br_wifi_nl_group(const uint8_t *attrs, size_t length, const char *name, uint32_t *id)
+{
+  const uint8_t *found_name = NULL;
+  size_t name_size = 0;
+  bool have_id = false;
+  uint32_t value = 0;
+  for (size_t at = 0; at + 4 <= length;) {
+    const uint16_t len = (uint16_t)(attrs[at] | attrs[at + 1] << 8), type = (uint16_t)((attrs[at + 2] | attrs[at + 3] << 8) & 0x3fff);
+    if (len < 4 || len > length - at) break;
+    if (type == 1) { found_name = attrs + at + 4; name_size = len - 4u; }
+    else if (type == 2 && len == 8) { memcpy(&value, attrs + at + 4, 4); have_id = true; }
+    at += (len + 3u) & ~3u;
+  }
+  const size_t want = strlen(name);
+  if (!have_id || !found_name || name_size < want || memcmp(found_name, name, want) || (name_size > want && found_name[want] != 0)) return false;
+  *id = value;
+  return true;
+}

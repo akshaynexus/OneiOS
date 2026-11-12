@@ -20,7 +20,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 |---|---|---|---|
 | CPU | `droidvm-amp.patch` + `DroidVMCpufreq.c` (UniXNU-droidvm, unchanged) | `runtime/bridges/cpu`: topology, vCPU plan, thread placement, the cpufreq device | host built and tested; kernel side waits for release-kernel (series, archive) and booter (device tree, placement calls) |
 | GPU | UniXNU-droidvm's virtio-gpu 3D + NativeAdreno user client (unchanged) | booter's `virtio_gpu.c` + drm2kgsl | booter's; not owned here (section 2) |
-| Wi-Fi / network | `kernel/patches/oneios-hosted/net`: `IO80211Controller`/`IO80211Interface` under the collection's `IOEthernetController`/`IOEthernetInterface`, a station that asks the host, UniXNU-droidvm's virtio-net transport (section 3) | `runtime/bridges/wifi`: wlan0 is iOS's for the session: frames by AF_PACKET, scans by nl80211, joins by the vendor's supplicant (AIDL V2 over `/dev/binder`); `wifictl`; the old tap/NAT route only with `wifi=tap` | both built; host tested (107 + 35 checks, the binder client on a real binder driver); on the phone beside One UI: the supplicant's service and an nl80211 scan (53 networks) answer our client; **not yet run in a session** (wifid, a join, DHCP) |
+| Wi-Fi / network | `kernel/patches/oneios-hosted/net`: `IO80211Controller`/`IO80211Interface` under the collection's `IOEthernetController`/`IOEthernetInterface`, a station that asks the host, UniXNU-droidvm's virtio-net transport (section 3) | `runtime/bridges/wifi`: wlan0 is iOS's for the session: frames by AF_PACKET, scans by nl80211, joins by the vendor's supplicant (AIDL V2 over `/dev/binder`); `wifictl`; the old tap/NAT route only with `wifi=tap` | both built; host tested (128 + 35 checks, the binder client on a real binder driver); on the phone beside One UI: the supplicant's service and an nl80211 scan (53 networks) answer our client; **not yet run in a session** (wifid, a join, DHCP) |
 | Bluetooth | `drivers/bluetooth` (port of iOSPlus10's transport) on `drivers/bridge` | `runtime/bridges/bt`: the HAL over `/dev/hwbinder` | both built; on by default in a session since 2026-11-11 (before: off, `bluetooth=virtual`); HAL client tested on the PC against a fake HAL on a real binder driver, not yet on the phone |
 | Haptics | `drivers/haptics` (port of iOSPlus10's LaurelVibrator and haptic node) | `runtime/bridges/haptics`: evdev force feedback | both built; host tested with a fake actuator |
 | Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp`: the hosted kernel's audio archive since 2026-11-12 (before: not built, no device in iOS) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | helper run on the phone beside One UI (plays and records, 0 underruns, about 130 ms); host-tested against a fake AAudio; in a session and the guest side not yet run (section 6) |
@@ -418,7 +418,7 @@ absent: a reason not to run it on the phone as it is.
 
 ### Tested
 
-- Host (arm64 Linux container, `runtime/host-tests.sh`): `test_wifi` 107 checks (frame rules; a 4000-byte coalesced
+- Host (arm64 Linux container, `runtime/host-tests.sh`): `test_wifi` 128 checks (frame rules; the netlink group reader; a 4000-byte coalesced
   IPv4 frame and a 3000-byte IPv6 one cut into three with right lengths, sequence numbers and checksums; the station
   against a fake radio; the AIDL parcels byte for byte; the join's plan for WPA2, WPA3, transition, WPA with TKIP,
   open, OWE and a network not seen; the supplicant's callbacks decoded); `test_aidl_binder` 35 checks: the client
@@ -426,6 +426,21 @@ absent: a reason not to run it on the phone as it is.
   the third lookup, the interface added and removed, the callback's descriptor and version asked for inside
   `registerCallback`, a join, a wrong key, a network not found, a rejection, a link that drops, a look without a
   callback, a supplicant that dies). Both ends of that test use `aidl.h`.
+- **Second session (the diagnostic session of 2026-11-12 11:53, `kernel.kc` 8eff915f from `bd7c1fb`, with the
+  medium fix)**: wifid takes en0 (`the interface is enabled (en0 is up)`, its whole attach: CARD_CAPABILITIES, POWER,
+  RSSI_BOUNDS, HW_SUPPORTED_CHANNELS, `sets 564` FILTER_MONITOR_EVENTS with 33 bytes, STATE, PHY_MODE, OP_MODE ...)
+  and scans: `wifid[41] sets 10: len 5528 -> 0`, and 8 s later `scan done: 45 networks (host error 0)`. But it never
+  fetched the results (no `gets 11`), twice. Two causes, both fixed after it:
+  - **No IEEE 802.11 event of the driver was ever posted.** The driver (as DroidVMWifi.inc) posted with
+    `kev_msg_post`, the function for kernel extensions, which refuses every vendor code that is not a registered
+    third party's: `KEV_VENDOR_APPLE` gets `EINVAL`. The kernel's own `kev_post_msg` is the one (UniXNU-sheng's
+    driver uses it). So SCAN_DONE never reached IO80211.framework's event reader (`_eventRead`: the event's first 16
+    bytes must be the interface's name, its code must be one the client monitors; for SCAN_DONE it then fetches
+    SCAN_RESULT records of 2280 bytes until `EIO`). The driver now logs the first events with their outcome.
+  - **The bridge listened to the wrong nl80211 group**, so each scan ended by the 8 s timeout and not by the
+    radio's event: the kernel writes a multicast group's id before its name, and the reader kept "the last name
+    seen", which gave it the id of the group after `scan` (`regulatory`). Fixed and unit-tested
+    (`br_wifi_nl_group`).
 - **First session with it (prelink's session 2, 2026-11-12 10:28, `kernel.kc` 66faa3e8 and runtime 0.1.8-dev from
   `924a0d9`)**: worked: `ONEIOS WIFI: classes registered ...`, `on: the phone's Wi-Fi, address a6:a4:20:b8:00:0c`,
   `the host has the phone's radio`; xnuhost: `the vendor's supplicant is the bridge's: joins by its AIDL service`,

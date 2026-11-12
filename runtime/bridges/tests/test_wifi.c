@@ -83,6 +83,19 @@ static void test_frames(void)
   f[5] ^= 1;
   CHECK(!br_wifi_to_guest(f, 60, mac) && !br_wifi_to_guest(f, 10, mac) && !br_wifi_to_radio(f, 1515, mac));
 
+  // A netlink multicast group as the kernel writes it (the id, then the name) and the other way round; another
+  // name; a name that only begins with the wanted one; cut short.
+  static const uint8_t scan_group[] = { 8, 0, 2, 0, 3, 0, 0, 0, 9, 0, 1, 0, 's', 'c', 'a', 'n', 0, 0, 0, 0 };
+  static const uint8_t name_first[] = { 9, 0, 1, 0, 's', 'c', 'a', 'n', 0, 0, 0, 0, 8, 0, 2, 0, 7, 0, 0, 0 };
+  static const uint8_t regulatory[] = { 8, 0, 2, 0, 4, 0, 0, 0, 15, 0, 1, 0, 'r', 'e', 'g', 'u', 'l', 'a', 't', 'o', 'r', 'y', 0, 0 };
+  static const uint8_t scanner[] = { 8, 0, 2, 0, 5, 0, 0, 0, 12, 0, 1, 0, 's', 'c', 'a', 'n', 'n', 'e', 'r', 0 };
+  uint32_t id = 0;
+  CHECK(br_wifi_nl_group(scan_group, sizeof scan_group, "scan", &id) && id == 3);
+  CHECK(br_wifi_nl_group(name_first, sizeof name_first, "scan", &id) && id == 7);
+  CHECK(!br_wifi_nl_group(regulatory, sizeof regulatory, "scan", &id) && !br_wifi_nl_group(scanner, sizeof scanner, "scan", &id));
+  CHECK(br_wifi_nl_group(regulatory, sizeof regulatory, "regulatory", &id) && id == 4);
+  for (size_t cut = 0; cut < sizeof scan_group - 3; cut++) CHECK(!br_wifi_nl_group(scan_group, cut, "scan", &id));
+
   static uint8_t big[14 + 40 + 20 + 4000];
   static sink s;
   // A frame of the link's size goes as it is.

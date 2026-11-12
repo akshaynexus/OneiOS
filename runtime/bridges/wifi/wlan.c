@@ -176,15 +176,14 @@ static int genl_replies(struct br_wlan *w, attr_fn fn, void *ctx)
 }
 
 struct family_query { const char *group; uint16_t id; uint32_t group_id; };
-static void group_attr(void *ctx, uint16_t type, const uint8_t *data, uint16_t size)
+// One multicast group of the family: its id and its name, in the order the kernel wrote them (the id first).
+static void groups_attr(void *ctx, uint16_t type, const uint8_t *data, uint16_t size)
 {
   struct family_query *q = ctx;
-  if (type != CTRL_ATTR_MCAST_GRP_NAME && type != CTRL_ATTR_MCAST_GRP_ID) return;
-  static _Thread_local char name[32];
-  if (type == CTRL_ATTR_MCAST_GRP_NAME) snprintf(name, sizeof name, "%.*s", (int)size, (const char *)data);
-  if (type == CTRL_ATTR_MCAST_GRP_ID && size == 4 && !strcmp(name, q->group)) memcpy(&q->group_id, data, 4);
+  uint32_t id;
+  (void)type;
+  if (br_wifi_nl_group(data, size, q->group, &id)) q->group_id = id;
 }
-static void groups_attr(void *ctx, uint16_t type, const uint8_t *data, uint16_t size) { (void)type; each_attr(data, size, group_attr, ctx); }
 static void family_attr(void *ctx, uint16_t type, const uint8_t *data, uint16_t size)
 {
   struct family_query *q = ctx;
