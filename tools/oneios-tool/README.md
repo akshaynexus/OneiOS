@@ -5,7 +5,7 @@ script before it may replace it; the commands and the results are below. What is
 
 | Tool | Replaces | State | Same output as the old tool |
 |---|---|---|---|
-| `sym` | `scripts/debug/dsc.py` | done | yes: byte for byte on 18 of 18 address sets (Linux, 2026-11-12; the Mac's run: 18 of 18) |
+| `sym` | `scripts/debug/dsc.py` (**retired 2026-11-12**: deleted, its output frozen in `tests/sym/golden/`) | done | yes: byte for byte on 18 of 18 address sets (Linux, 2026-11-12; the Mac's run: 18 of 18) |
 | `log` | nothing (new) | done | not applicable; 33 commands end with status 0, two runs equal |
 | `image` | `scripts/image/imagetool.py` | 9 subcommands in Rust, the rest run the Python tool | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds, byte for byte (the 36th: the Linux set has no `kernel.kc`) |
 | `ioslog` | the manual steps of `docs/newtodo.md` "How to resume" step 2 (mount, copy, `unifiedlog_iterator`) | done; not run on the phone's Data store yet | yes on 7 archives: CSV byte for byte from a `.logarchive`, from a Data-store image and from a mounted volume |
@@ -345,7 +345,8 @@ What the numbers say:
 ## sym
 
 `oneios-tool sym [--slide HEX] ADDR...` names user addresses of a boot log in the image's dyld shared cache, as
-`scripts/debug/dsc.py` does, from an index it builds once (`out/dsc-index/<cache UUID>/`, 1.07 GiB).
+`scripts/debug/dsc.py` did (the Python symbolizer it replaced; deleted on 2026-11-12, its output frozen as
+hashes), from an index it builds once (`out/dsc-index/<cache UUID>/`, 1.07 GiB).
 `ONEIOS_DSC_DIR` is the folder with `dyld_shared_cache_arm64e`. **No mount is needed** since the APFS reader
 decodes compressed files: `oneios-tool image apfs-copy out/image/24A446/systemos.img
 System/Library/Caches/com.apple.dyld out/dsc` copies the cache out of the image (82 files, 7,312,005,844 bytes,
@@ -356,9 +357,16 @@ that copy (18.6 s) is byte for byte the index built through an apfs-fuse mount (
 (2.5 s for its first 16 bytes), which is why `dsc.py` is so slow through it.
 
 ```sh
-ONEIOS_DSC_DIR=<cache folder> ONEIOS_LOG_DIR=<folder with *.log> tools/oneios-tool/tests/sym/compare-python.sh
-tools/oneios-tool/tests/sym/make-log.py <cache folder> OUT.log     # a stand-in log where there is none from the phone
+ONEIOS_DSC_DIR=<cache folder> tools/oneios-tool/tests/sym/compare-golden.sh
 ```
+
+The script writes two stand-in logs from the cache (`tests/sym/make-log.py`, fixed seeds), takes its 18 address
+sets from them, and compares `sym`'s stdout and exit status with `tests/sym/golden/24A446.txt`: per set, the
+SHA-256 of the arguments, of `dsc.py`'s stdout, and its status, taken from the last run of both tools. Result
+after `dsc.py` was deleted (2026-11-12, the cache copied out of the image with `apfs-copy`): 18 of 18 the same.
+With another cache the sets are other addresses and the script says "other arguments".
+
+**The comparison that froze them** (`tests/sym/compare-python.sh`, in git up to commit `06a9222`):
 
 Result on Linux x86_64 (2026-11-12): **18 of 18 address sets byte for byte the same as `dsc.py`**, exit status
 included. The box has no log from the phone, so the sets come from two stand-in logs that `make-log.py` wrote from

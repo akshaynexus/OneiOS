@@ -7,7 +7,7 @@
 #   parity    tests/image/parity.py               none (stand-in files)
 #   image     tests/image/compare-python.sh       SET=<image set folder> (or the set in out/image/<build>)
 #   apfs      tests/image/apfs-read.sh, apfs-fuse.sh   APFS_IMAGES="IMAGE[:VOLUME] ..." and apfs-fuse (Linux)
-#   sym       tests/sym/compare-python.sh         ONEIOS_DSC_DIR, ONEIOS_LOG_DIR (tests/sym/make-log.py makes a log)
+#   sym       tests/sym/compare-golden.sh         ONEIOS_DSC_DIR (the 24A446 cache; the script makes its logs)
 #   log       tests/log/run.sh                    ONEIOS_LOG_DIR or ONEIOS_LOGS
 #   ioslog    tests/ioslog/compare.sh             REF_ITER=<unifiedlog_iterator>, IOSLOG_ARCHIVES="A.logarchive ..."
 #   prelink   tests/prelink/compare-golden.sh     KERNELCACHE (default out/kernel-inputs/24A446/kernelcache.macho);
@@ -52,8 +52,8 @@ for part in $parts; do
       run apfs test $ok = 0
     fi ;;
   sym)
-    if [ -n "${ONEIOS_DSC_DIR:-}" ] && [ -n "${ONEIOS_LOG_DIR:-}" ]; then run sym "$here/sym/compare-python.sh"
-    else skip sym "ONEIOS_DSC_DIR and ONEIOS_LOG_DIR are not both set"; fi ;;
+    if [ -n "${ONEIOS_DSC_DIR:-}" ]; then run sym "$here/sym/compare-golden.sh"
+    else skip sym "ONEIOS_DSC_DIR is not set"; fi ;;
   log)
     if [ -n "${ONEIOS_LOG_DIR:-}${ONEIOS_LOGS:-}" ]; then run log "$here/log/run.sh"
     else skip log "ONEIOS_LOG_DIR or ONEIOS_LOGS is not set"; fi ;;

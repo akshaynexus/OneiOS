@@ -321,8 +321,9 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   the phone; under qemu-user it cannot, and only pc and lr are shown); `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
 - A user process that dies: the kernel logs its registers and a backtrace (`sheng-exc`, `sheng-ubt` lines) for the
   processes named in the boot argument `sheng-exc-name=SpringBoard,backboardd,...` (default: backboardd, chronod,
-  liveactivitiesd; launchd always). `scripts/debug/dsc.py ADDR...` names those addresses in the image set's dyld
-  shared cache (it finds the slide from a whole backtrace; its header says how to give it the cache).
+  liveactivitiesd; launchd always). `oneios-tool sym ADDR...` names those addresses in the image set's dyld
+  shared cache (it finds the slide from a whole backtrace; `ONEIOS_DSC_DIR` or `--dsc` names the cache folder, and
+  after the first call the index in `out/dsc-index` is enough: section 10, `tools/oneios-tool/README.md` "sym").
 - Wi-Fi on the PC: add `--set wifi=sim`: a made-up radio with two networks for the guest's Wi-Fi driver and wifid
   (`ONEIOS WIFI:` lines; [hardware.md](hardware.md) section 3). Not possible in the Mac's container: its Linux has no
   pointer authentication (`xnuhost E an arm64e kernel needs pointer authentication ...; this host has none`).
@@ -351,7 +352,7 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
 - A user process that neither dies nor does its job: boot arguments `oneios-ubt=NAME[,NAME...]`
   (`oneios-ubt-at=SECONDS`, default 420; `oneios-ubt-every=SECONDS` to repeat) make the kernel print where every
   thread of those processes is (`oneios-ubt:` lines: scheduler state, saved pc and lr, the return addresses up the
-  frame pointers; `0026`). Give a long line's addresses to `scripts/debug/dsc.py` for the slide, then name the rest
+  frame pointers; `0026`). Give a long line's addresses to `oneios-tool sym` for the slide, then name the rest
   with `--slide`.
 - Who opens the GPU, and whether the Metal plug-in's folder was mounted: `oneios-gpu-addon:` and `oneios-gpu-open:` lines,
   always on (`docs/gpu.md` 5.1).
@@ -655,8 +656,8 @@ what was changed for the iPhone's shared cache and what is verified: [gpu.md](gp
 
 ## 10. Rust tools (`oneios-tool`)
 
-`tools/oneios-tool` is one binary with the project's host tools in Rust: `sym` (the backtrace symbolizer,
-`scripts/debug/dsc.py`), `log` (reads an xnuhost session log), `image` (`scripts/image/imagetool.py`), `ioslog` (iOS's
+`tools/oneios-tool` is one binary with the project's host tools in Rust: `sym` (the backtrace symbolizer; it replaced
+`scripts/debug/dsc.py`, deleted 2026-11-12), `log` (reads an xnuhost session log), `image` (`scripts/image/imagetool.py`), `ioslog` (iOS's
 own unified log out of a copy of the phone's Data store, without a mount) and `prelink` (all twelve steps of
 `kernel/prelink/build.sh`, behind `PRELINK_IMPL=rust`). Since the third Linux round also `phone` (the adb
 workflow of section 6: status, stage, sums, switch, return, log, the Data store's copy), `app` (the fork's app of
