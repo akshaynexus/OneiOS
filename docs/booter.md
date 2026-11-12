@@ -293,6 +293,15 @@ spin on each side; with each thread on its own core a 20 us spin gave 1.8 us. So
 and on the phone, where two vCPUs and their iOS threads share the two E cores, a spin would cost what it saves. Not
 measured on the phone; the hand-off across cores there may be cheaper or dearer than in this VM.
 
+**On the phone** (combined boot of 2026-11-12 12:30, kernel.kc 1e297354, runtime 0.1.10-dev; `cpu-pin=1`, vCPU *i*
+on CPU *i*; 30 s windows during the boot): 17,000-22,600 task traps a second, two to three faults for each system
+call. Each hand-off took 10-12 us at p50 (up and down alike), ten times the container's: the cores were slow then (the
+cap and the governor) and most hand-offs slept in a futex. The kernel's work after a trap: 41 us at p50 for a system
+call (mean 115-130 us), 12-20 us for a fault (mean 60 us); a deferred map carried by a release took 50-70 us from the
+release to done (the task's `mmap` of one page), an unmap order 29-32 us. So the kernel's own work and the number of
+faults are now the larger costs, not the hand-off (the kernel side: `kernel/patches/oneios-hosted/README.md`,
+"0040-0044").
+
 **The report.** Each vCPU counts its traps by kind and keeps histograms (4 buckets a power of two) of each step
 (`src/perf.c`). The main thread prints them every `perf-log` seconds (default 30, `--set perf-log=0` only at the stop
 and on SIGQUIT), for that period; at the stop and on SIGQUIT since the start:

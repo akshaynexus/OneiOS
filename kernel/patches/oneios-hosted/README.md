@@ -210,7 +210,8 @@ Both built; not run.
   calls and 8 Mach traps with the most calls (`NUMBER CALLS xMEAN_US`; `bsd/kern/syscalls.master` and
   `osfmk/kern/syscall_sw.c` name them; Mach traps are negative). With xnuhost's `perf:` lines (`docs/booter.md`
   2.6a) this says which calls the kernel's share goes to, and whether the one TLB lock is a bottleneck.
-- **0042, `oneios-iobusy`** (on unless `oneios-iobusy=0`): at 30, 60, 120, 240 and 480 s of uptime, the services
+- **0042, `oneios-iobusy`** (on unless `oneios-iobusy=0`): at 30, 60, 120, 240 and 480 s after bsd_init (the first
+  phone boot printed all five at once: the guest's counter is the host's, which runs since the phone booted), the services
   that keep IOKit busy and have no busy child (`oneios-iobusy: 60 s: busy 1: NAME (class CLASS, id 0x...), inactive 0`)
   and the count. configd's InterfaceNamer waits up to 4 minutes for IOKit to go quiet before it names en0 (261 s
   after the Wi-Fi driver published it in prelink's session 2); these lines name what it waits for.
@@ -238,8 +239,27 @@ Both built; not run.
   one. One line per label: `oneios-jobs: com.apple.analyticsd: enabled in disabled.plist (it was disabled)` or `not
   disabled there`. The edit was tested on the Mac on a plistlib file.
 
-Built on the Mac (`HOSTED_OUT=perf`, series through 0044, DEVELOPMENT and the RELEASE reference); not prelinked by
-me, not run.
+Built on the Mac (`HOSTED_OUT=perf`, series through 0044, DEVELOPMENT and the RELEASE reference).
+
+**First phone run** (combined boot of 2026-11-12 12:30, kernel.kc 1e297354, runtime 0.1.10-dev, 30 s windows):
+- 0040: done (no idle flush). 0043: `names 52 of 52 apps of /Applications: kept`, lsd no longer rebuilds. 0044:
+  `com.apple.analyticsd: enabled in disabled.plist`; analyticsd runs (15-30 % CPU), but backboardd's CoreAnalytics queue
+  still loops in `retryXpcMessageHelper_sync` (the thread is runnable in every sample: each send fails at once and is
+  sent again). Not solved.
+- 0041: 150,000-240,000 system calls and 180,000-520,000 faults per 30 s. The top BSD calls by count: 75 `madvise` (35,000-45,000
+  per 30 s, about 120 us each: the most kernel time of any call), 375 `kevent_id`, 368 `workq_kernreturn`, 478
+  `bsdthread_ctl`, 153 `pread`, 305 `psynch_cvwait`, 220 `getattrlist` (250-350 us), 381 `__mac_syscall`; the top Mach
+  traps: -47 `mach_msg2_trap` (about 90 us), -18 `mach_port_deallocate`, -14 `mach_vm_protect`, -12
+  `mach_vm_deallocate` (100-130 us). malloc's `madvise` frees pages, which the pmap flushes one by one: a likely source
+  of the many unmap orders below. Faults split about evenly between fills from the tables and
+  `vm_fault`. The fills' own time was 77 ms per 30 s in the first window, then 44-572 s (summed over vCPUs and with the
+  time a filling thread was switched out) once the TLB lock got busy: the one global lock was taken 0.3-1.9 million
+  times per 30 s, held 38 % of a vCPU in the first window, and waited for 14 % of a vCPU in the first window and up to
+  41-47 s per 30 s (one and a half vCPUs spinning) later. User unmaps rose to 140,000-500,000 per 30 s (more than the
+  maps): a flush of the shared region (a nested pmap) sends an unmap order to every task, each a round trip of about
+  30 us made with the global lock held. The next step: a lock per pmap, and a flush of a nested range sent only to the
+  tasks that mapped in it.
+- 0042: no result (the timing fault above; fixed).
 
 ## 0039-gpu-client-list-and-texts.patch (gpu, 2026-11-12)
 

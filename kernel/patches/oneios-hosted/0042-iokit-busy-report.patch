@@ -1,18 +1,16 @@
 diff --git a/iokit/Kernel/IOService.cpp b/iokit/Kernel/IOService.cpp
 --- a/iokit/Kernel/IOService.cpp
 +++ b/iokit/Kernel/IOService.cpp
-@@ -9335,8 +9335,84 @@
- 	}
- 
+@@ -9337,6 +9337,85 @@
  	return status;
-+}
-+
+ }
+ 
 +#if XNU_HOSTED
 +/*
 + * OneiOS hosted (0042), a debugging aid: which services keep IOKit busy. configd's InterfaceNamer waits for IOKit to
 + * go quiet (IOKitWaitQuiet) for up to four minutes before it names a network interface: en0 was named 261 s after the
 + * Wi-Fi driver published it (prelink's session 2), so some service stayed busy for minutes. At 30, 60, 120, 240 and
-+ * 480 s of uptime (oneios-iobusy=0 turns it off) one line counts the busy services and gives the root's busy count,
++ * 480 s after bsd_init (oneios-iobusy=0 turns it off) one line counts the busy services and gives the root's busy count,
 + * and one line each names up to 16 busy services none of whose children is busy (a parent is busy while a child is):
 + *   oneios-iobusy: 60 s: busy 1: AppleSomething (class SomeClass, id 0x100000abc), inactive 0
 + *   oneios-iobusy: 60 s: 7 services busy, the root's count 3
@@ -52,15 +50,18 @@ diff --git a/iokit/Kernel/IOService.cpp b/iokit/Kernel/IOService.cpp
 +	IOLog("oneios-iobusy: %u s: %u services busy, the root's count %u\n", seconds, busy, root ? (unsigned)root->getBusyState() : 0);
 +	OSSafeReleaseNULL(all);
 +	OSSafeReleaseNULL(iter);
- }
- 
++}
++
 +static void
 +oneios_iokit_busy_thread(void *, wait_result_t)
 +{
 +	static const unsigned at[] = { 30, 60, 120, 240, 480 };
++	/* from this thread's start (bsd_init), not from mach_absolute_time's zero: under xnuhost the counter is the host's,
++	 * which has run since the phone booted (the first boot of 0042 printed all five reports at once) */
++	const uint64_t began = mach_absolute_time();
 +	for (unsigned i = 0; i < sizeof(at) / sizeof(at[0]); i++) {
 +		uint64_t nano = 0;
-+		absolutetime_to_nanoseconds(mach_absolute_time(), &nano);
++		absolutetime_to_nanoseconds(mach_absolute_time() - began, &nano);
 +		uint64_t up = nano / NSEC_PER_SEC;
 +		if (up < at[i]) {
 +			IOSleep((unsigned)((at[i] - up) * 1000));
