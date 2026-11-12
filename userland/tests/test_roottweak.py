@@ -105,7 +105,7 @@ class Policy(unittest.TestCase):
         self.assertFalse(set(chosen) & d.keep)
         self.assertFalse(set(chosen) & set(d.idle))
         # vphone's base list of 134, less generativeexperiencesd (kept) and the four OTA jobs (replace)
-        self.assertEqual(len(d.groups['base']['labels']), 129)
+        self.assertEqual(len(d.groups['base']['labels']), 128)          # analyticsd went to keep (2026-11-12)
         for label in ('com.apple.SpringBoard', 'com.apple.backboardd', 'com.apple.CommCenter', 'com.apple.sleepd',
                       'com.apple.generativeexperiencesd', 'com.apple.bluetoothd', 'com.apple.locationd'):
             self.assertIn(label, d.keep)
@@ -170,7 +170,7 @@ class Sealed(Case):
         self.apply()
         disabled = self.plist(self.data, 'db/com.apple.xpc.launchd/disabled.plist')
         self.assertEqual(set(disabled), {
-            'com.apple.watchdogd', 'com.apple.mobile.softwareupdated', 'com.apple.OTATaskingAgent', 'com.apple.analyticsd',
+            'com.apple.watchdogd', 'com.apple.mobile.softwareupdated', 'com.apple.OTATaskingAgent',
             'com.apple.nfcd', 'com.apple.seld', 'com.apple.assistantd', 'com.apple.nearbyd', 'com.apple.momentsd',
             'com.apple.coreduetd'})
         self.assertTrue(all(v is True for v in disabled.values()))
@@ -182,7 +182,7 @@ class Sealed(Case):
         self.assertEqual(sorted(contract['launch_policy']['disable_jobs']), sorted(disabled))
         # iOS 27's DisableAllowed = false: said, since a sealed root cannot change it
         self.assertEqual(contract['launch_policy']['force_enabled'],
-                         ['com.apple.OTATaskingAgent', 'com.apple.analyticsd', 'com.apple.mobile.softwareupdated'])
+                         ['com.apple.OTATaskingAgent', 'com.apple.mobile.softwareupdated'])
         # labels the fake root does not have are reported, not written
         missing = [r for r in self.read('report.json')['results'] if r['item'] == 'jobs not in this root'][0]
         self.assertIn('com.apple.weatherd', missing['labels'])
@@ -477,7 +477,7 @@ class Hook(Case):
         self.assertEqual(rules['tmp'], '0\t0\t1777')
         with open(info) as f:
             summary = json.load(f)
-        self.assertEqual((summary['layout'], summary['disabled_jobs'], summary['build']), ('sealed', 9, fakeroot.BUILD))
+        self.assertEqual((summary['layout'], summary['disabled_jobs'], summary['build']), ('sealed', 8, fakeroot.BUILD))
         self.assertTrue(any(line.startswith('oneios-init') for line in summary['off']))
         self.assertNotIn('com.apple.momentsd', self.plist(self.data, 'db/com.apple.xpc.launchd/disabled.plist'))
         # with built helpers: the first-start unpacker goes to the overlay, not into the seed, and is trusted
@@ -544,8 +544,9 @@ class ReadWrite(Case):
         helpers, hashes = self.helpers()
         self.apply('--helpers', helpers, layout='rw')
         have = launchd.jobs(self.cache())
-        for label in ('com.apple.nfcd', 'com.apple.watchdogd', 'com.apple.analyticsd', 'com.apple.momentsd'):
+        for label in ('com.apple.nfcd', 'com.apple.watchdogd', 'com.apple.momentsd'):
             self.assertNotIn(label, have)
+        self.assertIn('com.apple.analyticsd', have)              # kept: its clients spin without it
         for label in ('com.apple.SpringBoard', 'com.apple.CommCenter', 'com.apple.example.unknownd', 'com.apple.example.boot'):
             self.assertIn(label, have)
         # our manager is a launchd job whose program is on the root file system
@@ -661,13 +662,13 @@ class BootCheck(Case):
 
     def test_a_disabled_job_that_ran_is_a_problem_unless_launchd_may_not_disable_it(self):
         self.booted('2026-11-10 14:12:00.000000 (system/com.apple.nfcd) <Notice>: service state: spawning\n'
-                    '2026-11-10 14:12:01.000000 (system/com.apple.analyticsd [70]) <Notice>: service state: spawning\n')
+                    '2026-11-10 14:12:01.000000 (system/com.apple.OTATaskingAgent [70]) <Notice>: service state: spawning\n')
         lines, problems = bootcheck.check(self.data, self.root, ignore_owner=True)
         self.assertEqual(problems, ['1 disabled jobs were started: com.apple.nfcd'])
-        self.assertIn('run although disabled (DisableAllowed = false): com.apple.analyticsd', lines)
+        self.assertIn('run although disabled (DisableAllowed = false): com.apple.OTATaskingAgent', lines)
         # without the OS volume's files only launchd's own line says a job may not be disabled
         _, problems = bootcheck.check(self.data, None, ignore_owner=True)
-        self.assertEqual(problems, ['2 disabled jobs were started: com.apple.analyticsd, com.apple.nfcd'])
+        self.assertEqual(problems, ['2 disabled jobs were started: com.apple.OTATaskingAgent, com.apple.nfcd'])
 
     def test_what_launchd_asks_of_the_override_file(self):
         self.booted()

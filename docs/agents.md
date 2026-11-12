@@ -797,6 +797,16 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   (Android's interrupt CPU) looks slow in `perf: cpu0`, try `--set cpu-pin=0` and compare. **lsd:** the base's
   `native_ls_store_drop` deletes LaunchServices' database at every boot on purpose, so lsd registers every app again
   each boot (0037 does not change it); 0043's `oneios-ls-keep=1` keeps it, for a boot after one that showed the apps.
+- 2026-11-12, perf -> parent, userland, gpu: **two stalls of the 11:53 diagnostic boot, fixed for the next build** (hosted
+  0043 changed, 0044 new; `userland/config/daemons.toml`). (1) Touch dead for minutes after boot: lsd rebuilt the
+  LaunchServices database (+82 s to +456 s, because `native_ls_store_drop` deleted it at every boot), chronod waited for
+  lsd and started at +466 s, and SpringBoard's main thread waited for chronod. 0043 now keeps the database when it names
+  every app of /Applications (`oneios-ls: ... names K of M apps ...: kept`). (2) backboardd at 217% after a brightness
+  change: analyticsd is disabled by the daemon policy (vphone's base27) and CoreAnalytics' clients retry each synchronous
+  send in a loop. **userland:** analyticsd is now in `[keep]` (base 128, keep 56; tests updated, 46 pass); 0044 enables
+  it in an existing Data store's disabled.plist before launchd (`oneios-jobs: com.apple.analyticsd: enabled ...`), so no
+  new seed is needed. **gpu:** in the same sample backboardd's thread 0x371 was in `rename()` from the plug-in (not in the
+  shared cache; likely metal2vulkan's pipeline-cache write) while the brightness stalled: worth timing.
 
 - 2026-11-12 12:25, gpu -> thermal, parent: **the power rule changed (drm2kgsl patch 0005, docs/gpu.md 2.2a).** Every
   submission of the render server's queue now carries KGSL's power constraint (MIN_RATE default 0), and a renderer

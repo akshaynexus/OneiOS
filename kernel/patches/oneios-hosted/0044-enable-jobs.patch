@@ -1,0 +1,99 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8853,6 +8853,87 @@
+ 	}
+ 	vnode_close(vp, FREAD, ctx);
+ 	return named;
++}
++#endif /* XNU_HOSTED */
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0044): launchd jobs that the Data store's disabled.plist (written by the image's roottweak, the daemon
++ * policy of the seed it was made from) disables but that must run, enabled again before launchd reads the file: their
++ * entry's <true/> becomes <false/> (an override of false is "enabled"). A seed made after the policy changed has no such
++ * entry; this keeps a Data store made from an older seed from needing a new one. The list is oneios-enable-jobs=
++ * LABEL[,LABEL...] (default com.apple.analyticsd; "-" for none). One line per label:
++ *   oneios-jobs: com.apple.analyticsd: enabled in disabled.plist (it was disabled)        or: not disabled there
++ * Why analyticsd: without it CoreAnalytics' clients retry each synchronous send with a new connection
++ * (CoreAnalytics::Client::retryXpcMessageHelper_sync, __kernelrpc_mach_port_construct_trap in a loop): backboardd spun at
++ * 217% after a brightness change and the brightness never reached the panel (phone, 2026-11-12).
++ */
++static void
++oneios_jobs_enable(void)
++{
++	static const char path[] = "/private/var/db/com.apple.xpc.launchd/disabled.plist";
++	char labels[256] = "com.apple.analyticsd";
++	vfs_context_t ctx = vfs_context_current();
++	(void)PE_parse_boot_argn("oneios-enable-jobs", labels, sizeof(labels));
++	if (labels[0] == 0 || !strcmp(labels, "-")) {
++		return;
++	}
++	vnode_t vp = NULLVP;
++	off_t size = -1;
++	if (vnode_open(path, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx)) {
++		printf("oneios-jobs: no %s: nothing to enable\n", path);
++		return;
++	}
++	(void)vnode_size(vp, &size, ctx);
++	const size_t cap = 256 * 1024;
++	char *text = size > 0 && (size_t)size < cap ? kalloc_data(cap, Z_WAITOK | Z_ZERO) : NULL;
++	int resid = 0;
++	int error = text == NULL ? EFBIG : vn_rdwr(UIO_READ, vp, (caddr_t)text, (int)size, 0, UIO_SYSSPACE, IO_NOAUTH,
++	    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++	vnode_close(vp, FREAD, ctx);
++	if (error || resid) {
++		printf("oneios-jobs: %s not read (%d)\n", path, error ? error : EIO);
++		if (text != NULL) {
++			kfree_data(text, cap);
++		}
++		return;
++	}
++	size_t length = (size_t)size;
++	bool changed = false;
++	for (char *label = labels; *label;) {
++		char *end = label;
++		while (*end && *end != ',') {
++			end++;
++		}
++		char saved = *end;
++		*end = 0;
++		char key[160];
++		snprintf(key, sizeof(key), "<key>%s</key>", label);
++		char *at = strnstr(text, key, length);
++		const char *said = "not disabled there";
++		if (at != NULL) {
++			char *value = at + strlen(key);
++			while (value < text + length && (*value == ' ' || *value == '\t' || *value == '\n' || *value == '\r')) {
++				value++;
++			}
++			if (value + 7 <= text + length && !strncmp(value, "<true/>", 7) && length + 1 < cap) {
++				memmove(value + 8, value + 7, (size_t)(text + length - (value + 7)));
++				memcpy(value, "<false/>", 8);
++				length++;
++				changed = true;
++				said = "enabled in disabled.plist (it was disabled)";
++			}
++		}
++		printf("oneios-jobs: %s: %s\n", label, said);
++		*end = saved;
++		label = saved ? end + 1 : end;
++	}
++	if (changed) {
++		error = native_gpu_addon_write(path, (const uint8_t *)text, length, 0644, ctx);
++		if (error > 0) {
++			printf("oneios-jobs: %s not written (%d)\n", path, error);
++		}
++	}
++	kfree_data(text, cap);
+ }
+ #endif /* XNU_HOSTED */
+ static void
+@@ -9062,6 +9143,7 @@
+ #if XNU_HOSTED
+ 	oneios_icon_store_refresh(p, scratch);        /* 0036 */
+ 	oneios_lsd_first_boot_done(p, scratch);       /* 0037 */
++	oneios_jobs_enable();                         /* 0044 */
+ #endif
+ }
+ 

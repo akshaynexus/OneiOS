@@ -39,6 +39,8 @@ labels = [
   "com.apple.dt.remotepairingdeviced", "com.apple.diskimagesiod", "com.apple.diskimagesiod.ram",
   "com.apple.mobileassetd", "com.apple.storekitd", "com.apple.pasteboard.pasted",
   "com.apple.ReportCrash", "com.apple.osanalytics.osanalyticshelper",
+  # the CoreAnalytics server: its clients retry a synchronous send when it is missing
+  "com.apple.analyticsd",
   # media and location paths other daemons call synchronously
   "com.apple.locationd", "com.apple.bluetoothd",
   "com.apple.audiomxd", "com.apple.mediaplaybackd", "com.apple.mediaremoted", "com.apple.cameracaptured",
@@ -54,6 +56,7 @@ labels = [
 "com.apple.passd" = "Wallet's first screen waits on it, and it on financed (vphone, list version 3)"
 "com.apple.generativeexperiencesd" = "in vphone-cli's list, but vphone-android keeps it: without it an idle iOS 27 guest spins launchd (android/vphone-native/src/services.rs KEEP)"
 "com.apple.bluetoothd" = "locationd calls it synchronously (vphone). iOSPlus10 dropped it on iOS 16 for a relaunch loop; on iOS 27 it stays and idles"
+"com.apple.analyticsd" = "without it backboardd spun at 217% CPU after a brightness change: CoreAnalytics::Client::retryXpcMessageHelper_sync makes a new connection for each retry of a synchronous send (__kernelrpc_mach_port_construct_trap in a loop) and the brightness never reached the panel (phone, 2026-11-12, oneios-ubt). vphone's base27 disables it; here the lookups found no service and the clients spun"
 "com.apple.security.cryptexd" = "needs /chosen/manifest-properties in the device tree, or it restarts every 10 s (iOSPlus10 notes 5167-5175)"
 
 # ---- idle -------------------------------------------------------------------------------------------------
@@ -92,7 +95,7 @@ labels = [
   "com.apple.SensorKitALSHelper", "com.apple.SiriTTSTrainingAgent", "com.apple.StatusKitAgent",
   "com.apple.ThreadCommissionerService", "com.apple.WirelessRadioManager", "com.apple.absd",
   "com.apple.accessibility.heard", "com.apple.accessoryupdaterd", "com.apple.adid", "com.apple.amsengagementd",
-  "com.apple.analyticsagent", "com.apple.analyticsd", "com.apple.ap.adprivacyd", "com.apple.ap.promotedcontentd",
+  "com.apple.analyticsagent", "com.apple.ap.adprivacyd", "com.apple.ap.promotedcontentd",
   "com.apple.appstorecomponentsd", "com.apple.askpermissiond", "com.apple.assistant_cdmd",
   "com.apple.assistant_service", "com.apple.assistantd", "com.apple.audioanalyticsd",
   "com.apple.batteryintelligenced", "com.apple.biomesyncd", "com.apple.bookassetd", "com.apple.callintelligenced",

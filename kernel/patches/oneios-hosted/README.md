@@ -214,14 +214,32 @@ Both built; not run.
   that keep IOKit busy and have no busy child (`oneios-iobusy: 60 s: busy 1: NAME (class CLASS, id 0x...), inactive 0`)
   and the count. configd's InterfaceNamer waits up to 4 minutes for IOKit to go quiet before it names en0 (261 s
   after the Wi-Fi driver published it in prelink's session 2); these lines name what it waits for.
-- **0043, `oneios-ls-keep`.** The base's `native_ls_store_drop` deletes LaunchServices' database at every boot, on
-  purpose (its comment: the staged apps are registered only by a rebuild, and a database saved before they were
-  registered kept them out). So lsd registers every app again at every boot: about 11 minutes on the phone, with the
-  database's lock held while SpringBoard waits; 0037's semaphore does not change that. Each file is now logged with its
-  size (`oneios-ls: CONTAINER/FILE: N bytes: dropped (...)`), and `oneios-ls-keep=1` keeps it. Default unchanged.
-  Not proven: whether a kept database still has the staged apps after a session that was stopped before lsd saved.
+- **0043, the LaunchServices database is kept when it holds the apps.** The base's `native_ls_store_drop` deleted
+  LaunchServices' database at every boot, on purpose (its comment: the staged apps are registered only by a rebuild,
+  and a database saved before they were registered kept them out). So lsd registered every app again at every boot:
+  6 to 11 minutes on the phone. In the diagnostic boot of 11:53 (kernel.kc 8eff915f) lsd ran from +82 s to +456 s;
+  chronod started its own work at +466 s, and SpringBoard's main thread had waited in `kevent_id` under ChronoServices'
+  `-[CHSWidgetDescriptorProvider initWithConnection:...]` for a queue whose thread was in a synchronous XPC to chronod
+  (`-[CHSChronoServicesConnection _subscribeToExtensions]`), so no touch was handled until then. 0037's semaphore does
+  not change that. Now (`oneios-ls-keep=2`, the default) a container's database is kept when its largest file names
+  every `NAME.app` entry of `/Applications` (the system's and the staged view's) in its strings (a name ends at
+  `.app` and starts after a `/` or a NUL); one that lacks any of them is dropped as before. `oneios-ls-keep=1` keeps
+  every one, `0` drops every one. One line per container: `oneios-ls: CONTAINER/FILE: N bytes, names K of M apps of
+  /Applications: kept` (or `dropped (...)`). If K stays 0 on a database that does hold the apps, the database does
+  not store the names as plain text, and only `oneios-ls-keep=1` keeps it. The scan was tested on the Mac against
+  sample bytes (a name across two 1 MiB chunks, `Notes.apps` against `Notes.app`); not on a real database.
+- **0044, `oneios-enable-jobs`** (default `com.apple.analyticsd`; `-` for none). Before launchd, each listed job's
+  `<true/>` in the Data store's `/private/var/db/com.apple.xpc.launchd/disabled.plist` becomes `<false/>` (enabled),
+  and the file is written again (root's, 0644). The image's daemon policy disabled analyticsd (vphone's base27); then
+  CoreAnalytics' clients retry each synchronous send with a new connection: in the same boot backboardd spun at 217%
+  after a brightness change (`CoreAnalytics::Client::retryXpcMessageHelper_sync` and
+  `__kernelrpc_mach_port_construct_trap`) and the brightness never reached the panel. `userland/config/daemons.toml`
+  now keeps analyticsd, so a new seed has no such entry; 0044 fixes a Data store made from an older seed without a new
+  one. One line per label: `oneios-jobs: com.apple.analyticsd: enabled in disabled.plist (it was disabled)` or `not
+  disabled there`. The edit was tested on the Mac on a plistlib file.
 
-Built on the Mac (`HOSTED_OUT=perf`, series through 0043); not prelinked by me, not run.
+Built on the Mac (`HOSTED_OUT=perf`, series through 0044, DEVELOPMENT and the RELEASE reference); not prelinked by
+me, not run.
 
 ## 0039-gpu-client-list-and-texts.patch (gpu, 2026-11-12)
 

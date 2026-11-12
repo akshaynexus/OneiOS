@@ -1,31 +1,163 @@
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -8792,6 +8792,27 @@
+@@ -8751,7 +8751,111 @@
+ 	    error ? "not made" : "made", error);
+ }
+ #endif /* XNU_HOSTED */
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0043): the drop below makes lsd register every app again at every boot: 6 to 11 minutes on the phone,
++ * with the database's lock held, and chronod (the lock screen's widgets) waits for lsd, and SpringBoard's main thread
++ * waits for chronod, so touches are not handled until it ends. The drop exists because the staged apps are registered
++ * only by a rebuild and a database saved before they were registered kept them out. So a database is kept when it
++ * already names every app of /Applications (the system's and the staged view's) as "NAME.app" in its strings: a
++ * database saved before the registration ended lacks some of them and is dropped as before.
++ *   oneios-ls-keep=2 (default) that test; 1 keep every one; 0 drop every one (the old behaviour)
++ * One line per container: oneios-ls: CONTAINER/FILE: N bytes, names K of M apps of /Applications: kept|dropped
++ */
++#define ONEIOS_LS_APPS 320
++struct oneios_ls_apps {
++	char     name[ONEIOS_LS_APPS][64];
++	uint8_t  seen[ONEIOS_LS_APPS];
++	unsigned count;
++};
++
++/* The ".app" entries of /Applications. */
++static void
++oneios_ls_apps_list(struct oneios_ls_apps *apps)
++{
++	unsigned found = 0;
++	apps->count = 0;
++	(void)native_ls_store_names("/Applications", "", apps->name, ONEIOS_LS_APPS, &found);
++	for (unsigned i = 0; i < found; i++) {
++		size_t length = strlen(apps->name[i]);
++		if (length > 4 && !strcmp(apps->name[i] + length - 4, ".app")) {
++			if (apps->count != i) {
++				memcpy(apps->name[apps->count], apps->name[i], length + 1);
++			}
++			apps->count++;
++		}
++	}
++}
++
++/* Marks the apps whose "NAME.app" ends at each ".app" of data[0..length) (a name starts after a '/' or a NUL). */
+ static void
++oneios_ls_apps_scan(struct oneios_ls_apps *apps, const uint8_t *data, size_t length)
++{
++	for (size_t at = 1; at + 4 <= length; at++) {
++		if (data[at] != '.' || data[at + 1] != 'a' || data[at + 2] != 'p' || data[at + 3] != 'p') {
++			continue;
++		}
++		uint8_t next = at + 4 < length ? data[at + 4] : 0;       /* the name ends here: "Notes.apps" is not "Notes.app" */
++		if ((next >= 'a' && next <= 'z') || (next >= 'A' && next <= 'Z') || (next >= '0' && next <= '9') || next == '_' || next == '-') {
++			continue;
++		}
++		size_t start = at;
++		while (start > 0 && at - start < 63 && data[start - 1] != '/' && data[start - 1] != 0) {
++			start--;
++		}
++		size_t name_length = at + 4 - start;
++		for (unsigned i = 0; i < apps->count; i++) {
++			if (!apps->seen[i] && !strncmp(apps->name[i], (const char *)data + start, name_length) && apps->name[i][name_length] == 0) {
++				apps->seen[i] = 1;
++				break;
++			}
++		}
++	}
++}
++
++/* How many apps of the list the file names; -1 when it cannot be read. */
++static int
++oneios_ls_apps_named(struct oneios_ls_apps *apps, const char *path, off_t *size, vfs_context_t ctx)
++{
++	vnode_t vp = NULLVP;
++	*size = -1;
++	if (vnode_open(path, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx)) {
++		return -1;
++	}
++	(void)vnode_size(vp, size, ctx);
++	const uint32_t chunk = 1024 * 1024, overlap = 64;
++	uint8_t *buffer = kalloc_data(chunk + overlap, Z_WAITOK);
++	int named = -1;
++	if (buffer != NULL && *size > 0) {
++		bzero(apps->seen, sizeof(apps->seen));
++		size_t kept = 0;
++		for (off_t at = 0; at < *size; at += chunk) {
++			int length = (int)(*size - at < chunk ? *size - at : chunk), resid = 0;
++			if (vn_rdwr(UIO_READ, vp, (caddr_t)buffer + kept, length, at, UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid,
++			    vfs_context_proc(ctx)) || resid) {
++				break;
++			}
++			size_t total = kept + (size_t)length;
++			oneios_ls_apps_scan(apps, buffer, total);
++			/* the last bytes go to the front, so a name across two chunks is still seen (one seen twice is no harm) */
++			kept = total < overlap ? total : overlap;
++			memmove(buffer, buffer + total - kept, kept);
++			if (at + length >= *size) {
++				named = 0;
++				for (unsigned i = 0; i < apps->count; i++) {
++					named += apps->seen[i];
++				}
++			}
++		}
++	}
++	if (buffer != NULL) {
++		kfree_data(buffer, chunk + overlap);
++	}
++	vnode_close(vp, FREAD, ctx);
++	return named;
++}
++#endif /* XNU_HOSTED */
++static void
+ native_ls_store_drop(proc_t p, user_addr_t scratch)
+ {
+ 	/* LaunchServices keeps its database in the Library/Caches of lsd's data container, whose name is a UUID made when the Data store
+@@ -8790,6 +8894,47 @@
+ 				continue;
+ 			}
  			looked++;
++#if XNU_HOSTED
++			/* 0043: the container's database is kept when its largest file names every app of /Applications. */
++			uint32_t keep_mode = 2;
++			(void)PE_parse_boot_argn("oneios-ls-keep", &keep_mode, sizeof(keep_mode));
++			bool keep = keep_mode == 1;
++			if (n != 0 && keep_mode != 0) {
++				off_t largest = -1, size = -1;
++				int named = -1;
++				unsigned largest_file = 0;
++				for (unsigned j = 0; j < n; ++j) {
++					vnode_t file_vp = NULLVP;
++					snprintf(path, 256, "%s/%s/Library/Caches/%s", parents[k], containers[i], files[j]);
++					if (vnode_lookup(path, 0, &file_vp, ctx) == 0) {
++						size = -1;
++						(void)vnode_size(file_vp, &size, ctx);
++						vnode_put(file_vp);
++						if (size > largest) {
++							largest = size;
++							largest_file = j;
++						}
++					}
++				}
++				struct oneios_ls_apps *apps = keep_mode == 2 ? kalloc_data(sizeof(struct oneios_ls_apps), Z_WAITOK | Z_ZERO) : NULL;
++				if (apps != NULL) {
++					oneios_ls_apps_list(apps);
++					snprintf(path, 256, "%s/%s/Library/Caches/%s", parents[k], containers[i], files[largest_file]);
++					named = oneios_ls_apps_named(apps, path, &size, ctx);
++					keep = apps->count != 0 && named == (int)apps->count;
++				}
++				printf("oneios-ls: %s/%s: %lld bytes, names %d of %u apps of /Applications: %s\n", containers[i], files[largest_file],
++				    (long long)largest, named, apps != NULL ? apps->count : 0,
++				    keep ? (keep_mode == 1 ? "kept (oneios-ls-keep=1)" : "kept") :
++				    keep_mode == 2 ? "dropped (lsd rebuilds it and registers every app again)" : "dropped");
++				if (apps != NULL) {
++					kfree_data(apps, sizeof(struct oneios_ls_apps));
++				}
++			}
++			if (keep) {
++				continue;
++			}
++#endif
  			for (unsigned j = 0; j < n; ++j) {
  				snprintf(path, 256, "%s/%s/Library/Caches/%s", parents[k], containers[i], files[j]);
-+#if XNU_HOSTED
-+				/*
-+				 * OneiOS hosted (0043): the drop makes lsd register every app again at every boot (11 minutes on the
-+				 * phone, holding the database's lock while SpringBoard waits). Each file is said with its size (a
-+				 * database with the staged apps registered against one without), and oneios-ls-keep=1 keeps them: for
-+				 * a boot after one whose Home Screen showed the apps. Default: dropped, as before.
-+				 */
-+				uint32_t keep = 0;
-+				off_t size = -1;
-+				vnode_t file_vp = NULLVP;
-+				(void)PE_parse_boot_argn("oneios-ls-keep", &keep, sizeof(keep));
-+				if (vnode_lookup(path, 0, &file_vp, ctx) == 0) {
-+					(void)vnode_size(file_vp, &size, ctx);
-+					vnode_put(file_vp);
-+				}
-+				printf("oneios-ls: %s/%s: %lld bytes: %s\n", containers[i], files[j], (long long)size,
-+				    keep ? "kept (oneios-ls-keep=1)" : "dropped (lsd rebuilds it and registers every app again)");
-+				if (keep) {
-+					continue;
-+				}
-+#endif
  				struct unlink_args request = {.path = scratch + 0xc00};
- 				int32_t result = 0;
- 				if (!copyout(path, request.path, strlen(path) + 1) && !unlink(p, &request, &result)) {
