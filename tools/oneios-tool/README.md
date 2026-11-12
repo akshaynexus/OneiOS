@@ -28,7 +28,7 @@ python3 tools/oneios-tool/tests/image/parity.py -v                     # image a
 tools/oneios-tool/tests/compare-python.sh [PART...]                    # every comparison below whose inputs are named (its header)
 ```
 
-Rust 1.88 or newer (macos-unifiedlogs needs it; built with 1.98.0). Linux x86_64 (2026-11-12): clean build 1 min 20 s
+Rust 1.95 or newer (apk-info-zip 1.1.1 needs 1.95, macos-unifiedlogs 1.88; built with 1.98.0, and 1.99.1 on the Mac). Linux x86_64 (2026-11-12): clean build 1 min 20 s
 with two jobs, 51 unit tests pass (`oneios-common` 3, `oneios-image` 29 + 1, `oneios-ioslog` 4, `oneios-log` 7, `oneios-sym` 7),
 `parity.py`: 138 cases, all the same. macOS arm64: the three first tools were built and compared there on 2026-11-12
 (the numbers in [todo_rust.md](todo_rust.md)); `ioslog`, `prelink`, `image im4p` and the APFS file reader were not
