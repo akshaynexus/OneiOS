@@ -1,0 +1,13 @@
+[package]
+name = "oneios-log"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+memmap2.workspace = true
+rayon.workspace = true
+oneios-common.workspace = true
+oneios-sym.workspace = true

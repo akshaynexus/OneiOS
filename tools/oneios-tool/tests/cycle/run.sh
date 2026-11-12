@@ -1,0 +1,203 @@
+#!/bin/bash
+# oneios-tool phone log, phone status --watch and cycle, against the stand-in phone and a stand-in OneiOS checkout
+# whose build scripts are stand-ins: no phone, no kernel build. Needs tmux (scripts/bg.sh) and zstd.
+#
+#   tools/oneios-tool/tests/cycle/run.sh        one line per check, then `ALL OK` (exit 0) or `FAILED: N`
+#
+# phone log: --list, --file, --tail, the named filters, --grep, --since, --markers (a stage once), --save,
+# --save-auto, --analyze; --follow on a log that grows, with adb dropping in the middle (no line lost or twice)
+# and a Ctrl-C that ends it with status 0 and a whole saved file; status --watch.
+# cycle: --dry-run (nothing started, no adb call); a whole cycle (kernel, prelink with the stubs check, runtime
+# package, host tests, stage of only what differs, switch, markers, hold, return, the folder with summary.md); a
+# second cycle that stages nothing; a panic, a boot that never gets ready, Ctrl-C in the hold with and without
+# --stay; an audit failure and bad stubs stop it before the phone is touched; no switch without the return script,
+# during an import, or when the preflight refuses; one phone lock.
+set -u
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(cd "$HERE/../../../.." && pwd)
+TOOL=${TOOL:-$ROOT/tools/oneios-tool/target/release/oneios-tool}
+W=${WORK:-$ROOT/out/rustport-cycle}
+[ -x "$TOOL" ] || { echo "run.sh: no $TOOL" >&2; exit 2; }
+. "$HERE/../phone/lib.sh"
+rm -rf "$W"; mkdir -p "$W"
+export ADB=$HERE/../phone/fake-adb.sh FAKE_ADB_LOG=$W/adb.log
+unset ANDROID_SERIAL FAKE_NO_ROOT FAKE_DEVICES ONEIOS_DSC_INDEX
+FORK=$(fork_dir)
+[ -n "$FORK" ] || { echo "run.sh: the cycle's checks need the OneOS fork's root script (ONEOS_DIR, or ../OneOS beside the main checkout)"; exit 2; }
+export FAKE_FORK_ROOT_SH=$FORK/app-android/app/src/full/assets/root/oneios_root.sh ONEOS_DIR=$FORK
+P=$W/phone; export FAKE_PHONE=$P; make_phone "$P"
+S=$P/data/local/tmp/oneios
+plog() { "$TOOL" phone log "$@"; }
+
+# ---- phone log on a finished session's log
+"$TOOL" phone switch > /dev/null 2>&1; wait_for 10 test -e "$S/session/ready"
+"$TOOL" phone return > /dev/null 2>&1; wait_for 10 no_session "$P"
+L=$S/session/xnuhost.log; n=$(wc -l < "$L")
+check "log --list: the names, no folder listed" 0 "^xnuhost +[0-9]+ bytes  changed [0-9]+  session/xnuhost.log" plog --list
+check "log --list: a log that is not there" 0 "^display +missing" plog --list
+plog > "$W/all.txt" 2>/dev/null && cmp -s "$W/all.txt" "$L" && ok "log: the whole file ($n lines)" || bad "log: the whole file"
+[ "$(plog --tail 3 2>/dev/null)" = "$(tail -n 3 "$L")" ] && ok "log --tail 3" || bad "log --tail"
+check "log --file switch" 0 "=== OneOS app switch .* versionCode 115 ===" plog --file switch
+check "log --file return" 0 "One UI restored in place" plog --file return
+check "log --file of no known name" 1 "one of xnuhost, switch, return, outcome, display, watchdog or logs/xnuhost-<epoch>.log" plog --file ../../etc/passwd
+m=$(plog --markers 2>/dev/null)
+[ "$(printf '%s\n' "$m" | grep -c 'backboardd\[')" = 1 ] && [ "$(printf '%s\n' "$m" | wc -l)" = 11 ] && printf '%s\n' "$m" | tail -n 1 | grep -q "xnuhost I exit 0" \
+  && ok "log --markers: nine stages once each, the stop and the exit" || bad "log --markers" "$(printf '%s' "$m" | cut -c1-60 | tr '\n' '|')"
+for f in "gpu oneios-gpu-report 1" "hid oneios-hid 1" "wifi ONEIOS.WIFI 1" "display ONEIOS.BACKLIGHT 1" "panic stopping: 2"; do
+  set -- $f; got=$(plog --$1 2>/dev/null)
+  printf '%s\n' "$got" | grep -Eq "$2" && [ "$(printf '%s\n' "$got" | grep -Evc "oneios-gpu-report|$2")" -lt "$3" ] && ok "log --$1" || bad "log --$1" "$(printf '%s' "$got" | cut -c1-70 | tr '\n' '|')"
+done
+[ "$(plog --grep 'touch (down|up)' --gpu 2>/dev/null | grep -Evc 'oneios-gpu-report|oneios-hid')" = 0 ] && [ "$(plog --grep 'touch (down|up)' 2>/dev/null | wc -l)" = 1 ] && ok "log --grep, and with a named filter (any of them)" || bad "log --grep"
+check "log --grep of a bad pattern" 1 "--grep \(: " plog --grep "("
+t=$(sed -n '8p' "$L" | sed 's/^\[ *\([0-9.]*\)\].*/\1/')
+[ "$(plog --since "$t" 2>/dev/null)" = "$(tail -n +8 "$L")" ] && ok "log --since $t: from that stamp on" || bad "log --since"
+plog --tail 5 --save "$W/saved/tail.log" > /dev/null 2>&1 && [ "$(cat "$W/saved/tail.log")" = "$(tail -n 5 "$L")" ] && ok "log --save: what was read, its folder made" || bad "log --save"
+(cd "$W" && mkdir -p repo0/scripts repo0/oneos && touch repo0/scripts/bg.sh repo0/oneos/interface.md && cd repo0 && plog --gpu --save-auto > /dev/null 2> "$W/auto.err")
+auto=$(ls "$W"/repo0/out/session-logs/*/live-*.log 2>/dev/null | head -n 1)
+[ -n "$auto" ] && cmp -s "$auto" "$L" && ok "log --save-auto: out/session-logs/DATE/live-HHMMSS.log, every line though --gpu printed few" || bad "log --save-auto" "$(cat "$W/auto.err")"
+check "log --analyze: oneios-tool log timeline of what was read" 0 "^--- oneios-tool log timeline .*live-[0-9]+\.log" sh -c "cd '$W/repo0' && '$TOOL' phone log --analyze 2>&1"
+check "log --analyze without a sym index says so" 0 "no sym index" sh -c "cd '$W/repo0' && '$TOOL' phone log --analyze 2>&1"
+check "log: no root" 1 "no root on the phone" env FAKE_NO_ROOT=1 "$TOOL" phone log
+
+# ---- --follow: a growing log, adb dropping, Ctrl-C
+echo 0.3 > "$P/.fake/step"
+"$TOOL" phone switch > /dev/null 2>&1; wait_for 10 has_session "$P"
+touch "$W/drop"
+FAKE_DROP=$W/drop "$TOOL" phone log --follow --save "$W/follow.log" > "$W/follow.out" 2> "$W/follow.err" &
+fpid=$!
+wait_for 20 grep -q "guest ready: first frame" "$W/follow.out" && ok "log --follow: the lines come as the log grows, in a session" || bad "log --follow: no ready line" "$(tail -n 2 "$W/follow.err" | tr '\n' '|')"
+grep -q "adb dropped after [0-9]* lines; connecting again" "$W/follow.err" && [ ! -e "$W/drop" ] && ok "log --follow: adb dropped once and the follow connected again" || bad "log --follow: the drop" "$(cat "$W/follow.err" | tr '\n' '|')"
+sleep 1; kill -INT $fpid; wait $fpid; st=$?
+[ $st = 0 ] && grep -q "stopped after [0-9]* lines" "$W/follow.err" && ok "log --follow: Ctrl-C ends it cleanly (status 0)" || bad "log --follow: Ctrl-C" "status $st"
+k=$(wc -l < "$W/follow.log")
+[ "$k" -ge 13 ] && cmp -s "$W/follow.log" <(head -n "$k" "$L") && cmp -s "$W/follow.out" "$W/follow.log" && ok "log --follow: the $k saved lines are the phone's first $k, none lost or twice across the drop" || bad "log --follow: the saved lines" "$k lines"
+"$TOOL" phone log --follow --tail 2 --markers > "$W/follow2.out" 2>/dev/null & fpid=$!
+sleep 1.5; kill -INT $fpid; wait $fpid
+[ "$(wc -l < "$W/follow2.out")" -le 3 ] && ! grep -Evq 'SpringBoard\[|backboardd\[|guest ready' "$W/follow2.out" && ok "log --follow --tail 2 --markers: starts near the end, prints markers only" || bad "log --follow --tail" "$(cut -c1-60 "$W/follow2.out" | tr '\n' '|')"
+"$TOOL" phone status --watch 1 > "$W/watch.out" 2>&1 & wpid=$!
+sleep 3.5; kill -INT $wpid; wait $wpid; st=$?
+[ $st = 0 ] && [ "$(grep -c '^--- 20' "$W/watch.out")" -ge 2 ] && grep -q "^session: open" "$W/watch.out" && ok "status --watch 1: again every second until Ctrl-C (status 0)" || bad "status --watch" "status $st, $(grep -c '^--- ' "$W/watch.out") looks"
+"$TOOL" phone return > /dev/null 2>&1; wait_for 10 no_session "$P"
+echo 0.1 > "$P/.fake/step"
+
+# ---- a stand-in OneiOS checkout whose builds are stand-ins
+R=$W/repo; mkdir -p "$R/scripts" "$R/oneos" "$R/kernel/prelink" "$R/kernel/patches/oneios-hosted" "$R/runtime" "$R/out/image/24A446/overlay/userland"
+cp "$ROOT/scripts/bg.sh" "$R/scripts/bg.sh"; echo stand-in > "$R/oneos/interface.md"; echo "a patch" > "$R/kernel/patches/oneios-hosted/0001.patch"
+cat > "$R/kernel/build-hosted.sh" <<'B'
+#!/bin/bash
+d=out/kernel/current-hosted-$HOSTED_OUT; mkdir -p "$d"
+echo "hosted kernel, reference=${XNU_FILESET_REFERENCE:-0}, build $(cat "$d/n" 2>/dev/null || echo 0)" > "$d/xnu.macho"; echo reference > "$d/reference.macho"
+echo "build-hosted: $d/xnu.macho"
+B
+cat > "$R/kernel/prelink/build.sh" <<'B'
+#!/bin/bash
+[ ! -e audit-fails ] || { echo "audit: 3 failures"; echo "prelink: the audit failed" >&2; exit 1; }
+mkdir -p out/kernel/24A446
+echo "collection of $(cat "$KERNEL") with $(basename "$REFERENCE")" > out/kernel/24A446/kernel.kc; echo hashes > out/kernel/24A446/kernel.kc.hashes
+echo "audit: 2711 paired, 0 failures"; echo "prelink: out/kernel/24A446/kernel.kc"
+B
+printf 'import os\nprint("stubs: 660 good, 6 bad" if os.path.exists("stubs-bad") else "stubs: 666 good, 0 bad")\n' > "$R/kernel/prelink/stubs-check.py"
+cat > "$R/runtime/package.sh" <<'B'
+#!/bin/bash
+d=$(mktemp -d); mkdir -p "$d/bin" out/release
+echo "xnuhost $1" > "$d/bin/xnuhost"
+python3 -I - "$d" "$1" <<'PY'
+import hashlib, json, os, sys
+d, v = sys.argv[1:3]
+b = open(f"{d}/bin/xnuhost", "rb").read()
+json.dump({"format": 1, "name": "oneios-runtime", "version": v, "arch": "arm64", "session_abi": 1, "image_formats": [1], "xnuhost": "bin/xnuhost",
+           "files": [{"path": "bin/xnuhost", "size": len(b), "sha256": hashlib.sha256(b).hexdigest(), "mode": "0755"}]}, open(f"{d}/runtime.json", "w"))
+PY
+tar -C "$d" -cf - runtime.json bin | zstd -q -f -o "out/release/oneios-runtime-$1-arm64.tar.zst"; rm -rf "$d"
+echo "package: out/release/oneios-runtime-$1-arm64.tar.zst"
+B
+printf '#!/bin/bash\n[ ! -e tests-fail ] || { echo "loader FAIL"; exit 1; }\necho "all pass"\n' > "$R/runtime/host-tests.sh"
+chmod +x "$R"/kernel/*.sh "$R"/kernel/prelink/build.sh "$R"/runtime/*.sh
+cp "$S/image/manifest.json" "$R/out/image/24A446/manifest.json"; cp "$S/image/overlay/userland/xnuhost.conf" "$R/out/image/24A446/overlay/userland/xnuhost.conf"
+(cd "$R" && git init -q . && git add -A && git -c user.name=t -c user.email=t@example.invalid commit -q -m stand-in)
+export ONEIOS_ROOT=$R
+cycle() { (cd "$R" && "$TOOL" cycle "$@"); }
+D=$R/out/session-logs/$(date +%F)
+calls() { grep -c . "$W/adb.log"; }
+
+# ---- dry run
+before=$(calls)
+out=$(cycle --dry-run --kernel-out t --runtime-version 0.1.7 --tests --name dry 2>&1); st=$?
+[ $st = 0 ] && [ "$(calls)" = "$before" ] && [ ! -e "$R/logs" ] && [ ! -e "$D/dry" ] && ok "cycle --dry-run: status 0, no adb call, no job, no folder" || bad "cycle --dry-run touched something" "status $st"
+for want in "scripts/bg.sh cycle-kernel env HOSTED_OUT=t XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh" "scripts/bg.sh cycle-prelink env KERNEL=.*/xnu.macho REFERENCE=.*/reference.macho kernel/prelink/build.sh" "scripts/bg.sh cycle-runtime runtime/package.sh 0.1.7" "scripts/bg.sh cycle-tests runtime/host-tests.sh" "phone sums; stage image \(only the files whose sha256 differs\)" "check the way back" "write session/return.request"; do
+  printf '%s\n' "$out" | grep -Eq "^would: $want" && ok "cycle --dry-run: $(printf '%s' "$want" | cut -c1-60)" || bad "cycle --dry-run: $want" "$(printf '%s' "$out" | tr '\n' '|' | cut -c1-300)"
+done
+check "cycle --only with a word that is no step" 1 "boot is not a step \(build, tests, stage, switch, watch, hold, return, collect\)" cycle --only boot
+check "cycle --dry-run --only watch,return" 0 "^cycle c1: watch, return \(dry run" cycle --dry-run --only watch,return --name c1
+
+# ---- the whole cycle
+out=$(cycle --kernel-out t --runtime-version 0.1.7 --tests --hold 1 --name full 2>&1); st=$?
+[ $st = 0 ] && ok "cycle: the whole cycle ends with status 0" || bad "cycle: the whole cycle" "status $st: $(printf '%s' "$out" | tail -n 4 | tr '\n' '|')"
+for want in "cycle-kernel: exit 0" "cycle-prelink: exit 0" "stubs: 666 good, 0 bad" "cycle-runtime: exit 0" "cycle-tests: exit 0" "against the phone's sums: kernel.kc, kernel.kc.hashes differ; the runtime differs" "the phone's sums are the local files'" "switch started \(versionCode 115\)" "kernel +\[" "launchd +\[" "backboardd +\[" "SpringBoard +\[" "ready +\[" "ready after [0-9]+ s" "holding the session for 1 s" "One UI restored in place \(Enforcing\)\. \([0-9]+ s after the request\); return.outcome: inplace" "summary.md in"; do
+  printf '%s\n' "$out" | grep -Eq "$want" && ok "cycle: $(printf '%s' "$want" | cut -c1-70)" || bad "cycle: $want" "$(printf '%s' "$out" | grep -E 'sums|stub|exit' | tr '\n' '|' | cut -c1-300)"
+done
+cmp -s "$R/out/kernel/24A446/kernel.kc" "$S/image/kernel.kc" && grep -q "^version=0.1.7" "$S/runtime.conf" && grep -q "reference=1" "$S/image/kernel.kc" && grep -q "reference.macho" "$S/image/kernel.kc" \
+  && ok "cycle: the phone has the new collection (built with XNU_FILESET_REFERENCE=1 and the reference) and the new runtime" || bad "cycle: what is staged"
+[ "$(cat "$S/image/data.seed")" = "seed stand-in" ] && ok "cycle: data.seed is untouched" || bad "cycle: data.seed"
+no_session "$P" && ok "cycle: One UI is back, no session" || bad "cycle: a session is left"
+for f in xnuhost.log switch.log return.log return.outcome sums.txt summary.md; do [ -s "$D/full/$f" ] || bad "cycle: $f is missing in out/session-logs/DATE/full"; done
+cmp -s "$D/full/xnuhost.log" "$S/session/xnuhost.log" && ok "cycle: out/session-logs/DATE/full has the session's log, the fork's logs and sums.txt" || bad "cycle: the collected log"
+for want in "^# Cycle full" "every step that ran ended well" "prelink: audit 0 failures \(build.sh exit 0\), stubs: 666 good, 0 bad" "app source: 0.4.86 \(versionCode 115\)" "app installed: 0.4.86 \(versionCode 115\)" "^\| stage \| [0-9.]+ \| ok \|" "^\| return \| [0-9.]+ \| ok \|" "^- \+[0-9]+ s ready: .*guest ready: first frame" "^## Panics" "^none$" "One UI restored in place \(Enforcing\)" "  image/kernel.kc$"; do
+  grep -Eq "$want" "$D/full/summary.md" && ok "summary.md: $(printf '%s' "$want" | cut -c1-60)" || bad "summary.md: $want"
+done
+
+# ---- again: nothing changed, nothing built, nothing staged
+before=$(grep -c "push" "$W/adb.log")
+out=$(cycle --kernel-out t --hold 0 --name again 2>&1); st=$?
+[ $st = 0 ] && printf '%s\n' "$out" | grep -q "kernel: up to date" && printf '%s\n' "$out" | grep -q "prelink: up to date" && printf '%s\n' "$out" | grep -q "no image file differs" && [ "$(grep -c push "$W/adb.log")" = "$before" ] \
+  && ok "cycle again: kernel and collection up to date, no file differs, nothing pushed" || bad "cycle again" "status $st: $(printf '%s' "$out" | grep -E 'kernel|prelink|differ' | tr '\n' '|')"
+touch -d '+1 minute' "$R/kernel/patches/oneios-hosted/0002.patch"
+check "cycle: a newer patch rebuilds the kernel and the collection" 0 "cycle-kernel: exit 0" cycle --kernel-out t --only build --name patch
+
+# ---- a boot that fails: the way back is still taken
+touch "$P/.fake/panic"
+out=$(cycle --skip build,tests,stage --hold 60 --name panic 2>&1); st=$?
+[ $st = 1 ] && printf '%s\n' "$out" | grep -q "PANIC .*panic(cpu 0" && printf '%s\n' "$out" | grep -q "a panic: returning" && no_session "$P" && grep -q "^- \`.*panic(cpu 0 caller" "$D/panic/summary.md" && grep -q "stopped\*\*: the boot did not reach its first frame" "$D/panic/summary.md" \
+  && ok "cycle: a panic returns at once (no hold), status 1, the panic and the way back in summary.md" || bad "cycle: a panic" "status $st: $(printf '%s' "$out" | tail -n 3 | tr '\n' '|')"
+rm "$P/.fake/panic"; touch "$P/.fake/hang"
+out=$(cycle --only switch,watch,return,collect --ready-timeout 3 --name hang 2>&1); st=$?
+[ $st = 1 ] && printf '%s\n' "$out" | grep -q "no first frame within 3 s: returning" && no_session "$P" && grep -q "One UI restored" "$D/hang/summary.md" \
+  && ok "cycle: no first frame within --ready-timeout returns, status 1" || bad "cycle: --ready-timeout" "status $st: $(printf '%s' "$out" | tail -n 3 | tr '\n' '|')"
+rm "$P/.fake/hang"
+# Ctrl-C in the hold
+(cd "$R" && exec "$TOOL" cycle --skip build,tests,stage --name ctrlc > "$W/ctrlc.out" 2>&1) & cpid=$!
+wait_for 30 grep -q "holding the session until Ctrl-C" "$W/ctrlc.out"; kill -INT $cpid; wait $cpid; st=$?
+[ $st = 0 ] && grep -q "One UI restored" "$W/ctrlc.out" && no_session "$P" && grep -q "hold: Ctrl-C after" "$D/ctrlc/summary.md" && ok "cycle: Ctrl-C in the hold returns to One UI and collects (status 0)" || bad "cycle: Ctrl-C" "status $st: $(tail -n 3 "$W/ctrlc.out" | tr '\n' '|')"
+(cd "$R" && exec "$TOOL" cycle --skip build,tests,stage --stay --name stay > "$W/stay.out" 2>&1) & cpid=$!
+wait_for 30 grep -q "holding the session until Ctrl-C" "$W/stay.out"
+check "cycle: a second cycle while one holds the phone is refused" 1 "the phone is taken: .*phone.lock is locked by another cycle \(pid [0-9]+ cycle stay\)" cycle --skip build,tests --name second
+kill -INT $cpid; wait $cpid; st=$?
+[ $st = 0 ] && has_session "$P" && grep -q "the session was left open (--stay)" "$D/stay/summary.md" && ok "cycle --stay: Ctrl-C leaves the session open and says how to end it" || bad "cycle --stay" "status $st: $(tail -n 3 "$W/stay.out" | tr '\n' '|')"
+check "cycle: no switch into an open session" 1 "a session is open: return to One UI first" cycle --only switch --name open
+out=$(cycle --only return,collect --name back 2>&1); st=$?
+[ $st = 0 ] && no_session "$P" && grep -q "One UI restored" "$D/back/summary.md" && ok "cycle --only return,collect: ends the session that was left open" || bad "cycle --only return,collect" "status $st"
+
+# ---- what stops a cycle before the phone is touched, or before the switch
+before=$(calls); touch "$R/audit-fails"
+check "cycle: an audit failure stops the cycle" 1 "cycle-prelink ended with exit code 1" cycle --kernel-out t --force prelink --name audit
+rm "$R/audit-fails"; touch "$R/stubs-bad"
+check "cycle: stubs that are not all good stop the cycle" 1 "the collection's stubs are not all good: stubs: 660 good, 6 bad" cycle --kernel-out t --force prelink --name stubs
+rm "$R/stubs-bad"; touch "$R/tests-fail"
+check "cycle: failing host tests stop the cycle" 1 "cycle-tests ended with exit code 1: loader FAIL" cycle --tests --only tests,stage --name tests
+rm "$R/tests-fail"
+[ "$(calls)" = "$before" ] && ok "cycle: none of the three touched the phone" || bad "cycle: the phone was touched after a failed build or test"
+mv "$S/oneios_return.sh" "$W/return.keep"
+check "cycle: no switch without the return script" 1 "no switch: oneios_return.sh is not staged" cycle --only switch,watch --name noreturn
+mv "$W/return.keep" "$S/oneios_return.sh"; mkdir "$S/image.new"
+check "cycle: no switch while an import is in progress" 1 "no switch: an import of an image is in progress \(image.new\)" cycle --only switch --name import
+rmdir "$S/image.new"; echo "the battery is at 4 percent (stand-in)" > "$P/.fake/preflight-refuses"
+check "cycle: no switch when the preflight refuses" 1 "no switch: the preflight refuses: the battery is at 4 percent" cycle --only switch --name preflight
+rm "$P/.fake/preflight-refuses"
+check "cycle: no root" 1 "no root on the phone" env FAKE_NO_ROOT=1 ONEIOS_ROOT="$R" "$TOOL" cycle --only stage --name noroot
+no_session "$P" && ok "none of the refused switches started a session" || bad "a refused switch started a session"
+if grep -Eqi 'find |ls -R|du |/sys/power|reboot' "$W/adb.log"; then bad "a tree walk, /sys/power or a restart was sent to the phone"
+else ok "nothing sent to the phone walks a tree, writes /sys/power or restarts ($(calls) adb calls)"; fi
+
+end_session "$P"; tmux kill-session -t oneios-cycle-kernel 2>/dev/null
+[ -n "${KEEP:-}" ] || rm -rf "$W"
+[ $FAILED = 0 ] && echo "ALL OK" || { echo "FAILED: $FAILED"; exit 1; }

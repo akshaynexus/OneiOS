@@ -14,6 +14,13 @@
 #                          the volumes' files are already readable here (mounted by other means, or a
 #                          fixture): do not mount the images. With --os-root, apfs-fuse/hdiutil is not needed
 # Env: INPUTS (default inputs/<build>), OUT (default out/image).
+#      IMAGETOOL_IMPL=python|rust   which image tool does the work (default python: scripts/image/imagetool.py).
+#                          rust: tools/oneios-tool's `oneios-tool image` runs profile, apfs-info, tree-copy,
+#                          seed-pack, manifest and the set folder's verify; it writes the same files, byte for
+#                          byte, in less time (docs/building.md "Rust tools"). pack and the archive's verify stay
+#                          with the Python tool. Build it first:
+#                            cargo build --release --manifest-path tools/oneios-tool/Cargo.toml
+#      ONEIOS_TOOL         the Rust binary (default tools/oneios-tool/target/release/oneios-tool)
 #
 # What it makes:
 #   os.img, systemos.img, app.img   the decrypted OS, SystemOS and AppOS images, byte for byte (raw APFS
@@ -34,8 +41,20 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 TOOL=$ROOT/scripts/image/imagetool.py
+IMPL=${IMAGETOOL_IMPL:-python}
+RTOOL=${ONEIOS_TOOL:-$ROOT/tools/oneios-tool/target/release/oneios-tool}
 die() { echo "build: $*" >&2; exit 1; }
-tool() { python3 -I "$TOOL" "$@"; }
+# tool SUBCOMMAND ARGS...: the image tool. With IMAGETOOL_IMPL=rust the subcommands oneios-tool has itself go to
+# it; the rest (pack, verify of the archive) stay with the Python tool.
+tool() {
+  if [ "$IMPL" = rust ]; then
+    case "$1" in
+    profile|apfs-info|apfs-owners|hashes|tree-copy|seed-pack|manifest) "$RTOOL" image "$@"; return ;;
+    verify) if [ -d "$2" ]; then "$RTOOL" image "$@"; return; fi ;;
+    esac
+  fi
+  python3 -I "$TOOL" "$@"
+}
 
 kernel= no_kernel=0 hook= no_hook=0 seed=tar pack=1 profile= os_root= sys_root= app_root=
 while [ $# -gt 0 ]; do
@@ -78,6 +97,11 @@ Darwin)
 esac
 [ ${#missing[@]} = 0 ] || die "missing tools: $(IFS=';'; echo "${missing[*]}" | sed 's/;/; /g')"
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' || die "missing tools: python3 3.11 or newer (this one is $(python3 -V 2>&1))"
+case "$IMPL" in
+python) ;;
+rust) [ -x "$RTOOL" ] || die "IMAGETOOL_IMPL=rust: no $RTOOL (build it: cargo build --release --manifest-path tools/oneios-tool/Cargo.toml; or set ONEIOS_TOOL)" ;;
+*) die "IMAGETOOL_IMPL is python or rust, not $IMPL" ;;
+esac
 
 eval "$(tool profile "$profile" --shell)"
 IN=${INPUTS:-$ROOT/inputs/$P_BUILD}

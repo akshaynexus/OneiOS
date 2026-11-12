@@ -1,0 +1,40 @@
+# oneios-tool: OneiOS's host tools in Rust (the symbolizer, the log analyzer, the kernel collection's pairing and
+# build, the image tool). One binary, `oneios-tool`, with a subcommand per tool; one library crate per tool.
+# Build: cargo build --release --manifest-path tools/oneios-tool/Cargo.toml   (binary: target/release/oneios-tool)
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+memmap2 = "0.9"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+# No `preserve_order` here or in any crate of this workspace: features are shared by the whole binary, and with it
+# macos-unifiedlogs writes the keys of a decoded state dump in another order than its own unifiedlog_iterator
+# (tests/ioslog/compare.sh found this). JSON that must keep Python's key order is written by oneios-common::pyjson.
+serde_json = "1"
+sha2 = "0.10"
+libc = "0.2"
+oneios-common = { path = "crates/oneios-common" }
+oneios-sym = { path = "crates/oneios-sym" }
+oneios-log = { path = "crates/oneios-log" }
+oneios-image = { path = "crates/oneios-image" }
+oneios-prelink = { path = "crates/oneios-prelink" }
+oneios-ioslog = { path = "crates/oneios-ioslog" }
+oneios-phone = { path = "crates/oneios-phone" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+debug = "line-tables-only"
+
+# Tests hash and walk real inputs of gigabytes: run them optimized too.
+[profile.test]
+opt-level = 2

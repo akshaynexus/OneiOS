@@ -1,0 +1,19 @@
+[package]
+name = "oneios-phone"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+libc.workspace = true
+oneios-common.workspace = true
+oneios-ioslog.workspace = true
+# `phone pull-data` and `phone sparse-write --gunzip`: the gzip stream the phone's busybox writes.
+flate2 = "1"
+apk-info-zip = "1.1"
+oneios-log.workspace = true
+regex = "1"
