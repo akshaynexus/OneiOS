@@ -6,6 +6,8 @@
 
 pub mod adb;
 pub mod app;
+pub mod cycle;
+pub mod log;
 pub mod phone;
 pub mod sparse;
 
@@ -23,7 +25,13 @@ pub struct Cli {
 #[derive(clap::Subcommand)]
 pub enum Command {
     /// Root, the installed app, the session, and what `oneios_root.sh status` says (read only)
-    Status,
+    Status {
+        /// Again every SECONDS (default 5) until Ctrl-C
+        #[arg(long, value_name = "SECONDS", num_args = 0..=1, default_missing_value = "5")]
+        watch: Option<u64>,
+    },
+    /// The session's logs by name: print, filter, follow live, save (runs beside a session: read only)
+    Log(LogArgs),
     /// Start a session: `oneios_root.sh switch <the app's versionCode> 1`
     Switch {
         /// Instead of the installed app's versionCode
@@ -68,12 +76,89 @@ pub enum Command {
     },
 }
 
+#[derive(clap::Args)]
+pub struct LogArgs {
+    /// Which log: xnuhost (default), switch, return, outcome, display, watchdog, or logs/xnuhost-<epoch>.log
+    #[arg(long, default_value = "xnuhost")]
+    file: String,
+    /// The named logs with their sizes, and the earlier sessions' (the fork's `oneios_root.sh logs`)
+    #[arg(long)]
+    list: bool,
+    /// Only the last N lines (with --follow: start N lines before the end)
+    #[arg(long)]
+    tail: Option<u64>,
+    /// Keep reading as the log grows (tail -F), connecting again when adb drops; Ctrl-C ends it
+    #[arg(long, short = 'f')]
+    follow: bool,
+    /// Also write every line read (not only the ones printed) to PATH
+    #[arg(long)]
+    save: Option<String>,
+    /// --save to out/session-logs/DATE/live-HHMMSS.log
+    #[arg(long)]
+    save_auto: bool,
+    /// Print only lines matching REGEX (repeatable; with the named filters: any of them)
+    #[arg(long)]
+    grep: Vec<String>,
+    /// Panics, faults, crashes, the session's end
+    #[arg(long)]
+    panic: bool,
+    /// The boot's stages (kernel, launchd, backboardd, SpringBoard, the first frame), each once, and panics and the end
+    #[arg(long)]
+    markers: bool,
+    #[arg(long)]
+    display: bool,
+    #[arg(long)]
+    gpu: bool,
+    #[arg(long)]
+    wifi: bool,
+    #[arg(long)]
+    hid: bool,
+    #[arg(long)]
+    mem: bool,
+    /// Only lines from this second of the log's own clock on (its [seconds.millis] stamps)
+    #[arg(long, value_name = "SECONDS")]
+    since: Option<f64>,
+    /// When the reading ends: `oneios-tool log timeline` of what was read, and `log stacks --summary` when a sym index exists
+    #[arg(long)]
+    analyze: bool,
+}
+
+fn phone_log(serial: Option<&str>, a: LogArgs) -> anyhow::Result<()> {
+    let adb = Adb::connect(serial)?;
+    if a.list {
+        return log::list(&adb);
+    }
+    let named: Vec<&str> = [("panic", a.panic), ("display", a.display), ("gpu", a.gpu), ("wifi", a.wifi), ("hid", a.hid), ("mem", a.mem)].iter().filter(|(_, on)| *on).map(|(name, _)| *name).collect();
+    let filter = log::Filter::new(&a.grep, &named, a.markers, a.since)?;
+    let save = match (a.save, a.save_auto || a.analyze) {
+        (Some(path), _) => Some(path),
+        (None, true) => Some(log::auto_save_path(&cycle::repo_root().unwrap_or_else(|_| std::path::PathBuf::from(".")))),
+        (None, false) => None,
+    };
+    log::log(&adb, &log::Options { file: a.file, tail: a.tail, follow: a.follow, save, analyze: a.analyze }, filter)
+}
+
 /// Run a parsed command; the exit status.
 pub fn main(cli: Cli) -> i32 {
     let serial = cli.serial.as_deref();
     let result = match cli.command {
         Command::SparseWrite { out, gunzip, expect_size } => phone::sparse_write(&out, gunzip, expect_size),
-        Command::Status => Adb::connect(serial).and_then(|adb| phone::status(&adb)),
+        Command::Status { watch: None } => Adb::connect(serial).and_then(|adb| phone::status(&adb)),
+        Command::Status { watch: Some(seconds) } => Adb::connect(serial).and_then(|adb| {
+            log::catch_stop();
+            loop {
+                let (date, time) = cycle::local_date_time();
+                println!("--- {date} {}:{}:{}", &time[..2], &time[2..4], &time[4..]);
+                // a look that fails (adb dropping while the framework stops) is said, and the watch goes on
+                if let Err(e) = phone::status(&adb) {
+                    println!("status: {e:#}");
+                }
+                if log::sleep_or_stop(std::time::Duration::from_secs(seconds.max(1))) {
+                    return Ok(());
+                }
+            }
+        }),
+        Command::Log(args) => phone_log(serial, args),
         Command::Switch { version_code } => Adb::connect(serial).and_then(|adb| phone::switch(&adb, version_code).map(|_| ())),
         Command::Return { timeout, note } => Adb::connect(serial).and_then(|adb| phone::do_return(&adb, &note, timeout)),
         Command::Stage { kind, dir } => Adb::connect(serial).and_then(|adb| phone::stage(&adb, &kind, &dir)),

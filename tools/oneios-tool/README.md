@@ -12,6 +12,7 @@ script before it may replace it; the commands and the results are below. What is
 | `prelink` | the steps of `kernel/prelink/build.sh` | 2 of 12 steps (`roots`, `hosted`) | yes for those two, byte for byte on the real kernelcache; the others are not ported |
 | `phone` | `scripts/phone/stage.sh`, the adb lines of `docs/building.md` section 6, the Mac's `sparsewrite.py` | written; **not run on the phone** (none on the box) | `stage` and `sums`: the same output and the same stage as `stage.sh` on a stand-in phone; 64 checks pass (`tests/phone/run.sh`) |
 | `app` | the app lines of `docs/building.md` section 7 (new) | written; **the app was not built or installed with it** (the owner's decision for this box) | not applicable; 65 checks pass with a stand-in checkout, gradlew, gh and phone (`tests/app/run.sh`); `app version` runs on the real clone |
+| `cycle`, `phone log` | the test cycle of `docs/building.md` section 6 by hand (new) | written; **not run on the phone or with real builds** | not applicable; 90 checks pass with a stand-in checkout and phone (`tests/cycle/run.sh`) |
 
 **Python stays the default.** No build script calls `oneios-tool` unless it is asked to
 (`IMAGETOOL_IMPL=rust` for `scripts/image/build.sh` and `verify.sh`), with one exception that changes no output:
@@ -354,6 +355,9 @@ oneios-tool phone status                      # root, the installed app, the ses
 oneios-tool phone stage runtime DIR           # an unpacked runtime package, through oneios_root.sh begin/receive/finish
 oneios-tool phone stage runtime-asis DIR      # the same with each file's own size and SHA-256
 oneios-tool phone stage image DIR             # files of an image set at their paths; image.sha256 and image.ids follow
+oneios-tool phone status --watch [SECONDS]    # the same again every 5 s until Ctrl-C
+oneios-tool phone log [--file NAME] [--tail N] [--follow] [--save PATH | --save-auto] [filters] [--since S] [--analyze]
+oneios-tool phone log --list                  # the logs by name, with sizes
 oneios-tool phone sums                        # sha256 of the staged kernel.kc, its hash list, manifest.json, data.seed's line, xnuhost.conf, the runtime
 oneios-tool phone switch [--version-code N]   # busybox setsid sh oneios_root.sh switch <the installed app's versionCode> 1
 oneios-tool phone return [--timeout 180] [--note TEXT]   # session/return.request, then waits for "One UI restored"
@@ -390,8 +394,34 @@ What each does:
   renamed to `OUT` only when as many bytes came as the phone's `stat -c %s` of that file says, before and after.
   `--ioslog` then runs `ioslog boots OUT` and `ioslog checks OUT`.
 
+- `log` reads one named file of the stage and runs beside a session (it only reads). `--file`: `xnuhost`
+  (`session/xnuhost.log`, the default), `switch`, `return`, `outcome`, `display`, `watchdog` (the names of
+  `oneos/interface.md` section 3), or `logs/xnuhost-<epoch>.log` for an earlier session. `--list` prints each name
+  with its size and time (`stat` of the named files, and the earlier sessions as the fork's read-only
+  `oneios_root.sh logs` gives them): no folder of the phone is listed.
+  - `--tail N`; `--follow` (`tail -n +K -F` on the file): when adb drops, the follow waits (1 to 5 s) and starts
+    again after the last whole line it got, so no line is lost or printed twice; a log with fewer lines than were
+    read is a new session's and is read from its start. Ctrl-C ends it with status 0.
+  - `--save PATH`, `--save-auto` (`out/session-logs/DATE/live-HHMMSS.log`): **every** line read goes to the file,
+    whatever the filters print.
+  - Filters (a line is printed when it matches any of them; none: every line): `--grep REGEX` (repeatable),
+    `--panic` (`panic(`, `xnuhost !!`, `xnuhost E`, `sheng-exc`, `sheng-exit`, `crashed:`, `stopping:`, `exit`),
+    `--display` (`oneios-display`, `sheng-vsync`, `ONEIOS BACKLIGHT`, `ONEIOS ALS`, `oneios-swap`), `--gpu`
+    (`oneios-gpu*`, `sheng-gpu`, `oneios-adreno`), `--wifi` (`ONEIOS WIFI`, `oneios-wifi`, `sheng-wifi`,
+    `oneios-net`), `--hid` (`oneios-hid`, `ONEIOS HAPTIC`, `oneios-haptic`, `ONEIOS VIBRATOR`, `oneios-actuator`),
+    `--mem` (`oneios-swap`, `oneios-fault-around`, `oneios-gpu-memory`, `memorystatus`, `jetsam`). The prefixes
+    are the ones `docs/booter.md`, `docs/hardware.md`, `docs/gpu.md` and the hosted patches' README name; they were
+    not checked against a real session's log here.
+  - `--markers`: the stages of `oneos/interface.md` section 8, each once per boot (xnuhost, kernel, darwin,
+    bsd-root, init, launchd, backboardd, SpringBoard, ready), and every panic and end line.
+  - `--since SECONDS`: from that second of the log's own `[seconds.millis]` stamps on.
+  - `--analyze`: when the reading ends (the file's end, or Ctrl-C of a follow), `oneios-tool log timeline` of the
+    saved lines, and `oneios-tool log stacks --summary` when a `sym` index exists (`out/dsc-index/latest` here or
+    in the main checkout, or `ONEIOS_DSC_INDEX`). It is not line by line: the analysis is of the log so far.
+
 ```sh
 tools/oneios-tool/tests/phone/run.sh          # 64 checks against the stand-in phone; ALL OK
+tools/oneios-tool/tests/cycle/run.sh          # phone log, status --watch and cycle: 90 checks; ALL OK
 ```
 
 The stand-in phone: `fake-adb.sh` runs what the tool sends on this machine, inside a folder that plays the
@@ -403,6 +433,46 @@ lines) and the return (the restore line, `return.outcome`). `stage` and `sums` a
 (`runtime`, `runtime-asis`, `image`, a file that is not staged). Result, Linux x86_64, 2026-11-12: 64 checks, all
 ok, two runs. What the stand-in cannot show: the real `su`, adb's behaviour when One UI's framework stops, the
 time a 64 GiB store takes (6 min on the Mac with the Python script), the fork's real switch and return.
+
+## cycle
+
+`oneios-tool cycle [options]`: one test cycle on the phone, eight steps in this order: `build`, `tests`, `stage`,
+`switch`, `watch`, `hold`, `return`, `collect`. `docs/building.md` section 6 has the table of what each does.
+**Not run on the phone, and not with the real build scripts**: tested with a stand-in checkout whose
+`kernel/build-hosted.sh`, `kernel/prelink/build.sh`, `stubs-check.py`, `runtime/package.sh` and
+`runtime/host-tests.sh` are stand-ins, and the stand-in phone.
+
+```sh
+oneios-tool cycle --dry-run [...]                 # what each step would do; nothing is started, no adb call
+oneios-tool cycle --kernel-out NAME --runtime-version V --tests --hold 120 --name NAME
+oneios-tool cycle --skip build,tests [--image DIR] [--runtime DIR] [--stay] [--ready-timeout 300] [--pull-data]
+oneios-tool cycle --only return,collect --name NAME
+```
+
+- `--only A,B` / `--skip A,B` choose the steps; a word that is no step is refused.
+- The checkout is `ONEIOS_ROOT`, else the folder at or above the current one with `scripts/bg.sh` and
+  `oneos/interface.md`. Long builds are `scripts/bg.sh cycle-NAME ...` (tmux); the cycle waits for
+  `logs/cycle-NAME.exit` and stops on anything but 0, with the log's last lines. Ctrl-C while it waits ends the
+  job's tmux session.
+- **Safety.** One phone lock for the whole cycle (`out/phone.lock` of the main checkout, `flock`; a second cycle
+  is refused and told who holds it). Before the switch: root, no open session, the three scripts staged, no
+  import in progress, the root script's preflight `ready 1`. From the switch on, whatever happens (a panic, no
+  first frame in time, the session ending by itself, Ctrl-C, an error while watching), the return is made and
+  waited for, unless `--stay` was given and Ctrl-C came in the hold. A failed build, a failed audit, stubs that
+  are not all good or failing host tests end the cycle before the phone is touched.
+- The exit status is 0 only when every step that ran ended well and the boot reached its first frame (when
+  `watch` ran).
+- `summary.md` is written by `collect` also for a cycle that failed: the reason, each step's time and result, the
+  markers, the panics, the way back.
+
+Result of `tests/cycle/run.sh`, Linux x86_64, 2026-11-12: 90 checks, all ok, three runs. Among them: a whole
+cycle (the stand-in kernel built with `XNU_FILESET_REFERENCE=1`, the collection with the reference, the stubs
+check, the runtime package unpacked, the host tests, only the differing files staged, the fork's own
+`begin`/`receive`/`finish` and `status` under its test root, switch, the nine markers, the hold, the restore
+line, the folder); a second cycle that builds and stages nothing; a newer patch that rebuilds; a panic; a boot
+that never gets ready; Ctrl-C in the hold with and without `--stay`; the lock; the three build failures; the
+three refused switches. What it cannot show: the real builds' times and outputs, the real switch and return,
+adb while One UI's framework stops.
 
 ## app
 

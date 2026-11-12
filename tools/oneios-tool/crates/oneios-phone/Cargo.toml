@@ -15,3 +15,5 @@ oneios-ioslog.workspace = true
 # `phone pull-data` and `phone sparse-write --gunzip`: the gzip stream the phone's busybox writes.
 flate2 = "1"
 apk-info-zip = "1.1"
+oneios-log.workspace = true
+regex = "1"

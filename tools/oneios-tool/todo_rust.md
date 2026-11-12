@@ -382,7 +382,7 @@ Open, in order:
    mostly are (2,910 of 3,347 in the SystemOS and AppOS images, the shared cache's `.symbols` among them), so
    `image apfs-copy` cannot replace a mount for `sym` yet. `flate2` and `lzfse_rust` would do it; LZVN needs a look.
 
-## 6. `phone` and `app`: the adb workflow and the fork's app (third Linux round)
+## 6. `phone`, `app` and `cycle`: the adb workflow, the fork's app, one test cycle (third Linux round)
 
 Written; **nothing of it ran on the real phone, and the app was not built or installed with it**. Crate
 `crates/oneios-phone` (`adb.rs`: the one phone and the rules; `phone.rs`; `sparse.rs`; `app.rs`). README "phone" and
@@ -399,7 +399,14 @@ Open, in order:
    `apk-info-zip`; compare `app version`'s certificate with `apksigner verify --print-certs`), `app install
    --release`, `app stage-scripts` against the app's own staging (the three SHA-256 values must be the ones the
    installed app pins).
-3. `phone status`'s `session:` line is this tool's own test (stage.sh's: the pid file and /proc); the fork's
+3. **`cycle` and `phone log` on the phone and with the real builds**: `cycle --dry-run` first, then
+   `cycle --skip build,tests --hold 60`, then a whole one. To check there: the named filters' prefixes against a
+   real session's log; `--follow` while One UI's framework stops (adb stays up through a switch on this phone, but
+   the follow's reconnect was only tested with a stand-in drop); the build step's mtime rules against the real
+   trees (`out/kernel/current-hosted-NAME`); whether the cycle's own lock and the coordinator's `phone-lock.sh`
+   should be one. `--analyze` is an analysis at the end of the reading, not line by line; live naming of
+   `oneios-ubt` frames through the `sym` index is not written.
+4. `phone status`'s `session:` line is this tool's own test (stage.sh's: the pid file and /proc); the fork's
    `@@RESULT session` line beside it is the root script's (its control folder). They can differ for a moment
    around a switch.
 

@@ -13,6 +13,7 @@
 #   prelink   tests/prelink/compare-python.sh     KERNELCACHE (default out/kernel-inputs/24A446/kernelcache.macho)
 #   phone     tests/phone/run.sh                  none (a stand-in phone; scripts/phone/stage.sh is the reference)
 #   app       tests/app/run.sh                    none (a stand-in OneOS checkout, gradlew, gh and phone)
+#   cycle     tests/cycle/run.sh                  the OneOS fork's checkout (its root script); tmux, zstd
 #
 # Usage: compare-python.sh [PART...]   (default: all). Exit 0 when every part that ran passed; a part without its
 # inputs is "skipped" and does not fail the run. Each script's header has its own options.
@@ -20,7 +21,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../../.." && pwd)
 export PATH=$HOME/.cargo/bin:$PATH
-parts=${*:-units parity image apfs sym log ioslog prelink phone app}
+parts=${*:-units parity image apfs sym log ioslog prelink phone app cycle}
 failed="" skipped="" passed=""
 run() {  # run PART COMMAND...
   local part=$1; shift
@@ -32,6 +33,7 @@ for part in $parts; do
   case "$part" in
   phone) run phone "$here/phone/run.sh" ;;
   app) run app "$here/app/run.sh" ;;
+  cycle) run cycle "$here/cycle/run.sh" ;;
   units) run units cargo test --release --manifest-path "$root/tools/oneios-tool/Cargo.toml" ;;
   parity) run parity python3 "$here/image/parity.py" ;;
   image)

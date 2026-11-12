@@ -367,7 +367,55 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
 
 ### Test cycle on the phone
 
-What the area agents follow to try a build in a real session (bringup, 2026-11-12; every command was run). The
+**Phone and app work goes through `oneios-tool`** (`phone`, `app`, `cycle`; `tools/oneios-tool/README.md` has every
+option). Use adb, the shell scripts or other tools directly only when the CLI fails or lacks the command, then say
+so and fix or extend the CLI. **The CLI has not run on the real phone yet** (written and tested against a stand-in
+phone on a box without one, 2026-11-12): until its first run there, the commands of "The same by hand" below are
+the ones that were run, and `scripts/phone/stage.sh` stays.
+
+```sh
+T=tools/oneios-tool/target/release/oneios-tool        # cargo build --release --manifest-path tools/oneios-tool/Cargo.toml
+$T phone status                    # root, the installed app, the session, oneios_root.sh status (@@RESULT ready 1: a switch would start)
+$T phone stage runtime DIR         # an unpacked runtime package        (scripts/phone/stage.sh runtime DIR)
+$T phone stage image DIR           # kernel.kc, kernel.kc.hashes, manifest.json, overlay/... at their paths
+$T phone sums                      # the staged files' sha256
+$T phone switch                    # oneios_root.sh switch <the installed app's versionCode> 1
+$T phone log --follow --markers    # kernel, launchd, backboardd, SpringBoard, the first frame, a panic, as they come
+$T phone log --gpu --tail 200      # named filters: --panic --markers --display --gpu --wifi --hid --mem; --grep REGEX; --since SECONDS
+$T phone log --follow --save-auto  # also into out/session-logs/DATE/live-HHMMSS.log; --analyze: timeline and stacks at the end
+$T phone log --list                # the logs by name: xnuhost, switch, return, outcome, display, watchdog, logs/xnuhost-<epoch>.log
+$T phone status --watch            # the status again every 5 s
+$T phone return                    # session/return.request, then waits for "One UI restored in place"
+$T phone pull-data OUT --ioslog    # the Data store's copy (no session open), then ioslog boots and checks
+```
+
+One command for the whole cycle (each step can be left out with `--only` or `--skip`; `--dry-run` says what each
+would do and touches nothing):
+
+```sh
+$T cycle --kernel-out NAME --runtime-version 0.1.8-dev --tests --hold 120 --name gpu1
+$T cycle --skip build,tests --image DIR --runtime DIR      # stage what is built already, switch, watch, hold until Ctrl-C, return, collect
+$T cycle --only return,collect --name NAME                 # end a session that was left open (--stay) and take its logs
+```
+
+| Step | What it does |
+|---|---|
+| `build` | Only what changed. The hosted kernel (`scripts/bg.sh cycle-kernel env HOSTED_OUT=NAME XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`) when `--kernel-out NAME` is given and `xnu.macho` is older than the newest file of `kernel/patches/oneios-hosted` (or missing). The collection (`kernel/prelink/build.sh` with `KERNEL=` and `REFERENCE=` of that tree) when the kernel is newer than `out/kernel/24A446/kernel.kc`; **the cycle stops unless the build ends with status 0 (the audit: 0 failures) and `stubs-check.py` says `0 bad`**. The runtime (`runtime/package.sh V`, unpacked into `out/cycle/runtime-V`) with `--runtime-version V`; `--runtime DIR` takes one that is built. The image parts (`kernel.kc`, `kernel.kc.hashes`, `manifest.json`, `overlay/userland/xnuhost.conf`) are gathered in `out/cycle/image`; `--image DIR` takes a folder instead, which is also where iOS plug-ins built elsewhere go. The iOS plug-ins build on macOS only (`--force plugins`). The app: its source's version is said; `--force app` runs `app build` and `app install`. `--force kernel,prelink,...` builds a part whatever its state. Long builds run in tmux and the cycle waits for their exit code |
+| `tests` | `--tests`: `runtime/host-tests.sh`; a failure stops the cycle before the phone is touched |
+| `stage` | `phone sums`, then `stage image` with only the files whose SHA-256 differs from the phone's and `stage runtime` when a file of it differs, then `phone sums` again, which must equal the local hashes (`sums.txt`). `data.seed` is never staged |
+| `switch` | First the way back: root, no session, `oneios_return.sh`, `oneios_switch.sh` and `bin/oneios_root.sh` staged, no import in progress (`runtime.new`, `image.new`), and the root script's preflight says `ready 1`. Then `phone switch` |
+| `watch` | Reads `session/xnuhost.log`'s new lines every 2 s and prints each marker once with its time: xnuhost, kernel, darwin, bsd-root, init, launchd, backboardd, SpringBoard, ready (the first frame), PANIC, end. On a panic, when the session ends by itself, or after `--ready-timeout` (300 s) without the first frame: straight to the return, and the cycle's status is 1 |
+| `hold` | `--hold S` seconds, else until Ctrl-C. Ctrl-C returns, unless `--stay`, which leaves the session open (end it with `phone return` or `cycle --only return,collect`). A panic or the session's own end during the hold returns |
+| `return` | `session/return.request`, then waits (180 s) for `One UI restored` in what `return.log` gained |
+| `collect` | `out/session-logs/DATE/NAME/`: `xnuhost.log`, the last 2000 lines of `switch.log` and `return.log`, `return.outcome`, `sums.txt`, and `summary.md` (versions, hashes, each step's time and result, the markers with their times, the panics, the way back). `--pull-data` adds the Data store's copy and `ioslog` |
+
+A cycle takes one phone lock (`out/phone.lock` of the main checkout, also from a worktree) and refuses when
+another cycle holds it. That lock is this tool's own: **the coordinator's `phone-lock.sh` is still the lock between
+agents** until the two are one.
+
+### The same by hand (when the CLI fails or lacks a command)
+
+What the area agents followed to try a build in a real session (bringup, 2026-11-12; every command was run). The
 phone is the S24 Ultra on adb, KernelSU root, the OneOS fork 0.4.86 (versionCode 115) with its stage at
 `/data/local/tmp/oneios`. One agent at a time: hold the phone lock first (the coordinator's `phone-lock.sh`), and
 restore the baseline (`phone-baseline.txt` next to that script) before you release it.
@@ -467,6 +515,22 @@ URLs are also in `logs/serve-urls.txt`; each tunnel's log is `logs/serve-tN.log`
 `.sha256` (same URL plus `.sha256`), then in the app: iOS 27 (OneiOS) → I have the file → the download.
 
 ## 7. The OneOS fork app
+
+With `oneios-tool` (first choice; **not used for a real build or install yet**: the Linux PC builds no app and has no
+JDK 21 or Android SDK, by the owner's decision, so the tool was tested there with stand-ins only):
+
+```sh
+T=tools/oneios-tool/target/release/oneios-tool
+$T app version           # applicationId, versionName, versionCode, the commit; with a phone: the installed version and certificate
+$T app doctor            # JDK 21, an Android SDK with platform 37, the GitHub Packages login (a token is never printed)
+$T app build             # cd app-android && ./gradlew test assembleFullDebug (--no-test); then the APK's path, size, sha256, version
+$T app install           # adb install -r of that APK; refuses another signing certificate (never uninstall: that wipes the app's data)
+$T app install --release 0.4.86      # the CI prerelease oneios-0.4.86 instead, through gh
+$T app stage-scripts     # the fork's oneios_switch.sh, oneios_return.sh, oneios_root.sh into the stage, sha256 before and after
+```
+
+The checkout is `--oneos DIR`, `ONEOS_DIR`, the current folder, or `OneOS` beside the OneiOS main checkout; each
+command says which. By hand, and what the tool runs:
 
 Repo `akshaynexus/OneOS`, branch `oneios`. A push to `oneios` runs `.github/workflows/oneios-apk.yml`: it builds
 the full debug APK (the workflow's own `GITHUB_TOKEN` reads the SESL packages), runs the unit tests and publishes
@@ -591,9 +655,10 @@ what was changed for the iPhone's shared cache and what is verified: [gpu.md](gp
 `scripts/debug/dsc.py`), `log` (reads an xnuhost session log), `image` (`scripts/image/imagetool.py`), `ioslog` (iOS's
 own unified log out of a copy of the phone's Data store, without a mount) and `prelink` (two steps of
 `kernel/prelink/build.sh` so far). Since the third Linux round also `phone` (the adb
-workflow of section 6: status, stage, sums, switch, return, the Data store's copy) and `app` (the fork's app of
-section 7: version, doctor, build, install, stage-scripts); **neither has run on the real phone yet**, so sections
-6 and 7 still show the scripts and adb lines that were run. Commands, crates, and each tool's comparison with the Python tool it replaces:
+workflow of section 6: status, stage, sums, switch, return, log, the Data store's copy), `app` (the fork's app of
+section 7: version, doctor, build, install, stage-scripts) and `cycle` (one test cycle: build, tests, stage, switch, watch, hold, return, collect).
+**None of the three has run on the real phone yet**: sections 6 and 7 show the CLI first and, as the fallback, the
+scripts and adb lines that were run. Commands, crates, and each tool's comparison with the Python tool it replaces:
 [tools/oneios-tool/README.md](../tools/oneios-tool/README.md); what is left:
 [tools/oneios-tool/todo_rust.md](../tools/oneios-tool/todo_rust.md).
 

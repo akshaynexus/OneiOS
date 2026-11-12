@@ -39,10 +39,12 @@ enum Tool {
         #[command(subcommand)]
         command: oneios_ioslog::Command,
     },
-    /// The phone on adb: status, switch, return, stage, sums, pull-data, sparse-write
+    /// The phone on adb: status, switch, return, stage, sums, log, pull-data, sparse-write
     Phone(oneios_phone::Cli),
     /// The OneOS fork's app: version, build, doctor, install, stage-scripts
     App(oneios_phone::AppCli),
+    /// One test cycle on the phone: build, tests, stage, switch, watch, hold, return, collect
+    Cycle(oneios_phone::cycle::Args),
 }
 
 fn main() {
@@ -56,6 +58,7 @@ fn main() {
             Tool::Ioslog { command } => oneios_ioslog::main(command),
             Tool::Phone(cli) => oneios_phone::main(cli),
             Tool::App(cli) => oneios_phone::app_main(cli),
+            Tool::Cycle(args) => oneios_phone::cycle::main(args),
         },
         Err(e) if !e.use_stderr() => {
             let _ = e.print();

@@ -59,7 +59,9 @@ PKG
   echo "xnuhost stand-in" > "$S/runtime/bin/xnuhost"
   printf 'version=0.1.6\nsession_abi=1\nxnuhost=bin/xnuhost\nimage_formats=1\nplaceholder=0\n' > "$S/runtime.conf"
   (cd "$S/runtime" && sha256sum bin/xnuhost > ../runtime.sha256)
-  echo "# switch stand-in" > "$S/oneios_switch.sh"; echo "# return stand-in" > "$S/oneios_return.sh"
+  # the session scripts: the switch's stand-in answers the root script's preflight question (--check)
+  printf '%s\n' '[ -e "$ONEIOS_TEST_ROOT/.fake/preflight-refuses" ] && echo "PREFLIGHT REFUSED: $(cat "$ONEIOS_TEST_ROOT/.fake/preflight-refuses")" || echo "PREFLIGHT OK"' > "$S/oneios_switch.sh"
+  echo "# return stand-in" > "$S/oneios_return.sh"; chmod 600 "$S/oneios_switch.sh" "$S/oneios_return.sh"
   # the Data store: 48 MiB, of which three places hold data
   truncate -s $((48 << 20)) "$S/data/data.img"
   printf 'first block' | dd of="$S/data/data.img" conv=notrunc status=none
