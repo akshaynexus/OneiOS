@@ -643,29 +643,47 @@ section 6 ("Very slow" playback).
   `osfmk/vm/vm_compressor_backing_store_internal.h`, opened `O_CREAT | O_TRUNC | O_NOFOLLOW_ANY` by
   `vm_swapfile_open`, `bsd/vm/vm_compressor_backing_file.c`). Nothing in the kernel makes the folder: iOS's own Data
   volume has it, the image set's seeds did not. In the 15:35 session (phone, 2026-11-12) every swap file failed
-  ("Failed to open swap file", errno 2 and 30) while `VM_pageout_scan` took about 95% of a vCPU. The first try is
-  `vm_compaction_swapper_do_init` at the pageout scan's first wake (it opens `swapfile0` once and marks itself done
-  either way); after that the creation thread tries again 15 s after each failure (`vm_swapfile_creation_delay_ns`),
-  so swap starts once the folder is there.
+  ("Failed to open swap file", errno 2 and 30) while `VM_pageout_scan` took about 95% of a vCPU. Those two are early
+  tries before the Data mount (below, "errno 2 and 30"); after a failure the creation thread tries again, 15 s or more
+  later, when a swap-out asks for room (`vm_swapfile_creation_delay_ns`), so swap can start once the folder is there.
 - **What.** (1) `oneios_swap_folder` in `kern_exec.c`, called last in the pre-launchd list (after 0053): makes
   `/private/var/vm` root:wheel 0755 with 0004's `oneios_kern_mkdir`, or gives a folder there that owner and mode;
   anything else there (a file, a link) is left alone and said. `oneios-swap-folder=0`: nothing done. The roottweak's
   `data_layout` puts the folder in new seeds too. (2) `oneios_swapfile_failed` in `vm_compressor_backing_file.c`,
-  after XNU's own line: for each errno the first time, then every 64th failure, the path, the seconds since boot, and
+  after XNU's own line: for each errno the first time, then every 64th failure, the path, the seconds since boot (by
+  the calendar), and
   the deepest folder of the path that is there with its volume and whether that is read-only.
 - **Log.** `oneios-swap: /private/var/vm: made, root:wheel 0755 (0), on /private/var (apfs, read-write)` (later boots:
   `there already`). If a swap file still fails: `oneios-swap: /private/var/vm/swapfile0: errno N at S s (failure K);
   DIR is there, on MOUNT (TYPE, read-only|read-write)`. Then XNU's `VM Swap Subsystem is ON` stays as before, and swap
   in use shows as files in `/private/var/vm` and as `vm.swapusage` (`sysctl vm.swapusage` in iOS).
-- **errno 30 (EROFS), not settled.** `vnode_open` with `O_CREAT` gives EROFS when the folder exists on a read-only
-  volume. Two explanations fit and the session's log (on the Mac) has not been read for the order of the two errors:
-  the pageout scan's first try before the Data volume is mounted at `/private/var` (the sealed root's
-  `/private/var/vm`), or a Data volume that became read-only later. The failure line names the volume, so the next
-  boot decides it. [I]
+- **errno 2 and 30, settled on the PC (2026-11-12, pc-kernel).** Two boots of the Linux-built kernel under qemu
+  (`--ram auto` = 14,080 MiB, and `--ram 2G`; logs in `out/run-pc-auto/`, git-ignored) show both errors before the Data
+  volume is mounted, and neither is a swap file on the Data volume:
+  - errno 2, 4 s in, on `/private/var/vm/swapfile` (no number): the freezer's budget probe (`vm_swap_max_budget`,
+    `CONFIG_FREEZE`, before any swap file exists), before the root is mounted (`rootvnode is not set`; the line says
+    `nothing is there, on ?`). Its failure only keeps the freezer's default daily budget.
+  - errno 30, 7 s in, on `/private/var/vm/swapfile0`, right after `VM Swap Subsystem is ON` and followed by XNU's
+    `low swap: failed to create swapfile`: the creation thread's first swap file, made as soon as swap starts. The line
+    says `/private/var/vm is there, on / (apfs, read-only)`: the sealed root's own `/private/var/vm`, under the Data
+    mount. The thread then sleeps until a swap-out wakes it (`vm_swapfile_create_needed`, from the swap-out paths of
+    `vm_compressor_backing_store.c`) and tries again 15 s or more after the failure.
+  - Then 0057's line, 11 s in (365 s on a first boot under qemu, which waits for the Data store):
+    `oneios-swap: /private/var/vm: there already (0), on /private/var (apfs, read-write)` (the roottweak's seed has the
+    folder, root:wheel 0755, read back from the Data volume after the run).
+  - Not seen on the PC: a swap file. In 20 minutes at 2 GiB (to SpringBoard and the daemons, no panic) nothing asked for
+    a swap-out, so the thread never tried again and `/private/var/vm` stayed empty. Whether swap starts under the phone's
+    pressure is for the phone's log: a `Failed to open swap file` after the Data mount (and its `oneios-swap:` line), or
+    `swapfile0` in `/private/var/vm`. [I] On iOS the swap-out of compressed segments may serve only the freezer (frozen
+    apps); then swap does not relieve the pageout scan of the 15:35 session at all.
+- **The time in the failure line** is seconds since boot from the calendar (`clock_get_calendar_microtime` less
+  `clock_get_boottime_microtime`): the hosted `mach_absolute_time` is the host's counter (wall time under qemu, the
+  phone's own uptime on the phone); the first build printed `at 1794488403 s`.
 - **State.** Written on the Linux PC (2026-11-12): every one of the 23 patches of the build's series that touch
   `kern_exec.c` (arch, OS, device, hosted through 0056) and then this one apply with `git apply` to xnu-12377.121.6's
-  file, and the swap file hunk to its `vm_compressor_backing_file.c`. Compiled on the Linux PC once libdispatch
-  was installed (`HOSTED_OUT=pc` at `7652df1`, no warnings from it; the `oneios-swap:` strings are in the kernel).
+  file, and the swap file hunk to its `vm_compressor_backing_file.c`. Compiled on the Linux PC once libdispatch was
+  installed (`HOSTED_OUT=pc` at `7652df1`; with the time fix `HOSTED_OUT=pc2`, `kernel.kc` `cdd98e7e`; no warnings from
+  it) and run on the PC as above. Not run on the phone.
 
 ## 0049-wifi-association-event.patch (radio2, 2026-11-12)
 

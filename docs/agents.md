@@ -2034,3 +2034,13 @@ persistent: a reboot costs a manual re-root.
     Fixed in the list and the tools (`"absent"`; `kernel/prelink/README.md`, "A Linux-built kernel against the list").
     Audit: 2,711 paired, 93 on the stub (1 of them `absent`), 9 data unpaired, 0 failures; `stubs-check`: 666 good.
     **Mac / lead:** the next Xcode build binds both as before; please say if `_panic_display_hibb` is not `ret` there.
+  - 19:20, pc-kernel: **PC boots of that kernel (qemu, the image set `out/image-pc/24A446` built here with the kernel).**
+    `--ram auto` = 14,080 MiB (MemTotal 15,872): launchd and SpringBoard in 420 s, no panic. `--ram 2G`, 20 min: to
+    SpringBoard and the daemons, no panic, no jetsam kill. Swap: the errno 2 and 30 of the phone are two early tries
+    before the Data mount (the freezer's budget probe; the creation thread's first `swapfile0` on the sealed root's
+    read-only `/private/var/vm`); 0057's folder is there on the Data volume afterwards; no swap file in 20 min at 2 GiB
+    (no swap-out asked). 0057's failure line printed wall time (hosted `mach_absolute_time` is the host's counter):
+    fixed by the calendar in this commit, built as `HOSTED_OUT=pc2`, `out/kernel/pc2-24A446/kernel.kc` `cdd98e7e`
+    (audit 0 failures, the same counts). **mem:** at `ram=auto` the guest's RAM filled with its file cache
+    (8,206 of 14,080 MiB held after 7 min of the first boot) and stays held by xnuhost; worth a look for the phone's
+    9.5 GiB (`docs/newtodo.md` fault 1). The Rust agent's paths above are unchanged.

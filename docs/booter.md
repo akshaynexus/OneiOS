@@ -145,8 +145,10 @@ multiple of 2 MiB away from the link base, which is the slide the kernel finds w
   GPU's blobs are guest pages, udmabufs of the window, and grow with it); `boot_args.memSize`, `/chosen dram-size` and
   `xh_info.ram_size` all name the window; `kern.maxvnodes` in `/defaults` is the window / 64 KiB + 1024. The kernel's
   own range below starts at the next GiB after the RAM, so a larger guest leaves it less: 102 GiB with 9.5 GiB of RAM
-  (107 GiB with 4 GiB). XNU sizes its zone map and its kernel ranges from `memSize` inside that range; that a hosted
-  kernel boots with 9.5 GiB has **not** been run yet (a PC boot with `--ram 9728M`, section 5 of building.md).
+  (107 GiB with 4 GiB). XNU sizes its zone map and its kernel ranges from `memSize` inside that range. Run on the PC (2026-11-12, the
+  Linux-built kernel under qemu): `ram=auto` gave 14,080 MiB and the kernel booted through launchd to SpringBoard with
+  no panic (`zones` 24G there and at 2 GiB; `kmem_ptr_range_0` and the two data ranges 18G each); 9.5 GiB, which is less,
+  was not run on its own.
 - **The kernel's own address space** outside the window (zones, kalloc, stacks, IOKit buffers) is a
   no-access reservation from the end of the RAM, rounded up to 1 GiB, to `0x3c00000000`
   (`xh_info.kva_base/kva_size`). `kernel_map(va, size, prot, phys)` maps RAM pages into it and

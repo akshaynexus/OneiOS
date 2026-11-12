@@ -54,15 +54,21 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
      (about 9.5 GiB on this phone); `ram-percent=`, `ram-host-floor=`, `host-mem-log=` (30 s), also in the image set's
      `xnuhost.conf`; the choice and the host's MemAvailable in the log (`docs/booter.md` 1). Checked: the window,
      `/chosen dram-size`, `boot_args.memSize`, `xh_info.ram_size` (test kernel); the GPU pool is fixed (8 MiB of
-     response buffers; blobs are guest pages). **Not checked:** XNU's zone map and kernel ranges with 9.5 GiB (a PC
-     boot with `--ram 9728M` once the IPSW and an image set are built). OOM score unchanged. On the phone: read the
+     response buffers; blobs are guest pages). **A large guest boots (the PC, 2026-11-12):** `ram=auto` on the PC
+     (MemTotal 15,872 MiB) gave 14,080 MiB; XNU set up its ranges (`zones` 24G, the same at 2 GiB) and booted through
+     launchd to SpringBoard in 420 s under qemu with no panic. Seen there: the guest's RAM fills with its file cache and
+     stays filled (`the guest's RAM holds` 671 MiB at +30 s, 5,065 at +210 s, 8,206 MiB at +420 s, while the first boot
+     hashed the shared cache): what the host gives the guest it does not get back. OOM score unchanged. On the phone: read the
      two `memory:` lines; if `host MemAvailable` falls under ~300 MiB, lower `ram-percent` in the image's
      `xnuhost.conf`.
    - **Swap: built (the Linux PC, 2026-11-12), not on the phone.** Hosted 0057 makes `/private/var/vm` root:wheel 0755 before
      launchd in every Data store and, on each swap file failure, logs which volume the folder was on and whether it
      was read-only; the roottweak's `data_layout` puts the folder in new seeds. errno 30 is not settled (the sealed
-     root before the Data mount, or a Data volume gone read-only: `kernel/patches/oneios-hosted/README.md`, 0057);
-     the next boot's `oneios-swap:` line decides it. Compiled and prelinked on the Linux PC (`HOSTED_OUT=pc`,
+     root before the Data mount, or a Data volume gone read-only: `kernel/patches/oneios-hosted/README.md`, 0057).
+     **Settled on the PC:** both are early tries before the Data mount (errno 2: the freezer's budget probe before the
+     root is mounted; errno 30: the creation thread's first `swapfile0` on the sealed root's read-only
+     `/private/var/vm`); 0057's folder is then there on the Data volume. No swap file was made in 20 min at 2 GiB on
+     the PC (no swap-out asked). On the phone: a `Failed to open swap file` after the Data mount, or `swapfile0`. Compiled and prelinked on the Linux PC (`HOSTED_OUT=pc`,
      `kernel.kc` `ffbe95f7...`; `kernel/prelink/README.md`, "A Linux-built kernel against the list").
    - **backboardd's GPU memory growth** (gpu): read, not fixed (2026-11-12). Upstream NativeMetal (at our pin)
      already frees the runtime's empty 64 MiB blocks every 2 s even while backboardd draws (`watchIdleMemory`),
