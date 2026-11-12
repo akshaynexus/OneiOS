@@ -118,7 +118,7 @@ typedef struct {
 static struct {
   pthread_mutex_t lock;
   stat_ctx ctx[STAT_CTX];
-  uint64_t since, render_n, render_sum, render_max, other_n, other_sum, submit_n, submit_sum, submit_max, blob_n, blob_sum, blob_max;
+  uint64_t since, render_n, render_sum, render_max, other_n, other_sum, submit_n, submit_sum, submit_max, blob_n, blob_sum, blob_max, holds, keepalives;
 } st = { .lock = PTHREAD_MUTEX_INITIALIZER };
 
 static uint64_t now_us(void)
@@ -138,13 +138,19 @@ static void stat_report(uint64_t now)         // with st.lock held
 {
   if (!st.since) { st.since = now; return; }
   if (now - st.since < 10000000u) return;
+  uint64_t holds = 0, keepalives = 0;
+  drm2kgsl_renderer_hold_stats(&holds, &keepalives);
   if (st.render_n || st.other_n || st.blob_n)
     say(1, "gpu: %llu s host: backboardd fences %llu, submit->retired mean %llu us max %llu us; submit calls mean %llu us max %llu us; "
-        "other fences %llu, mean %llu us; blobs made %llu, mean %llu us max %llu us", (unsigned long long)((now - st.since) / 1000000u),
+        "other fences %llu, mean %llu us; blobs made %llu, mean %llu us max %llu us; clock held +%llu times, keep-alives +%llu",
+        (unsigned long long)((now - st.since) / 1000000u),
         (unsigned long long)st.render_n, (unsigned long long)(st.render_n ? st.render_sum / st.render_n : 0), (unsigned long long)st.render_max,
         (unsigned long long)(st.submit_n ? st.submit_sum / st.submit_n : 0), (unsigned long long)st.submit_max,
         (unsigned long long)st.other_n, (unsigned long long)(st.other_n ? st.other_sum / st.other_n : 0),
-        (unsigned long long)st.blob_n, (unsigned long long)(st.blob_n ? st.blob_sum / st.blob_n : 0), (unsigned long long)st.blob_max);
+        (unsigned long long)st.blob_n, (unsigned long long)(st.blob_n ? st.blob_sum / st.blob_n : 0), (unsigned long long)st.blob_max,
+        (unsigned long long)(holds - st.holds), (unsigned long long)(keepalives - st.keepalives));
+  st.holds = holds;
+  st.keepalives = keepalives;
   st.since = now;
   st.render_n = st.render_sum = st.render_max = st.other_n = st.other_sum = st.submit_n = st.submit_sum = st.submit_max = 0;
   st.blob_n = st.blob_sum = st.blob_max = 0;

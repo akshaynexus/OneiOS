@@ -103,6 +103,30 @@ kept a 45 fps redraw constrained. `MIN_RATE=0` still constrains every submission
 queues that ask are constrained (the render server's: `context N: constrained ...` in the log). drm2kgsl's matching vCPU
 clamp looks for threads named `crosvm_vcpu*`; xnuhost's are `xnu-cpuN`, so it does nothing here.
 
+### 2.2a `drm2kgsl/patches/0005-clock-held-between-frames.patch` (2026-11-12)
+
+On the phone with every app drawing (diagnostic session of 2026-11-12, clocks uncapped) the render server's frames took
+5-18 ms from submission to done at 231 MHz with the owner swiping, KGSL 15 % busy: the burst rule constrained a
+frame's own submission, KGSL dropped the constraint about 80 ms (its idle timer) after it, and the governor, seeing
+10-20 % busy, kept the lowest level, so every frame started at the bottom and the clock ramped inside it. A sustained
+animation (whose submissions keep the constraint alive) ran the same frames in about 2 ms (2026-11-11). Now:
+
+- every submission of the render server's queue carries the constraint (`DRM2KGSL_PWR_CONSTRAINT_MIN_RATE` default 0;
+  the burst rule stays for a non-zero rate);
+- while that queue submits and for `DRM2KGSL_PWR_HOLD_MS` (150; 0 turns it off) after its last submission, a thread
+  of the renderer submits 4 `CP_NOP`s every 40 ms on a KGSL context of its own (its own `/dev/kgsl-3d0` file, kernel
+  timestamps) that carries the same constraint, so KGSL renews it and the next frame starts at the top level; then
+  KGSL drops it and the governor decides as before;
+- KGSL's thermal limit (`thermal_pwrlevel`) still caps the level the constraint asks for.
+
+Log: once `drm2kgsl: clock hold: the top level from the render server's submissions to 150 ms after them` (or
+`clock hold: off (reason)`), and in the 10 s host line `clock held +N times, keep-alives +M` (a hold is a run from
+the first frame after a pause to 150 ms after the last; M about 25 per second of holding). What to expect: KGSL
+`gpuclk` at the top level while the screen moves and for 150 ms after, the governor's level otherwise; the host
+line's `submit->retired` near 2 ms. Heat: the GPU at the top level whenever iOS draws (a still screen draws nothing);
+the thermal agent's caps apply. Host tests pass with it (they do not drive a deadline queue, so the hold itself is
+not exercised off the phone); not yet run on the phone.
+
 ### 2.3 `drm2kgsl/patches/0004-gpu-address-room-by-process.patch`
 
 Every GPU context gets its own part of the VBO's GPU addresses (a KGSL page table is per process, and every guest

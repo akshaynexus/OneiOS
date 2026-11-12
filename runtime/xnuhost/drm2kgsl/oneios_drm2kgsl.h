@@ -15,4 +15,6 @@ int drm2kgsl_renderer_set_guest_blob_chunks(struct virgl_context *ctx, uint64_t 
 // each and knows them as `res_id` (bound when the guest sends GEM_SET_IOVA). The fds stay the caller's. Nothing
 // happens when the context already has the resource. 0 or a negative errno.
 int drm2kgsl_renderer_attach_chunks(struct virgl_context *ctx, uint32_t res_id, const int *fds, const uint64_t *sizes, unsigned n);
+// patch 0005: how often the render server's clock hold started, and the keep-alive submissions it made, since the start.
+void drm2kgsl_renderer_hold_stats(uint64_t *holds, uint64_t *keepalives);
 #endif

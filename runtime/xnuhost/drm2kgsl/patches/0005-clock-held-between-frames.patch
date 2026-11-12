@@ -1,0 +1,188 @@
+--- a/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-12 12:18:21
++++ b/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-12 12:18:21
+@@ -1513,7 +1513,7 @@
+ static bool
+ kgsl_constraint_now(struct kgsl_context *kctx)
+ {
+-   static uint64_t min_rate = 60;
++   static uint64_t min_rate = 0;   /* ONEIOS: every submission of the render server's queue (0005; upstream 60) */
+    /* ONEIOS: and the first DRM2KGSL_PWR_CONSTRAINT_BURST submissions (default 2; 0, upstream's rule alone) after a pause of
+     * 100 ms or more. iOS's render server draws sparse frames for a touch or a clock tick, and with the rate rule alone each
+     * ran at the governor's idle clock: 22-31 ms from submission to done on the S24 Ultra (2026-11-11). Constraining every
+@@ -1674,11 +1674,176 @@
+    pthread_mutex_unlock(&lock);
+ }
+ 
++/* ONEIOS (0005): the clock held between the render server's frames. KGSL applies a context's power constraint to each
++ * submission of it and drops it about idle_timer (80 ms) after that submission retired; the GPU's governor then picks
++ * the clock from how busy the GPU was, and at the 10-20 % an iOS compositor keeps it busy that is the lowest level:
++ * on the S24 Ultra (2026-11-12) the render server's frames took 5-18 ms at 231 MHz with the owner swiping, where
++ * a sustained animation, whose submissions keep the constraint alive, ran them in about 2 ms. So while the render
++ * server's queue submits, and for DRM2KGSL_PWR_HOLD_MS (150; 0: off) after its last submission, a thread of this
++ * renderer submits a few CP_NOPs every 40 ms on a context of its own that carries the same constraint: each renews
++ * it, so the next frame starts at the top clock. After the hold KGSL drops the constraint as before and the governor
++ * decides. KGSL's thermal limit (thermal_pwrlevel) still caps the level the constraint asks for. */
++#define ONEIOS_HOLD_PERIOD_NS 40000000ull
++static struct {
++   pthread_mutex_t lock;
++   pthread_cond_t wake;
++   bool started, failed, holding;
++   uint64_t until;          /* CLOCK_MONOTONIC ns */
++   int fd;
++   uint32_t drawctxt;
++   uint64_t ib, ib_bytes;
++   uint32_t ib_id;
++   uint64_t holds, keepalives, failures;
++} g_hold = { .lock = PTHREAD_MUTEX_INITIALIZER, .wake = PTHREAD_COND_INITIALIZER, .fd = -1 };
++
++static uint64_t
++oneios_now_ns(void)
++{
++   struct timespec ts;
++   clock_gettime(CLOCK_MONOTONIC, &ts);
++   return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
++}
++
++static uint32_t
++oneios_parity(uint32_t v)
++{
++   v ^= v >> 16; v ^= v >> 8; v ^= v >> 4;
++   return (~0x6996u >> (v & 0xf)) & 1;   /* odd parity, as pm4's packets carry it */
++}
++
++static uint32_t
++oneios_pkt7(uint32_t opcode, uint32_t count)
++{
++   return 7u << 28 | count | oneios_parity(count) << 15 | (opcode & 0x7f) << 16 | oneios_parity(opcode) << 23;
++}
++
++static bool kgsl_set_pwr_constraint(int fd, uint32_t drawctxt_id, bool on);
++
++/* Its own KGSL file, a context that carries the constraint (kernel timestamps), and a page of CP_NOPs. */
++static bool
++oneios_hold_setup(void)
++{
++   g_hold.fd = open(KGSL_DEVICE_NODE, O_RDWR | O_CLOEXEC);
++   if (g_hold.fd < 0)
++      return false;
++   struct kgsl_drawctxt_create ctx = {
++      .flags = KGSL_CONTEXT_PREAMBLE | KGSL_CONTEXT_NO_GMEM_ALLOC | KGSL_CONTEXT_PWR_CONSTRAINT,
++   };
++   if (kgsl_ioctl(g_hold.fd, IOCTL_KGSL_DRAWCTXT_CREATE, &ctx))
++      return false;
++   g_hold.drawctxt = ctx.drawctxt_id;
++   if (!kgsl_set_pwr_constraint(g_hold.fd, g_hold.drawctxt, true))
++      return false;
++   struct kgsl_gpuobj_alloc alloc = { .size = 4096 };
++   if (kgsl_ioctl(g_hold.fd, IOCTL_KGSL_GPUOBJ_ALLOC, &alloc))
++      return false;
++   g_hold.ib_id = alloc.id;
++   struct kgsl_gpuobj_info info = { .id = alloc.id };
++   if (kgsl_ioctl(g_hold.fd, IOCTL_KGSL_GPUOBJ_INFO, &info) || !info.gpuaddr)
++      return false;
++   uint32_t *words = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, g_hold.fd, (off_t)alloc.id << 12);
++   if (words == MAP_FAILED)
++      return false;
++   for (unsigned i = 0; i < 8; i += 2) {
++      words[i] = oneios_pkt7(0x10 /* CP_NOP */, 1);
++      words[i + 1] = 0x6f6e6569;
++   }
++   munmap(words, 4096);
++   g_hold.ib = info.gpuaddr;
++   g_hold.ib_bytes = 8 * sizeof(uint32_t);
++   return true;
++}
++
++static bool
++oneios_hold_keepalive(void)
++{
++   struct kgsl_command_object obj = {
++      .gpuaddr = g_hold.ib, .size = g_hold.ib_bytes, .flags = KGSL_CMDLIST_IB, .id = g_hold.ib_id,
++   };
++   struct kgsl_gpu_command cmd = {
++      .flags = KGSL_CMDBATCH_SUBMIT_IB_LIST,
++      .cmdlist = (uintptr_t)&obj,
++      .cmdsize = sizeof(obj),
++      .numcmds = 1,
++      .context_id = g_hold.drawctxt,
++   };
++   return kgsl_ioctl(g_hold.fd, IOCTL_KGSL_GPU_COMMAND, &cmd) == 0;
++}
++
++static void *
++oneios_hold_thread(void *arg)
++{
++   (void)arg;
++   pthread_mutex_lock(&g_hold.lock);
++   for (;;) {
++      while (oneios_now_ns() >= g_hold.until) {
++         g_hold.holding = false;
++         pthread_cond_wait(&g_hold.wake, &g_hold.lock);
++      }
++      if (!g_hold.holding) {
++         g_hold.holding = true;
++         g_hold.holds++;
++      }
++      pthread_mutex_unlock(&g_hold.lock);
++      const bool ok = oneios_hold_keepalive();
++      struct timespec gap = { 0, (long)ONEIOS_HOLD_PERIOD_NS };
++      nanosleep(&gap, NULL);
++      pthread_mutex_lock(&g_hold.lock);
++      if (ok)
++         g_hold.keepalives++;
++      else if (++g_hold.failures == 1)
++         drm_err("clock hold: a keep-alive submission failed: %s", strerror(errno));
++   }
++   return NULL;
++}
++
++/* A submission of the render server's queue: the hold runs until DRM2KGSL_PWR_HOLD_MS after it. */
++static void
++oneios_hold_extend(void)
++{
++   static uint64_t hold_ms = 150;
++   static bool read;
++   pthread_mutex_lock(&g_hold.lock);
++   if (!read) {
++      kgsl_parse_u64_env("DRM2KGSL_PWR_HOLD_MS", &hold_ms);
++      read = true;
++   }
++   if (hold_ms && !g_hold.failed) {
++      if (!g_hold.started) {
++         pthread_t thread;
++         g_hold.started = true;
++         if (!oneios_hold_setup() || pthread_create(&thread, NULL, oneios_hold_thread, NULL)) {
++            g_hold.failed = true;
++            drm_err("clock hold: off (%s): the governor alone picks the clock between frames", strerror(errno));
++         } else {
++            pthread_detach(thread);
++            _drm_log(VIRGL_LOG_LEVEL_WARNING, "clock hold: the top level from the render server's submissions to %llu ms after them\n",
++                     (unsigned long long)hold_ms);
++         }
++      }
++      if (!g_hold.failed) {
++         g_hold.until = oneios_now_ns() + hold_ms * 1000000ull;
++         pthread_cond_signal(&g_hold.wake);
++      }
++   }
++   pthread_mutex_unlock(&g_hold.lock);
++}
++
++void
++drm2kgsl_renderer_hold_stats(uint64_t *holds, uint64_t *keepalives)
++{
++   pthread_mutex_lock(&g_hold.lock);
++   *holds = g_hold.holds;
++   *keepalives = g_hold.keepalives;
++   pthread_mutex_unlock(&g_hold.lock);
++}
++
+ /* A constrained queue's submission: its context's constraint set or cleared as its rate rises above or falls below the
+  * threshold (kgsl_constraint_now), an ioctl only where that changes; the vCPUs' clamp follows (kgsl_vcpu_animating). */
+ static void
+ kgsl_constraint_update(struct kgsl_context *kctx, uint32_t drawctxt_id)
+ {
++   oneios_hold_extend();
+    const bool want = kgsl_constraint_now(kctx);
+    if (want != kctx->constraint_on && kgsl_set_pwr_constraint(kctx->base.fd, drawctxt_id, want)) {
+       kctx->constraint_on = want;

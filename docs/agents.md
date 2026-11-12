@@ -798,6 +798,13 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   `native_ls_store_drop` deletes LaunchServices' database at every boot on purpose, so lsd registers every app again
   each boot (0037 does not change it); 0043's `oneios-ls-keep=1` keeps it, for a boot after one that showed the apps.
 
+- 2026-11-12 12:25, gpu -> thermal, parent: **the power rule changed (drm2kgsl patch 0005, docs/gpu.md 2.2a).** Every
+  submission of the render server's queue now carries KGSL's power constraint (MIN_RATE default 0), and a renderer
+  thread renews it with 4 CP_NOPs every 40 ms on a context of its own until 150 ms after the last frame
+  (`DRM2KGSL_PWR_HOLD_MS`, 0 off). Reason: at 10-20 % busy the governor kept 231 MHz and frames took 5-18 ms (the
+  owner's laggy UI). The GPU now sits at the top level whenever iOS draws, plus 150 ms; KGSL's `thermal_pwrlevel`
+  still caps it. thermal: if heat needs it, cap through thermal_pwrlevel (honoured) or ask for a shorter hold.
+
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
 Format: id, owner if taken, files, root cause or need, expected result. Check with: `kernel/build-hosted.sh`, then
