@@ -58,8 +58,9 @@ python3 "$HERE/roots.py" "$CACHE" "$WORK/select.json" "$PROFILE"
 rm -f "$WORK/kernelcache.hosted.macho"
 python3 "$HERE/hosted.py" "$CACHE" "$WORK/kernelcache.hosted.macho" "$WORK/hosted.json" --closure "$WORK/select.json" ${X18:+--x18}
 INPUT=$CACHE; [ -f "$WORK/kernelcache.hosted.macho" ] && INPUT=$WORK/kernelcache.hosted.macho
-# 4. The pairing of the original kernel with ours (reused while both inputs and the reference are the same).
-KEY="$(sha "$INPUT") $(sha "$WORK/native.macho") ${REFERENCE:+$(sha "$REFERENCE")}"
+# 4. The pairing of the original kernel with ours (reused while both inputs, the reference and XnuPrelink's matcher are
+# the same: a pairing from another XnuPrelink is refused by its emitter).
+KEY="$(sha "$INPUT") $(sha "$WORK/native.macho") ${REFERENCE:+$(sha "$REFERENCE")} $(sha "$XNUPRELINK/fileset_match.py")"
 if [ ! -f "$WORK/match.map.json" ] || [ "$(cat "$WORK/match.key" 2>/dev/null)" != "$KEY" ]; then
   python3 "$XNUPRELINK/fileset_match.py" "$INPUT" "$WORK/native.macho" --out "$WORK/match.map.json" \
     ${REFERENCE:+--reference-kernel "$REFERENCE"}

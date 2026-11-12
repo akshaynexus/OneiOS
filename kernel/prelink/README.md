@@ -160,7 +160,10 @@ of 2026-11-12 (below) has 97 and 10.
 
 The same command on macOS (python3 3.11+; Homebrew's keg-only `llvm` for `llvm-nm` and `llvm-mc`, which `build.sh`
 puts on `PATH`; XnuPrelink is `external/XnuPrelink` when it exists, else the kernel base's submodule
-`external/Droid-VM-UniXNU/kits/XnuPrelink` at `b74ed7c`). Inputs: the hosted kernel and reference built with Xcode
+`external/Droid-VM-UniXNU/kits/XnuPrelink` at `b74ed7c`). **Use `external/XnuPrelink` at `9b950f2`**
+(`scripts/setup/get-references.sh XnuPrelink`): `b74ed7c` does not retarget the hosted archives' `<stub>.original`
+branches (that came in UniXNU/XnuPrelink `2b7baca`, "absolute adapter branches"; its report key is
+`native_original_branches`). The table below was made with `b74ed7c`; see "On the phone" under it. Inputs: the hosted kernel and reference built with Xcode
 27.2 (`kernel/README.md` "macOS"), the series through `0038`, and `out/kernel-inputs/24A446/kernelcache.macho`
 (`scripts/image/kernel-inputs.sh`; its SHA-256 is the profile's). Results:
 
@@ -181,6 +184,36 @@ them `pure-leaf` pairs (bodies that return a constant, as before), and 6 others 
 before `vfs_context_iopolicy_unassigned_0x8000` (the settled record), `random_cpu_init` (string pair) before
 `ml_set_interrupts_enabled`, `OSUnserializeXML` (reference order) before `OSUnserialize` (aligned), and
 `SecureDTFindEntry` twice (reference symbol and reviewed). XnuPrelink's own tests (`python3 -m unittest`, 59) pass.
+
+### On the phone (2026-11-12, bringup): two panics, not fixed
+
+Both Mac collections were booted on the S24 Ultra with the Mac runtime 0.1.7-dev (logs in
+`out/phone-baseline/2026-11-12/session1-xnuhost.log` and `session2-xnuhost.log`, git-ignored).
+
+1. `d01f7674...` (XnuPrelink `b74ed7c`): 1.1 s into the kernel, right after `droidvm-gpu: published for the virtio
+   GPU`, `panic(cpu 0 ...): Undefined kernel instruction: pc=0x20068c3c50 instr=0`. The call chain is
+   `oneios_gpu3d_start` -> `oneios_adreno_start` -> `sheng_gpu_power_probe` -> `native_adreno_accelerator_allocate`
+   -> the stub `IOAcceleratorES::IOAcceleratorES(OSMetaClass const*)` (`bti c; b ...`). The stub's branch went to
+   `0xfffffff00d8c3c50`, past the end of the collection: the `.original` value `0xfffffff00a04bc50` plus the move of
+   the kernel's `__TEXT_EXEC` (`0xfffffff0072cc000` linked, `0xfffffff00ab44000` in the collection). **All 507
+   `.original` stubs** of that collection pointed past it; in the phone's Linux-built `kernel.kc` of 2026-11-11 all
+   507 point at their `.original` address. Cause: `b74ed7c` relocates only what the split-segment records name, and
+   a branch to an absolute symbol has no record. Fixed by building with `external/XnuPrelink` at `9b950f2`.
+   `build.sh` now also keys the reused pairing on XnuPrelink's `fileset_match.py` (the newer emitter refuses a
+   pairing made by the older matcher: "Pairing predates the current matching checks").
+   `kernel/prelink/stubs-check.py KERNEL.KC` checks every stub against its `.original` (507 good on the Linux and the
+   `9b950f2` collection, 0 on the `b74ed7c` one).
+2. `eae11352...` (XnuPrelink `9b950f2`, the same kernel; all 507 stubs at their targets, 97 originals on the stub,
+   10 data unpaired): 1.5 s in, after `BSD root`, the Data mount, the GPU add-on mount and `oneios-icons: the
+   drawn-icon store had another generation`, `panic(cpu 0 ...): fileset: original component called an unmapped
+   kernel function from 0x20038daa8c`. `0xfffffff00a8daa8c` is in `com.apple.security.sandbox`'s `__TEXT_EXEC`,
+   called from `mac_posixsem_check_create` <- `sem_open` <- `native_gpu_addon_prepare` <- `load_init_program`. So
+   Sandbox's posix-semaphore check calls an original kernel function that the Mac pairing left on the panic stub
+   (the Linux pairing had it). Which one: `unmapped.py` on this collection. Not looked at further: the owner moved
+   the audit of every import of the Mac collection against the Linux one to the agent `prelink`.
+
+The phone's baseline stays the Linux-built `kernel.kc` of 2026-11-11 until that audit is done
+(`docs/building.md`, "Test cycle on the phone").
 
 ## Records of several agents, and the import-order check
 

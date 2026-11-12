@@ -34,6 +34,10 @@ DEST=${REF_DIR:-$REPO/external}
 #                   record of iPadOS 27 with Metal on an SM8650 / Adreno 750 phone.
 # macOS-DroidVM     docs/ (TODO-gpu, xnu-12377-port, reims-vgpu-vtpv-contract) and compat/ (Linux toolchain layer).
 # gunyah_host_mod   udmabuf for GKI 6.1 (drm2kgsl needs /dev/udmabuf) and the Gunyah host modules (docs/plan.md 8).
+# XnuPrelink        kernel/prelink/build.sh's matcher and fileset emitter (it prefers external/XnuPrelink to the kernel
+#                   base's kits/XnuPrelink submodule at b74ed7c). Needed: from 2b7baca it retargets the `<stub>.original`
+#                   branches of the hosted kernel's archives (native_original_branches); b74ed7c leaves all 507 of them
+#                   pointing past the collection and the kernel panics at the GPU's start (phone, 2026-11-12).
 TABLE='
 virglrenderer        https://github.com/Droid-VM/virglrenderer.git        7e17c8e814e963912fc1e4e737137a31b5efa027 wip/hackintosh
 crosvm               https://github.com/Droid-VM/crosvm.git               f82707d2cbd8d1666cd11428157ddb45c4d61282 wip/hackintosh
@@ -51,6 +55,7 @@ applebox             https://github.com/Droid-VM/applebox.git             6e3b47
 droidvm-meta-repo    https://github.com/Droid-VM/droidvm-meta-repo.git    a18ec72392721e34fbe98216a8be1ee3acc41ddc wip/hackintosh
 macOS-DroidVM        https://github.com/Droid-VM/macOS-DroidVM.git        77f761485bfc2c2e379ee49eb5c6a25c19b98739 main
 gunyah_host_mod      https://github.com/Droid-VM/gunyah_host_mod.git      44e8ae5a088a3a35290a5cacb205640cff187b99 droidvm
+XnuPrelink           https://github.com/UniXNU/XnuPrelink.git             9b950f2e104da77f494e8f2735c6f044f0e4db4d main
 '
 # Extra table (-a or by name): read-only references, nothing to build on.
 # UniXNU-shennong   Xiaomi 14 Pro (SM8650): the only public iPhone iOS 27.0.1 (24A446, iPhone17,1) OS profile. No licence.
