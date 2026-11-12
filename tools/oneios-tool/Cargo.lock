@@ -869,10 +869,12 @@ name = "oneios-prelink"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "hmac",
  "indexmap",
  "md-5 0.10.6",
+ "memchr",
  "oneios-common",
  "plist",
  "rand_mt",

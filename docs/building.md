@@ -131,7 +131,8 @@ scripts/bg.sh prelink env KERNEL=out/kernel/current-hosted-me/xnu.macho REFERENC
 ```
 
 Linux and macOS (python3 3.11+, LLVM's `llvm-nm` and `llvm-mc`: on a Mac Homebrew's keg-only `llvm`, which the
-script puts on `PATH`). The input is `out/kernel-inputs/24A446/kernelcache.macho` (section 1:
+script puts on `PATH`). `PRELINK_IMPL=rust` runs the same steps with `oneios-tool prelink` instead (section 10: the
+same files byte for byte, 14 s instead of two minutes, no `python3` or `llvm-nm`). The input is `out/kernel-inputs/24A446/kernelcache.macho` (section 1:
 `scripts/image/kernel-inputs.sh`). It also writes `kernel.kc.hashes` (the 1 MiB chunk list of
 [image-format.md](image-format.md)). On the M4: 46 s cold, 19 s with the pairing reused; 94,109,696 bytes, 92
 original functions on the stub and 9 data unpaired (with the reference).
@@ -655,8 +656,8 @@ what was changed for the iPhone's shared cache and what is verified: [gpu.md](gp
 
 `tools/oneios-tool` is one binary with the project's host tools in Rust: `sym` (the backtrace symbolizer,
 `scripts/debug/dsc.py`), `log` (reads an xnuhost session log), `image` (`scripts/image/imagetool.py`), `ioslog` (iOS's
-own unified log out of a copy of the phone's Data store, without a mount) and `prelink` (two steps of
-`kernel/prelink/build.sh` so far). Since the third Linux round also `phone` (the adb
+own unified log out of a copy of the phone's Data store, without a mount) and `prelink` (all twelve steps of
+`kernel/prelink/build.sh`, behind `PRELINK_IMPL=rust`). Since the third Linux round also `phone` (the adb
 workflow of section 6: status, stage, sums, switch, return, log, the Data store's copy), `app` (the fork's app of
 section 7: version, doctor, build, install, stage-scripts) and `cycle` (one test cycle: build, tests, stage, switch, watch, hold, return, collect).
 **None of the three has run on the real phone yet**: sections 6 and 7 show the CLI first and, as the fallback, the
@@ -686,7 +687,7 @@ Rust 1.88 or newer (built with 1.98.0); the first build downloads the crates and
 |---|---|---|
 | `scripts/image/build.sh`, `scripts/image/verify.sh` | `IMAGETOOL_IMPL=rust` (default `python`), `ONEIOS_TOOL=PATH` | `oneios-tool image` runs profile, apfs-info, apfs-owners, hashes, tree-copy, seed-pack, manifest and the set folder's verify; pack and the archive's verify stay with the Python tool. Same files, byte for byte (README "image") |
 | `scripts/image/kernel-inputs.sh` | none needed; `IM4P_TOOL=PATH` forces it | without the `lzfse` program the kernelcache is decoded by `oneios-tool image im4p`; the result is checked against the pinned SHA-256 either way (section 1) |
-| `kernel/prelink/build.sh` | none | Python only; `oneios-tool prelink roots` and `hosted` exist and are compared, the other steps are not ported |
+| `kernel/prelink/build.sh` | `PRELINK_IMPL=rust` (default `python`), `ONEIOS_TOOL=PATH` | `oneios-tool prelink` runs all twelve steps: the same `kernel.kc` and records byte for byte, in 14 s instead of two minutes; no `python3` or `llvm-nm` needed (README "prelink") |
 
 `oneios-tool image seed-pack` writes `data.seed`'s members in parallel, each at its own offset (the same bytes as
 `imagetool.py`'s; the SHA-256 is the one the trust list pins). `ONEIOS_IMAGE_TIMING=1` prints each phase's time;

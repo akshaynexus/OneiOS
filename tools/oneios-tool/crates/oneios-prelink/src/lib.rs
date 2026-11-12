@@ -2,18 +2,24 @@
 //! the step's own arguments and output files so that it can be swapped and compared alone
 //! (tools/oneios-tool/README.md "prelink"; tests/prelink/compare-python.sh).
 //!
-//! Ported: `roots` (roots.py), `hosted` (hosted.py). Not ported yet: native-input, merge-reviewed, the pairing
-//! (XnuPrelink's fileset_match.py), align, kclasses, structors, vtables, the emitter (emit.py over XnuPrelink's
-//! fileset_emit, fileset_layout, fileset_segmented), audit, record. kernel/prelink/build.sh runs the Python steps.
+//! All twelve steps are ported: roots, hosted, native-input, merge-reviewed, match (XnuPrelink's
+//! fileset_match.py), align, kclasses, structors, vtables, emit (emit.py over XnuPrelink's fileset_emit,
+//! fileset_layout and fileset_segmented), audit, record. XnuPrelink is read at pin 9b950f2: its reviewed fixtures
+//! and the matcher signature come from the checkout given with `--xnuprelink`.
 
 mod align;
+mod audit;
+mod emit;
 mod hosted;
 mod kclasses;
+mod layout;
 pub mod image;
 mod matcher;
 mod merge_reviewed;
 mod native_input;
+mod plistpy;
 mod pyset;
+mod record;
 mod records;
 mod roots;
 mod structors;
@@ -51,14 +57,21 @@ pub enum Command {
     Structors(structors::Args),
     /// vtables.py: the virtual methods of every named vtable, slot by slot
     Vtables(vtables::Args),
+    /// emit.py over XnuPrelink's emitter: write kernel.kc and its report
+    Emit(emit::Args),
+    /// audit.py: every kext import's binding against the known-good pairs and the stub list (exit 1 on a failure)
+    Audit(audit::Args),
+    /// record.py: the build record kernel.kc.build.json
+    Record(record::Args),
+    /// Print the kernelcache SHA-256 a kernel profile pins ([kernel.prelink] kernelcache_sha256)
+    Pin { profile: String },
 }
 
 #[derive(clap::Parser)]
 #[command(
     name = "oneios-tool prelink",
     args_override_self = true,
-    after_help = "Not ported yet (kernel/prelink/build.sh runs the Python steps): native-input, merge-reviewed, match, align, \
-                  kclasses, structors, vtables, emit, audit, record."
+    after_help = "Each step takes the arguments of the Python step it replaced (kernel/prelink/README.md)."
 )]
 struct Standalone {
     #[command(subcommand)]
@@ -99,6 +112,13 @@ pub fn main(command: Command) -> i32 {
         Command::Kclasses(args) => ("kclasses", kclasses::run(args)),
         Command::Structors(args) => ("structors", structors::run(args)),
         Command::Vtables(args) => ("vtables", vtables::run(args)),
+        Command::Emit(args) => ("emit", emit::run(args)),
+        Command::Audit(args) => match audit::run(args) {
+            Ok(true) => return 1,
+            other => ("audit", other.map(|_| ())),
+        },
+        Command::Record(args) => ("record", record::run(args)),
+        Command::Pin { profile } => ("pin", pin(&profile)),
     };
     match result {
         Ok(()) => 0,
@@ -107,4 +127,12 @@ pub fn main(command: Command) -> i32 {
             1
         }
     }
+}
+
+fn pin(profile: &str) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let table: toml::Table = std::fs::read_to_string(profile).with_context(|| profile.to_string())?.parse().with_context(|| profile.to_string())?;
+    let pinned = table.get("kernel").and_then(|k| k.get("prelink")).and_then(|p| p.get("kernelcache_sha256")).and_then(|v| v.as_str());
+    println!("{}", pinned.ok_or_else(|| anyhow::anyhow!("{profile}: no [kernel.prelink] kernelcache_sha256"))?);
+    Ok(())
 }

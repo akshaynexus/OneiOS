@@ -24,6 +24,16 @@ kernel, the kernelcache, the reference and XnuPrelink's matcher are the same). A
 
 ## Steps (`build.sh`)
 
+`PRELINK_IMPL=python|rust` chooses who runs the steps: `python` (the default) the scripts here and XnuPrelink's
+`fileset_match.py`; `rust` `oneios-tool prelink STEP` (`tools/oneios-tool`, built with
+`cargo build --release --manifest-path tools/oneios-tool/Cargo.toml`; `ONEIOS_TOOL=PATH` for another binary). Both
+write the same files byte for byte (`tools/oneios-tool/tests/prelink/compare-python.sh` compares every step; on the
+Linux-built kernels `13ed0b70` and `399f50fa` both give `kernel.kc` `ffbe95f7` and `cdd98e7e`, 2026-11-12); the
+Rust build takes 14 s where Python takes about two minutes. With `rust` the build needs neither `python3` nor
+`llvm-nm`, and `llvm-mc` only with `X18=1`; XnuPrelink's checkout is still read for its reviewed fixtures and the
+matcher signature. The cached pairing (`work/match.key`) is keyed on the matcher that made it, so a switch of
+`PRELINK_IMPL` pairs again.
+
 1. `native-input.py`: the kernel's weak-lookup binds resolved to its own definitions (Linux's ld64 left one,
    `native_source_storage_start`; Xcode 27.2's ld leaves seven: the `boot_progress_*` and `boot_log_export_put`
    defaults, `native_adreno_fences`, `native_ufs_dpu_map`), and the same for `REFERENCE`;
