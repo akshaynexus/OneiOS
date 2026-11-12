@@ -664,8 +664,8 @@ section 6 ("Very slow" playback).
   boot decides it. [I]
 - **State.** Written on the Linux PC (2026-11-12): every one of the 23 patches of the build's series that touch
   `kern_exec.c` (arch, OS, device, hosted through 0056) and then this one apply with `git apply` to xnu-12377.121.6's
-  file, and the swap file hunk to its `vm_compressor_backing_file.c`. **Not compiled**: this PC cannot set up the
-  Linux XNU toolchain (no libdispatch, no root); the Mac builds it. Not run.
+  file, and the swap file hunk to its `vm_compressor_backing_file.c`. Compiled on the Linux PC once libdispatch
+  was installed (`HOSTED_OUT=pc` at `7652df1`, no warnings from it; the `oneios-swap:` strings are in the kernel).
 
 ## 0049-wifi-association-event.patch (radio2, 2026-11-12)
 
