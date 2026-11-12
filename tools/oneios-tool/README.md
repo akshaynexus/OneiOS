@@ -171,6 +171,12 @@ Result (Linux x86_64, 2026-11-12, Mandiant's test archives of BUILDING.md; every
 The image has no `logdata.LiveData.tracev3` (only `log collect` writes one), so its entry count is lower than the
 archive's. The box ran two other agents' jobs: the times are not clean.
 
+`ioslog` decodes on one thread. Decoding the tracev3 files side by side was tried (2026-11-12) and is not in
+the tool: the library's per-file function needs its oversize cache, whose module is private, its string storage is
+made for one thread, and oversize payloads are looked up across files, so the files cannot be decoded
+independently from outside the library without changing the output ([todo_rust.md](todo_rust.md) section 5 has
+the details and what upstream would have to open).
+
 **What this does not show**, because neither the phone's Data store nor the Mac's files are on the Linux box:
 
 1. `ioslog` on a real `data.img` from the phone (an image written by iOS's own APFS, after a session). The reader's

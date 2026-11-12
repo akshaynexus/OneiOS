@@ -1,11 +1,23 @@
-# oneios-tool: state and what is left (2026-11-12, after the Linux round)
+# oneios-tool: state and what is left (2026-11-12, after the third Linux round)
 
 Branch: `rustport`. Commands, crates and every comparison with its result: [README.md](README.md). This file is
 the hand-over: what is done, what is open, and the notes behind the decisions.
 
-Two rounds so far, both on 2026-11-12: the Mac round (sym, log, image written and compared there; stopped by the
-owner) and the Linux round (the three built and compared again on a Linux x86_64 PC; `ioslog` written; `image im4p`
-and the APFS file reader added; `prelink roots` and `hosted` ported).
+Rounds so far, all on 2026-11-12: the Mac round (sym, log, image written and compared there; stopped by the
+owner), the Linux round (the three built and compared again on a Linux x86_64 PC; `ioslog` written; `image im4p`
+and the APFS file reader added; `prelink roots` and `hosted` ported), the second Linux round (clap for every tool),
+and the third Linux round, the owner's queue of eight items:
+
+| # | Item | State |
+|---|---|---|
+| 1 | `image seed-pack` faster; the writers to libraries | done (`b0fbd20`): the same `data.seed`; at the floor of `cp` on tmpfs and on the disk |
+| 2 | `phone`: the adb workflow | written, tested on a stand-in phone (`d31e69f`); **not run on the phone** |
+| 3 | `app`: the OneOS fork's app | written, tested with stand-ins (`d31e69f`); **no real build or install** |
+| 4 | `cycle`, `phone log` | written, tested with stand-ins (`38c9b58`); **not run on the phone** |
+| 5 | APFS: decmpfs, the apfs-fuse backend | done (`687f0a7`): all 2,910 compressed files as apfs-fuse gives them |
+| 6 | `ioslog` in parallel | **not done**: the library's per-file entry point cannot be used from outside (section 5, "Parallel decoding"). The `sym --slide` question is settled (README "sym") |
+| 7 | `prelink`: the ten remaining steps | **not started** (section 4 is unchanged; main's `86bbb38` changed `audit.py`, `emit.py` and `pairs-24A446.json`: port the current versions) |
+| 8 | Retire the replaced Python and shell code | **not started**: nothing was retired, no caller was switched, Python is still the default everywhere |
 
 **Rule until further notice: Python stays the default and the only path the builds use.** The switches that
 exist (`IMAGETOOL_IMPL` in `scripts/image/build.sh` and `verify.sh`, default `python`; `kernel-inputs.sh` takes
@@ -365,6 +377,27 @@ Decisions:
   `ioslog save` is asked for.
 - CSV and JSON lines are `unifiedlog_iterator`'s so that the two can be compared with `cmp`.
 
+**Parallel decoding (`--jobs`) was tried in the third round and is not in the tree.** What stands in the way, in
+macos-unifiedlogs at the pinned commit `3d5b27a`:
+- The only public way to decode is `visit_provider` (and `visit_logarchive_tracev3_files` over a folder), which
+  visits the files one after the other on one thread. The per-file function `tracev3::visit_tracev3` is public,
+  but it takes an `&OversizeCache`, and `tracev3::oversize` is a private module: the type cannot be named or made
+  outside the crate (the compiler's E0603).
+- Its shared state is made for one thread: the string storage and the oversize cache are `elsa::FrozenMap`s
+  behind `Cell` and `RefCell`, and an entry's evidence is an `Rc`. So "uuidtext and dsc loaded once and shared
+  read-only" needs the library to change, or a parsed copy per thread.
+- Files do not decode independently: an oversize payload is looked up by (boot, index, process ids) across files,
+  earlier or later ones, the first file in the visit's order winning (`tracev3/oversize.rs`). Giving each thread
+  a provider that lists only some files would change which payload an entry gets. Byte-identical output needs
+  the oversize table of all files in order, which only the library can build.
+- What would do it: `tracev3::oversize::OversizeCache` public upstream (then the design that was written works:
+  one thread per file with its own string catalog, logd's time records shared, an oversize table harvested once,
+  a window of `2 * jobs` files between the decoders and the writer that writes in file order; the draft is in the
+  worktree's `out/scratch/ioslog-parallel.rs.txt`, not in git), or a `Sync` string storage upstream. Ask
+  upstream before forking the crate.
+- Not worth doing instead: a writer thread (the decoder already writes through a 1 MiB buffer).
+The times of one thread are the README's table (20 s for the 4.7 million entries of the macOS 27 archive).
+
 Open, in order:
 1. **Run it on a real `data.img`** (copy the store after a session, `docs/newtodo.md` "How to resume" step 2; then
    `oneios-tool ioslog boots data.img`). What a real store may show that the stand-ins do not: an APFS written by
@@ -420,6 +453,23 @@ section 10 "Rust tools" and section 1 (`kernel-inputs.sh` without `lzfse`), `doc
 inputs' tools), `CLAUDE.md`'s table. Also written: `tests/compare-python.sh`, which runs every tool's comparison whose inputs are named. Not written:
 `kernel/prelink/README.md` (no prelink switch yet).
 
+## 7. Retiring the Python and shell tools (the owner's item 8): not started
+
+Nothing was retired in the third round. The order the owner gave, for whoever does it:
+1. Freeze the Python reference as goldens under `tests/` (hashes, sizes and names only for anything made from
+   Apple's files) and switch the comparison scripts to them.
+2. Switch every caller: `scripts/image/{build.sh,verify.sh,kernel-inputs.sh}`, `kernel/prelink/build.sh`,
+   `scripts/debug`, `runtime`, `.github/workflows`, and what `grep` finds; drop `IMAGETOOL_IMPL` and `IM4P_TOOL`;
+   Rust becomes a build prerequisite and `build.sh` builds or finds `oneios-tool`.
+3. Delete the Python nothing else uses; one commit per retired tool; then the whole chain on the box.
+What can be retired today by the rule "1:1 or strictly better": `scripts/debug/dsc.py` (`sym`: 18 of 18 sets on
+the Mac and on Linux). `scripts/image/imagetool.py` cannot go whole: `check-ipsw`, `fetch`, `record-plain`,
+`aea-info`, `pack` and `verify` of a `.tar.zst` are not ported (the nine ported subcommands are 1:1, so
+`IMAGETOOL_IMPL=rust` can become the default once the owner says so). The prelink stays Python until its twelve
+steps are 1:1. `scripts/phone/stage.sh` stays until `oneios-tool phone` has run on the phone. Python that is not
+ported and stays: `userland/tweak`, `scripts/fetch`, `scripts/ios`, the display capture, `kernel/prelink/*.py`,
+`runtime/package/pack.py`, the tests' helpers under `tools/oneios-tool/tests/`.
+
 ## Notes for the next agent
 
 - The source was not run through rustfmt (no `rustfmt.toml`); some lines are long. Clippy was clean for
@@ -428,6 +478,14 @@ inputs' tools), `CLAUDE.md`'s table. Also written: `tests/compare-python.sh`, wh
   such strings in code (see `esc()` in `crates/oneios-common/src/pyjson.rs`).
 - Give each parallel agent its own `CARGO_TARGET_DIR` (`tools/oneios-tool/target/<name>`), or the builds wait on
   each other.
+- Third round, scratch in the worktree's `out/` (git-ignored): `rustport-seed/` (the copied tree, its meta file
+  and the Python seed for `seed-pack`'s timings; `out/scratch/seedbench4.sh` runs them), `rustport-dsc/` (the dyld
+  cache copied out of the image with `apfs-copy`, 7.3 GB), `rustport-apfs-systemos/` (7 GB), `rustport-fuse-src.img`
+  (a Data-store stand-in), the previous binary `rustport-seed/oneios-tool.8cc763e`.
+- The stand-in phone (`tests/phone/fake-adb.sh`, `lib.sh`) is what `tests/phone`, `tests/app` and `tests/cycle`
+  share; a new phone command gets a check there, and a line in the "nothing sent to the phone walks a tree" test.
+- zsh is the shell of the agent's Bash tool here: `$EPOCHREALTIME` and arrays behave differently; put anything
+  that times or loops into a bash script file.
 - The scratch outputs of the comparisons are in the worktree's `out/` (`rustport-sym/`, `rustport-log/`,
   `rustport-image/`, `rustport-ioslog/`, `rustport-prelink/`, `rustport-apfs*/`, `dsc-index/`): git-ignored, they
   go away with the worktree.
