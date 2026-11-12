@@ -150,12 +150,19 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
    the xnuhost logs of every session of the day (`combo1`, `diag`, `c2`, `c3`, `c5` = the 15:35 boot), iOS's own
    log of the 14:12 session (`ios3.logarchive`, parsed `ios3-log.csv`), the baseline config and `phone-baseline.txt`.
 2. iOS's own log of a session: copy the Data store after the session (read only, no session running), fast:
-   `adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'" | gunzip -c |
-   python3 -I sparsewrite.py data.img` (writes sparsely: 6 min, 2.2 GB), attach it read-only
+   `oneios-tool phone pull-data data.img` (gzip -1 on the phone, the zero runs as holes here, the length checked
+   against the phone's; `--ioslog` then reads the log out of the copy without a mount). By hand it is
+   `adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'" |
+   oneios-tool phone sparse-write data.img --gunzip`. `sparse-write` replaced `gunzip -c | python3 -I
+   sparsewrite.py data.img` (the script of 2026-11-12, kept as `tools/oneios-tool/tests/phone/sparsewrite.py`:
+   6 min, 2.2 GB of blocks for the 32 GiB store): the same bytes, a quarter of the CPU, and fewer blocks on
+   Linux's file systems; its macOS part (APFS) and `pull-data` on the phone have not run yet
+   (`tools/oneios-tool/README.md` "The sparse copy"). The way of 2026-11-12, by hand on the Mac: attach the copy
+   read-only
    (`hdiutil attach -readonly -noverify -nobrowse -imagekey diskimage-class=CRawDiskImage -nomount`), mount the
    Data volume `mount -t apfs -o rdonly,nobrowse,noowners`, copy `db/diagnostics/{Persist,Special,Signpost,
    HighVolume,timesync}` and `db/uuidtext/*` into a `.logarchive`, and parse it with Mandiant's macos-unifiedlogs
-   (`unifiedlog_iterator -m log-archive -i ARCHIVE -f csv -o OUT`). The planned `oneios-tool ioslog` does this.
+   (`unifiedlog_iterator -m log-archive -i ARCHIVE -f csv -o OUT`).
 3. Build the set from `main` in a clean worktree (`git worktree add --detach out/parent-wt origin/main`, link
    `external/`): `scripts/bg.sh k env HOSTED_OUT=prelink XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`, then
    `env REFERENCE=out/kernel/current-hosted-prelink/reference.macho KERNEL=out/kernel/current-hosted-prelink/xnu.macho

@@ -10,7 +10,7 @@ script before it may replace it; the commands and the results are below. What is
 | `image` | `scripts/image/imagetool.py` | 9 subcommands in Rust, the rest run the Python tool | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds, byte for byte (the 36th: the Linux set has no `kernel.kc`) |
 | `ioslog` | the manual steps of `docs/newtodo.md` "How to resume" step 2 (mount, copy, `unifiedlog_iterator`) | done; not run on the phone's Data store yet | yes on 7 archives: CSV byte for byte from a `.logarchive`, from a Data-store image and from a mounted volume |
 | `prelink` | the steps of `kernel/prelink/build.sh` | all 12 steps (`PRELINK_IMPL=rust`) | yes: every step's files and stdout byte for byte on two Linux-built kernels, `kernel.kc` `ffbe95f7...` and `cdd98e7e...` |
-| `phone` | `scripts/phone/stage.sh`, the adb lines of `docs/building.md` section 6, the Mac's `sparsewrite.py` | written; **not run on the phone** (none on the box) | `stage` and `sums`: the same output and the same stage as `stage.sh` on a stand-in phone; 64 checks pass (`tests/phone/run.sh`) |
+| `phone` | `scripts/phone/stage.sh`, the adb lines of `docs/building.md` section 6, the Mac's `sparsewrite.py` | written; **not run on the phone** (none on the box) | `stage` and `sums`: the same output and the same stage as `stage.sh` on a stand-in phone; 73 checks pass (`tests/phone/run.sh`); `sparse-write`: the bytes and length of `sparsewrite.py` on 7 streams and a 32 GiB one, not more blocks, a quarter of the CPU (`tests/phone/sparse-compare.sh`) |
 | `app` | the app lines of `docs/building.md` section 7 (new) | written; **the app was not built or installed with it** (the owner's decision for this box) | not applicable; 65 checks pass with a stand-in checkout, gradlew, gh and phone (`tests/app/run.sh`); `app version` runs on the real clone |
 | `cycle`, `phone log` | the test cycle of `docs/building.md` section 6 by hand (new) | written; **not run on the phone or with real builds** | not applicable; 90 checks pass with a stand-in checkout and phone (`tests/cycle/run.sh`) |
 
@@ -70,7 +70,7 @@ exists or where ours is measured to be faster; each such part says why in its mo
 | `tar` 0.4 (`Header`) | `image seed-pack`: every 512-byte ustar block of `data.seed`, field by field (`crates/oneios-image/src/tar.rs`; what stays ours and why: below) |
 | `serde_json` (`ser::Formatter`), `serde` | every JSON file the tools write: Python's `json.dumps` layout is a `Formatter` (`oneios-common/src/pyjson.rs`) |
 | `base64`, `percent-encoding` | the seed's xattr values and their pax keys (`base64.b64encode`, `urllib.parse.quote`) |
-| `flate2` | `phone pull-data`, `phone sparse-write --gunzip`: the gzip stream of the phone's busybox; the zlib kinds of compressed APFS files |
+| `flate2` (`zlib-rs`) | `phone pull-data`, `phone sparse-write --gunzip`: the gzip stream of the phone's busybox; the zlib kinds of compressed APFS files. The backend is `zlib-rs` (pure Rust), the fastest of the three on the Data store's stream ("The sparse copy") |
 | `zbitmap` 0.1 (MIT, github.com/valentinogrande/zbitmap) | LZBITMAP, the compression of most files of iOS 27's OS volumes (decmpfs kinds 13 and 14). A young crate: its output is checked against apfs-fuse on every compressed file of the two images |
 | `apk-info-zip` 1.1 (Apache-2.0, github.com/delvinru/apk-info) | `app`: an APK's signing certificates (schemes v1 to v3.x) |
 | `sha2` (`asm`), `rayon`, `memmap2`, `libc`, `anyhow` | hashing (the hash lists are `sha2` and `std::io::Write`), parallel work, file maps, `copy_file_range` (`image`, `sym`, `log`) |
@@ -472,9 +472,13 @@ What each does:
   no longer answers: a restart is the return's failsafe).
 - `pull-data` is the adb line of `docs/newtodo.md` "How to resume" step 2 with the Mac's `sparsewrite.py` built in:
   `adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'"`, unpacked
-  with `flate2`, written to `OUT.part` (blocks of 4096 zero bytes are skipped, the length is set at the end) and
-  renamed to `OUT` only when as many bytes came as the phone's `stat -c %s` of that file says, before and after.
-  `--ioslog` then runs `ioslog boots OUT` and `ioslog checks OUT`.
+  with `flate2` (`zlib-rs`), written to `OUT.part` (a block of zeros is not written, the length is set at the
+  end: "The sparse copy" below) and renamed to `OUT` only when as many bytes came as the phone's `stat -c %s` of
+  that file says, before and after. `--ioslog` then runs `ioslog boots OUT` and `ioslog checks OUT`.
+- `sparse-write OUT` is that copy without the phone, and `pull-data` by hand: `adb exec-out "su -c
+  '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'" | oneios-tool phone sparse-write
+  OUT --gunzip`. stdin goes to OUT; `--gunzip` unpacks it first; `--expect-size N` fails when another number of
+  bytes came. It prints `OUT: N bytes, M of them written (S s)`.
 
 - `log` reads one named file of the stage and runs beside a session (it only reads). `--file`: `xnuhost`
   (`session/xnuhost.log`, the default), `switch`, `return`, `outcome`, `display`, `watchdog` (the names of
@@ -502,7 +506,8 @@ What each does:
     in the main checkout, or `ONEIOS_DSC_INDEX`). It is not line by line: the analysis is of the log so far.
 
 ```sh
-tools/oneios-tool/tests/phone/run.sh          # 64 checks against the stand-in phone; ALL OK
+tools/oneios-tool/tests/phone/run.sh          # 73 checks against the stand-in phone; ALL OK
+tools/oneios-tool/tests/phone/sparse-compare.sh   # sparse-write against sparsewrite.py: 35 checks; ALL SAME ("The sparse copy" below)
 tools/oneios-tool/tests/cycle/run.sh          # phone log, status --watch and cycle: 90 checks; ALL OK
 ```
 
@@ -513,8 +518,121 @@ its test root** (`ONEIOS_TEST_ROOT`), and plays `switch` (a process named xnuhos
 lines) and the return (the restore line, `return.outcome`). `stage` and `sums` are compared with
 `scripts/phone/stage.sh` itself on a second, equal stand-in: the same output and the same stage afterwards
 (`runtime`, `runtime-asis`, `image`, a file that is not staged). Result, Linux x86_64, 2026-11-12: 64 checks, all
-ok, two runs. What the stand-in cannot show: the real `su`, adb's behaviour when One UI's framework stops, the
+ok, two runs; 2026-11-13, with the checks of `image-check` and `manifest`: 73, all ok, and the cycle suite's 90
+(the checks that fail on macOS, which has no /proc, pass here). What the stand-in cannot show: the real `su`, adb's behaviour when One UI's framework stops, the
 time a 64 GiB store takes (6 min on the Mac with the Python script), the fork's real switch and return.
+
+### The sparse copy (`sparse-write`, `pull-data`)
+
+`crates/oneios-phone/src/sparse.rs` replaces the Mac's `sparsewrite.py` (kept unchanged as
+`tests/phone/sparsewrite.py`, the comparison's reference). The stream is read 256 KiB at a time. A block that
+holds only zeros is not written (`memcmp` against zeros: 10 to 25 GB/s here, a byte loop 1.1 to 1.4); the other
+blocks are written as runs, each at its offset; the length is set at the end. A block is the file system's:
+`statvfs`'s `f_frsize` (4096 on tmpfs, btrfs, ext4, f2fs and APFS), on macOS not less than a page (16 KiB on
+Apple silicon, where a write allocates whole pages). The script's unit is its 4 MiB read.
+
+What the file systems keep of it (Linux 7.3 x86_64, 2026-11-13). The data regions are `lseek`'s `SEEK_DATA` and
+`SEEK_HOLE` after an `fsync`, the blocks `st_blocks`:
+
+| File system | How | What it keeps |
+|---|---|---|
+| tmpfs (`/tmp`) | the unit test | every block that was not written is a hole: the data regions are exactly the blocks that hold data, `st_blocks` is their size |
+| btrfs, `compress=zstd:3` (`/home`) | the unit test, `sparse-compare.sh` | the same. `st_blocks`, `SEEK_DATA` and `btrfs filesystem du` count an extent's size before compression, so zeros that are written (the script's, inside its 4 MiB reads) count as data: they are compressed extents of 128 KiB (`filefrag -v`: `encoded`), not holes. A block that was not written has no extent |
+| ext4 | **not through the kernel** (a mount needs root; `udisksctl loop-setup`: "Not authorized"). `mkfs.ext4 -b 4096 -d` of a folder with the copy, then `debugfs` | `dump_extents`: 14 extents, the copy's 13 data regions (one in two parts); `Blockcount` is the data and one extent block; `dump` gives the stream's bytes. This shows ext4's format holding these holes and e2fsprogs reading them out of the copy (it finds them with `SEEK_DATA`), not the kernel's driver writing them |
+| f2fs | **not tested** (a mount needs root; `sload.f2fs` writes every block of a file, so it shows nothing) | |
+| APFS | **not run** (no Mac on the box) | below |
+
+The `runs` stream of the comparison (154 MB; zero runs from 100 bytes to 70 MiB) on btrfs, the script's copy and
+`sparse-write`'s:
+
+```
+the script   : 50331648 bytes held, 5 data regions   0x0..0x1400000 0x1800000..0x2800000 0x3000000..0x3400000 0x4400000..0x4800000 0x8c00000..0x9000000
+sparse-write : 19181568 bytes held, 13 data regions  0x0..0x9000 0xc000..0x11000 0x14000..0x15000 0x1f000..0x31000 0x130000..0x231000 0x330000..0x331000
+               0x730000..0xb31000 0xf30000..0x1331000 0x1b31000..0x2432000 0x3331000..0x3333000 0x4732000..0x4751000 0x8d50000..0x8d53000 0x8d55000..0x8d56000
+```
+
+**APFS.** Nothing of this ran on a Mac; the macOS branch is written from Apple's manual pages and from what
+others measured, and the two tests below must run there.
+- The format holds a hole of any whole number of its 4096-byte blocks: a file extent record with no block
+  (`j_file_extent_val_t`; the inode's `INODE_IS_SPARSE`). Our reader returns zeros for it
+  (`crates/oneios-image/src/apfs/files.rs`).
+- Apple's driver is not documented and its source is not public. Measured by others (Howard Oakley,
+  eclecticlight.co, "Sparse files are common in APFS", 2021: a threshold of 16 MB on an M1 Mac mini; pull
+  requests of four other projects that corrected tests on macOS 26 and 27 with `SEEK_HOLE` and `st_blocks`,
+  listed in this change's pull request): a write behind a hole shorter than about 16 MiB makes APFS fill the
+  hole with zero blocks it allocates, whatever the order of the writes and whenever the length is set; a hole
+  of 17 MiB or more stays; a 4 KiB write allocates 16 KiB on Apple silicon. That is why the first port's
+  unit test failed on the Mac (a 9 MiB file with zero runs of 4 and 2 MiB: no hole at all, `sparse.rs:92`), and
+  it means the script's copy there kept only the zero runs of 16 MiB and more.
+- `fcntl(F_PUNCHHOLE)` gives blocks back (fcntl(2): "Deallocate a region and replace it with a hole ... Holes
+  must be aligned to file system block boundaries"; `EINVAL` when the offset or the length is not a multiple of
+  the block size). On macOS `sparse.rs` punches the hole in front of each write after the write, and the hole
+  at the end after the length is set (holes of up to 64 MiB; a longer one was never seen filled). A punch that
+  fails is said once on stderr and not tried again: the bytes are right either way. `ONEIOS_SPARSE_PUNCH=0`
+  turns the punch off (the copy then holds what the script's did, or less); `=1` turns it on on Linux, where it
+  is `fallocate`'s punch and changes nothing.
+- **Guesses**, for the Mac to check: that a punched hole shorter than 16 MiB stays a hole while later writes
+  follow it, and that a punch is cheap (the unit test prints the time of 1000; here 1.3 ms on tmpfs, 11 to 19 ms
+  on btrfs).
+
+```sh
+cargo test --manifest-path tools/oneios-tool/Cargo.toml -p oneios-phone sparse -- --nocapture   # 4 tests; prints what the file system kept
+ONEIOS_SPARSE_TEST_DIRS=/tmp:$PWD/out/t cargo test ... sparse -- --nocapture                     # in these folders (one per file system) instead of the temporary folder
+tools/oneios-tool/tests/phone/sparse-compare.sh              # against sparsewrite.py: 35 checks; ALL SAME (MAP=1: every file's data regions)
+SPEED=4096:280 tools/oneios-tool/tests/phone/sparse-compare.sh   # also the times on a 4096 MiB stream with about 280 MiB of data (6 more checks; 32768:2100 is the store's size)
+```
+
+- The unit tests: (1) seven streams (zero runs shorter than a block, of one block, of 3, 15, 18 and 60 MiB; data
+  across the edge of two reads; a tail inside a block, with and without data; only zeros; one zero byte;
+  nothing; no zeros) into a file, with the punch off and on. The file is the stream; the data regions the file
+  system reports are exactly the blocks that hold data; `st_blocks` is at most their size plus 16 blocks and
+  1 %. On macOS without the punch only the holes of more than 32 MiB must have stayed. A file system without
+  holes (a 64 MiB file of only a length is not empty) gets the byte check alone. Each file's regions and blocks
+  are printed. (2) The same streams through the writer against a model of APFS as described above: without the
+  punch the short holes are allocated (23.1 MB for 3.4 MB of data in the first stream), with it exactly the
+  pages that hold data are, and no punch is off a block's edge or past the file's end. (3) The zero check.
+  (4) An error of the stream and one of the file.
+- `sparse-compare.sh`: seven streams of `tests/phone/mkstream.py` (`runs`: zero runs and data runs shorter than
+  4 KiB, between 4 KiB and 4 MiB, and longer; `tail`: ends inside a block; `zero`; `empty`; `lastbyte`: a data
+  byte at the very end; `dense`; `phone`: 64 MiB shaped like the store) through the script, through
+  `sparse-write`, and through `gzip -1` and `sparse-write --gunzip --expect-size`. Result, Linux x86_64 on btrfs,
+  2026-11-13: 35 checks, `ALL SAME`: the script's copy is the stream, `sparse-write`'s two copies are the
+  script's (`cmp`: bytes and length), both say the stream's length, and `sparse-write`'s copies never hold more
+  blocks than the script's. The same on a stream of 32 GiB with 2.18 GB of data (`SPEED=32768:2100`, 41
+  checks): the script's copy holds 4.52 GB in 459 regions, `sparse-write`'s 2.18 GB in 3648.
+
+Speed (the same machine: i5-7500, 4 cores; other agents' builds ran all the time, load 2 to 10, so wall times
+of one command moved by a third and more from run to run; CPU times did not). Two streams of `mkstream.py
+phone`: 32 GiB with 2.18 GB of data in 3648 runs (1.22 GB packed with `gzip -1`), and 4 GiB with 302 MiB of data
+(165 MB packed).
+
+| Reader | Fed the packed stream: wall, MB/s of the stream | CPU of the reader | Behind `mkstream.py \| gzip -1 -c`: wall |
+|---|---|---|---|
+| 32 GiB: the source alone (`> /dev/null`) | | | 49.6 s, 62.6 s |
+| 32 GiB: `gunzip -c \| sparsewrite.py` | 39.6 s, 868 MB/s | gunzip 11.5 s + python 10.6 s | 60.0 s, 72.7 s |
+| 32 GiB: `sparse-write --gunzip` | 10.7 s, 3218 MB/s | 5.0 s | 52.5 s, 80.9 s |
+| 4 GiB: the source alone | | | 5 rounds: 6.7 to 9.4 s, median 7.9 s |
+| 4 GiB: `gunzip -c \| sparsewrite.py` | 2.6 s and 2.9 s, 1633 and 1486 MB/s | gunzip 1.4 s + python 1.3 s | 6.9 to 11.1 s, median 8.1 s |
+| 4 GiB: `sparse-write --gunzip` | 1.1 s and 0.6 s, 3803 and 7469 MB/s | 0.6 s | 7.0 to 8.6 s, median 7.5 s |
+
+Without gzip, from the stream as a sparse file: `sparsewrite.py < FILE` 41.8 s (16.1 s of CPU), `sparse-write <
+FILE` 36.4 s (12.6 s); 4 GiB, two runs: 3.6 and 1.7 s against 2.0 and 1.2 s.
+
+Behind `gzip -1` (the phone's side of the real copy) both readers wait for it, so the pipe is as fast as
+`gzip -1`: `sparse-write` was the faster in the first 32 GiB round (load 3) and in 4 of the 5 rounds at 4 GiB,
+the slower in the second 32 GiB round (load 5); the difference is inside this machine's noise. Its CPU is a
+quarter of gunzip's and the script's. Fed a packed stream as fast as it can read, it is 2.4 to 4.8 times as
+fast. (Feeding the pipe from the sparse file, `gzip -1 -c FILE |`, was tried first and says nothing about the
+readers: reading 32 GiB of holes fills the page cache with zeros, and `gzip -1 -c FILE > /dev/null` alone took
+68 to 123 s; in five such rounds the script's pipe took 75 to 103 s and `sparse-write`'s 80 to 107 s.) What was
+measured to get there:
+- the unpacker (the 4 GiB stream, `flate2`'s `MultiGzDecoder` into a 1 MiB buffer, CPU): `zlib-rs` 0.48 s,
+  `zlib-ng` 1.48 s (it also needs cmake to build), `miniz_oxide` (flate2's default) 1.74 s; `zlib-rs` without
+  flate2's default features (no choice of AVX2 code at run time) 1.9 s; GNU gzip 1.15's `gunzip -c` 0.9 s;
+- the read: 64 KiB 0.58 s, 256 KiB 0.56 s, 1 MiB 0.58 to 0.63 s, 4 MiB (the first port's) 1.11 s of CPU for the
+  whole copy;
+- a second thread for the scan and the writes: 0.72 to 0.86 s of CPU against 0.54 s, the same wall time. So
+  there is one thread.
 
 ## cycle
 

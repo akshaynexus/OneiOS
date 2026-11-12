@@ -12,8 +12,12 @@ sha2.workspace = true
 libc.workspace = true
 oneios-common.workspace = true
 oneios-ioslog.workspace = true
-# `phone pull-data` and `phone sparse-write --gunzip`: the gzip stream the phone's busybox writes.
-flate2 = "1"
+# `phone pull-data` and `phone sparse-write --gunzip`: the gzip stream the phone's busybox writes. zlib-rs (pure
+# Rust; flate2's default features keep its choice of AVX2 code at run time) unpacks a stream shaped like the Data
+# store's 3 times as fast as zlib-ng (which also needs cmake) and 3.6 times as fast as miniz_oxide, flate2's
+# default: README "The sparse copy". apk-info-zip turns the feature on for the whole binary anyway; this line
+# does not rely on that.
+flate2 = { version = "1", features = ["zlib-rs"] }
 apk-info-zip = "1.1"
 oneios-log.workspace = true
 regex = "1"
