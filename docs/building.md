@@ -321,7 +321,9 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
 - `guest` lines in the log are the kernel's console. `kill -QUIT <xnuhost pid>` (the pid in `SESSION/xnuhost.pid`,
   not `pkill`: the task factory has the same command line and dies of the signal) logs every vCPU and every iOS
   thread, with the thread's return addresses up its frame pointers where the host can read the task's memory (on
-  the phone; under qemu-user it cannot, and only pc and lr are shown); `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
+  the phone; under qemu-user it cannot, and only pc and lr are shown). Seen on the Linux PC on 2026-11-13 (qemu-aarch64
+  11.1.3, a boot 30 minutes in, the pid from `xnuhost.pid`): `qemu: uncaught target signal 3 (Quit) - core dumped` and the
+  boot ended, so there it costs the boot (cause not looked into); `oneios-ubt=` is the safe way. `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
 - A user process that dies: the kernel logs its registers and a backtrace (`sheng-exc`, `sheng-ubt` lines) for the
   processes named in the boot argument `sheng-exc-name=SpringBoard,backboardd,...` (default: backboardd, chronod,
   liveactivitiesd; launchd always). `oneios-tool sym ADDR...` names those addresses in the image set's dyld
@@ -329,7 +331,12 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   after the first call the index in `out/dsc-index` is enough: section 10, `tools/oneios-tool/README.md` "sym").
 - Wi-Fi on the PC: add `--set wifi=sim`: a made-up radio with two networks for the guest's Wi-Fi driver and wifid
   (`ONEIOS WIFI:` lines; [hardware.md](hardware.md) section 3). Not possible in the Mac's container: its Linux has no
-  pointer authentication (`xnuhost E an arm64e kernel needs pointer authentication ...; this host has none`).
+  pointer authentication (`xnuhost E an arm64e kernel needs pointer authentication ...; this host has none`). The limit
+  is the container's only: on the Linux PC qemu-aarch64's `-cpu cortex-a710` has it (`host: ... PAC yes`), and
+  `wifi=sim` boots there (2026-11-13: en0 named, enabled by configd, wifid's attach; [hardware.md](hardware.md) 3, "en0
+  late"). On that 4-CPU PC under other agents' load configd reached the naming 13-26 minutes into the boot, so give
+  such a boot `timeout` 4000 s or more; iOS's own log can be read from the running boot's `data.img`
+  (`oneios-tool ioslog show ... --proc configd`), not always after a `timeout` kill.
 - Touch and keys on the PC: add `--input-script runtime/xnuhost/tools/input-demo.script` (keep `--no-input`: the
   evdev reader would open the PC's own devices). The script gives xnuhost's input device a panel's axes and, once
   the guest's driver runs it, repeats a tap, a swipe up from the bottom edge and the three side keys

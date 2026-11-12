@@ -214,7 +214,11 @@ Both built; not run.
   phone boot printed all five at once: the guest's counter is the host's, which runs since the phone booted), the services
   that keep IOKit busy and have no busy child (`oneios-iobusy: 60 s: busy 1: NAME (class CLASS, id 0x...), inactive 0`)
   and the count. configd's InterfaceNamer waits up to 4 minutes for IOKit to go quiet before it names en0 (261 s
-  after the Wi-Fi driver published it in prelink's session 2); these lines name what it waits for.
+  after the Wi-Fi driver published it in prelink's session 2); these lines name what it waits for. **Read on the PC
+  (2026-11-13):** the one busy service is the service root, `oneios,xnuhost (class IOPlatformExpertDevice)`, held by
+  `StartIOKitMatching` until driverkitd sends its dexts' personalities (`KextLog: driverkitd is active`). InterfaceNamer
+  waits for that only for an interface it does not know; the Wi-Fi nub now reserves en0's unit
+  (`network-interface-unit-en`, `net/README.md` "en0's name"), so en0 no longer waits for it.
 - **0043, the LaunchServices database is kept when it holds the apps.** The base's `native_ls_store_drop` deleted
   LaunchServices' database at every boot, on purpose (its comment: the staged apps are registered only by a rebuild,
   and a database saved before they were registered kept them out). So lsd registered every app again at every boot:
