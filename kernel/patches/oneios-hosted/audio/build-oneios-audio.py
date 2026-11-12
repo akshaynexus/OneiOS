@@ -15,7 +15,8 @@ passes from the compile records of the first.
 Boot arguments: droidvm-snd=0 (no transport: the devices play into silence), droidvm-audio=0 (no devices),
 oneios-audio-out-uid=UID and oneios-audio-in-uid=UID (the devices' UIDs, default Speaker and Mic; "none" leaves the
 microphone out), oneios-audio-latency=FRAMES (the speaker's "output latency", default 6480: 135 ms, what the host
-path measured on the phone, so iOS keeps pictures in step with the sound), oneios-audio-report=0.
+path measured on the phone, so iOS keeps pictures in step with the sound), oneios-audio-report=0,
+oneios-audio-selftest=SECONDS (a quiet 1 kHz tone from the kernel, OneiOSAudio.c).
 
 Force-loaded by CONFIG_XNU_EXTRA_LD_ARCHIVES; kernel/build-hosted.sh copies this script into the build's device
 repository and adds it to the board's archives. Run by UniXNU's driver in the build tree, with UNIXNU_DEVICE = the
