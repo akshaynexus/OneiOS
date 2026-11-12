@@ -528,8 +528,29 @@ absent: a reason not to run it on the phone as it is.
   the transports of iOS 16 (the control `com.apple.uart.bluetooth` and the two serial nodes), which this bluetoothd
   never opens. UniXNU's port of the same OS build carries H4 to bluetoothd through that Skywalk pipe ("UART.SK",
   [UniXNU/QcaBluetooth](https://github.com/UniXNU/QcaBluetooth) `qbt_transport`), with `transport-encoding` 1.
-- So Bluetooth needs the Skywalk UART pipe in the guest (not written), with the host bridge under it as it is. Until
-  then iOS has no controller whatever the HAL does.
+- So Bluetooth needs the Skywalk UART pipe in the guest, with the host bridge under it as it is. **Written
+  2026-11-12, not yet run**: `drivers/bluetooth/oneios_bt_sk.c`, after UniXNU/QcaBluetooth `986d631`
+  `src/qbt_transport.c` (APSL-2.0), which carries H4 to this same bluetoothd: the kernel control
+  `com.apple.uart.sk.bluetooth` (options `IOAOSSKYSETCHANNELSPEC` 0x800c5414, the spec 0x400c5413, the channel UUID
+  0x40105412, the 64-bit termios 0x80487414 and 0x40487413), a kernel pipe nexus bound to the client's pid, and the
+  two sync callbacks: bluetoothd's packets go into an 8 KiB FIFO that the core's pump thread hands to the H4 core
+  (framing, the answers on the controller's behalf, the bridge to the host), and the core's queued bytes fill the
+  receive ring. Connecting the control is the core's "client connected": the host opens the HAL then.
+  `transport-encoding` is 1 now (plain H4, what UniXNU gives this bluetoothd over the pipe; bluetoothd's boot
+  argument `bt-transport-override=3` tries H4BC).
+- **What is not known [U]:** how far the unchanged bluetoothd goes on a Qualcomm controller. UniXNU does not run
+  it unchanged: its adapter (`native-ios27.md`) patches this very binary so that every product gets the plain
+  controller type with no vendor operations, the virtual machine check says no, scans use the extended commands
+  (0x2041, 0x2042: the WCN7850 refuses the legacy ones once extended advertising was used), and capabilities follow
+  the controller's own reports. Here the kernel answers the vendor commands bluetoothd sends (the table of
+  `oneios_bt_h4.c`, made for iOS 16) and `/defaults/vmm-present` makes bluetoothd skip its chip initialisation. The
+  first boot's `ONEIOS BT: bluetoothd: command 0x....` lines say which command it stops at.
+- Expected lines, in order, when Bluetooth is turned on in iOS: `ONEIOS BT: dev: bluetoothd[N] opens /dev/btwake:
+  0`, `sk: bluetoothd[N] connects to com.apple.uart.sk.bluetooth: 0`, `ios: client Skywalk pipe connected`, xnuhost
+  `bluetooth: HAL 1.1 found, initialising`, `bluetooth: HAL initialisation complete`, `ONEIOS BT: host: controller
+  ready, address ..`, `sk: channel of 2048-byte buffers, N/N slots for pid N: 0`, `sk: bluetoothd's channel is
+  connected`, `bluetoothd: command 0x0c03` (HCI Reset), `controller: Command Complete for 0x0c03, status 0x00`, and
+  with a scan xnuhost's `bluetooth: the controller hears devices: N report(s)`.
 - The driver now logs who opens which node and how it went (`ONEIOS BT: dev: NAME[PID] opens /dev/...: error`), the
   first 40 commands of a client with the ones it answers itself (`bluetoothd: command 0x....`), and the controller's
   first 40 events (`controller: Command Complete for 0x...., status ..`).
@@ -547,7 +568,7 @@ absent: a reason not to run it on the phone as it is.
   HAL that dies. First phone test: `bridgectl bt` must print two Command Complete events (`runtime/bridges/README.md`).
 - booter: the tree's node. `runtime/loader/src/machine.c` publishes `/bluetooth` with `transport-encoding` 10 (the
   virtual transport of Apple's VMs) or, with the HAL (`bluetooth=hidl`, or `auto` when the HAL is registered, the
-  default since 2026-11-11), `transport-encoding` 3 (H4BC), `transport-speed` 3000000 and the phone's
+  default since 2026-11-11), `transport-encoding` 1 (H4; it was 3, H4BC, until 2026-11-12), `transport-speed` 3000000 and the phone's
   `local-mac-address`; `/defaults/vmm-present` 1 either way. What 24A446's `/usr/sbin/bluetoothd` contains (strings,
   read from `os.img` on the PC): `HCI Transport is set to H4BC`, `No valid serial port found (tried cu.bluetooth and
   uart.bluetooth)`, `Bluetooth is running inside a Virtual Machine, so skipping chip initialization` and `... skipping

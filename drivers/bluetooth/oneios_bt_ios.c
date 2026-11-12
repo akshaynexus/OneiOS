@@ -113,6 +113,9 @@ deliver(const uint8_t *p, uint32_t n)
 		thread_wakeup((event_t)&t.pump_event);
 	} else if (owner == 2) {
 		obt_dev_wakeup();
+	} else if (owner == 3) {
+		obt_sk_wakeup();
+		thread_wakeup((event_t)&t.pump_event);
 	}
 }
 
@@ -170,6 +173,7 @@ pump_thread(void *arg __unused, wait_result_t w __unused)
 		uint64_t deadline;
 
 		obt_ctl_pump();
+		obt_sk_pump();
 		clock_interval_to_deadline(PUMP_GUARD_MS, NSEC_PER_MSEC, &deadline);
 		assert_wait_deadline((event_t)&t.pump_event, THREAD_UNINT, deadline);
 		(void)thread_block(THREAD_CONTINUE_NULL);
@@ -198,8 +202,12 @@ tx_frame(uint8_t *p, uint32_t n)
 		/* bluetoothd's first commands, and which of them this driver answers itself (Broadcom's vendor commands) */
 		if (t.said_tx < OBT_SAY_PACKETS && n >= 4) {
 			t.said_tx++;
-			OBT_SAY("bluetoothd: command 0x%04x, %u parameter bytes%s\n", (unsigned)(p[1] | p[2] << 8), p[3],
-			    len ? ": answered here" : "");
+			if (len) {
+				OBT_SAY("bluetoothd: command 0x%04x, %u parameter bytes: answered here, status 0x%02x\n",
+				    (unsigned)(p[1] | p[2] << 8), p[3], ev[6]);
+			} else {
+				OBT_SAY("bluetoothd: command 0x%04x, %u parameter bytes\n", (unsigned)(p[1] | p[2] << 8), p[3]);
+			}
 		}
 		if (len != 0) {
 			t.n_local++;
@@ -257,7 +265,7 @@ obt_ios_claim(uint32_t owner, uint32_t unit)
 		lck_mtx_unlock(&tx_lock);
 		t.host_state = OB_HCI_STATE_OFF;
 		(void)oneios_bridge_send(OB_CH_HCI, OB_HCI_OPEN, NULL, 0);      /* power follows the client */
-		OBT_SAY("ios: client %s connected; %s\n", owner == 1 ? "control" : "device", oneios_bt_result());
+		OBT_SAY("ios: client %s connected; %s\n", owner == 1 ? "control" : owner == 2 ? "device" : "Skywalk pipe", oneios_bt_result());
 	}
 	return e;
 }
@@ -278,6 +286,13 @@ obt_ios_release(uint32_t owner)
 		(void)oneios_bridge_send(OB_CH_HCI, OB_HCI_CLOSE, NULL, 0);
 	}
 	OBT_SAY("ios: client gone (tx %u rx %u local %u dropped %u)\n", t.n_tx, t.n_rx, t.n_local, t.n_drop);
+}
+
+/* The pump thread looks now (the Skywalk pipe has bytes from bluetoothd). */
+void
+obt_ios_kick(void)
+{
+	thread_wakeup((event_t)&t.pump_event);
 }
 
 void

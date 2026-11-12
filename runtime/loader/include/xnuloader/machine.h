@@ -46,7 +46,7 @@ typedef struct {
   // the host's 3D renderer keeps what the guest maps (UniXNU-droidvm DroidVMVirtioGpu3D.cpp); size 0 for no 3D.
   uint64_t    gpu_pool_base, gpu_pool_size;
   // /bluetooth: transport-encoding 10 (the virtual transport, no controller) when bt_transport is 0;
-  // else that encoding (3 = the phone's controller behind the bridge) with bt_speed and bt_mac.
+  // else that encoding (xnuhost: 1, H4, the phone's controller behind the bridge) with bt_speed and bt_mac.
   uint32_t    bt_transport, bt_speed;
   uint8_t     bt_mac[6];
   uint64_t    panic_base, panic_size;     // /pram; size 0 for none

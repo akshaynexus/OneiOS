@@ -278,8 +278,8 @@ The bridges are linked in as `libonebridges.a` and come after the GPU in the win
 `virtio-snd`. They are on in a takeover session and off in `--mode bench` (`--set bridges=0|1`). With them,
 `/cpus` gets the host's cluster types (E vCPUs first), each vCPU thread is put on its cluster's host CPUs,
 and so is the iOS thread a vCPU runs (when the vCPU changes). Bluetooth (`--bluetooth`,
-`bluetooth=` in `xnuhost.conf`): `hidl` bridges the phone's controller (`/bluetooth` transport-encoding 3 =
-bluetoothd's H4BC UART transport, transport-speed 3000000, the address of `/mnt/vendor/efs/bluetooth/bt_addr`);
+`bluetooth=` in `xnuhost.conf`): `hidl` bridges the phone's controller (`/bluetooth` transport-encoding 1 =
+bluetoothd's H4 UART transport, which on iOS 27 is a Skywalk pipe: [hardware.md](hardware.md) section 4; transport-speed 3000000, the address of `/mnt/vendor/efs/bluetooth/bt_addr`);
 `virtual` gives iOS none (encoding 10, the guest driver hides the nub); the default `auto` is `hidl` when the bridges
 are on and hwservicemanager returns `android.hardware.bluetooth@1.x::IBluetoothHci/default` at the start (asked once
 and let go; the HAL is opened only when bluetoothd connects), else `virtual`. One log line says which:

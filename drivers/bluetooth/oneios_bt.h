@@ -10,8 +10,11 @@
  *   oneios_bt_h4.c       H4 framing, answers on the controller's behalf (as is)
  *   oneios_bt_ios.c      iOS transport core: queue, TX framing; packets go to and come from the host
  *                        bridge channel instead of a UART (the seam that changed)
- *   oneios_bt_ctl.c      kernel control com.apple.uart.bluetooth (as is)
- *   oneios_bt_dev.c      /dev/uart.bluetooth, /dev/cu.bluetooth, /dev/btwake (as is)
+ *   oneios_bt_sk.c       kernel control com.apple.uart.sk.bluetooth and its Skywalk kernel pipe: the transport
+ *                        iOS 27's bluetoothd opens (after UniXNU/QcaBluetooth's qbt_transport.c, APSL-2.0)
+ *   oneios_bt_ctl.c      kernel control com.apple.uart.bluetooth (as is; iOS 16's bluetoothd, not opened by 27's)
+ *   oneios_bt_dev.c      /dev/uart.bluetooth, /dev/cu.bluetooth (as is; 27's bluetoothd only looks whether they
+ *                        exist) and /dev/btwake (27's opens it before the pipe)
  *   oneios_bt.c          start, kill switch oneios_bt=0, the result line
  *   OneiOSBluetooth.cpp  the device tree's "bluetooth" nub: the address in use, hidden when off
  * Not ported (the phone's HAL does them): UART, clocks, rails, power pulses, firmware download.
@@ -102,7 +105,7 @@ int obt_fix_command(uint8_t *c, size_t n);                             /* 1 if c
 void obt_ctl_attach(void);                      /* kernel control com.apple.uart.bluetooth */
 void obt_ios_start(void);                       /* the host serves HCI: the pump thread runs, clients may connect */
 void obt_ios_fail(const char *why);             /* Bluetooth off: connects are refused */
-/* the two client kinds share one owner slot: 0 none, 1 kernel control, 2 device */
+/* the client kinds share one owner slot: 0 none, 1 kernel control, 2 device, 3 Skywalk pipe */
 int obt_ios_claim(uint32_t owner, uint32_t unit);       /* 0 or EBUSY */
 void obt_ios_release(uint32_t owner);
 int obt_ios_send(const uint8_t *b, uint32_t n);         /* userland H4 bytes toward the controller; 0 or errno */
@@ -114,6 +117,10 @@ void obt_dev_detach(void);                      /* Bluetooth off: the /dev nodes
 void obt_dev_wakeup(void);                      /* data queued for the device client */
 void obt_ctl_wakeup(void);                      /* data queued for the control client: obt_ctl_pump soon */
 void obt_ctl_pump(void);                        /* pump thread only: queued bytes -> the control client */
+void obt_ios_kick(void);                        /* wake the pump thread */
+void obt_sk_attach(void);                       /* kernel control com.apple.uart.sk.bluetooth (oneios_bt_sk.c) */
+void obt_sk_wakeup(void);                       /* data queued for the Skywalk pipe's client */
+void obt_sk_pump(void);                         /* pump thread only: the pipe's bytes both ways */
 
 /* ---- device-tree nub (OneiOSBluetooth.cpp) --------------------------------------------------- */
 

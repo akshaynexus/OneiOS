@@ -394,7 +394,10 @@ static int boot(void)
     bool have_bridge = br_bridge_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &bridge) != NULL;
     if (have_bridge) kinds[ndev++] = XL_DEV_BRIDGE;
     if (hidl && have_bridge) {
-      machine.bt_transport = 3;                     // the phone's controller, H4 over the bridge (bluetoothd's H4BC)
+      // The phone's controller, H4 over the bridge. bluetoothd's encodings (24A446, read from the binary): 1 H4,
+      // 2 H4DS, 3 H4BC, 10 virtual. Plain H4 is the one UniXNU carries to this bluetoothd over the same Skywalk UART
+      // pipe (drivers/bluetooth/oneios_bt_sk.c); the boot argument bt-transport-override=N tries another.
+      machine.bt_transport = 1;
       machine.bt_speed = 3000000;
       bool address = br_bt_address("/mnt/vendor/efs/bluetooth/bt_addr", machine.bt_mac) == 0;
       if (!address) xl_machine_mac(&machine, 0, machine.bt_mac);

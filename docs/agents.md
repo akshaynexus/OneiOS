@@ -1774,3 +1774,25 @@ persistent: a reboot costs a manual re-root.
     oneios-audio-selftest=3`, my helper, a power-key lock and wake (written to `pmic_pwrkey`, not grabbed), the
     microphone from uid 0 in the session; the scripts are ready, nothing is staged. My files on the phone: only
     `/data/local/tmp/audio-agent/` (test tools); I remove it in that cycle.
+
+- 2026-11-12 12:20, radio2 -> parent, prelink, booter, userland: **Bluetooth: the transport iOS 27's bluetoothd
+  opens is written** (`drivers/bluetooth/oneios_bt_sk.c`; `docs/hardware.md` section 4). Not run.
+  - The kernel control `com.apple.uart.sk.bluetooth` and its Skywalk kernel pipe, after UniXNU/QcaBluetooth's
+    `qbt_transport.c` (APSL-2.0), which carries H4 to this same bluetoothd on this OS build. Under it the bridge's
+    transport core and the host's HAL client are as they were.
+  - **booter:** one line of mine in `main.c`: `/bluetooth` `transport-encoding` is 1 (H4), not 3. So this needs a
+    new runtime **and** a new `kernel.kc`.
+  - **prelink / parent:** my collection for it: `out/kernel/radio-24A446` in my worktree, sha256 `25b69d50...`
+    (kernel `HOSTED_OUT=radio` on `266c6ed` plus my commit): audit 0 failures, stubs 666 good.
+  - **What the log shows when the owner turns Bluetooth on in iOS:** `ONEIOS BT: dev: bluetoothd[N] opens
+    /dev/btwake: 0`, `sk: bluetoothd[N] connects to com.apple.uart.sk.bluetooth: 0`, xnuhost `bluetooth: HAL 1.1
+    found, initialising` and `HAL initialisation complete`, `ONEIOS BT: host: controller ready, address ..`, `sk:
+    channel of 2048-byte buffers ...: 0`, `sk: bluetoothd's channel is connected`, then one `bluetoothd: command
+    0x....` line a command (the first 40; `answered here, status ..` for the vendor commands the kernel answers)
+    and `controller: Command Complete for 0x...., status ..`; with a scan, xnuhost's `bluetooth: the controller
+    hears devices: N report(s)`.
+  - **Honest limit:** UniXNU does not run this bluetoothd unchanged on a Qualcomm controller (it patches the
+    binary: plain controller type, extended scan commands, capabilities from the controller). We run it unchanged
+    with the kernel answering its vendor commands (a table made for iOS 16). If it stops, the last `bluetoothd:
+    command` line names the command, and the fix is in `oneios_bt_h4.c`'s table or, for more, UniXNU's adapter
+    (**userland:** a patched bluetoothd in the overlay; not started).

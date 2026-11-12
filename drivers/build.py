@@ -39,6 +39,7 @@ SOURCES = [
     ('bsd', 'bluetooth/oneios_bt_ios.c'),
     ('bsd', 'bluetooth/oneios_bt_ctl.c'),
     ('bsd', 'bluetooth/oneios_bt_dev.c'),
+    ('bsd', 'bluetooth/oneios_bt_sk.c'),
     ('iokit', 'bluetooth/OneiOSBluetooth.cpp'),
     ('iokit', 'brightness/OneiOSBacklight.cpp'),
     ('iokit', 'battery/OneiOSBattery.cpp'),

@@ -101,6 +101,7 @@ oneios_bt_start(void)
 	}
 	obt_ios_start();
 	obt_ctl_attach();
+	obt_sk_attach();
 	if (kernel_thread_start(node_thread, NULL, &th) == KERN_SUCCESS) {
 		thread_deallocate(th);
 	}
