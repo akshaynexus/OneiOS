@@ -1,6 +1,23 @@
 # Shared by tests/phone/run.sh, tests/app/run.sh and tests/cycle/run.sh: a stand-in phone and the checks' helpers.
 # Source it from bash with HERE (this folder), ROOT (the checkout), TOOL (the binary) and W (a scratch folder) set.
+# Sourcing it sets traps: on the suite's exit, a failure or Ctrl-C every stand-in session under $W is ended
+# (stop_sessions) and the suite's own background jobs are killed, so nothing is left running.
 FAILED=0
+# The checks themselves use GNU coreutils and sed (stat -c, date +%N, sed -i, timeout, sha256sum, truncate): on
+# macOS put Homebrew's gnubin folders (coreutils, gnu-sed) first on PATH.
+gnu_missing() {
+  local m=
+  stat -c %s "${BASH_SOURCE[0]}" >/dev/null 2>&1 || m="$m stat"
+  case "$(date +%N 2>/dev/null)" in ''|*[!0-9]*) m="$m date" ;; esac
+  sed --version 2>/dev/null | grep -q GNU || m="$m sed"
+  for c in timeout sha256sum truncate; do command -v "$c" >/dev/null 2>&1 || m="$m $c"; done
+  printf '%s' "${m# }"
+}
+if [ -n "$(gnu_missing)" ]; then
+  echo "$(basename "$0"): needs GNU coreutils and sed first on PATH; not GNU or missing: $(gnu_missing)" >&2
+  echo "  (macOS: brew install coreutils gnu-sed, then PATH=\"\$(brew --prefix)/opt/coreutils/libexec/gnubin:\$(brew --prefix)/opt/gnu-sed/libexec/gnubin:\$PATH\")" >&2
+  exit 2
+fi
 ok() { echo "ok      $1"; }
 bad() { echo "FAILED  $1${2:+: $2}"; FAILED=$((FAILED + 1)); }
 # check NAME WANT-STATUS 'grep -E pattern on stdout+stderr' cmd...
@@ -46,7 +63,10 @@ SH
 [ "$1" = -c ] || exit 2
 case "$2" in
 "id -u") echo 0 ;;
-"sh -s") sed -e "s#\(^\|[ '\"=<>(;]\)/data/#\1$FAKE_PHONE/data/#g" | bash ;;
+"sh -s")
+  # the script as the tool sent it (FAKE_ROOT_LOG), then as the stand-in runs it (fake-rewrite.sh)
+  if [ -n "${FAKE_ROOT_LOG:-}" ]; then t=$(mktemp); cat > "$t"; cat "$t" >> "$FAKE_ROOT_LOG"; "$FAKE_REWRITE" < "$t" | bash; st=$?; rm -f "$t"; exit $st; fi
+  "$FAKE_REWRITE" | bash ;;
 *) exec bash -c "$2" ;;
 esac
 SU
@@ -90,6 +110,49 @@ end_session() {
   local p; p=$(cat "$1/data/local/tmp/oneios/session/xnuhost.pid" 2>/dev/null)
   [ -z "$p" ] || kill "$p" 2>/dev/null
   rm -f "$1/data/local/tmp/oneios/session/xnuhost.pid"
+}
+# session_procs DIR: the pids of the stand-in sessions (fake-session.sh, named fake-xnuhost) of phones under DIR.
+# ps, not the pid files or the stand-in's /proc: a session whose files are gone is found too.
+session_procs() {
+  ps -A -o pid= -o command= 2>/dev/null | awk -v d="$1/" '$2 == "fake-xnuhost" && index($0, d) { print $1 }'
+}
+# stop_sessions DIR: end every stand-in session of the phones under DIR: its fake xnuhost and what it started
+# (its process group: fake-root.sh starts it with setsid), then its pid file and its /proc entry. Prints how many.
+stop_sessions() {
+  local d=$1 p pids n=0 i
+  pids=$(session_procs "$d")
+  for p in $pids; do kill -TERM -- "-$p" 2>/dev/null || kill -TERM "$p" 2>/dev/null; n=$((n + 1)); done
+  if [ -n "$pids" ]; then
+    for i in $(seq 50); do [ -n "$(session_procs "$d")" ] || break; sleep 0.1; done
+    for p in $(session_procs "$d"); do kill -KILL -- "-$p" 2>/dev/null || kill -KILL "$p" 2>/dev/null; done
+  fi
+  for p in "$d"/*/data/local/tmp/oneios/session/xnuhost.pid; do [ ! -e "$p" ] || rm -f "$p"; done
+  for p in "$d"/*/.fake/proc/*; do [ ! -e "$p" ] || rm -rf "$p"; done
+  echo $n
+}
+# end_case: after a case that leaves no session, end one it left anyway (it failed), so that it does not spread
+# to the next case (the fork's root script refuses a switch while one runs)
+end_case() {
+  local n; n=$(stop_sessions "$W")
+  [ "$n" = 0 ] || echo "(ended $n stand-in session(s) the case before left running)"
+}
+# the suite's end, a failure or Ctrl-C: no stand-in session and no job of the suite stays
+standin_exit() {
+  local j; j=$(jobs -p); [ -z "$j" ] || kill $j 2>/dev/null
+  [ -z "${W:-}" ] || stop_sessions "$W" > /dev/null
+}
+trap standin_exit EXIT
+trap 'echo "(stopped by Ctrl-C)"; exit 130' INT
+trap 'echo "(stopped by SIGTERM: Ctrl-C while a command ran, or kill)"; exit 143' TERM
+# Ctrl-C while a command runs: oneios-tool catches SIGINT and ends with status 0, and bash then takes the signal
+# as handled by it and runs no INT trap (the suite would go on). This watcher (perl: a background job starts with
+# SIGINT ignored, which bash cannot trap again) sees the Ctrl-C and sends the suite a SIGTERM, whose trap runs
+# when the command ends. It ends with the suite.
+perl -e '$SIG{INT} = sub { kill "TERM", $ARGV[0]; exit 0 }; while (kill 0, $ARGV[0]) { sleep 1 }' $$ &
+# no_session_left NAME: the check at a suite's end
+no_session_left() {
+  local n; n=$(stop_sessions "$W")
+  [ "$n" = 0 ] && ok "$1: no stand-in session is left running" || bad "$1: $n stand-in session(s) were left running"
 }
 has_session() { [ -n "$(session_pid "$1")" ]; }
 no_session() { [ -z "$(session_pid "$1")" ]; }
