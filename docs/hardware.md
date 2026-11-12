@@ -27,7 +27,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 | Camera | `drivers/camera`: the `oneios,camera` transport, `/dev/oneios-camera`; `userland/camera`: the capture plug-in (its device object not written) | `runtime/bridges/camera`: helper `oneios-camera` (provider HAL in a session, Camera2 NDK with One UI), ring, device, `camctl` | host and kernel sides built and host-tested; iOS shows no camera yet; one phone run (2026-11-11): cameraserver lists 4 cameras and opens one for a root client, no frame arrived (no binder threads in the process: fixed, the fix not yet run on the phone); the HAL back end never run (section 7) |
 | Backlight and light sensor | `drivers/brightness`: the backlight service (port of iOSPlus10's `AppleARMBacklight`), the light readings; the HID light sensor device, built into the hosted kernel's HID archive | `runtime/bridges/brightness`: the backlight sysfs node, `als_rear` by evdev, `brightctl` | both built; host tested; in a PC boot the HID device starts and Apple's `AppleUSBALSService` attaches to it; never run on the phone or in a session (section 7a) |
 | Battery | `drivers/battery`: an `IOPMPowerSource` powerd reads | `runtime/bridges/battery`: Android's `power_supply` nodes, polled, changes sent over the bridge channel; `batteryctl` | both built; host tested with a fake sysfs; never run on the phone or in a session (section 7c) |
-| Thermal | `drivers/thermal`: `OneiOSThermal` (the readings and the level in the registry); `userland/helpers/oneios-thermal` sets iOS's `com.apple.system.thermalpressurelevel` from it | `runtime/bridges/thermal`: the thermal zones, Samsung's thermistors, the battery's sensors; a level on iOS's scale; xnuhost's CPU step when hot; `thermalctl` | host built and tested; `thermalctl` run on the phone (read only); the step, the driver and the helper not yet run (section 7d) |
+| Thermal | `drivers/thermal`: `OneiOSThermal` (the readings and the level in the registry); `userland/helpers/oneios-thermal` sets iOS's `com.apple.system.thermalpressurelevel` from it | `runtime/bridges/thermal`: the thermal zones, Samsung's thermistors, the battery's sensors; a level on iOS's scale; xnuhost's CPU step when hot; `thermalctl` | host built and tested; the bridge and `thermalctl` run on the phone (2026-11-12); the step, the driver and the helper not yet run; an idle session's heat traced to the guest's idle cache flush (xnuhost's `setway-skip`: -40% CPU) (section 7d) |
 | Touch screen and buttons | `kernel/patches/oneios-hosted/hid`: UniXNU's NativeHidInput (digitizer, buttons) under the collection's `IOHIDDevice`, UniXNU-droidvm's virtio-input transport with the side keys | xnuhost's `input.c` (evdev, no grab) and `virtio_input.c`; `input_script.c` for a host with no panel | built; in a PC boot backboardd opens both services and scripted touches and keys are queued for it as HID events; never run on the phone (section 7b) |
 
 Common pieces:
@@ -767,9 +767,17 @@ Details, the layout header's evidence and the log lines: `kernel/patches/oneios-
 
 ### The phone
 
-- `/dev/input/event5` the touchscreen (multitouch protocol B: slots, tracking ids, `ABS_MT_POSITION_X/Y`),
-  `event0` gpio-keys, `event2` the power key, `event4` volume down (from the owner's phone; the axis ranges were
-  not read [U]).
+- Read on the phone on 2026-11-12 (One UI 8, `getevent -lp`, `/sys/class/sec/tsp`): `event0` `gpio-keys` (Volume Up only),
+  `event1` `pmic_pwrkey` (Power), `event2` `pmic_resin` (Volume Down only), `event8` `sec_touchscreen` (the screen,
+  `INPUT_PROP_DIRECT`), `event9` `sec_touchpad` (a pointer device with the same axes, not taken). The numbers can
+  change between boots; xnuhost finds the devices by their bits, not by number. Neither key device has `EV_REP`.
+- The touch IC: Synaptics S3916T, firmware SY35030014. Multitouch protocol B: 10 slots, `ABS_MT_POSITION_X/Y` 0..4095
+  each, `ABS_MT_TOUCH_MAJOR/MINOR` 0..255, tracking ids 0..65535, no pressure axis. Its `cmd` interface offers, among
+  others, `set_game_mode`, `dead_zone_enable`, `set_grip_data`, `blocking_palm` and `get_status` (read: `WET:0,NOISE:32,FREQ:0`).
+  Nothing of OneiOS writes those; the report rate and the edge rejection One UI left are what a session gets [U: not
+  measured].
+- The volume keys are one rocker: holding both ends at once can chatter (session of 2026-11-12: 6 key events in 3 s).
+  The fork's return chord tolerates releases under 0.5 s since OneOS `7839e4b`.
 - No Home key and no ringer switch.
 
 ### The path
@@ -907,12 +915,62 @@ Where a still lock screen's CPU goes (`thermalctl top`, session 4, 10 s after th
 the eight vCPU threads (`xnu-cpu0` 55% ... `xnu-cpu7` 6%), the iOS processes 80% (two at 26% and 23%). The vCPU
 threads run the guest kernel, so the kernel, not iOS's user space, keeps the phone hot. Session 3's stop line: cpu2
 emulated 104 million trapped instructions in 400 s (260,000 a second; cpu3 62 M, cpu4 37 M, the E vCPUs about 1 M),
-each a signal round trip on its thread. xnuhost now logs which instructions (`emulated: insn ...`, `docs/booter.md`
-2.5) to find it.
+each a signal round trip on its thread.
+
+**The cause, found in a session of mine (09:19, runtime 0.1.7-thermal, kernel.kc 9476a867):** xnuhost's new count
+(SIGQUIT, `emulated: insn ...`) had `0xd5087e42` (`dc cisw, x2`, clean and invalidate by set/way) 115 million times in
+about 3 minutes, with CLIDR, CSSELR and CCSIDR accesses 112,280 times each. That is XNU's `cpu_idle` ->
+`platform_cache_idle_enter()` -> `FlushPoU_Dcache` (`osfmk/arm/caches.c`, `osfmk/arm64/caches_asm.s`
+`DCACHE_SET_WAY`: this board is not `APPLE_ARM64_ARCH_FAMILY`): a set/way flush of L1 at every idle entry, 1024 trapped
+`dc` each (256 sets x 4 ways of the geometry xnuhost's CCSIDR gives), about 600 idle entries a second. On a host process
+the flush does nothing. xnuhost now ends that loop after its first trap (`setway-skip`, on by default: the operand
+becomes the level's last set and way; `docs/booter.md` 2.5). The fix in the kernel (`platform_cache_idle_enter` empty
+under `XNU_HOSTED`) is asked of hosted-xnu on the board; it was not built because Mac-built `kernel.kc`s panic on the
+phone today.
+
+My two sessions, one after the other, lock screen untouched, the same kernel and runtime; B with `setway-skip=1` in the
+image's `xnuhost.conf` (logs in `out/phone-baseline/2026-11-12/thermal/`):
+
+| Lock screen, after the first frame | One UI, screen off (09:13-09:18) | A: one trap per line (09:22-09:24) | B: setway-skip (09:31-09:35) |
+|---|---|---|---|
+| CPU in use, the phone (800 = all cores) | 40 | 480 | 334 |
+| xnuhost / the whole session | - | 334 / 409 | 197 / 264 |
+| vCPU threads (`thermalctl top`, 30 s) | - | 310% (`xnu-cpu2` 62, `cpu3` 54, `cpu0` 54, `cpu1` 54, `cpu4` 40, `cpu5` 24, `cpu6` 14, `cpu7` 8) | 233% (`cpu0` 56, `cpu1` 56, `cpu2` 38, `cpu3` 32, `cpu4` 22, `cpu5` 14, `cpu6` 9, `cpu7` 5) |
+| `dc cisw` traps per flush | - | 1024 | 1 (192,940 flushes in 4 min) |
+| CPU zones (mean) | 38.3 C | 50.1 C | 44.4 C |
+| GPU zones | 36.2 C | 42.6 C | 38.9 C |
+| board thermistor | 35.5 C | 40.5 C | 37.8 C |
+| case (`lrp`) | 34.3 C (cooling from bringup's session) | 35.3 C | 34.4 C |
+| GPU clock (mean of samples) | 231 MHz | 441 MHz | 417 MHz |
+| battery current | about 0 mA: on USB and full, so not the phone's draw | same | same |
+
+The sessions were 5 and 7 minutes (the coordinator's rule: short sessions, each ended with `return.request`), so the
+case had not reached its level: compare the CPU lines, not the case. Not measured: 15 minutes, a scroll or animation
+load (nothing can touch the panel from the Mac), the drain off USB.
+
+What is left in B: the E vCPUs (`cpu0`, `cpu1`, 56% each) run most of iOS's system calls (1.5 million task traps each
+in session 3 against 0.3 million on a P vCPU); interrupts are about 2,900 a second (`ICC_IAR1_EL1` 688,826 in 4 min);
+each idle entry still traps 6 times (CLIDR twice, CSSELR, CCSIDR twice, the one `dc`). The kernel fix removes those too.
+
+### One UI's limits stay in a session
+
+One UI (Samsung's SSRM in system_server, and the HALs it drives) caps the clocks when the phone is warm: at 09:18
+`policy0..7/scaling_max_freq` read 1689600, 2035200, 2035200, 2035200 kHz (the hardware's 2265600, 3148800, 2956800,
+3398400) and `/sys/kernel/gpu/gpu_max_clock` 500 MHz (owner `system`, written at 08:58, after a return). KGSL shows that
+cap as `thermal_pwrlevel` 9 (`max_gpuclk` 500000000; its devfreq and `gpu` cooling devices were at state 0, so the
+kernel's thermal zones did not set it). The switch stops system_server, so whatever cap One UI last set stays for the
+whole session (sessions A and B ran with these; bringup's sessions 3 and 4, after a cool One UI, had 3340800 and 1000
+MHz). A session that starts after a warm One UI is slowed for its whole length, and one that starts cool has no case
+policy but ours. Proposal (oneos, not done): the switch saves `scaling_max_freq`/`scaling_min_freq` of each policy and
+`gpu_max_clock`, sets the hardware's tops (xnuhost's own step and the kernel's trips then decide), and the return writes
+the saved values back before zygote starts; a SIGKILL of xnuhost does not skip the return, so the restore always runs.
+xnuhost itself writes none of them.
 
 ### Missing, unknown
 
-- Not run: the thermal step, the driver, the helper (the helpers are in no image yet: `docs/userland.md` 7).
+- Run on the phone: the thermal bridge in xnuhost (`thermal: on: 29 zones; case 32.7 C (lrp), SoC 48.1 C (cpu-1-2-0),
+  battery 30.8 C; nominal`); the level stayed nominal (case below 39 C), so no step was taken. Not run: the step, the
+  driver (it needs a new `kernel.kc`), the helper (the helpers are in no image yet: `docs/userland.md` 7).
 - [U] Whether the "heavy" and "critical" levels change what iOS does (frame rate, the cool-down screen).
 - [U] The case thresholds are a guess on Samsung's scale, not Samsung's policy.
 - The GPU: drm2kgsl's burst rule (`docs/gpu.md` 2.2) and its constraint are the gpu agent's; at heavy pressure they

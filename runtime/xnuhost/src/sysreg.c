@@ -58,6 +58,7 @@ static int64_t psci(xh_vcpu *v, xh_regs *r)
 
 // Which instructions the kernel traps on, and how often (each is a signal round trip on the vCPU's thread): the
 // table xh_sysreg_stats_log prints at the stop and on SIGQUIT. An idle guest that keeps its vCPUs busy shows here.
+bool xh_setway_skip;
 #define INSN_SLOTS 256u
 static struct { uint32_t insn; uint64_t count, pc; } insn_seen[INSN_SLOTS];
 static uint64_t insn_other;
@@ -107,6 +108,24 @@ bool xh_sysreg_emulate(xh_vcpu *v, xh_regs *r, uint32_t insn)
     return true;
   }
   if ((insn & 0xfff80000) == 0xd5080000) {                   // sys: tlbi, at, dc, ic at EL1: nothing to do
+    // dc isw/csw/cisw (set/way): with setway-skip, the operand becomes the last set and way of its level, so the
+    // guest's set/way loop (XNU's DCACHE_SET_WAY: FlushPoU_Dcache at every idle entry) ends after this one trap instead
+    // of one trap per line (1024 for L1). The geometry is the one CCSIDR_EL1 answers below (4 ways of 64 KiB at L1,
+    // 8 of 1 MiB beyond, the host's line size). The operation does nothing here either way.
+    uint32_t op = insn & 0xffffffe0u;
+    if (xh_setway_skip && (op == 0xd5087640u || op == 0xd5087a40u || op == 0xd5087e40u) && (insn & 31) != 31) {
+      uint64_t ctr = 4u << 16, x = xh_reg_get(r, insn & 31);
+#if defined(__aarch64__)
+      __asm__("mrs %0, ctr_el0" : "=r"(ctr));
+#endif
+      unsigned line = 4u << ((ctr >> 16) & 15), level = (unsigned)(x >> 1) & 7, ways = level == 0 ? 4 : 8, bytes = level == 0 ? 64u << 10 : 1u << 20;
+      unsigned lg_line = 0, lg_ways = 0;
+      while ((1u << lg_line) < line) lg_line++;
+      while ((1u << lg_ways) < ways) lg_ways++;
+      uint64_t sets = bytes / (line * ways);
+      x = (x & 0xe) | (sets - 1) << lg_line | (uint64_t)(ways - 1) << (32 - lg_ways);
+      xh_reg_set(r, insn & 31, x);
+    }
     r->pc += 4;
     return true;
   }

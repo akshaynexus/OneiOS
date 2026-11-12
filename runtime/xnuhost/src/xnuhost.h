@@ -59,6 +59,7 @@ typedef struct {
   int   task_uid;           // uid of iOS task processes, -1 = xnuhost's own
   int   log_level;
   bool  legacy_boot_args;
+  int   setway_skip;        // a trapped dc set/way ends the guest's set/way loop of its level at once (sysreg.c): 1 (default), 0, -1 = unset
   bool  selftest;
   int   bridges;            // runtime/bridges devices (network, sound, haptics, Bluetooth, CPU placement): 1, 0, -1 = by mode
   char  clusters[XH_MAX_CPUS + 1]; // "EEPPPPPP": the cluster type of each vCPU, overriding the bridges' plan ("" = the plan, else all P)
@@ -230,6 +231,7 @@ int      xh_cpu_start(unsigned index, uint64_t entry, uint64_t a0, uint64_t a1, 
 void     xh_cpu_line(unsigned index, bool line);     // the interrupt line of a CPU (the GIC's notify hook)
 void     xh_cpu_timer_set(xh_vcpu *v, uint64_t deadline);
 void     xh_cpu_idle(xh_vcpu *v);
+extern bool xh_setway_skip;         // sysreg.c: config.setway_skip (the idle set/way flush, docs/booter.md 2.5)
 bool     xh_cpu_timer_due(unsigned index);            // the level of a CPU's timer line (INTID 27)
 void     xh_cpu_frame_resume(xh_vcpu *v, const struct xh_frame *frame);
 uint64_t xh_counter(void);                            // CNTVCT_EL0 (host builds: a monotonic clock)

@@ -26,6 +26,7 @@ void xh_config_defaults(xh_config *c)
   c->log_level = XH_LOG_INFO;
   c->bridges = -1;
   c->scale_fixup = -1;
+  c->setway_skip = -1;
   strcpy(c->bluetooth, "auto");
 }
 
@@ -96,6 +97,7 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
   else if (!strcmp(key, "clusters")) { ok = strlen(value) <= XH_MAX_CPUS && strspn(value, "EP") == strlen(value); if (ok) strcpy(c->clusters, value); }
   else if (!strcmp(key, "bluetooth")) { ok = !strcmp(value, "auto") || !strcmp(value, "virtual") || !strcmp(value, "hidl"); if (ok) strcpy(c->bluetooth, value); }
   else if (!strcmp(key, "legacy-boot-args")) return flag(value, &c->legacy_boot_args);
+  else if (!strcmp(key, "setway-skip")) { bool on; if (flag(value, &on)) return -1; c->setway_skip = on; }
   else if (!strcmp(key, "log-level")) c->log_level = atoi(value);
   else if (!strcmp(key, "disk") || !strcmp(key, "disk-rw") || !strcmp(key, "data-store")) {
     // disk=FILE (read-only), disk-rw=FILE[,SEED], data-store=FILE[,SEED]
@@ -210,6 +212,7 @@ int xh_config_finish(xh_config *c)
   if (snprintf(path, sizeof path, "%s/overlay/userland/xnuhost.conf", c->image) < (int)sizeof path && xh_config_file(&from_image, path)) return -1;
   if (!*c->boot_args) strcpy(c->boot_args, from_image.boot_args);
   if (!c->width) c->width = from_image.width;
+  if (c->setway_skip < 0) c->setway_skip = from_image.setway_skip < 0 ? 1 : from_image.setway_skip;
   if (!c->height) c->height = from_image.height;
   if (!c->hz) c->hz = from_image.hz;
   if (!c->scale) c->scale = from_image.scale ? from_image.scale : 3;

@@ -1555,3 +1555,19 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   - **radio:** pairs or bindings for IOEthernetController / IOEthernetInterface go through me (the lists), not a new
     reviewed file. **lead:** your record `0xfffffe000b271b70` (`dictEntry::compare`) is overridden: the code says no
     (README); the original is on the stub list.
+- 2026-11-12, thermal -> hosted-xnu, lead, oneos, gpu, coordinator: **why an idle lock screen keeps 3 cores busy, and
+  One UI's clock caps in a session** (`docs/hardware.md` 7d; my sessions 09:19 and 09:28, baseline restored, lock
+  released 09:36).
+  - **Cause:** the guest's `cpu_idle` -> `platform_cache_idle_enter()` -> `FlushPoU_Dcache`: an L1 flush by set/way at
+    every idle entry, 1024 trapped `dc cisw` each, about 600 a second. xnuhost now ends that loop after one trap
+    (`setway-skip`, default on; sysreg.c). Measured: xnuhost 334% -> 197%, the session 409% -> 264%, CPU zones 50 -> 44 C.
+  - **hosted-xnu / lead:** please make `platform_cache_idle_enter` (osfmk/arm/caches.c, the non-Apple one) empty under
+    `#if XNU_HOSTED` in a numbered patch: the flush has no meaning in a host process, and it also removes the 6 traps
+    per idle entry that remain (CLIDR x2, CSSELR, CCSIDR x2, one dc). Not done by me: Mac-built kernel.kc panics on the
+    phone today, so I could not test it.
+  - **oneos / coordinator (the 500 MHz GPU):** `/sys/kernel/gpu/gpu_max_clock` = 500 (owner system, written 08:58 after
+    a return) and `scaling_max_freq` 1.69/2.04/2.04/2.04 GHz are One UI's (SSRM's) warm caps; KGSL shows the GPU one as
+    `thermal_pwrlevel` 9; the kernel's cooling devices were at 0. system_server stops at the switch, so the last cap stays
+    for the session. Proposal: the switch saves those nodes and writes the hardware tops, the return writes the saved
+    values back before zygote. xnuhost writes none of them.
+  - **gpu:** with that cap the render server's constraint gets at most 500 MHz; drm2kgsl's rules unchanged by me.

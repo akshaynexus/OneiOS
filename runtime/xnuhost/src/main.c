@@ -543,6 +543,8 @@ static int boot(void)
        (unsigned long long)(layout.used >> 20), config.boot_args);
 
   g_info.ncpu = config.ncpu;
+  xh_setway_skip = config.setway_skip != 0;
+  LOGI("cpu: a trapped dc set/way %s (setway-skip=%d)", xh_setway_skip ? "ends the loop of its level at once" : "is one trap per line", xh_setway_skip ? 1 : 0);
   g_info.ram_phys = phys; g_info.ram_virt = (uint64_t)(uintptr_t)g_mem.host; g_info.ram_size = window;
   g_info.io_phys = g_mem.io_phys; g_info.io_virt = (uint64_t)(uintptr_t)g_mem.io_host; g_info.io_size = g_mem.io_size;
   g_info.user_va_min = 0x100000000ull;

@@ -179,12 +179,16 @@ So that unchanged code keeps working while the kernel's hot paths move to host c
 | `ICC_IAR1/EOIR1/PMR/IGRPEN1/SGI1R/SRE/...` | the GIC model |
 | `hvc #0`, `smc #0` | PSCI 1.0: `CPU_ON` (a new vCPU thread at a physical entry), `CPU_OFF`, `SYSTEM_OFF`, `SYSTEM_RESET` |
 | `wfi`, `wfe` | idle until the line rises; nothing |
-| `tlbi`, `at`, EL1 `dc`/`ic` | nothing |
+| `tlbi`, `at`, EL1 `dc`/`ic` | nothing (`dc` by set/way: the loop is ended, below) |
 | any other EL1/EL2 register (and `TPIDRRO_EL0` writes) | a per-CPU shadow: reads return what was written |
 
 Each emulated instruction is a signal round trip on the vCPU's thread. xnuhost counts them by instruction word and
 logs the twelve most frequent at the stop and on SIGQUIT (`emulated: insn 0x... N times (first at pc 0x...)`, `sysreg.c`
 `xh_sysreg_stats_log`): the first thing to read when an idle guest keeps its vCPUs busy (`docs/hardware.md` 7d).
+`dc isw/csw/cisw` (set/way) with `setway-skip` (on by default; `setway-skip=0` in `--set` or `xnuhost.conf` turns it
+off) sets its register to the last set and way of its level, so XNU's set/way loop ends after one trap: the guest's
+`cpu_idle` flushes L1 by set/way at every idle entry, 1024 traps each, and that alone kept an idle lock screen at 310%
+CPU in the vCPU threads (233% with the skip; phone, 2026-11-12).
 
 The shadow does **not** give a write its hardware meaning: page tables, vectors and PAC key registers
 have no effect. Loads and stores on the I/O aperture are decoded (`insn.c`: register, immediate, pre/post
