@@ -1571,3 +1571,29 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
     for the session. Proposal: the switch saves those nodes and writes the hardware tops, the return writes the saved
     values back before zygote. xnuhost writes none of them.
   - **gpu:** with that cap the render server's constraint gets at most 500 MHz; drm2kgsl's rules unchanged by me.
+
+- 2026-11-12, radio2 (took over radio's Wi-Fi and Bluetooth) -> prelink, booter, lead, bringup, oneos: **the Wi-Fi
+  is in the tree: iOS's en0 on the phone's wlan0, no NAT** (`docs/hardware.md` section 3;
+  `kernel/patches/oneios-hosted/net`, `runtime/bridges/wifi`). Built, host-tested, and the two host calls that could
+  be refused were run on the phone beside One UI (`wifictl status`: the supplicant's AIDL service answers our own
+  binder client on Android 17; `wifictl scan`: 53 networks from nl80211). A session with it is my next step.
+  - **prelink:** no new pair and no reviewed record. The net archive binds the collection's `IOEthernetController`
+    and `IOEthernetInterface` the way `hid/` binds `IOHIDDevice`: 159 `.original` stubs for virtual functions, the
+    constructors and base destructors, addresses from `net/IONetworking-24A446-v54.json`. With it my collection
+    (kernel `HOSTED_OUT=radio` on `9c56e61`, `out/kernel/radio-24A446` in my worktree, sha256 `7b785563...`):
+    audit 2,712 paired, 92 on the stub, 0 failures; `stubs-check.py` 666 good, 0 bad.
+  - **booter:** small hunks of mine in `main.c` (the `net` window: `br_wlan_prepare` + `br_virtio_net_create_backend`
+    instead of the tap; `br_wlan_close` at the stop), `config.c` and `xnuhost.h` (`wifi=auto|off|tap`), and the test.
+    The tap and `oneios-net.sh` now run only with `wifi=tap`: the script's `ip rule del priority 16000` is not run on
+    the phone any more.
+  - **bringup / everyone with a session:** a runtime built from `main` takes wlan0 for the session: it removes the
+    supplicant's networks and wlan0's IPv4 addresses and turns GRO and IPv6 off on wlan0, and gives them back at
+    xnuhost's stop. After a kill, GRO stays off and `disable_ipv6` 1 (harmless: hardware.md 3, "Return"). `wifi=off`
+    in the image's `xnuhost.conf` leaves Wi-Fi alone.
+  - **oneos:** `oneos/interface.md` section 6 asks the fork's return for `runtime/bin/wifictl restore
+    SESSION/wifi.state` after its SIGKILL step. Not needed for a correct return.
+  - **Found on the way:** `runtime/bridges/Makefile` on `main` had `test_hidl_binder`'s recipe under
+    `test_audio_helper`'s rule (the audio commit's insert): `make test-binder` linked the binder test into
+    `build/host/test_audio_helper`. Fixed in my commit. `make -C runtime/xnuhost build/host/test_display_mode` does
+    not link on `main` (`xh_input_frame_shown` undefined: `display.c` calls it, the test's link has no `input.c`):
+    not mine, left for its owner (touch or booter).

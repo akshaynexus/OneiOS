@@ -20,7 +20,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 |---|---|---|---|
 | CPU | `droidvm-amp.patch` + `DroidVMCpufreq.c` (UniXNU-droidvm, unchanged) | `runtime/bridges/cpu`: topology, vCPU plan, thread placement, the cpufreq device | host built and tested; kernel side waits for release-kernel (series, archive) and booter (device tree, placement calls) |
 | GPU | UniXNU-droidvm's virtio-gpu 3D + NativeAdreno user client (unchanged) | booter's `virtio_gpu.c` + drm2kgsl | booter's; not owned here (section 2) |
-| Wi-Fi / network | **none in the hosted kernel** (UniXNU-droidvm's virtio-net and DroidVMWifi.inc sources are not built into it; section 3) | design of 2026-11-12: iOS drives the vendor's supplicant (AIDL V2) and nl80211, frames by AF_PACKET on wlan0 (`runtime/bridges/wifi`, being written); old tap/NAT route (`runtime/bridges/net`) not used | iOS has had no en0 in any boot; the phone had no network to join on 2026-11-12 |
+| Wi-Fi / network | `kernel/patches/oneios-hosted/net`: `IO80211Controller`/`IO80211Interface` under the collection's `IOEthernetController`/`IOEthernetInterface`, a station that asks the host, UniXNU-droidvm's virtio-net transport (section 3) | `runtime/bridges/wifi`: wlan0 is iOS's for the session: frames by AF_PACKET, scans by nl80211, joins by the vendor's supplicant (AIDL V2 over `/dev/binder`); `wifictl`; the old tap/NAT route only with `wifi=tap` | both built; host tested (87 + 35 checks, the binder client on a real binder driver); on the phone beside One UI: the supplicant's service and an nl80211 scan (53 networks) answer our client; **not yet run in a session** (wifid, a join, DHCP) |
 | Bluetooth | `drivers/bluetooth` (port of iOSPlus10's transport) on `drivers/bridge` | `runtime/bridges/bt`: the HAL over `/dev/hwbinder` | both built; on by default in a session since 2026-11-11 (before: off, `bluetooth=virtual`); HAL client tested on the PC against a fake HAL on a real binder driver, not yet on the phone |
 | Haptics | `drivers/haptics` (port of iOSPlus10's LaurelVibrator and haptic node) | `runtime/bridges/haptics`: evdev force feedback | both built; host tested with a fake actuator |
 | Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp`: the hosted kernel's audio archive since 2026-11-12 (before: not built, no device in iOS) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | helper run on the phone beside One UI (plays and records, 0 underruns, about 130 ms); host-tested against a fake AAudio; in a session and the guest side not yet run (section 6) |
@@ -179,18 +179,20 @@ GPU memory on this phone (2026-11-11, `gpuctl` of runtime 0.1.3 as root; `docs/g
 
 ## 3. Wi-Fi and network
 
-Design changed on 2026-11-12 (owner): **no NAT**. Wi-Fi works the way a Treble GSI gets it: in a session iOS is the
-only OS that uses the radio, and it drives the vendor's own Wi-Fi stack. The tap, the private subnet and
-`oneios-net.sh` are the old route; they stay in the tree until the new one runs, and are not used by it.
+Design of 2026-11-12 (owner): **no NAT**. Wi-Fi works the way a Treble GSI gets it: in a session iOS is the only OS
+that uses the radio, and it drives the vendor's own Wi-Fi stack. The tap, the private subnet and `oneios-net.sh` are
+the old route; xnuhost runs them only with `wifi=tap`.
 
 ### The phone [F, read on the owner's phone 2026-11-12 unless marked]
 
 - Chip: Qualcomm WCN785x / FastConnect 7800 ("kiwi"): DT node `compatible = "qcom,cnss-kiwi"`, `supported-ids =
   <0x1107>` (`samsung/e3q_eur_openx_w00_r09.dts` line 17994); modules `qca_cld3_kiwi_v2` + `cnss2` (`ethtool -i
   wlan0`: driver `cnss_pci`); firmware `vendor/firmware/kiwi/` ([android_device_samsung_e3q@fb2ba30](https://github.com/samsung-sm8650/android_device_samsung_e3q/blob/fb2ba3010d59c0f38ddf81aef7fd9c78e2172860/proprietary-files.txt)).
-- `wlan0`: ifindex 44, MTU 1500. Offloads (`ethtool -k`): GRO on (can be changed), TSO and TX scatter-gather on and
-  fixed, RX checksum on and fixed, LRO off and fixed. While One UI is not joined to a network, `disable_ipv6` is 1
-  on wlan0 and the interface has no address.
+- Android 17 (SDK 37) with the vendor image's HALs. `wlan0`: ifindex 44, MTU 1500. Offloads (`ethtool -k`): GRO on
+  (can be changed), TSO and TX scatter-gather on and fixed, RX checksum on and fixed, LRO off and fixed. While One UI
+  is not joined to a network, `disable_ipv6` is 1 on wlan0 and the interface has no address. **wlan0's address is a
+  random one while One UI is not joined** (`06:e3:b9:7d:95:16` at 09:30, `8e:f6:ae:01:7e:c9` after a return restarted
+  the framework): the address iOS's en0 gets is the one wlan0 has at the switch.
 - **HALs (all AIDL, none HIDL)**, from `service list`, `lshal` and `/vendor/etc/vintf/manifest/`:
 
   | Service | Interface, version | Process (domain) |
@@ -207,68 +209,124 @@ only OS that uses the radio, and it drives the vendor's own Wi-Fi stack. The tap
   0660). Cause [I]: AOSP lets the supplicant send to a client socket only of the `su` domain and only on userdebug
   and eng builds (`hal_wifi_supplicant.te`, `userdebug_or_eng(unix_socket_send(hal_wifi_supplicant, wpa, su))`), so
   its replies to `ksu` are refused. Not used.
-- The supplicant's **AIDL service answers root**: `service call android.hardware.wifi.supplicant.ISupplicant/default 3`
-  (`getDebugLevel`) returned 3, and `getInterfaceHash` the hash above, both from the `ksu` domain with One UI running.
+- The supplicant's **AIDL service answers root**, and so does nl80211 (both run with our own client on 2026-11-12,
+  One UI running, SELinux Enforcing, no policy change; "On the phone" below).
 - No SIM in the phone on 2026-11-12 (`gsm.sim.state` ABSENT), mobile data off. One UI's Wi-Fi was on and joined to no
-  network (its last network, a phone hotspot, left on 2026-11-11 15:36). So that day the phone had no internet to
-  give iOS whichever route is taken.
+  network (its last network, a phone hotspot, left on 2026-11-11 15:36).
 
 ### The design: iOS drives the vendor stack
 
 ```
  iOS: wifid, Settings, configd (DHCP, ARP, IPv6, DNS)
    |  Apple80211 ioctls (SIOCGA80211/SIOCSA80211) on en0, IEEE 802.11 kernel events
- guest kernel: IO80211Controller/IO80211Interface (DroidVMWifi.inc's classes) with a host-backed station,
-               frames on the virtio-net transport
-   |  station requests and events: a channel of the bridge device; frames: virtio-net
+ guest kernel: OneiOSWifi.cpp: IO80211Controller/IO80211Interface (the classes wifid knows) under the collection's
+               IOEthernetController/IOEthernetInterface, a station that asks the host, UniXNU-droidvm's virtio-net transport
+   |  one virtio-net device (/arm-io/net): frames, and the station's messages as frames of their own type
  xnuhost: runtime/bridges/wifi
-   control: ISupplicant V2 (AIDL over /dev/binder): getStaInterface(wlan0), addNetwork, set*, select,
-            disconnect, removeNetwork, getSignalPollResults; callbacks for state changes and disconnects
-   scans and signal: nl80211 on wlan0 (TRIGGER_SCAN, GET_SCAN, GET_STATION), as wificond does
+   joins: ISupplicant V2 (AIDL over /dev/binder): getStaInterface(wlan0), addNetwork, set*, select, disconnect,
+          removeNetwork; one callback object for state changes, disconnects, rejections
+   scans and signal: nl80211 on wlan0 (TRIGGER_SCAN, GET_SCAN, GET_STATION, GET_INTERFACE), as wificond does
    frames: AF_PACKET on wlan0 (ETH_P_ALL, PACKET_IGNORE_OUTGOING), the guest's MAC = wlan0's
  One UI's kernel: cfg80211 + qca_cld3, the vendor's wpa_supplicant (keys, 4-way handshake, rekeys)
 ```
 
 1. **Control.** The supplicant keeps doing what only it can do on this chip (WPA2/WPA3 handshakes, PMF, rekeys,
    roaming inside an ESS). The bridge is its only client in a session, as the framework is in One UI:
-   - join: `addNetwork`, then on the network `setSsid`, `setKeyMgmt` (NONE, WPA_PSK, SAE), `setProto`,
-     `setPairwiseCipher`, `setGroupCipher`, `setPskPassphrase` or `setSaePassword`, `setRequirePmf` for SAE, `select`;
-     the outcome from the interface callback (`onStateChanged` to COMPLETED, `onDisconnected`,
-     `onAuthenticationTimeout`, `onAssociationRejected` with its status code) and nl80211's station.
+   - join: `addNetwork`, then on the network `setSsid`, `setKeyMgmt`, `setProto`, `setPairwiseCipher`,
+     `setGroupCipher`, the secret, `select`. What to set comes from the key iOS gave and from the network's RSN and
+     WPA elements in the last scan (`br_wifi_plan_join`):
+
+     | The network offers | iOS gave | Supplicant network |
+     |---|---|---|
+     | no RSN or WPA element | no key | `NONE` |
+     | OWE only | no key | `OWE`, PMF required |
+     | PSK (also beside SAE: a transition network) | a passphrase | `WPA_PSK | WPA_PSK_SHA256`, `setPskPassphrase`; WPA and TKIP allowed too when the network has a WPA element or TKIP |
+     | PSK | a 32-byte key (iOS's own PBKDF2 of the passphrase) | the same with `setPsk` |
+     | SAE only | a passphrase | `SAE`, `setSaePassword`, PMF required, `setSaeH2eMode(optional)` |
+     | SAE only | a 32-byte key | refused before the supplicant is asked: WPA3 needs the password itself |
+     | not in the last scan | either | as PSK or open, with `setScanSsid(true)` (a probe for the name) |
+
+     The outcome comes from the callback: `onStateChanged` or `onSupplicantStateChanged` to COMPLETED is the join;
+     `onAssociationRejected` (not timed out) fails it with the access point's status; a disconnect or an
+     authentication timeout after the 4-way handshake began, with a key, is a refused key; two `onNetworkNotFound`
+     are a network that is not there; nothing in 25 s is a timeout. After any failure the network is removed, so the
+     supplicant does not try again by itself.
    - leave: `disconnect`, `removeNetwork`.
-   - scan: nl80211 `TRIGGER_SCAN` on wlan0 and `GET_SCAN` after `NEW_SCAN_RESULTS`: BSSID, frequency, signal (mBm),
-     capability, beacon interval, the information elements (SSID, rates, RSN, ...) that iOS's scan record carries
-     as they are. The supplicant sees the same results (it listens to the same nl80211 events).
-   - signal: `getSignalPollResults` (RSSI, link speeds, frequency) or nl80211 `GET_STATION`, every 2 s while joined;
-     iOS gets RSSI_CHANGED events and the values for its 16 RSSI / 8 RATE / 4 CHANNEL requests.
+   - the link drops (`onDisconnected` while joined): the network is removed and iOS is told (`OW_STATE`, link down
+     with the 802.11 reason). **iOS decides when to join again**, not the supplicant.
+   - scan: nl80211 `TRIGGER_SCAN` on wlan0 with one wildcard SSID (an active scan, as wificond's) and `GET_SCAN`
+     after `NEW_SCAN_RESULTS` (or after 8 s without the event): BSSID, frequency, signal (mBm), capability, beacon
+     interval, and the information elements as they are, cut to whole elements within the 1024 bytes of iOS's scan
+     record. A busy radio (`EBUSY`: the supplicant's own scan) is not an error: its results are taken.
+   - signal: nl80211 `GET_STATION` (signal, transmit rate) and `GET_INTERFACE` (the channel), every 2 s while joined.
    - iOS keeps its own known networks (wifid's store in the Data volume); the supplicant holds only the one network
      iOS is joining or joined to.
-   - At the start of a session the bridge disconnects the supplicant and removes the framework's networks from it, so
-     the supplicant does not rejoin One UI's network on its own; One UI's framework adds its networks again when it
+   - At the start of a session the bridge disconnects the supplicant and removes the networks in it, so the
+     supplicant does not rejoin One UI's network on its own; One UI's framework adds its networks again when it
      starts (it does that after every framework restart).
+   - The supplicant is a lazy service: when it is not running (its client, One UI's framework, is gone) the
+     lookup starts it (waited for up to 8 s), and it then has no station interface: the bridge adds `wlan0`
+     (`addStaInterface`) and removes it again at the stop (`removeInterface`). When it is running with `wlan0`, the
+     bridge takes that interface and leaves it at the stop.
 2. **Data.** One IP stack on the link: iOS's. The bridge opens `AF_PACKET`/`SOCK_RAW`/`ETH_P_ALL` bound to wlan0,
    with `PACKET_IGNORE_OUTGOING` and `PACKET_VNET_HDR`. The guest's en0 has wlan0's MAC (a station can send only
-   with its own address). Frames from the guest go out as they are; frames to wlan0's MAC, broadcast and multicast
-   come in. EAPOL (0x888e) is not passed either way: it is the supplicant's. GRO is turned off on wlan0 for the
-   session (`ETHTOOL_SGRO`); a coalesced TCP frame that still arrives (its `virtio_net_hdr` says GSO) is cut back
-   into MTU-sized segments with fresh IPv4/TCP checksums. The Linux side keeps quiet on wlan0: its IPv4 addresses
-   are removed (`ip addr flush dev wlan0`), `disable_ipv6` 1, `arp_ignore` 8, `ip_forward` stays as it is (0 on
-   the phone: a frame for iOS's address is dropped by Linux, not forwarded or answered). netd, which keeps running,
-   is not asked for anything.
-3. **Return.** The bridge's stop: `disconnect` and `removeNetwork` for its network, its supplicant callback
-   unregistered by closing the binder (the supplicant drops a dead client's callbacks), GRO and the three sysctls
-   back to the values it read at the start, wlan0 left up with no address. One UI's framework then sets wlan0 up
-   itself when it starts: IpClient enables IPv6 and runs DHCP, the framework re-adds its saved networks and joins
-   (to be checked on the phone: the step "One UI's Wi-Fi joins again by itself").
-   **After a SIGKILL** of xnuhost nothing of xnuhost runs: the bridge writes what it changed and the old values to
-   `/data/session/wifi.state` before it changes anything, and `bin/oneios-wifi.sh restore` (runtime package, no
-   xnuhost needed) puts them back and disconnects the supplicant by the AIDL tool `wifictl disconnect`. The fork's
-   return must run it after its SIGKILL step and before it starts zygote (oneos: `oneios/interface.md`); the
-   return's netd restart then rebuilds netd's routes and rules anyway.
-4. **Wi-Fi off in One UI at the switch** [U, not designed further yet]: then the chip is stopped and wlan0 and the
-   supplicant's interface may not exist. The bridge would have to do the framework's start sequence: IWifi
-   `start`, the chip's mode, `createStaIface`, the supplicant's `addStaInterface("wlan0")`; and the reverse at the
-   return. First version: the bridge works only when One UI's Wi-Fi was on at the switch, and says so in one line.
+   with its own address; iOS's private addresses are refused by the driver: `setHardwareAddress` is not supported).
+   Frames from the guest with that source address go out as they are; frames to wlan0's MAC, broadcast and
+   multicast come in. EAPOL (0x888e) is not passed either way: it is the supplicant's. GRO is turned off on wlan0
+   for the session (`ETHTOOL_SGRO`); a coalesced TCP frame that still arrives (its `virtio_net_hdr` says GSO or
+   "needs checksum") is cut back into MTU-sized segments with fresh IPv4/TCP checksums. The Linux side keeps quiet
+   on wlan0: its IPv4 addresses are removed (`ip -4 addr flush dev wlan0`) and `disable_ipv6` is 1. `ip_forward`
+   stays as it is (0 on the phone: a frame for iOS's address is dropped by Linux, not forwarded or answered), and
+   with no address on wlan0 Linux answers no ARP request for iOS. netd, which keeps running, is not asked for
+   anything.
+3. **Return.** xnuhost's stop (`br_wlan_close`): `disconnect` and `removeNetwork` for its network, `removeInterface`
+   if it added `wlan0`, the binder closed (the supplicant drops a dead client's callback), then GRO and
+   `disable_ipv6` back to the values in `/data/session/wifi.state` (written before anything was changed), wlan0 left
+   with no address. One UI's framework then sets wlan0 up itself when it starts: IpClient enables IPv6 and runs
+   DHCP, the framework adds its saved networks and joins (to be checked on the phone: "One UI's Wi-Fi joins again by
+   itself").
+   **After a SIGKILL** of xnuhost nothing of xnuhost runs, and what is left is: GRO off and `disable_ipv6` 1 on
+   wlan0, and the supplicant with iOS's network in it (unless it ended with its client [I: AOSP's AIDL supplicant
+   ends itself when a client that registered a callback dies; not seen on this phone yet]). Neither setting breaks
+   One UI's Wi-Fi: `disable_ipv6` 1 is how the framework itself leaves wlan0 between networks (IpClient turns IPv6 on
+   when it joins), GRO off only costs receive speed, and the framework removes the supplicant's networks before it
+   joins one. That is why the bridge does **not** set `arp_ignore` (the first design did): left at 8 after a kill it
+   would stop One UI answering ARP on wlan0. `bin/wifictl restore /data/local/tmp/oneios/session/wifi.state` puts
+   both settings back; the fork's return can run it after its SIGKILL step (`oneos/interface.md` section 6; not in
+   the fork yet).
+4. **Wi-Fi off in One UI at the switch** [U]: then the chip is stopped and wlan0 does not exist. The bridge says
+   `wifi: off: no wlan0 (One UI's Wi-Fi was off at the switch?)` and iOS gets no network device. Starting the chip
+   itself (IWifi `start`, `createStaIface`) is not written.
+
+### The guest's side (`kernel/patches/oneios-hosted/net`, in the hosted kernel since 2026-11-12)
+
+Before 2026-11-12 the hosted kernel had **no network driver at all** (UniXNU-droidvm's network sources are built only
+by its own script), so iOS had no en0 in any boot. Now `build-hosted.sh` builds one more archive,
+`liboneiosnet.a` (`kernel/patches/oneios-hosted/net/README.md`):
+
+- `OneiOSWifi.cpp`: `IO80211Controller` and `IO80211Interface` (the class names configd and wifid know a Wi-Fi
+  interface by; Apple's IO80211Family is not in the collection) as subclasses of **the collection's own**
+  `IOEthernetController` and `IOEthernetInterface`. Apple's `com.apple.iokit.IONetworkingFamily` is a root of the
+  collection and 25 of the 130 roots link it, so it cannot be replaced by a copy compiled into the kernel (what
+  Droid-VM does). The classes are compiled against IONetworkingFamily-188's headers (APSL; fetched into
+  `out/sources/IONetworkingFamily`), and the build checks those headers against the kernelcache's classes
+  (`IONetworking-24A446-v54.json`, made by `layout.py`): 250 and 221 vtable slots, every slot's
+  pointer-authentication discriminator, and whether its function is the family's or the kernel's. 159 original
+  functions are bound at their addresses in the collection through `.original` stubs (`stubs-check.py`: good).
+- The Apple80211 requests and events of DroidVMWifi.inc (below), with its made-up station replaced: `SCAN_REQ` sends
+  `OW_SCAN` and the records come back as `OW_BSS`; `ASSOCIATE` sends `OW_JOIN` and `ASSOCIATE_RESULT` follows
+  `OW_JOIN_RESULT`; `DISASSOCIATE` sends `OW_LEAVE`; `OW_STATE` carries the link, the signal, the rate and the joined
+  network's record. The link status configd's DHCP waits for (`setLinkStatus`) is active only while joined. Frames
+  pass only while joined.
+- The messages (`drivers/net/oneios_wifi_proto.h`) travel on the virtio-net queues as Ethernet frames of type 0x88b5
+  (IEEE 802 local experimental) to and from the address `02:4f:57:49:46:49`: the bridge never sends such a frame to
+  the radio, the driver never gives one to iOS's network stack.
+- `DroidVMVirtioNet.c` (UniXNU-droidvm f9121cd, the transport), staged with one change: its receive filter passes
+  multicast too (IPv6 neighbour discovery, mDNS).
+- Boot argument `oneios-wifi=0` leaves it out. Log lines: `ONEIOS WIFI: classes registered below the collection's
+  IOEthernetController and IOEthernetInterface`, `ONEIOS WIFI: on: the phone's Wi-Fi, address ...`, `the host has
+  the phone's radio`, `wifid gets|sets N: ...` (each request for the first 150, then a type's first), `scan done: N
+  networks`, `join: ...`, `join done: joined` or `join failed`.
 
 ### What wifid needs from the interface (Apple80211)
 
@@ -279,7 +337,8 @@ Apple80211"; iOS 16, so the iOS 27 details are [I] until seen):
 - Found as Wi-Fi only if: the controller's class is `IO80211Controller` (configd), the interface is `IFT_ETHER` with
   `IFNET_SUBFAMILY_WIFI` (IO80211.framework), it has the property `IOInterfaceName` (wifid matches on it), and the
   device tree has `/arm-io/wlan` (wifid's launchd plist has `_LimitLoadToDeviceTree=wlan`; MobileGestalt's `wifi`
-  reads it too). A refused `APPLE80211_IOC_FILTER_MONITOR_EVENTS` makes wifid give up the device: accept it.
+  reads it too; booter's tree has the node). A refused `APPLE80211_IOC_FILTER_MONITOR_EVENTS` makes wifid give up
+  the device: accept it.
 - Requests (type numbers): 1 SSID, 2 AUTH_TYPE, 4 CHANNEL, 5 POWERSAVE, 8 RATE, 9 BSSID, 10 SCAN_REQ, 11 SCAN_RESULT
   (1164-byte records, EIO after the last), 12 CARD_CAPABILITIES, 13 STATE, 14 PHY_MODE, 15 OP_MODE, 16 RSSI, 17 NOISE,
   19 POWER, 20 ASSOCIATE (592 bytes: SSID, BSSID, cipher, key or passphrase), 21 ASSOCIATE_RESULT (0 while the join
@@ -289,50 +348,60 @@ Apple80211"; iOS 16, so the iOS 27 details are [I] until seen):
 - Events (kernel event class 6, subclass 1, the interface name first): 1 POWER_CHANGED, 2 SSID_CHANGED, 3
   BSSID_CHANGED, 4 LINK_CHANGED (32 bytes: down, RSSI, SNR, noise, reason), 9 ASSOC_DONE, 10 SCAN_DONE; and the
   link state on the IOKit side (`setLinkStatus`, which configd's DHCP waits for).
-- So the guest driver is DroidVMWifi.inc with its station replaced by the host: scan and join requests go to the
-  bridge, scan records and state come back, and the controller sends and receives frames (DroidVMWifi.inc's
-  controller has no transport and drops them).
 
-### iOS side today: no network driver in the hosted kernel [F, 2026-11-12]
+### The host bridge (`runtime/bridges/wifi`)
 
-The hosted kernel (`out/kernel/current-hosted/xnu.macho` of 2026-11-12) has **no network driver at all**: no
-`DroidVMVirtioEthernet`, `DroidVMVirtualWifi`, `IO80211Interface` or `droidvm_net_tx_frame`. UniXNU-droidvm's network
-sources are built only by its own `ipados27/scripts/build-droidvm-devices.py`, which this kernel's build does not run,
-so xnuhost's `/arm-io/net` device has had no driver in every boot so far and iOS had no en0 (the earlier text here,
-"iOS side unchanged from UniXNU-droidvm", described the sources, not the kernel). What it takes:
+| File | What |
+|---|---|
+| `frames.c` | which frames cross (above), and the cut of a coalesced TCP frame |
+| `station.c` | the station the guest's driver talks to: its messages become calls on a radio back end, the radio's reports become messages |
+| `wlan.c` | the back end on the phone: the AF_PACKET socket, nl80211, wlan0's settings kept and given back. Three threads: frames, nl80211 events, control. The guest's vCPU only sends a frame or queues a message; netlink, binder and the join's timeouts are the control thread's |
+| `supplicant.c` | the supplicant's client: the lookup, the interface, the callback object, the join's plan and its outcome |
+| `aidl_parcel.c`, `aidl_binder.c` | stable AIDL over `/dev/binder` with no Android library (xnuhost is static): the interface token (strict mode word, work source, `SYST`), `String` as UTF-16, `byte[]`, binder objects with the stability word (VINTF 0x3f), the status header of a reply; the kernel's binder protocol, one looper thread for the calls into our callback, death notifications |
+| `tools/wifictl.c` | the bridge without xnuhost: `status`, `scan`, `join`, `restore` (`runtime/bridges/README.md`) |
 
-- IONetworkingFamily. The collection keeps Apple's `com.apple.iokit.IONetworkingFamily` as a root (with
-  `IOSkywalkFamily`, `IONetworkFamily`, `IOUserEthernet`, `usb.networking`), so `IOEthernetController` is Apple's
-  original class in a kext. Two ways: (a) subclass the original, with an ABI header of its vtables checked against
-  the kernelcache (as `kernel/patches/oneios-hosted/hid` does for `IOHIDDevice`; IONetworkController and
-  IONetworkInterface have many virtuals); or (b) as Droid-VM does on the same 24A446 kernelcache: compile
-  IONetworkingFamily-188 into the kernel and keep Apple's copy and its dependents out of the collection
-  (`kernel/prelink/roots.py` `FORCE_OUT`). (b) is what ran in Droid-VM's iPadOS 27 guest. Neither is done; (b) needs
-  the prelink's owner.
-- A hosted archive (like `hid/`): DroidVMVirtioNet.c (transport), the Wi-Fi controller with the host station and the
-  transport, and DroidVMVirtioNetIf.cpp (the late start of IONetworkStack); no Ethernet controller (the iPhone's en0 is
-  its Wi-Fi). Plus `/arm-io/wlan` in booter's device tree.
+xnuhost: `wifi=auto` (the default; `xnuhost.conf` or `--set wifi=...`) takes wlan0 when the bridges are on, `wifi=off`
+makes no network device, `wifi=tap` is the old route. Log lines: `wifi: wlan0 is iOS's for the session: ...`, `wifi:
+on: wlan0 (..) is the guest's en0`, `wifi: the vendor's supplicant is the bridge's`, `wifi: the guest's driver is up`,
+`wifi: join: network N in the supplicant, WPA2 (passphrase): selected`, `wifi: supplicant: <state>`, `wifi: join done`
+or `join failed (status S, code C)`, `wifi: link down (reason R)`, `wifi: closed (...)`, `wifi: wlan0 given back`.
 
-### The host bridge
+Old (only with `wifi=tap`): `runtime/bridges/net/net.c` (tap `oneios0`, DHCP answered in the bridge: 192.168.77.2/24)
+and `runtime/bridges/net/oneios-net.sh` (NAT). The script's `ip rule del priority 16000` would delete netd's own rule
+of that priority (netd's `fwmark 0x10063/0x1ffff iif lo lookup local_network` is at 16000 on this phone) when ours is
+absent: a reason not to run it on the phone as it is.
 
-- New (being written, 2026-11-12, `runtime/bridges/wifi`): the data path and the control path above, and
-  `bin/oneios-wifi.sh restore` / `wifictl`. Not yet in the tree when this design was written.
-- Old (not used by the new route; kept until it runs): `runtime/bridges/net/net.c` (tap `oneios0`, DHCP answered in
-  the bridge: 192.168.77.2/24), `runtime/bridges/devices/virtio_net.c` (the virtio-net device; kept, it carries the
-  frames of the new route too), `runtime/bridges/net/oneios-net.sh` (NAT). On the phone on 2026-11-12 xnuhost made
-  the tap and `oneios-net.sh up` stopped at "no uplink: the phone has no default network" (bringup's session 1).
-  The script's `ip rule del priority 16000` would have deleted netd's own rule of that priority (netd's
-  `fwmark 0x10063/0x1ffff iif lo lookup local_network` is at 16000 on this phone) when ours was absent: a reason
-  not to run it again as it is.
+### Tested
+
+- Host (arm64 Linux container, `runtime/host-tests.sh`): `test_wifi` 87 checks (frame rules; a 4000-byte coalesced
+  IPv4 frame and a 3000-byte IPv6 one cut into three with right lengths, sequence numbers and checksums; the station
+  against a fake radio; the AIDL parcels byte for byte; the join's plan for WPA2, WPA3, transition, WPA with TKIP,
+  open, OWE and a network not seen; the supplicant's callbacks decoded); `test_aidl_binder` 35 checks: the client
+  against a fake service manager and supplicant in another process on a real binder driver (a lazy service found on
+  the third lookup, the interface added and removed, the callback's descriptor and version asked for inside
+  `registerCallback`, a join, a wrong key, a network not found, a rejection, a link that drops, a look without a
+  callback, a supplicant that dies). Both ends of that test use `aidl.h`.
+- **On the phone, beside One UI (2026-11-12, SELinux Enforcing, no policy change)**: `wifictl status`: the service
+  manager's lookup, `getStaInterface("wlan0")`, `getMacAddress` (wlan0's own address), `listNetworks` (0) all
+  answered by Android 17's servicemanager and the vendor's supplicant; `wifictl scan`: 53 networks with their
+  security from nl80211 in 6 s.
 
 ### Missing, unknown
 
-- [U] What the vendor stack does when system_server stops: whether the supplicant stays up with wlan0, whether the
-  Wi-Fi HAL or wificond tear the interface down when their client dies. Read in the first session with this route.
+- [U] **Everything in a session**: whether wifid finds en0 and scans, what `ASSOCIATE` carries on iOS 27 (a
+  passphrase, or the 32-byte key: the driver's log line says which), DHCP by configd, the internet.
+- [U] What the vendor stack does when system_server stops: whether the supplicant stays up with wlan0 (the bridge
+  handles both: it takes the interface, or adds it), whether the Wi-Fi HAL or wificond take wlan0 down.
 - [U] Whether the supplicant's callbacks reach our process (binder calls from `hal_wifi_supplicant_default` into
-  `ksu`; KernelSU allows binder calls into its domain [I]).
+  `ksu`; KernelSU allows binder calls into its domain [I]). `registerCallback` fails with a line naming SELinux if
+  the supplicant cannot ask our object for its descriptor.
 - [U] One UI joining its network again after the return without help.
-- Enterprise (802.1X) networks, hotspot (iOS's Personal Hotspot), AWDL/AirDrop: not in the first version.
+- wlan0's address is a random one when One UI is not joined, so iOS's en0 can have another address in the next
+  session (a new DHCP lease). The factory address is not set by the bridge (the framework sets wlan0's address
+  through the Wi-Fi HAL; the bridge does not use that HAL).
+- A WPA3-only network when iOS gives the 32-byte key instead of the password: not joinable (logged).
+- Enterprise (802.1X) networks, WEP, hotspot (iOS's Personal Hotspot), AWDL/AirDrop: not in the first version.
+- The fork's return does not run `wifictl restore` after a kill yet (`oneos/interface.md` section 6).
 - Mobile data (rmnet) as the uplink: not with this design (no NAT); not planned.
 
 ## 4. Bluetooth

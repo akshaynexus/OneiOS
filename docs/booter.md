@@ -284,7 +284,14 @@ bluetoothd's H4BC UART transport, transport-speed 3000000, the address of `/mnt/
 are on and hwservicemanager returns `android.hardware.bluetooth@1.x::IBluetoothHci/default` at the start (asked once
 and let go; the HAL is opened only when bluetoothd connects), else `virtual`. One log line says which:
 `bluetooth: on: the phone's controller through its HAL 1.1, address ...` or `bluetooth: off (...)` with the reason.
-A bridge whose Linux side is missing logs one line and is left out. At a stop the motor is stopped and
+The network (`wifi=` in `xnuhost.conf`, `--set wifi=...`): `auto`, the default, makes the phone's wlan0 the guest's
+en0 (`br_wlan_prepare`, [hardware.md](hardware.md) section 3): the `net` window's virtio-net device carries wlan0's
+address in its configuration, its frames go to and from wlan0 by AF_PACKET, and the guest driver's station messages
+(frames of type 0x88b5) go to nl80211 and the vendor's supplicant. It keeps what it changes on wlan0 (GRO,
+`disable_ipv6`) in `/data/session/wifi.state`. No wlan0: one line (`wifi: off: no wlan0 ...`) and no `net` window.
+`off` makes no network device; `tap` is the old route (a tap and `bin/oneios-net.sh`'s NAT), for a bench.
+A bridge whose Linux side is missing logs one line and is left out. At a stop the motor is stopped, the Wi-Fi
+bridge leaves its network and gives wlan0's settings back (`br_wlan_close`), and with `wifi=tap`
 `bin/oneios-net.sh down` removes the tap's rules. Every virtio node carries its SPI as `interrupts` and as
 `droidvm,intid` (the name UniXNU-droidvm's transports read).
 
@@ -388,8 +395,10 @@ and any change that would break one goes on the board first:
 - nothing that needs a clean exit: every helper is a child inside the cgroup and dies with it.
 
 Two things outlive a killed session and are not xnuhost's files: `vm.max_map_count` stays raised until
-the phone reboots, and the network bridge's routing rules and iptables chains stay if xnuhost is killed
-before it runs `oneios-net.sh down` (the tap itself goes with the process).
+the phone reboots, and wlan0 keeps GRO off and `disable_ipv6` 1 if xnuhost is killed before `br_wlan_close`
+(neither breaks One UI's Wi-Fi: [hardware.md](hardware.md) section 3, "Return"; `bin/wifictl restore
+SESSION/wifi.state` puts them back). With `wifi=tap`, the tap's routing rules and iptables chains stay until
+`oneios-net.sh down` (the tap itself goes with the process).
 
 ## 3. What each XNU subsystem gets from the host
 

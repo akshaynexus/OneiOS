@@ -410,3 +410,19 @@ whose start, `oneios_audio_start` (`audio/OneiOSAudio.c`), is the last call of `
 `__mod_init_func`, as the HID archive's: `droidvm_audio_attach` runs it in its own module load). Before it the
 hosted kernel had no audio device. Log lines, boot arguments and what was measured: `docs/hardware.md` section 6.
 Built on the Mac (`HOSTED_OUT=audio`); not yet booted.
+
+## net/: the Wi-Fi, en0 on the phone's radio (radio, radio2, 2026-11-12)
+
+No numbered patch: an archive (`net/build-oneios-net.py`, hooked into `kernel/build-hosted.sh` like `hid/`) whose
+start, `oneios_net_start` (`net/OneiOSWifi.cpp`), `oneios_drivers_start` calls before the audio's (weak in
+`drivers/bridge/OneiOSBridge.c`). Before it the hosted kernel had no network driver and iOS no en0. It holds
+`IO80211Controller` and `IO80211Interface` (the class names wifid and configd know) as subclasses of the
+collection's **original** `IOEthernetController` and `IOEthernetInterface` (Apple's IONetworkingFamily stays in the
+collection: 25 of its 130 roots link it), a station whose scans and joins are messages to xnuhost's Wi-Fi bridge
+(`drivers/net/oneios_wifi_proto.h`, in-band on the virtio-net queues), and UniXNU-droidvm's virtio-net transport
+(`DroidVMVirtioNet.c`, staged: multicast passes its receive filter). The classes are compiled against
+IONetworkingFamily-188's headers, which the build checks against `net/IONetworking-24A446-v54.json` (250 and 221
+vtable slots, every discriminator); 159 original functions are bound through `.original` stubs, none of them
+non-virtual. `net/README.md` has the files, the check, the boot argument (`oneios-wifi=0`) and the log lines;
+`docs/hardware.md` section 3 the design, the host's side and what ran. Built on the Mac (`HOSTED_OUT=radio`) and
+prelinked: the import audit passes (0 failures) and `stubs-check.py` finds 666 good stubs, 0 bad.

@@ -158,6 +158,11 @@ gone), and feeds Samsung's software watchdog. Gone: zygote, zygote_secondary, sy
 
 1. `SIGTERM` to the xnuhost pid. xnuhost should flush `/data/data` and end its tasks; it has **20 s**.
 2. `SIGKILL` to every process still in the namespace.
+   **Asked of the fork, not in it yet (radio2, 2026-11-12):** after this step and before zygote, when
+   `session/wifi.state` exists (xnuhost was killed before its own stop), run `runtime/bin/wifictl restore
+   /data/local/tmp/oneios/session/wifi.state`: it puts wlan0's GRO and `disable_ipv6` back and removes the file.
+   Without it nothing breaks (`docs/hardware.md` section 3, "Return": IPv6 off is how One UI's framework itself
+   leaves wlan0 between networks, GRO off only costs receive speed); a clean stop of xnuhost does it itself.
 3. Checks that nothing of the session is left and One UI's vold, keystore2, surfaceflinger and SELinux mode
    are as they were at the switch, on the same boot. Then starts One UI's zygote in place.
 4. Any failed check: reboot (the failsafe). A reboot is always a correct way back.

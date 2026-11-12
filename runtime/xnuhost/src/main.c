@@ -206,6 +206,7 @@ static bool cpu_planned;
 extern unsigned xh_cpu_place_epoch;   // task.c: an iOS thread is placed again when it runs after this changes
 void xh_sysreg_stats_log(void);       // sysreg.c: the most frequent trapped instructions
 static bool net_up;
+static bool wifi_up;                // wlan0 is the guest's en0 (runtime/bridges/wifi)
 
 static void bridge_log(int level, const char *line) { xh_log(level == 0 ? XH_LOG_ERROR : level == 1 ? XH_LOG_INFO : XH_LOG_DEBUG, "%s", line); }
 static void place(int tid, unsigned vcpu) { br_cpu_place(tid, &cpu_plan, vcpu); }
@@ -403,13 +404,24 @@ static int boot(void)
     else LOGI("bluetooth: off (%s): iOS gets no controller%s", config.bluetooth,
               !strcmp(config.bluetooth, "virtual") ? "; bluetooth=hidl in xnuhost.conf (or --bluetooth hidl) for the phone's" : "");
 
+    // The network: the phone's Wi-Fi. wlan0 is iOS's for the session (docs/hardware.md section 3): en0 has wlan0's
+    // address, frames go between them as they are, scans and joins go to the vendor's Wi-Fi stack; no NAT.
+    // wifi=tap: the old route (a tap and oneios-net.sh's NAT), for a bench.
     br_net_config net;
     br_net_config_defaults(&net);
-    xl_machine_mac(&machine, 1, net.guest_mac);     // en0
-    if (br_virtio_net_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &net, br_net_open_tap)) {
-      kinds[ndev++] = XL_DEV_NET;
-      net_up = net_script("up");                    // address, forwarding and NAT for the tap; undone at stop
-    }
+    xl_machine_mac(&machine, 1, net.guest_mac);     // en0 (the tap's; the Wi-Fi's is wlan0's)
+    if (!strcmp(config.wifi, "tap")) {
+      if (br_virtio_net_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &net, br_net_open_tap)) {
+        kinds[ndev++] = XL_DEV_NET;
+        net_up = net_script("up");                  // address, forwarding and NAT for the tap; undone at stop
+      }
+    } else if (!strcmp(config.wifi, "auto")) {
+      br_net_open_fn wlan = br_wlan_prepare("wlan0", config.session, net.guest_mac);
+      if (wlan && br_virtio_net_create_backend(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &net, wlan, br_wlan_send)) {
+        kinds[ndev++] = XL_DEV_NET;
+        wifi_up = true;
+      } else if (wlan) br_wlan_close();
+    } else LOGI("wifi: off (wifi=off): iOS gets no network device");
 
     char helper[600];
     void *audio_ctx = NULL;
@@ -697,6 +709,7 @@ int main(int argc, char **argv)
   if (brightness) br_bright_close(brightness);      // One UI's backlight level again, the light sensor as it was
   if (battery) br_battery_close(battery);           // read only: the worker stops
   if (thermal) br_thermal_close(thermal);           // read only; the step was affinities of our own threads
+  if (wifi_up) br_wlan_close();                     // the network left, the supplicant and wlan0 as One UI left them
   if (net_up) net_script("down");
   xh_input_script_stop();
   xh_input_stop();

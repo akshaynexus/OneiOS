@@ -16,6 +16,7 @@ back stay exactly OneOS-shaped.
  ├─ surfaceflinger + composer HAL ◄── oneios-display (layer with iOS's frames)
  ├─ /dev/kgsl-3d0, /dev/udmabuf  ◄── xnuhost's virtio-gpu 3D (drm2kgsl)
  ├─ audioserver, camera HAL, BT HAL, vibrator evdev, backlight sysfs, ALS ◄── bridges in xnuhost
+ ├─ wlan0 (AF_PACKET, nl80211) + the vendor's wpa_supplicant (AIDL) ◄── the Wi-Fi bridge: iOS's en0, no NAT
  └─ xnuhost  (one Linux process; mount namespace with the stage over /data; its own cgroup)
      ├─ one host thread per vCPU, GICv3 model, timer, PSCI, EL1 system registers emulated
      ├─ virtio-mmio devices: block (the image set), input (evdev), GPU, sound, net, camera, bridge channel

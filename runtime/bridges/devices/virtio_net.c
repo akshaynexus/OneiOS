@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // virtio-net (VirtIO 1.2, 5.1) for the guest's en0, as UniXNU-droidvm's DroidVMVirtioNet.c drives it:
 // VERSION_1 and MAC only, so every packet is one 12-byte virtio_net_hdr_v1 and one frame. Queue 0
-// receives (device to guest), queue 1 transmits. The frames go to a br_net back end.
+// receives (device to guest), queue 1 transmits. The frames go to a br_net back end (the tap of net/net.c) or to
+// another one with its own send (the phone's wlan0: wifi/wlan.c).
 #include "bridges/devices.h"
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,7 @@
 typedef struct {
   xh_virtio *dev;
   br_net *net;
+  br_net_send_fn send;
   uint8_t mac[6];
   uint64_t rx_dropped, tx_frames, rx_frames;
 } net_state;
@@ -41,7 +43,7 @@ static int64_t net_handle(xh_virtio *dev, unsigned queue, uint16_t head, xh_viov
     memcpy(packet + size, iov[i].data, iov[i].length);
     size += iov[i].length;
   }
-  if (size > NET_HDR && s->net) { s->tx_frames++; (void)br_net_send(s->net, packet + NET_HDR, size - NET_HDR); }
+  if (size > NET_HDR && s->net) { s->tx_frames++; (void)s->send(s->net, packet + NET_HDR, size - NET_HDR); }
   return 0;
 }
 
@@ -75,13 +77,19 @@ static void net_kick(xh_virtio *dev, unsigned queue) { (void)dev; (void)queue; }
 static const xh_virtio_ops net_ops = { .device_id = 1, .features = 1ull << NET_F_MAC, .nqueues = 2, .handle = net_handle,
                                        .config_read = net_config_read, .manual = 1, .kick = net_kick };
 
-xh_virtio *br_virtio_net_create(uint64_t base, unsigned spi, const br_net_config *config, br_net_open_fn net_open)
+xh_virtio *br_virtio_net_create_backend(uint64_t base, unsigned spi, const br_net_config *config, br_net_open_fn net_open, br_net_send_fn net_send)
 {
   net_state *s = calloc(1, sizeof *s);
   if (!s) return NULL;
   memcpy(s->mac, config->guest_mac, 6);
+  s->send = net_send ? net_send : br_net_send;
   s->dev = xh_virtio_create(base, spi, &net_ops, s, "virtio-net");
   if (!s->dev) { free(s); return NULL; }
   s->net = net_open ? net_open(config, net_rx, s) : NULL;            // without a back end the link is up and silent
   return s->dev;
+}
+
+xh_virtio *br_virtio_net_create(uint64_t base, unsigned spi, const br_net_config *config, br_net_open_fn net_open)
+{
+  return br_virtio_net_create_backend(base, spi, config, net_open, NULL);
 }

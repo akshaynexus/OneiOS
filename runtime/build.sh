@@ -3,7 +3,7 @@
 #   runtime/build.sh STAGE        build and stage bin/xnuhost (static; the task stub is inside it) and the
 #                                 bridges' helpers bin/oneios-audio and bin/oneios-net.sh, and the display helper
 #                                 (runtime/display): bin/oneios-display, bin/liboneios-display.so, lib/oneios-display.dex,
-#                                 and the phone checks: bin/gpuctl, bin/bridgectl, bin/brightctl, bin/batteryctl, bin/thermalctl, bin/displayctl, bin/camctl
+#                                 and the phone checks: bin/gpuctl, bin/bridgectl, bin/wifictl, bin/brightctl, bin/batteryctl, bin/thermalctl, bin/displayctl, bin/camctl
 #   runtime/build.sh --test       host unit tests of the loader and of xnuhost, then the Android binary
 #                                 booting the test kernel under qemu-aarch64 when that is installed (on a Mac: the
 #                                 whole host suite in an arm64 Linux container, runtime/host-tests.sh)
@@ -50,12 +50,16 @@ chmod 0755 "$STAGE/bin/gpuctl"
 # The other phone checks, which the OneOS fork's Hardware checks screen runs with One UI up (as root):
 # bridgectl (cpu, haptic, haptic-pattern, bt, audio), brightctl (info, levels, als), batteryctl (reads the battery), thermalctl (the temperatures; `watch` logs them) and displayctl (test; it
 # starts bin/oneios-display beside itself). Each folder's README has the commands and what a good run prints.
-make -s -C "$ROOT/runtime/bridges" NDK="$NDK" build/android/bridgectl
+make -s -C "$ROOT/runtime/bridges" NDK="$NDK" build/android/bridgectl build/android/wifictl
 make -s -C "$ROOT/runtime/bridges/brightness" NDK="$NDK" build/android/brightctl
 make -s -C "$ROOT/runtime/bridges/battery" NDK="$NDK" build/android/batteryctl
 make -s -C "$ROOT/runtime/bridges/thermal" NDK="$NDK" build/android/thermalctl
 make -s -C "$ROOT/runtime/display" NDK="$NDK" build/android/displayctl
 "$STRIP" -o "$STAGE/bin/bridgectl" "$ROOT/runtime/bridges/build/android/bridgectl"
+# wifictl: the Wi-Fi bridge alone (status and scan are read only; join takes wlan0 as a session does; restore gives
+# wlan0's settings back after a killed xnuhost). runtime/bridges/README.md, docs/hardware.md section 3.
+"$STRIP" -o "$STAGE/bin/wifictl" "$ROOT/runtime/bridges/build/android/wifictl"
+chmod 0755 "$STAGE/bin/wifictl"
 "$STRIP" -o "$STAGE/bin/brightctl" "$ROOT/runtime/bridges/brightness/build/android/brightctl"
 "$STRIP" -o "$STAGE/bin/batteryctl" "$ROOT/runtime/bridges/battery/build/android/batteryctl"
 "$STRIP" -o "$STAGE/bin/thermalctl" "$ROOT/runtime/bridges/thermal/build/android/thermalctl"

@@ -29,6 +29,22 @@ xh_virtio *br_bridge_create(uint64_t base, unsigned spi, const br_bridge_config 
 // `net_open` makes the back end with the device's receive function (br_net_open_tap on the phone).
 typedef br_net *(*br_net_open_fn)(const br_net_config *c, br_net_rx_fn rx, void *ctx);
 xh_virtio *br_virtio_net_create(uint64_t base, unsigned spi, const br_net_config *config, br_net_open_fn net_open);
+// The same with a back end that is not net/net.c's: net_send takes the guest's frames (NULL: br_net_send) and gets
+// what net_open returned. The phone's Wi-Fi: br_wlan_prepare's open and br_wlan_send (wifi/wifi.h).
+typedef int (*br_net_send_fn)(br_net *n, const uint8_t *frame, size_t length);
+xh_virtio *br_virtio_net_create_backend(uint64_t base, unsigned spi, const br_net_config *config, br_net_open_fn net_open, br_net_send_fn net_send);
+
+// The phone's Wi-Fi as that back end (wifi/wlan.c; docs/hardware.md section 3): wlan0 is iOS's for the session.
+// br_wlan_prepare takes the interface (state_dir/wifi.state keeps the two settings it changes: IPv6 and GRO) and
+// gives its address, which the guest's en0 must use (config->guest_mac). NULL: no such interface or no access: iOS
+// gets no Wi-Fi. Then br_virtio_net_create_backend(base, spi, config, the returned open, br_wlan_send).
+br_net_open_fn br_wlan_prepare(const char *ifname, const char *state_dir, uint8_t mac_out[6]);
+int  br_wlan_send(br_net *n, const uint8_t *frame, size_t length);
+// The stop: the network left, the supplicant as it was found, wlan0's settings back.
+void br_wlan_close(void);
+// wlan0's settings back from a state file (`wifictl restore`, after a killed xnuhost). 0, -ENOENT (nothing to give
+// back) or -errno.
+int  br_wlan_restore(const char *state_path);
 
 // "droidvm,virtio-snd": virtio-snd with one output stream (48 kHz S16 stereo) and one input stream
 // (48 kHz S16 mono), 240-frame periods, as DroidVMVirtioSnd.c asks.

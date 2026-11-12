@@ -1032,7 +1032,7 @@ static void test_config(const char *dir)
   CHECK(strstr(c.kernel, "/image/kernel.kc") && c.ndisk == 4 && strstr(c.disk[3].path, "data.seed") && !c.disk[3].writable && !c.disk[0].writable && strstr(c.disk[1].path, "systemos.img"));
   CHECK(c.disk[2].data_store && c.disk[2].writable && strstr(c.disk[2].path, "/data.img") && strstr(c.disk[2].seed, "data.seed"));
   CHECK(c.ncpu >= 1 && c.ncpu <= XH_MAX_CPUS && !strcmp(c.display, "shm") && c.input && c.tasks);
-  CHECK(c.bridges == 1 && !strcmp(c.bluetooth, "auto"));                       // on in a session; the phone's HAL when it is there
+  CHECK(c.bridges == 1 && !strcmp(c.bluetooth, "auto") && !strcmp(c.wifi, "auto"));                       // on in a session; the phone's HAL when it is there
   // the image set's own settings, and what the command line overrides
   snprintf(path, sizeof path, "%s/xnuhost.conf", image);
   FILE *f = fopen(path, "w");
@@ -1048,6 +1048,12 @@ static void test_config(const char *dir)
   char *argv4[] = { "xnuhost", "--image", image, "--set", "bluetooth=virtual" };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 5, argv4) == 0 && xh_config_finish(&c) == 0 && !strcmp(c.bluetooth, "virtual"));
+  char *argv5[] = { "xnuhost", "--image", image, "--set", "wifi=off" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 5, argv5) == 0 && xh_config_finish(&c) == 0 && !strcmp(c.wifi, "off"));
+  char *bad_wifi[] = { "xnuhost", "--image", image, "--set", "wifi=nat" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 5, bad_wifi) == -1);
   char *bad0[] = { "xnuhost", "--image", image, "--bluetooth", "usb" };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 5, bad0) == -1);

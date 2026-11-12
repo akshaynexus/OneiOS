@@ -28,6 +28,7 @@ void xh_config_defaults(xh_config *c)
   c->scale_fixup = -1;
   c->setway_skip = -1;
   strcpy(c->bluetooth, "auto");
+  strcpy(c->wifi, "auto");
 }
 
 uint64_t xh_parse_size(const char *text, bool *ok)
@@ -95,6 +96,7 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
   else if (!strcmp(key, "task-uid")) c->task_uid = atoi(value);
   else if (!strcmp(key, "bridges")) { bool on; if (flag(value, &on)) return -1; c->bridges = on; }
   else if (!strcmp(key, "clusters")) { ok = strlen(value) <= XH_MAX_CPUS && strspn(value, "EP") == strlen(value); if (ok) strcpy(c->clusters, value); }
+  else if (!strcmp(key, "wifi")) { ok = !strcmp(value, "auto") || !strcmp(value, "off") || !strcmp(value, "tap"); if (ok) strcpy(c->wifi, value); }
   else if (!strcmp(key, "bluetooth")) { ok = !strcmp(value, "auto") || !strcmp(value, "virtual") || !strcmp(value, "hidl"); if (ok) strcpy(c->bluetooth, value); }
   else if (!strcmp(key, "legacy-boot-args")) return flag(value, &c->legacy_boot_args);
   else if (!strcmp(key, "setway-skip")) { bool on; if (flag(value, &on)) return -1; c->setway_skip = on; }

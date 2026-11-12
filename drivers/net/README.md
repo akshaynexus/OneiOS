@@ -1,13 +1,13 @@
-# Network: en0
+# Network: en0, the phone's Wi-Fi
 
-No source here. The kernel side is UniXNU-droidvm's, unchanged (f9121cd): `package/DroidVMVirtioNet.c` (transport),
-`DroidVMVirtioEthernet.cpp` and `DroidVMVirtioNetIf.cpp` (the `IOEthernetController` on IONetworkingFamily),
-`DroidVMWifi.inc` (a Wi-Fi interface for wifid and Settings), built by its
-`ipados27/scripts/build-droidvm-devices.py`. `DroidVMVirtioNet.c` compiles with our kernel records
-(`-DDROIDVM_DEVICE_DYNAMIC=1`).
+`oneios_wifi_proto.h`: the station's messages between the guest's Wi-Fi driver and xnuhost's Wi-Fi bridge (scan,
+join, leave; state, networks, results). They travel on the virtio-net queues as Ethernet frames of type 0x88b5 to
+and from the address `02:4f:57:49:46:49`; neither end lets such a frame out (to the radio, or to iOS's network
+stack). Shared by both ends, so it is here and not beside either.
 
-The device it drives is `runtime/bridges/devices/virtio_net.c` at `/arm-io/net` (`droidvm,net`). The transport reads
-its interrupt from the node's `droidvm,intid` property: booter's tree writes `interrupts`, so either the tree adds
-`droidvm,intid` or the driver polls every 10 ms (it works both ways).
-
-Not written: a bridge from One UI's Wi-Fi state (SSID, signal) into `DroidVMWifi.inc`'s station.
+The driver is not built by `drivers/build.py`: it subclasses the kernel collection's own `IOEthernetController`
+and `IOEthernetInterface`, so it is an archive of the hosted kernel, `kernel/patches/oneios-hosted/net`
+(`OneiOSWifi.cpp`, its README), with UniXNU-droidvm's transport `package/DroidVMVirtioNet.c` (f9121cd). The host's
+side: `runtime/bridges/wifi` and `runtime/bridges/devices/virtio_net.c` at `/arm-io/net` (`droidvm,net`; the
+transport reads its interrupt from the node's `droidvm,intid`). The design and what was tested: `docs/hardware.md`
+section 3.

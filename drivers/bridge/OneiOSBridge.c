@@ -319,6 +319,10 @@ __attribute__((weak)) void oneios_hid_input_start(void) {}
 // The speaker and the microphone: the hosted kernel's audio archive (kernel/patches/oneios-hosted/audio,
 // OneiOSAudio.c: UniXNU-droidvm's virtio-snd transport and IOAudio2Devices). Weak: a kernel without it has none.
 __attribute__((weak)) void oneios_audio_start(void) {}
+// The Wi-Fi, en0 on the phone's radio: the hosted kernel's network archive (kernel/patches/oneios-hosted/net,
+// OneiOSWifi.cpp: the Wi-Fi controller and interface under the collection's IOEthernetController and
+// IOEthernetInterface, UniXNU-droidvm's virtio-net transport). Weak: a kernel without it has no network interface.
+__attribute__((weak)) void oneios_net_start(void) {}
 
 void oneios_drivers_start(void) {
     oneios_bridge_start();
@@ -330,5 +334,6 @@ void oneios_drivers_start(void) {
     oneios_thermal_start();
     oneios_camera_start();
     oneios_hid_input_start();   // after the backlight: the light sensor's device listens to its readings
+    oneios_net_start();
     oneios_audio_start();
 }

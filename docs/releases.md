@@ -18,7 +18,7 @@ window) around a ustar archive of regular files, `runtime.json` first, no top fo
 |---|---|
 | `runtime.json` | manifest, below |
 | `bin/xnuhost`, other `bin/*` | the booter and its helpers, arm64 Android, built by `runtime/build.sh` with NDK 28.2.13676358. Until that script exists: a 968-byte placeholder that prints `xnuhost: not built yet ...` and exits 2 |
-| `bin/gpuctl`, `bin/bridgectl`, `bin/brightctl`, `bin/batteryctl`, `bin/displayctl`, `bin/camctl` | the phone checks, each a tool of its own that runs as root with One UI up (`docs/gpu.md`, `runtime/bridges/README.md`, `runtime/bridges/brightness/README.md`, `runtime/bridges/battery/README.md`, `runtime/display/README.md`, `runtime/bridges/camera/README.md`). The fork's **Hardware checks** screen runs them from the staged runtime (`oneios_root.sh check <id>`, the fork's `docs/oneios.md`) |
+| `bin/gpuctl`, `bin/bridgectl`, `bin/wifictl`, `bin/brightctl`, `bin/batteryctl`, `bin/displayctl`, `bin/camctl` | the phone checks, each a tool of its own that runs as root with One UI up (`docs/gpu.md`, `runtime/bridges/README.md`, `runtime/bridges/brightness/README.md`, `runtime/bridges/battery/README.md`, `runtime/display/README.md`, `runtime/bridges/camera/README.md`). The fork's **Hardware checks** screen runs them from the staged runtime (`oneios_root.sh check <id>`, the fork's `docs/oneios.md`) |
 | `scripts/*` | `runtime/scripts/*`, when there are any |
 | `kernel/xnu.macho`, `kernel/xnu.macho.build.json` | the XNU that `kernel/` builds from Apple's open source, and its build record. Only when a kernel was built |
 | `NOTICE`, `LICENSE` | licences; with a kernel, the APSL notice (`kernel/NOTICE.kernel`) |
