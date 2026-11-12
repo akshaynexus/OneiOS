@@ -1,25 +1,26 @@
-# oneios-tool: state and what is left (2026-11-12)
+# oneios-tool: state and what is left (2026-11-12, after the Linux round)
 
-The owner stopped the Rust work on 2026-11-12 to continue it later. This file is the hand-over.
-Branch: `rustport` (not merged to `main`). Agent: rustport, with two helpers (sym + log, image).
+Branch: `rustport`. Commands, crates and every comparison with its result: [README.md](README.md). This file is
+the hand-over: what is done, what is open, and the notes behind the decisions.
 
-**Rule until further notice: Python stays the default and the only path the builds use.** No build script on
-this branch calls the Rust tool. The switches (`PRELINK_IMPL`, `IMAGETOOL_IMPL`) go in only after a byte-identical
-comparison of the whole step passes on the real inputs, and even then with `python` as the default until the
-parent says otherwise.
+Two rounds so far, both on 2026-11-12: the Mac round (sym, log, image written and compared there; stopped by the
+owner) and the Linux round (the three built and compared again on a Linux x86_64 PC; `ioslog` written; `image im4p`
+and the APFS file reader added; `prelink roots` and `hosted` ported).
+
+**Rule until further notice: Python stays the default and the only path the builds use.** The switches that
+exist (`IMAGETOOL_IMPL` in `scripts/image/build.sh` and `verify.sh`, default `python`; `kernel-inputs.sh` takes
+`oneios-tool image im4p` only when there is no `lzfse` program) change no output. `kernel/prelink/build.sh` has no
+switch.
 
 ## Summary
 
-| Tool | Code | Same output as Python | Left |
+| Tool | Code | Same output as the old tool | Left |
 |---|---|---|---|
-| `sym` | done | yes: 18 of 18 address sets byte-identical to `dsc.py` | docs; index location for the main checkout |
-| `log` | done (new tool, no Python original) | not applicable; 67 commands on 4 real logs end with status 0 | tables for more line kinds; docs |
-| `image` | done for 8 subcommands | yes: 35 of 35 compared items; the two full builds were not compared to the end | finish the full-build comparison; apply the switch patch; docs |
-| `prelink` | **not started** (stub only) | no | everything; plan below |
-| `ioslog` | **not started** (the owner's later request) | not applicable | everything; request below |
-
-Nobody ran the comparisons again after the helpers' runs. The numbers below are from the helpers' logs of
-2026-11-12. The Mac had other jobs (load average 4 to 25), so the times are not clean.
+| `sym` | done | yes: 18 of 18 address sets byte-identical to `dsc.py`, on the Mac (real logs) and on Linux (stand-in logs from the real cache) | the index's place for the main checkout; a comparison on real logs on Linux |
+| `log` | done (new tool, no Python original) | not applicable; 67 commands on 4 real logs (Mac) and 33 on 2 stand-in logs (Linux) end with status 0 | tables for more line kinds |
+| `image` | 9 subcommands, plus `apfs-ls` and `apfs-copy` | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds (the 36th: no `kernel.kc` in the Linux set, README) | decmpfs (compressed files) in the APFS reader; `IMAGETOOL_IMPL=rust` as the default is the owner's call |
+| `ioslog` | done | yes on 7 archives (CSV byte for byte, from an archive, an image and a mounted volume) | **a run on the phone's real Data store**; the Mac's `ios3-log.csv`; `checks` on a real log; `pull` |
+| `prelink` | `roots`, `hosted` (2 of 12 steps) | yes for the two, byte for byte on the real kernelcache | **the other ten steps**, the pairing and the emitter first (section 4) |
 
 ## Build and unit tests
 
@@ -28,16 +29,16 @@ cargo build --release --manifest-path tools/oneios-tool/Cargo.toml      # binary
 cargo test  --release --manifest-path tools/oneios-tool/Cargo.toml      # unit tests, synthetic data only
 ```
 
-- Rust 1.94.1. The whole workspace builds (checked at the last commit: 40 s clean).
-- `sha2` has the `asm` feature in `oneios-image` (ARMv8 SHA-256 instructions). It needs a C compiler at build time.
-- Crates in `Cargo.lock`: anyhow, memmap2, rayon, sha2 (+ sha2-asm), libc, toml (image profile), and their parts.
-  `serde` and `serde_json` are declared in the workspace but no crate uses them: `oneios-common::pyjson` writes
-  JSON text as Python's `json` module writes it (indent, separators, `ensure_ascii`, float `repr`, key order).
-- Unit tests in the tree: `oneios-common` 3, `oneios-sym` 7, `oneios-log` 7, `oneios-image` 29. The sym + log helper
-  reported its 14 as passing. The `pyjson` 3 passed. **The image helper was stopped before it reported: the result
-  of its 29 unit tests and of `tests/image/parity.py` is not confirmed.** Run `cargo test` first.
-- No Apple bytes are in the repository. The tests build their own stand-in caches, images and logs.
-- `target/` and `out/` are git-ignored already (`.gitignore` needed no change).
+- Rust 1.88+ (macos-unifiedlogs); built with 1.98.0 on Linux x86_64 (clean build 1 min 20 s with `-j2`) and with
+  1.94.1 on the Mac in the first round (before `ioslog`: check the Mac's toolchain is 1.88 or newer).
+- `sha2` has the `asm` feature in `oneios-image`. It needs a C compiler at build time.
+- Unit tests, Linux, 2026-11-12: 51 pass (`oneios-common` 3, `oneios-image` 29 + 1 `tests/apfs_files.rs`,
+  `oneios-ioslog` 4, `oneios-log` 7, `oneios-sym` 7). `tests/image/parity.py`: 138 cases, all the same. This
+  settles the first round's open point (the image helper's 29 tests and `parity.py` were never confirmed there).
+- `tests/apfs_files.rs` makes its image with `tests/ioslog/mkapfs.py` (python3; skipped with a line on stderr
+  where there is none).
+- No Apple bytes are in the repository. `target/` and `out/` are git-ignored.
+- `serde_json`'s `preserve_order` must stay off in the whole workspace (README "The rule for libraries").
 
 ## 0. First: libraries instead of hand-written code (owner, 2026-11-12)
 
@@ -55,7 +56,10 @@ bytes,** wherever a file's bytes are not hashed or signed (parse both JSON files
 messages by content). Keep byte-identical output only where a hash is checked: the image's `.hashes` files,
 `kernel.kc`, and (until Rust is the default) the seed.
 
-Review of this branch (Opus, 2026-11-12), in order:
+Review of this branch (Opus, 2026-11-12), in order. Done in the Linux round: 1 (`ioslog`, with our APFS reader
+instead of a mount, and clap, csv and regex), and of 9 the IM4P part (`image im4p` on simple_asn1 + lzfse_rust).
+Not done: 2 to 8. They change code that is compared byte for byte with Python today; do them when Rust becomes
+the default for a tool (then its comparison by meaning replaces the byte comparison):
 
 | # | Area | Now | Use | Saves | Do |
 |---|---|---|---|---|---|
@@ -93,9 +97,10 @@ Checked on 2026-11-12 (source read, not built):
   It does not check sealed-volume hashes (xnuhost verifies them). GPL: run it as a program, do not link it.
 - iOSPlus10 used no APFS library: macOS's own APFS (`hdiutil attach` + mount, `sudo`, root-macos.sh) and apfs-fuse
   on Linux, plus blacktop's `ipsw` for caches and firmware.
-So: the image build keeps our reader (sealed volumes, real owners without root, any host). `ioslog` reads the Data
-store through macOS's own read-only mount (`hdiutil attach -readonly -nomount`, `mount -t apfs -o
-rdonly,nobrowse,noowners`), which needs no owners; on a Linux host apfs-fuse, or `apfs` 0.4.1 after a test.
+So: the image build keeps our reader (sealed volumes, real owners without root, any host). **`ioslog` reads the
+Data store with our reader too** (the owner, second round: no mount, the same on Linux and macOS): the reader
+got file contents, any volume of the container and the newest checkpoint (`apfs/files.rs`), checked against
+apfs-fuse on images written by Apple's APFS and on stand-ins (README). A mounted volume still works as a source.
 
 Layout for the next round: fold the workspace into one crate with one module per subcommand where that keeps it
 simple (op10tool's layout), unless a crate boundary pays (e.g. a shared `apfs` module used by two tools).
@@ -138,8 +143,14 @@ Left, in order:
 1. Decide where the index lives for the main checkout. The built one is in the worktree
    (`out/dsc-index/77bc8c6393da3e9bbb9c0be2af0c0e17/`, 1.0 GiB) and goes away with the worktree. Move it to the
    main checkout's `out/dsc-index/` (and its `latest`), or let the first call build it again.
-2. `docs/building.md` "Rust tools" section (not written; text drafted below under "Docs").
-3. Not tested: a cache other than 24A446's; Linux.
+2. Not tested: a cache other than 24A446's.
+
+Linux round (2026-11-12): built and compared on Linux x86_64. 18 of 18 sets byte-identical to `dsc.py` (README
+"sym" has the table). The box has no log from the phone: the sets come from stand-in logs that
+`tests/sym/make-log.py` writes from the real cache (real return addresses, random frames). The cache was read
+through apfs-fuse (`.symbols` is kept compressed in the image and decompressed on every read): index build 26.4 s,
+`dsc.py` 4 to 649 s per set, `sym` 0.002 to 0.85 s, and 14.4 s for 4000 addresses with `--slide` (0.1 s on the Mac:
+with the cache at hand `sym` reads it, and here every read goes through FUSE; not looked into further).
 
 Known faults and limits (all are `dsc.py`'s behaviour, ported as it is):
 - With a short backtrace several slides tie and the lowest wins. For the 6-frame locationd crash of
@@ -188,7 +199,10 @@ Left, in order:
    `BACKLIGHT`, `oneios-keystore`. Today they show only as kinds in `diff`. `oneios-iobusy` is only in `timeline`.
 2. `timeline` does not name the lock screen: no log line says it. It lists the display's frame and swap lines.
 3. `--json` / `--csv` for `stacks`, `timeline` and `diff`.
-4. Docs.
+
+Linux round (2026-11-12): `tests/log/run.sh` on the two stand-in logs: 33 commands, all status 0, two runs equal.
+Those logs hold thread lines and one crash only, so the tables and `timeline` read almost nothing there; `stacks`
+found both slides and named every frame. A run on real session logs on Linux is open (none on the box).
 
 Known faults and limits:
 - The tie-break of `stacks` for short backtraces is an inference, not a fact from the sources: it takes the slide
@@ -204,7 +218,9 @@ Done for `profile`, `apfs-info`, `apfs-owners`, `hashes`, `tree-copy`, `seed-pac
 set folder. Crate `crates/oneios-image` (`apfs.rs`, `hashes.rs`, `seed.rs`, `tar.rs`, `manifest.rs`, `profile.rs`,
 `py.rs`, `fixtures.rs` for tests).
 
-Not ported, on purpose: `check-ipsw`, `fetch`, `record-plain`, `aea-info`, `im4p`, `pack`, and `verify` of a
+Since the Linux round also `im4p`, and `apfs-ls` and `apfs-copy` (`im4p.rs`, `apfs/files.rs`, `apfs_tools.rs`).
+
+Not ported, on purpose: `check-ipsw`, `fetch`, `record-plain`, `aea-info`, `pack`, and `verify` of a
 `.tar.zst`. They are network or one-off helpers. `oneios-tool image X` starts
 `python3 -I scripts/image/imagetool.py X ...` for them (`IMAGETOOL_PY` names the script).
 
@@ -229,7 +245,7 @@ tools/oneios-tool/tests/image/parity.py -v                      # both tools on 
 ```
 
 Env: `ONEIOS_MAIN` (the checkout whose `out/` and `inputs/` hold the set), `TOOL` (the binary), `OS_ROOT`, `WORK`,
-`KEEP=1`. `FULL_BUILD=1` needs the switch patch applied first (below); without it both builds run the Python tool.
+`KEEP=1`. `FULL_BUILD=1` builds the set twice, with `IMAGETOOL_IMPL=python` and `rust`, and compares every file.
 
 Result of the helper's last run (`SKIP_SLOW=1 FULL_BUILD=1`, one run each, the Mac loaded):
 
@@ -265,16 +281,29 @@ Best of three runs (the helper's timing script, same loaded Mac):
 | `verify` | 25.44 s | 8.81 s | 2.9x |
 | the build's four (tree-copy, seed-pack, manifest, verify) | 59.99 s | 26.78 s | 2.2x |
 
+Linux round (2026-11-12), which closes the first round's open points 1 to 4 and 6:
+- `cargo test`: the 29 unit tests pass; `tests/image/parity.py`: 138 cases, all the same.
+- The switch patch is applied (`IMAGETOOL_IMPL=python|rust`, default `python`, and `ONEIOS_TOOL`, in
+  `scripts/image/build.sh` and `scripts/image/verify.sh`); the patch file is gone.
+- `FULL_BUILD=1 BUILD_ARGS=--no-hook tests/image/compare-python.sh`, nothing skipped, on a set built on the Linux
+  PC from the fetched IPSW (no kernel, no hook): 35 items the same, the whole-volume `apfs-owners` (Python 385 s,
+  Rust 2.7 s) and the two full builds (every file of the two sets) among them. One item differs as documented:
+  `apfs-info kernel.kc` on a set that has no `kernel.kc` (Python's traceback against one line). README "image"
+  has the table.
+- Added: `im4p` in Rust (simple_asn1 + lzfse_rust; the kernelcache decodes to the pinned SHA-256), and the
+  commands only this tool has, `apfs-ls` and `apfs-copy` (the APFS file reader `apfs/files.rs`, which `ioslog`
+  uses; checked against apfs-fuse, README "ioslog").
+
 Left, in order:
-1. Run `cargo test -p oneios-image` and `tests/image/parity.py` and record the result (not confirmed, see above).
-2. Apply `tools/oneios-tool/patches/imagetool-impl-switch.patch` (`git apply` from the repository root). It adds
-   `IMAGETOOL_IMPL=python|rust` (default `python`) and `ONEIOS_TOOL` to `scripts/image/build.sh` and
-   `scripts/image/verify.sh`. It is kept as a patch because this branch's commits touch only `tools/oneios-tool/`.
-3. Run `FULL_BUILD=1 tools/oneios-tool/tests/image/compare-python.sh` to the end, and once without `SKIP_SLOW`.
-4. Only then land the switch, with `python` as the default.
-5. `hashes` and `verify` are limited by reading 16 GiB once (the whole-file SHA-256 is sequential). `tree-copy`
+1. A comparison on a set with a kernel and with the userland hook (this box had neither `kernel.kc` nor the built
+   plug-ins): `FULL_BUILD=1 tools/oneios-tool/tests/image/compare-python.sh` where the set is built for the phone.
+2. `im4p`: the Rust decoder and the `lzfse` program side by side on one host (the result is checked against the
+   pinned hash, which the `lzfse` program made on the Mac).
+3. `IMAGETOOL_IMPL=rust` as the default: the owner's decision.
+4. `hashes` and `verify` are limited by reading 16 GiB once (the whole-file SHA-256 is sequential). `tree-copy`
    is limited by the file copies. More speed needs fewer passes over the images (for example hash while copying).
-6. Docs: `docs/building.md` "Rust tools", `docs/image-format.md` if the tool is named there.
+5. `seed-pack` of the copied tree was slower than Python in the Linux run (14.9 s against 12.0 s, one run each on
+   a loaded box): measure it alone before believing either number.
 7. Not tested: Linux (apfs-fuse path of the comparison script).
 
 Known differences from the Python tool, on purpose (listed in `crates/oneios-image/src/lib.rs`):
@@ -285,81 +314,77 @@ Known differences from the Python tool, on purpose (listed in `crates/oneios-ima
 
 ## 4. `prelink`: the kernel collection's pairing and build
 
-**Not started.** `crates/oneios-prelink` is a stub that prints "not built yet" and exits 2. No `PRELINK_IMPL`
-switch exists in `kernel/prelink/build.sh`.
+**Two of twelve steps are ported.** `crates/oneios-prelink`: `roots.rs` (`roots.py`), `hosted.rs` (`hosted.py`).
+Each takes the Python step's arguments and writes the same files; `tests/prelink/compare-python.sh` runs both on the
+real kernelcache and compares stdout, the exit status and every file with `cmp`: all the same (README "prelink":
+`select.json`, `hosted.json`, `kernelcache.hosted.macho`; Python 1.1 s and 5.3 s, Rust 0.05 s and 1.7 s).
+`kernel/prelink/build.sh` has no `PRELINK_IMPL` switch and runs Python.
 
-What to port (sizes in lines of Python):
-- XnuPrelink at pin `9b950f2` (`external/XnuPrelink`): `fileset_match.py` 1086, `fileset_emit.py` 804,
-  `fileset_segmented.py` 378, `fileset_layout.py` 333, `kc_image.py` 229, `fileset_shape.py` 47,
-  `native_prelink.py` 264, `emit_prelink.py` 381.
-- `kernel/prelink/`: `emit.py` 216, `align.py` 313, `audit.py` 334, `stubs-check.py` 63, `lead/imports.py` 153;
-  and the small steps `build.sh` runs: `native-input.py`, `merge-reviewed.py`, `roots.py`, `hosted.py`,
-  `kclasses.py`, `structors.py`, `vtables.py`, `record.py`.
+Why only two: the Linux PC had no hosted kernel (`xnu.macho`, `reference.macho`) during the round, and every other
+step reads it. These two read the kernelcache alone, which `scripts/image/kernel-inputs.sh` now makes without the
+`lzfse` program. The comparison inputs for the rest, once a kernel is built
+(`HOSTED_OUT=NAME XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`): run the Python build into a scratch `OUT` with
+`KERNEL=`, `KERNELCACHE=`, `REFERENCE=`, `XNUPRELINK=` set, keep its `work/`, and compare each Rust step's file.
 
-Times today (the parent's numbers): 70 s cold, 19 s warm; `match_images` 20 s, emit 8 s, align 4 s, audit 3 s.
+What is left, in the order to do it (lines of Python; XnuPrelink at pin `9b950f2`, `external/XnuPrelink`):
 
-Plan:
-1. One Rust subcommand per Python step, with the same arguments and the same output file, so each step can be
-   swapped and compared alone: `oneios-tool prelink match|align|kclasses|structors|vtables|emit|audit|stubs-check`.
-2. Order by time: `match` (writes `match.map.json`), `emit` (`kernel.kc`, `kernel.kc.prelink.json`), `align`
-   (`aligned-*.json`), `audit` (`kernel.kc.binds.json`), then the rest.
-3. Output formats to keep byte for byte (`pyjson::dumps(value, indent, sort_keys=false)`):
-   `fileset_match.py` `indent=1` with **no** final newline; `fileset_emit.py` report `indent=2` + newline;
-   `align.py`, `audit.py --report`, `kclasses.py`, `structors.py`, `vtables.py`, `merge-reviewed.py`, `record.py`,
-   `lead/imports.py` `indent=1` + newline; `audit.py --draft` `indent=0` + newline; `hosted.py`, `roots.py`,
-   `native-input.py` `indent=1` with no final newline (`json.dump`).
-4. The emitter refuses a pairing from another matcher: `build.sh` keys `match.map.json` on the SHA-256 of
-   `fileset_match.py`. A Rust matcher must write the same key fields or the cache key must name the Rust tool.
-5. Parallelize per image (matching, fixup walks) with rayon; collect in the Python order before writing.
-6. `PRELINK_IMPL=rust|python` in `kernel/prelink/build.sh`, default `python`.
+| # | Step | Python | Reads | Notes |
+|---|---|---|---|---|
+| 1 | the image reader | `kc_image.py` 229, `fileset_shape.py` 47 | - | `Image` (segments, fileset entries, symbols, function starts, chained fixups), `scan`, `checked_shape`. Every later step uses it. Can be checked on the kernelcache alone (dump the fixups and each function's digest from both and compare) |
+| 2 | `native-input` | `native-input.py` 108 | the kernel | writes `native.macho`, `native-input.json` |
+| 3 | `merge-reviewed` | `merge-reviewed.py` 57 | the reviewed records, `llvm-nm` | |
+| 4 | `match` | `fileset_match.py` 1086 | kernelcache, kernel, reference | 20 s of the build's 70 s. Writes `match.map.json` (`indent=1`, no final line end). Dictionaries and sets are iterated in many places: keep Python's insertion order (a `Vec` plus an index, as `hosted.rs`'s `Counter`), and check every `next(iter(set))` is on a set of one. `build.sh` keys the cached map on the SHA-256 of `fileset_match.py`; a Rust matcher needs its own key |
+| 5 | `align`, `kclasses`, `structors`, `vtables` | 313, 139, 191, 112 | the map, the kernel | `align.py` uses `random` with a seed: port the generator or keep the step in Python |
+| 6 | `emit` | `emit.py` 216 over `fileset_emit.py` 804, `fileset_layout.py` 333, `fileset_segmented.py` 378 | everything | 8 s. `kernel.kc` is hashed: byte for byte (its sha256 and `kernel.kc.prelink.json`) |
+| 7 | `audit`, `record`, `stubs-check` | 334, 118, 63 | `kernel.kc` | |
 
-Comparison inputs and the expected result:
-- Kernel and reference: `out/parent-wt/out/kernel/current-hosted-prelink/xnu.macho` and `reference.macho` (the
-  clean build from `c0b8618`), under the main checkout.
-- Kernelcache: `out/kernel-inputs/24A446/kernelcache.macho` (78135296 bytes).
-- Python outputs of these inputs: `out/parent-wt/out/kernel/24A446/` (`kernel.kc` 94240768 bytes, sha256
-  `1e297354...`, `kernel.kc.hashes`, `kernel.kc.prelink.json`, `kernel.kc.binds.json`) and every step's file in
-  its `work/` (`match.map.json`, `aligned-native.json`, `aligned-reference.json`, `kclasses.json`,
-  `structors.json`, `vtables.json`, `select.json`, `hosted.json`, `reviewed.merged.json`).
-- Run the Python build into a scratch `OUT` with `KERNEL=`, `KERNELCACHE=`, `REFERENCE=`, `XNUPRELINK=` set
-  (a worktree has no `external/` and no `out/`), then compare each Rust step's file with `cmp`.
-- The comparison script to write: `tools/oneios-tool/tests/prelink/compare-python.sh`.
+JSON formats to keep byte for byte (`pyjson::dumps(value, indent, sort_keys=false)`): `fileset_match.py`
+`indent=1` with no final newline; `fileset_emit.py` report `indent=2` + newline; `align.py`, `audit.py --report`,
+`kclasses.py`, `structors.py`, `vtables.py`, `merge-reviewed.py`, `record.py`, `lead/imports.py` `indent=1` +
+newline; `audit.py --draft` `indent=0` + newline; `hosted.py`, `roots.py`, `native-input.py` `indent=1` with no
+final newline (`json.dump`). Times today (the parent's numbers on the Mac): 70 s cold, 19 s warm; `match_images`
+20 s, emit 8 s, align 4 s, audit 3 s. Parallelize per image with rayon; collect in Python's order before writing.
 
-## 5. `ioslog`: iOS's unified log from the phone's Data store (the owner's request, not started)
+`roots.rs` copies `roots.py`'s rule and its two lists. Until Python is retired a change to one must be made to the
+other; the comparison shows a drift.
 
-A subcommand `oneios-tool ioslog`, built on Mandiant's `macos-unifiedlogs` crate (crates.io, Apache-2.0; the
-owner approved it; pin it in `Cargo.lock`). The parent did these steps by hand and found the touch fault with
-them (`NN >= MAX_PATH_COUNT` in backboardd's TouchEvents). Everything is read-only for the phone.
+## 5. `ioslog`: iOS's unified log from the phone's Data store
 
-1. `ioslog pull`: copy `/data/local/tmp/oneios/data/data.img` from the phone with
-   `adb exec-out "su -c 'cat ...'"`, **only when no session runs** (`pidof xnuhost` is empty). Check the free
-   disk first. Write the file sparsely in the tool itself: skip all-zero 4 MiB blocks with a seek (macOS
-   `dd conv=sparse` did not stay sparse). A faster pull to try: read only the data extents on the phone
-   (`SEEK_DATA` / `SEEK_HOLE`) or send the stream through gzip.
-2. Attach it read-only:
-   `hdiutil attach -readonly -noverify -nobrowse -imagekey diskimage-class=CRawDiskImage -nomount`, mount the
-   Data volume with `mount -t apfs -o rdonly,nobrowse,noowners`, copy
-   `db/diagnostics/{Persist,Special,Signpost,HighVolume,timesync}` and `db/uuidtext/*` into a `.logarchive`
-   folder under `out/` (git-ignored), then detach.
-3. Parse the archive with the crate (the parent's run: 2.87 M entries from a 285 MB archive) and filter:
-   `--boot last|UUID`, `--since` / `--until` (guest UTC), `--proc`, `--subsystem`, `--category`, `--grep REGEX`;
-   output as text, CSV or JSONL.
-4. `ioslog checks`: print the known problems: `MAX_PATH_COUNT` drops, UISensor mode changes
-   (`digitizerEnabled`, `pocketTouchesExpected`), backlight states, crashes and "Too many corpses", launch
-   constraint violations, jetsam kills.
+**Written and compared; not run on the phone's Data store.** `crates/oneios-ioslog` (`lib.rs`: command line,
+filters, outputs, boots; `source.rs`: the files of an image, an archive or a mounted volume as the decoder's
+provider; `checks.rs`). README "ioslog" has the commands, the comparison and its table.
 
-Notes: the guest's clock is about a day behind the host's, so its log dates are too. The parent's archive for
-tests (read only): `<session scratchpad>/ios.logarchive`. Never touch the phone while a session runs, and never
-write to it. Unit tests must not hold Apple's log files. Document it in `docs/building.md` "Rust tools".
+Decisions:
+- macos-unifiedlogs 0.8.0 from GitHub at commit `3d5b27a` (pinned in `Cargo.lock`), not 0.7.0 from crates.io: 0.8.0
+  has the provider that loads string files by UUID and the lazy `message()`, which the filters use. When 0.8.0 is
+  on crates.io, name the version instead of the commit.
+- The Data store is read with our APFS reader, at its newest checkpoint; no `.logarchive` copy is made unless
+  `ioslog save` is asked for.
+- CSV and JSON lines are `unifiedlog_iterator`'s so that the two can be compared with `cmp`.
 
-## Docs (not written)
+Open, in order:
+1. **Run it on a real `data.img`** (copy the store after a session, `docs/newtodo.md` "How to resume" step 2; then
+   `oneios-tool ioslog boots data.img`). What a real store may show that the stand-ins do not: an APFS written by
+   iOS's own kernel after many transactions (several levels of object map and file-system tree, snapshots, files
+   with many extents). `image apfs-ls data.img db/diagnostics --volume Data --newest` and
+   `tests/image/apfs-read.sh data.img 2` (Linux, against apfs-fuse, with `NEWEST=1`) check the reader alone.
+2. On the Mac: `tests/ioslog/compare.sh out/session-logs/2026-11-12/ios3.logarchive`, and `ioslog show` of it
+   against `ios3-log.csv` (the same only if that file was made by `unifiedlog_iterator` at commit `3d5b27a`).
+3. `checks`: its patterns are the texts the notes quote; run it on a real log and correct them.
+4. `ioslog pull`: copy `data.img` from the phone (`adb exec-out "su -c 'cat ...'"`, only when `pidof xnuhost` is
+   empty, free disk checked, written sparsely in the tool: skip all-zero 4 MiB blocks with a seek). Not written:
+   no phone on the Linux PC. Until then `docs/newtodo.md`'s adb line.
+5. An `Info.plist` in the saved archive, if Apple's `log show --archive` is wanted on it.
+6. The APFS reader does not read compressed files (decmpfs). Log files are not compressed; the OS volumes' files
+   mostly are (2,910 of 3,347 in the SystemOS and AppOS images, the shared cache's `.symbols` among them), so
+   `image apfs-copy` cannot replace a mount for `sym` yet. `flate2` and `lzfse_rust` would do it; LZVN needs a look.
 
-`CLAUDE.md` asks for the docs in the same commit. They are not written because the work stopped and this
-branch's commits are limited to `tools/oneios-tool/`. When the work continues, add a "Rust tools" section to
-`docs/building.md` with the commands above, and name the tools in `docs/image-format.md` and
-`kernel/prelink/README.md` when their switches land. Also write the top-level
-`tools/oneios-tool/tests/compare-python.sh` that runs the per-tool scripts (`tests/sym`, `tests/image`,
-`tests/log/run.sh`, and `tests/prelink` when it exists).
+## Docs
+
+Written in the Linux round: [README.md](README.md) (the tool's own: commands, crates, comparisons), `docs/building.md`
+section 10 "Rust tools" and section 1 (`kernel-inputs.sh` without `lzfse`), `docs/image-format.md` (the kernel
+inputs' tools), `CLAUDE.md`'s table. Also written: `tests/compare-python.sh`, which runs every tool's comparison whose inputs are named. Not written:
+`kernel/prelink/README.md` (no prelink switch yet).
 
 ## Notes for the next agent
 
@@ -370,4 +395,11 @@ branch's commits are limited to `tools/oneios-tool/`. When the work continues, a
 - Give each parallel agent its own `CARGO_TARGET_DIR` (`tools/oneios-tool/target/<name>`), or the builds wait on
   each other.
 - The scratch outputs of the comparisons are in the worktree's `out/` (`rustport-sym/`, `rustport-log/`,
-  `rustport-image/logs/`, `dsc-index/`): git-ignored, they go away with the worktree.
+  `rustport-image/`, `rustport-ioslog/`, `rustport-prelink/`, `rustport-apfs*/`, `dsc-index/`): git-ignored, they
+  go away with the worktree.
+- Linux box notes (2026-11-12): no IPv6 route (`scripts/fetch/remotezip.py` was fixed in the main checkout to move
+  on after 5 s); no `lzfse` program (`kernel-inputs.sh` uses `oneios-tool image im4p`); the dyld shared cache is
+  read through apfs-fuse (`apfs-fuse -o ro inputs/24A446/043-70037-715.dmg out/dsc`), where `.symbols` is
+  decompressed on every read, so `dsc.py` and the index build are several times slower than on the Mac.
+- Mandiant's test archives (`tests/ioslog/compare.sh`'s inputs) are 2.4 GB unpacked: BUILDING.md of
+  github.com/mandiant/macos-unifiedlogs has the download. They are other people's Mac logs: keep them in `out/`.

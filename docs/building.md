@@ -42,6 +42,15 @@ scripts/image/kernel-inputs.sh "$P"                 # Apple's kernelcache and de
                                                     # (without inputs/24A446/ it fetches only those, 24 MB)
 ```
 
+`kernel-inputs.sh` decodes the two IM4P members (the kernelcache's payload is LZFSE) with `imagetool.py im4p` when the
+`lzfse` program is on `PATH`, and otherwise with `oneios-tool image im4p` (LZFSE by the `lzfse_rust` crate, no other
+program; build it with `cargo build --release --manifest-path tools/oneios-tool/Cargo.toml`, section 10).
+`IM4P_TOOL=PATH` names a `oneios-tool` binary and makes it the decoder in either case. Whichever ran, the script then
+checks `kernelcache.macho` against the SHA-256 the kernel profile pins (`kernel/unixnu/profiles/os/ios-27.0.1-24A446/
+profile.toml`, `kernelcache_sha256`) and stops when it differs. On the Linux PC on 2026-11-12, without `lzfse`:
+78135296 bytes, sha256 `349c4692...0c57e3`, the pinned one (which was made with the `lzfse` program on the Mac), in
+0.7 s. Not compared: the two decoders run side by side on one host (no `lzfse` program on the PC).
+
 The set is built after `kernel.kc` exists (step 3), so that it carries the kernel:
 
 ```sh
@@ -522,3 +531,41 @@ scripts/bg.sh metal userland/metal/build.sh
 
 Then rebuild the image set (section 1): the hook places the bundle and lists its two CDHashes. What the build does,
 what was changed for the iPhone's shared cache and what is verified: [gpu.md](gpu.md) section 7.
+
+## 10. Rust tools (`oneios-tool`)
+
+`tools/oneios-tool` is one binary with the project's host tools in Rust: `sym` (the backtrace symbolizer,
+`scripts/debug/dsc.py`), `log` (reads an xnuhost session log), `image` (`scripts/image/imagetool.py`), `ioslog` (iOS's
+own unified log out of a copy of the phone's Data store, without a mount) and `prelink` (two steps of
+`kernel/prelink/build.sh` so far). Commands, crates, and each tool's comparison with the Python tool it replaces:
+[tools/oneios-tool/README.md](../tools/oneios-tool/README.md); what is left:
+[tools/oneios-tool/todo_rust.md](../tools/oneios-tool/todo_rust.md).
+
+```sh
+cargo build --release --manifest-path tools/oneios-tool/Cargo.toml     # -> tools/oneios-tool/target/release/oneios-tool
+cargo test  --release --manifest-path tools/oneios-tool/Cargo.toml     # unit tests, no Apple file
+```
+
+Rust 1.88 or newer (built with 1.98.0); the first build downloads the crates and one git dependency
+(macos-unifiedlogs, pinned by commit in `Cargo.lock`). Linux x86_64 and macOS arm64.
+
+**The builds use the Python tools.** Where a Rust tool can be chosen, Python is the default:
+
+| Script | Switch | Effect |
+|---|---|---|
+| `scripts/image/build.sh`, `scripts/image/verify.sh` | `IMAGETOOL_IMPL=rust` (default `python`), `ONEIOS_TOOL=PATH` | `oneios-tool image` runs profile, apfs-info, apfs-owners, hashes, tree-copy, seed-pack, manifest and the set folder's verify; pack and the archive's verify stay with the Python tool. Same files, byte for byte (README "image") |
+| `scripts/image/kernel-inputs.sh` | none needed; `IM4P_TOOL=PATH` forces it | without the `lzfse` program the kernelcache is decoded by `oneios-tool image im4p`; the result is checked against the pinned SHA-256 either way (section 1) |
+| `kernel/prelink/build.sh` | none | Python only; `oneios-tool prelink roots` and `hosted` exist and are compared, the other steps are not ported |
+
+iOS's own log of a session, from a copy of the Data store (replaces the mount-and-copy steps of
+[newtodo.md](newtodo.md) "How to resume" step 2; no mount, Linux and macOS):
+
+```sh
+oneios-tool ioslog boots data.img                                   # which boots the log holds
+oneios-tool ioslog show data.img --boot last --proc backboardd      # text; -f csv|jsonl -o FILE for a file
+oneios-tool ioslog checks data.img                                  # counts of the known problems' lines, last boot
+oneios-tool ioslog save data.img out/session.logarchive             # the .logarchive the manual steps made
+```
+
+Tested on stand-in images and on Mandiant's test archives (CSV byte for byte what `unifiedlog_iterator` writes);
+**not yet run on a Data store from the phone** (README "ioslog": what was compared and what was not).

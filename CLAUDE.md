@@ -29,6 +29,7 @@ command that no longer works, or a status that has moved on. If you are unsure w
 | What the OneOS fork reads or does (session ABI, stage layout, start/stop) | `oneos/interface.md` (and the fork's `docs/oneios.md`) |
 | A new reference repo or pin | `docs/references.md`, `scripts/setup/get-references.sh` |
 | A phone check tool's commands or output | its `README.md` "On the phone" section |
+| The Rust tools (`tools/oneios-tool`: sym, log, image, ioslog, prelink), a comparison with the Python tool they replace | `tools/oneios-tool/README.md` (commands, the comparison and its result, crates), `tools/oneios-tool/todo_rust.md` (what is left), `docs/building.md` section 10 |
 
 Write docs as facts: what it does, the exact commands, what was tested and what was not. Mark guesses as guesses.
 The board (`docs/agents.md`) is for coordination between agents; it is **not** a substitute for the docs above.

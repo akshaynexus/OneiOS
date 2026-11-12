@@ -288,7 +288,7 @@ The same commands on Linux and on macOS; neither needs root. `build.sh` picks th
 | Seed as tar | yes | yes (xattrs read with libc's `listxattr`, which Python lacks on macOS) |
 | Seed as APFS (`--seed apfs`) | **no**: nothing on Linux writes this APFS | `newfs_apfs`, as root (`sudo`). Not run |
 | Hash lists, manifest, archive | python3, `zstd` | same (Homebrew's `zstd`) |
-| Kernel inputs | python3, `lzfse` | same |
+| Kernel inputs | python3, and `lzfse` or `oneios-tool` (`image im4p`; `scripts/image/kernel-inputs.sh` takes the one that is there) | same |
 
 **The owners on macOS.** A volume a user attaches with owners honoured keeps root's folders closed to that user,
 and attaching as root needs `sudo`. So `build.sh` attaches with owners ignored and reads the real owner, group and
