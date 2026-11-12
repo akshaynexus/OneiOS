@@ -39,6 +39,47 @@ cargo test  --release --manifest-path tools/oneios-tool/Cargo.toml      # unit t
 - No Apple bytes are in the repository. The tests build their own stand-in caches, images and logs.
 - `target/` and `out/` are git-ignored already (`.gitignore` needed no change).
 
+## 0. First: libraries instead of hand-written code (owner, 2026-11-12)
+
+The rule for the next round: **use a maintained library for every format and every generic job. Keep hand-written
+code only where no library exists, or where ours is measured to be faster or more efficient** (say the numbers in
+a comment). Model: iOSPlus10's `tools/op10tool` (/Users/akshaycm/Documents/GitRepos/iOSPlus10/tools/op10tool):
+1,347 lines for 6 tools, one crate, one small file per subcommand, each a thin wrapper around a library
+(`im4p.rs` is 30 lines on simple_asn1 + lzfse_rust; `ipsw.rs` 164 on zip + ureq; `img2simg.rs` 172 on
+android-sparse), clap derive, and `tests/compare-python.sh` with the Python versions as references. This branch is
+9,567 lines for 3 tools and uses 6 crates; serde and serde_json are declared and unused.
+
+Why it grew: the brief asked for byte-identical output to Python, which forced Python's `json.dumps`, `repr`,
+`shlex`/`urllib` quoting and `tarfile` bytes to be rewritten by hand. From now on: **compare by meaning, not by
+bytes,** wherever a file's bytes are not hashed or signed (parse both JSON files and compare the values; compare
+messages by content). Keep byte-identical output only where a hash is checked: the image's `.hashes` files,
+`kernel.kc`, and (until Rust is the default) the seed.
+
+Review of this branch (Opus, 2026-11-12), in order:
+
+| # | Area | Now | Use | Saves | Do |
+|---|---|---|---|---|---|
+| 1 | `ioslog` | not written | `macos-unifiedlogs` 0.8.0 (Apache-2.0, needs Rust 1.88+): all decoding. `LiveSystemProvider::with_roots(<mnt>/db/diagnostics, <mnt>/db/uuidtext)` reads the mounted Data volume directly (no `.logarchive` copy; keep a copy only as `--save`). Filter in the visit callback on cheap fields (boot, pid, process, subsystem, category, time) before `message()`, which formats lazily. | the whole decoder; our wrapper about 400-600 lines | first |
+| 2 | JSON | `oneios-common/src/pyjson.rs` 552 lines | serde_json with `preserve_order` and derive; a small `Formatter` only where a JSON file's bytes are hashed | about 400 | replace |
+| 3 | CLI | each tool parses argv by hand | clap 4 derive, one style for all subcommands | 150-300 | replace |
+| 4 | xattrs, file calls | raw `libc` list/get/set xattr, futimens, mkfifo in `seed.rs` | `xattr` 1.x, std / `filetime` | 60-100 of unsafe code | replace |
+| 5 | encoders | `oneios-image/src/py.rs` 349 | percent-encoding, base64; drop Python `repr` and `OSError` texts unless a message must match | about 100+ | replace |
+| 6 | pax tar | `oneios-image/src/tar.rs` 217 | `tar` 0.4 (`Builder`, `append_pax_extensions`) once Rust is the default (accept one new seed hash) | about 150 | replace later |
+| 7 | plist, uuid | hand bits | `plist`, `uuid` | small | replace |
+| 8 | dyld cache + Mach-O | `oneios-sym/src/cache.rs` 298 | `object`'s `read::macho::DyldCache` if it reads the `.symbols` local symbols (check first); today 18 of 18 sets match dsc.py | small | only if iOS changes the format |
+| 9 | IPSW / IM4P (prelink inputs, fetch) | Python | `zip` + `ureq` for remote reads, `simple_asn1` + `lzfse_rust` for IM4P, as op10tool | - | for prelink and fetch |
+
+Keep (no library, or ours is measured faster):
+- `oneios-image/src/apfs.rs` (690): no maintained Rust crate reads iOS's sealed APFS volumes; it gives the real
+  owners without root (the other way is a root mount).
+- `oneios-image/src/hashes.rs` (382): one read pass feeding the whole-file SHA and the rayon chunk SHAs; the speed
+  work (sha2 with `asm` and rayon are libraries already).
+- `oneios-sym/src/index.rs` (605): the project's own on-disk index; the reason `sym` answers in milliseconds.
+- `oneios-log`: xnuhost's own log format (cut and joined records); add `regex` only for `--grep`.
+
+Layout for the next round: fold the workspace into one crate with one module per subcommand where that keeps it
+simple (op10tool's layout), unless a crate boundary pays (e.g. a shared `apfs` module used by two tools).
+
 ## 1. `sym`: the backtrace symbolizer (port of `scripts/debug/dsc.py`)
 
 Done. Crate `crates/oneios-sym` (`lib.rs`, `cache.rs`, `index.rs`, `tests/synthetic.rs`).
