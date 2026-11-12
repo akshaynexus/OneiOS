@@ -39,6 +39,13 @@ the Linux runtime 0.1.6 does the same, and the owner unlocked it to the Home Scr
 Volume Up + Volume Down chord did not return; five returns by `session/return.request` or after a panic all came back
 to One UI in place. Numbers per area: `docs/hardware.md` 0.1; the test cycle: `docs/building.md` section 6.
 
+The Mac `kernel.kc` with the known-good pairs (2026-11-12, agent prelink; `kernel/prelink/README.md`, "Known-good
+pairs" and "On the phone (2026-11-12, prelink)"): kernel and collection from origin/main `924a0d9` (series through
+0039), runtime 0.1.8-dev. Boot frame at +102 s, then about 11 minutes of lsd registering the staged apps (the first
+boot of 0035/0037 on this Data store) while SpringBoard waited for the LaunchServices database; then the lock screen,
+the owner's swipe unlocked it, and the Home Screen showed the apps (their icons do not draw right yet). No panic and
+no call to the panic stub in 23 minutes. This set is the phone's baseline now.
+
 On the PC (xnuhost under `qemu-aarch64`, 8 vCPUs, the real iOS 27.0.1 `24A446` image set, `kernel.kc` with the
 iPhone18,2 kexts), the boot gets through:
 

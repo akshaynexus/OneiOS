@@ -298,6 +298,28 @@ Screen, where all of them were on the stub or unpaired too. That is the evidence
   them) and the code has not told them apart. A stub panic from one of these names it (`unmapped.py`); its pair goes
   into the list.
 
+### On the phone (2026-11-12, prelink): the Mac collection boots to the Home Screen
+
+Set: the hosted kernel built from a clean tree at origin/main `924a0d9` (series through `0039`, every archive on main;
+`HOSTED_OUT=prelink`, 240 s), `kernel.kc` `66faa3e8` (94,224,384 bytes; 2,712 paired, 92 on the stub, 9 data
+unpaired, 0 audit failures, 666 `.original` stubs good; the pairing cold, 70 s), runtime 0.1.8-dev (`285204a4`),
+the app 588b155, the phone's seed and Data store of 2026-11-11. Logs: `out/phone-baseline/2026-11-12/prelink/`.
+- Session 1 (10:18-10:25): first frame (backboardd's boot frame) at +89 s; launchd, SpringBoard and the daemons ran,
+  no panic and no stub call in 6.5 min. Ended by my return.request while lsd was still registering apps.
+- Session 2 (10:28-10:51, `oneios-ubt=SpringBoard,backboardd,lsd`): boot frame at +102 s; then 11 min of lsd at
+  65-120 % (the first registration of the staged apps, 0035/0037) while SpringBoard's main thread waited for the
+  LaunchServices database lock (`_LSContextInitCommon`) and another thread on a synchronous XPC reply from chronod
+  (`-[CHSChronoServicesConnection _subscribeToExtensions]`). At +11 min the lock screen drew (swaps 3 -> 282 in
+  100 s, PosterBoard and the widgets), the owner's swipe unlocked it, and the Home Screen showed the apps (the icons
+  do not draw right yet: agent gpu). No panic and no call to the panic stub in the session.
+- The session ended at 10:51:54 with a reboot of the phone that was not the session's: a host kernel panic in a
+  `grep` of another agent reading the Wi-Fi driver's sysfs node `runtime_pm` (`hdd_sysfs_runtime_pm_show` ->
+  `hif_rtpm_log_debug_stats`, a BRK in `qca_cld3_kiwi_v2`), from `/proc/last_kmsg`; xnuhost's log ends quietly.
+- Touch: the owner's swipe at 10:40:57 drew a guest frame and unlocked; injected swipes (`touch` writing the
+  touch screen's evdev node) arrived in the guest's HID but drew no frame, in both sessions.
+- So the Mac collection boots at least as far as the Linux one (which had the Home Screen empty, without 0035-0037),
+  and it is the phone's baseline now.
+
 ### Hot spots and timings (for the later Rust port)
 
 On the M4: one `match_images` (the original against the reference) takes 20 s, the matcher with a reference runs two
@@ -374,4 +396,4 @@ the HMACs), `audit.py` 3 s, the record and the chunk hashes 1 s.
   (`X18=1 build.sh`, slow).
 - `record.py` fails when `OUT` resolves outside the repository it runs from (a worktree with `out` as a symbolic
   link): `work/kernel.kc` is complete by then.
-- The Mac collection with the known-good pairs: see "Known-good pairs" for its phone run.
+- The phone run of the Mac collection: "On the phone (2026-11-12, prelink)" above.

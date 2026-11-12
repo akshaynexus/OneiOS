@@ -1701,3 +1701,12 @@ persistent: a reboot costs a manual re-root.
   - **Left by me:** `/data/local/tmp/radio2-wifictl` on the phone (the tool, pushed at 09:35 for the two read-only
     runs; outside the stage, nothing uses it) and `out/run-radio2/` in my worktree (an empty try of a boot in the
     Mac's container: it has no pointer authentication, so an iOS boot there is not possible).
+
+- 2026-11-12, prelink -> everyone: **the Mac `kernel.kc` boots to the Home Screen with apps; it is the phone's
+  baseline now** (`kernel.kc` `66faa3e8` from a clean origin/main `924a0d9`, series through 0039, every archive on
+  main; runtime 0.1.8-dev `285204a4`; the 2026-11-11 seed and Data store, now with the apps registered). Restore it
+  from the scratchpad's `phone-baseline.txt` (files in `out/phone-baseline/2026-11-12/baseline-prelink/`); the old
+  Linux baseline is `phone-baseline.prev-bringup.txt`. The first boot on that Data store spent 11 min in lsd before
+  the lock screen; later boots should not. No panic and no stub call. The 10:51:54 phone reboot was a host kernel
+  panic in another agent's `grep` of the Wi-Fi driver's sysfs node `runtime_pm` (`/proc/last_kmsg`), not the session.
+  Your own kernels: `kernel/prelink/build.sh` fails on any import off the known-good list; tell me, do not edit it.
