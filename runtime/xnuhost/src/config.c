@@ -17,7 +17,9 @@ void xh_config_defaults(xh_config *c)
   // One vCPU per core of the host, up to the 8 the phone has (the bridges give them its cluster types).
   long cores = sysconf(_SC_NPROCESSORS_ONLN);
   c->ncpu = cores < 1 ? 1 : cores > XH_MAX_CPUS ? XH_MAX_CPUS : (unsigned)cores;
-  c->ram_bytes = 4ull << 30;
+  c->ram_bytes = 0;                      // auto
+  c->ram_percent = 90;
+  c->ram_host_floor = 3ull << 29;         // 1.5 GiB
   strcpy(c->display, "shm");
   strcpy(c->gpu, "auto");
   c->input = true;
@@ -87,7 +89,9 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
   else if (!strcmp(key, "display")) return copy(c->display, sizeof c->display, value);
   else if (!strcmp(key, "gpu")) { ok = !strcmp(value, "auto") || !strcmp(value, "3d") || !strcmp(value, "2d"); if (ok) return copy(c->gpu, sizeof c->gpu, value); }
   else if (!strcmp(key, "cpus")) { c->ncpu = (unsigned)atoi(value); ok = c->ncpu >= 1 && c->ncpu <= XH_MAX_CPUS; }
-  else if (!strcmp(key, "ram")) c->ram_bytes = xh_parse_size(value, &ok);
+  else if (!strcmp(key, "ram")) c->ram_bytes = !strcmp(value, "auto") ? 0 : xh_parse_size(value, &ok), ok = ok && (c->ram_bytes || !strcmp(value, "auto"));
+  else if (!strcmp(key, "ram-percent")) { int v; ok = number(value, 10, 100, &v); if (ok) c->ram_percent = (unsigned)v; }
+  else if (!strcmp(key, "ram-host-floor")) c->ram_host_floor = xh_parse_size(value, &ok);
   else if (!strcmp(key, "width")) c->width = (unsigned)atoi(value);
   else if (!strcmp(key, "height")) c->height = (unsigned)atoi(value);
   else if (!strcmp(key, "hz")) { c->hz = (unsigned)atoi(value); ok = c->hz == 0 || (c->hz >= 24 && c->hz <= 240); }
@@ -285,8 +289,40 @@ int xh_config_finish(xh_config *c)
       strcpy(d->path, path);
     }
   }
+  if (!c->ram_bytes) c->ram_bytes = from_image_ram;
+  if (!c->ram_bytes) {
+    // ram=auto (docs/booter.md 1): as much of the phone's RAM as leaves the host its floor.
+    uint64_t total = 0, available = 0;
+    if (xh_meminfo("/proc/meminfo", &total, &available) == 0 && (c->ram_bytes = xh_ram_auto(total, c->ram_percent, c->ram_host_floor)) != 0)
+      c->ram_auto_total = total;
+    else c->ram_bytes = 4ull << 30;    // no /proc/meminfo, or too small a host: the old default
+  }
   if (c->ram_bytes & 0x1fffff || c->ram_bytes < (256ull << 20)) { fprintf(stderr, "xnuhost: --ram must be a multiple of 2 MiB, at least 256 MiB\n"); return -1; }
   return 0;
+}
+
+uint64_t xh_ram_auto(uint64_t total, unsigned percent, uint64_t floor)
+{
+  if (percent > 100) percent = 100;
+  uint64_t share = total / 100 * percent, left = total > floor ? total - floor : 0;
+  uint64_t ram = (share < left ? share : left) & ~((256ull << 20) - 1);
+  if (ram > XH_RAM_MAX) ram = XH_RAM_MAX;
+  return ram >= (1ull << 30) ? ram : 0;
+}
+
+int xh_meminfo(const char *path, uint64_t *total, uint64_t *available)
+{
+  FILE *f = fopen(path, "r");
+  if (!f) return -1;
+  char line[128];
+  unsigned long long kb;
+  int found = 0;
+  while (fgets(line, sizeof line, f)) {
+    if (sscanf(line, "MemTotal: %llu kB", &kb) == 1) { *total = (uint64_t)kb << 10; found |= 1; }
+    else if (sscanf(line, "MemAvailable: %llu kB", &kb) == 1) { *available = (uint64_t)kb << 10; found |= 2; }
+  }
+  fclose(f);
+  return found == 3 ? 0 : -1;
 }
 
 // ---- the display's mode ---------------------------------------------------------------------------

@@ -204,13 +204,15 @@ void xs_handler(int signo, struct k_siginfo *info, struct k_ucontext *uc)
   tp->t_woken = counter();
   if (tp->command == XS_EXIT) sys(NR_exit, 0);
 
-  // Maps the kernel gave for this task since its last order (task.c, map-defer): carried out here, before the
-  // thread runs again, while xnuhost holds the task's order lock; then to_host is woken for them.
+  // Maps, and unmaps given while none of the task's threads ran, that the kernel gave for this task since its last
+  // order (task.c, map-defer): carried out here, in their order, before the thread runs again, while xnuhost holds the
+  // task's order lock; then to_host is woken for them.
   uint32_t nops = tp->nops;
   if (nops) {
     struct xs_op *ops = (struct xs_op *)((uint8_t *)tp + XS_OPS_OFF);
     for (uint32_t i = 0; i < nops && i < XS_THREAD_OPS; i++) {
-      long r = ops[i].op == XS_OP_MAP ? sys(NR_mmap, ops[i].va, ops[i].size, ops[i].prot & 7, MAP_SHARED | MAP_FIXED, config->ram_fd, ops[i].offset) : -38;
+      long r = ops[i].op == XS_OP_MAP ? sys(NR_mmap, ops[i].va, ops[i].size, ops[i].prot & 7, MAP_SHARED | MAP_FIXED, config->ram_fd, ops[i].offset) :
+               ops[i].op == XS_OP_UNMAP ? sys(NR_munmap, ops[i].va, ops[i].size) : -38;
       ops[i].result = r > 0 ? 0 : r;
     }
     tp->nops = 0;

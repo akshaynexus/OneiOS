@@ -245,7 +245,12 @@ static void test_tasks(void)
   check(H->task_map(C0, task, other_va, 0x4000, XH_PROT_READ | XH_PROT_WRITE, data_pa) == 0 &&
         H->thread_run(C0, thread, &st, &trap) == 0 && trap.kind == XH_TRAP_BRK && st.pc == code_va + 20 &&
         ((uint64_t *)(uintptr_t)kva(data_pa))[0] == st.x[0], "a map given before the run is in place when the thread runs");
-  H->task_unmap(C0, task, other_va, 0x4000);
+  // task_unmap while no thread of the task runs waits in the queue (task.c): it must be in force when the thread runs.
+  check(H->task_unmap(C0, task, other_va, 0x4000) == 0, "an unmap while the task's thread is stopped");
+  st.pc = code_va + 16;
+  st.x[1] = other_va;
+  check(H->thread_run(C0, thread, &st, &trap) == 0 && trap.kind == XH_TRAP_FAULT && trap.far == other_va,
+        "it is in force when the thread runs again: the store faults");
   // Preemption: a thread that never traps is stopped when the vCPU's timer fires.
   st.pc = code_va + 24;
   uint32_t fires = timer_fires;
@@ -361,7 +366,7 @@ static void bench(unsigned scale)
   }
   bh_put("page fault filled by task_map, as user code sees it", &fault);
   bh_put("  task_map (host call)", &map);
-  bh_put("  task_unmap (host call; an order to the service thread)", &unmap);
+  bh_put("  task_unmap (host call; queued while the thread is stopped)", &unmap);
 
   // 3. The interrupt of a running thread: the timer fires 50 us into a loop that never traps.
   bhist kick;

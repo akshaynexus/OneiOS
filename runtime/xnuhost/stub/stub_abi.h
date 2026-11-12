@@ -66,7 +66,7 @@ struct xs_trap_page {
 };
 #define XS_RUN  0u
 #define XS_EXIT 1u
-// Deferred maps (XS_OP_MAP only) after the trap page, in the same slot.
+// Deferred maps and unmaps (XS_OP_MAP, XS_OP_UNMAP) after the trap page, in the same slot.
 #define XS_OPS_OFF      0x1000ull
 #define XS_THREAD_OPS   256u
 #define XS_OP_MAP      1u              // mmap(va, size, prot, MAP_SHARED|MAP_FIXED, ram_fd, offset)
@@ -74,7 +74,7 @@ struct xs_trap_page {
 #define XS_OP_PROTECT  3u
 #define XS_OP_CLONE    4u              // new thread: area index in va, trap memfd offset in offset
 #define XS_OP_EXIT     5u              // exit_group
-#define XS_OPS_MAX     128
+#define XS_OPS_MAX     320             // the task's deferred maps and unmaps (up to 256) and the order itself
 
 // One per task, shared: orders for the task's service thread (its first Linux thread).
 struct xs_service_page {

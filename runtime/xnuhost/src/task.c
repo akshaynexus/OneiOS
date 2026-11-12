@@ -94,7 +94,7 @@ extern const uint8_t xh_stub_blob[], xh_stub_blob_end[];
 #define MAX_TASKS 1024
 #define MAX_SLOTS 8192                       // trap memfd slots: threads and service pages
 #define KICK_SIGNAL (SIGRTMIN + 3)
-#define XS_PENDING_MAX 64                    // deferred maps a task holds before they are ordered
+#define XS_PENDING_MAX 256                   // deferred maps and unmaps a task holds before they are ordered
 
 typedef struct {
   bool used, dead;
@@ -111,6 +111,12 @@ typedef struct {
   // on the phone, while the kernel's caller holds the task's TLB lock with interrupts masked). A taker holds both.
   pthread_mutex_t qlock;
   unsigned npending;
+  // Threads of the task released and not yet back (in user code, or on their way to or from it). Under qlock. While it
+  // is 0 nothing of the task can touch its memory, so an unmap waits in the queue for the next release (which carries it
+  // out before the thread runs) or the next order: the kernel's flush of a page of a task that is not running costs a
+  // queue add, not a round trip. A release adds 1 under qlock in the same hold that takes the queue, so an unmap queued
+  // before it is carried by it, and one that comes after sees the thread and is ordered at once.
+  unsigned running;
   struct xs_op pending[XS_PENDING_MAX];
   uint8_t service_placed, service_epoch;     // the vCPU + 1 its service thread was last put with (xh_cpu_place)
 } task;
@@ -369,8 +375,8 @@ static void log_map_failure(task *t, const struct xs_op *op, const char *how)
 {
   static unsigned told;
   if (op->result < 0 && __atomic_fetch_add(&told, 1, __ATOMIC_RELAXED) < 16)
-    LOGE("tasks: pid %d: a deferred map (va 0x%llx, size 0x%llx, prot %u) failed %s: %lld", t->pid, (unsigned long long)op->va,
-         (unsigned long long)op->size, op->prot, how, (long long)op->result);
+    LOGE("tasks: pid %d: a deferred %s (va 0x%llx, size 0x%llx, prot %u) failed %s: %lld", t->pid, op->op == XS_OP_UNMAP ? "unmap" : "map",
+         (unsigned long long)op->va, (unsigned long long)op->size, op->prot, how, (long long)op->result);
 }
 
 static int64_t order(task *t, const struct xs_op *ops, unsigned count)
@@ -585,6 +591,19 @@ int64_t xh_task_unmap(uint64_t handle, uint64_t va, uint64_t size)
   if (!t) return -ESRCH;
   if (!user_range(va, size)) return -EINVAL;
   struct xs_op op = { .op = XS_OP_UNMAP, .va = va, .size = size };
+  xh_perf *p = xh_perf_self();
+  if (T.map_defer) {
+    // A TLB flush: once it returns, no thread of the task may use the old mapping. A task none of whose threads is
+    // released (task.running == 0) uses nothing until its next release, which carries out the queue first; an order
+    // given meanwhile takes the queue first too. So it waits in the queue, after the maps queued before it.
+    pthread_mutex_lock(&t->qlock);
+    bool queued = !t->dead && t->running == 0 && t->npending < XS_PENDING_MAX;
+    if (queued) t->pending[t->npending++] = op;
+    pthread_mutex_unlock(&t->qlock);
+    if (queued) { p->unmaps_deferred++; return 0; }
+    if (t->dead) return -ESRCH;
+  }
+  p->unmaps_ordered++;
   return order(t, &op, 1);
 }
 
@@ -743,6 +762,14 @@ void xh_tasks_dump(void)
   }
 }
 
+// The released thread is back (or its task is gone): it no longer counts as running.
+static void run_ended(task *t)
+{
+  pthread_mutex_lock(&t->qlock);
+  if (t->running) t->running--;
+  pthread_mutex_unlock(&t->qlock);
+}
+
 // thread_run's end, for perf.c: the trap's kind and when it was handed to the kernel.
 static void run_done(xh_vcpu *v, uint32_t kind)
 {
@@ -781,20 +808,31 @@ int64_t xh_thread_run(xh_vcpu *v, uint64_t handle, struct xh_user_state *state, 
   }
   // The task's deferred maps go with this release: the thread carries them out before it runs. The task's lock is
   // held until it says they are done, so no unmap or protect of the task can pass them.
+  // The thread counts as running from here (task.running, under qlock in the same hold that takes the queue).
   bool draining = false;
   unsigned nops = 0;
-  if (__atomic_load_n(&t->npending, __ATOMIC_RELAXED)) {
-    pthread_mutex_lock(&t->lock);
-    pthread_mutex_lock(&t->qlock);
-    nops = t->npending;
-    if (nops && !t->dead) {
-      memcpy((uint8_t *)tp + XS_OPS_OFF, t->pending, nops * sizeof(struct xs_op));
-      t->npending = 0;
+  for (;;) {
+    if (__atomic_load_n(&t->npending, __ATOMIC_RELAXED)) {
+      pthread_mutex_lock(&t->lock);
+      pthread_mutex_lock(&t->qlock);
+      nops = t->npending;
+      if (nops && !t->dead) {
+        memcpy((uint8_t *)tp + XS_OPS_OFF, t->pending, nops * sizeof(struct xs_op));
+        t->npending = 0;
+        tp->ops_done = 0;
+        tp->nops = nops;
+        draining = true;
+      }
+      t->running++;
       pthread_mutex_unlock(&t->qlock);
-      tp->ops_done = 0;
-      tp->nops = nops;
-      draining = true;
-    } else { pthread_mutex_unlock(&t->qlock); pthread_mutex_unlock(&t->lock); }
+      if (!draining) pthread_mutex_unlock(&t->lock);
+      break;
+    }
+    pthread_mutex_lock(&t->qlock);
+    if (t->npending) { pthread_mutex_unlock(&t->qlock); continue; }     // queued meanwhile: take it as above
+    t->running++;
+    pthread_mutex_unlock(&t->qlock);
+    break;
   }
   tp->state = *state;
   tp->command = XS_RUN;
@@ -822,6 +860,7 @@ int64_t xh_thread_run(xh_vcpu *v, uint64_t handle, struct xh_user_state *state, 
       if (draining) pthread_mutex_unlock(&t->lock);
       if (sleeping) __atomic_store_n(&tp->host_sleeping, 0, __ATOMIC_RELAXED);
       trap->kind = XH_TRAP_EXITED; trap->exit_status = t->exit_status;
+      run_ended(t);
       p->ticks_user += xh_counter() - released;
       run_done(v, trap->kind);
       return 0;
@@ -848,6 +887,7 @@ int64_t xh_thread_run(xh_vcpu *v, uint64_t handle, struct xh_user_state *state, 
   }
   if (sleeping) __atomic_store_n(&tp->host_sleeping, 0, __ATOMIC_RELAXED);
   uint64_t seen = xh_counter();
+  run_ended(t);
   p->ticks_user += seen - released;
   *state = tp->state;
   *trap = tp->trap;
