@@ -58,6 +58,9 @@ class OneiOSBacklight : public IOService {
 public:
 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
 	IOReturn setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE;
+	using IOService::newUserClient;
+	IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
+	    IOUserClient **handler) APPLE_KEXT_OVERRIDE;
 	void hostAls(const struct ob_bright_als *als);
 private:
 	uint32_t fNits;                 /* the light at the top of the slider */
@@ -198,14 +201,12 @@ OneiOSBacklight::calibration()
 	return ok;
 }
 
-/* The first requests in full (who, which keys), then every 200th: what iOS 27 really sends is not known yet. */
+/* Every request, who sent it and which keys (2026-11-12: the slider moved in iOS and no request came; until it is known
+ * what iOS 27 sends, each one is logged; a slider drag is some tens of lines). */
 void
 OneiOSBacklight::logRequest(OSDictionary *d, uint32_t level, uint32_t ms, bool linear)
 {
 	uint32_t n = ++fRequests;
-	if (n > 12 && n % 200 != 0) {
-		return;
-	}
 	char name[32], keys[160];
 	size_t used = 0;
 	keys[0] = 0;
@@ -264,6 +265,18 @@ OneiOSBacklight::setProperties(OSObject *properties)
 	}
 	logRequest(d, OBL_FULL + 1, 0, false);
 	return kIOReturnSuccess;
+}
+
+/* CoreBrightness sets properties; nothing of ours opens a connection. A process that tries is logged (who, which type)
+ * and gets what IOService gives (unsupported), so the log shows a client that looks for another way in. */
+IOReturn
+OneiOSBacklight::newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties, IOUserClient **handler)
+{
+	char name[32];
+	proc_selfname(name, sizeof(name));
+	IOReturn r = IOService::newUserClient(owningTask, securityID, type, properties, handler);
+	IOLog("ONEIOS BACKLIGHT: %s opened the service (type %u): 0x%x\n", name, (unsigned)type, r);
+	return r;
 }
 
 void
@@ -376,9 +389,16 @@ obl_conform_thread(void *arg, wait_result_t result)
 {
 	(void)arg;
 	(void)result;
+	/* Said at the start and every 60 s: on the phone (2026-11-12) neither outcome line came in 18 minutes, so a look that
+	 * never returns (the class lock) shows as a start line with nothing after it. */
+	IOLog("ONEIOS BACKLIGHT: waiting for AppleARMBacklight's class (AppleARMPlatform) to make the service conform, %u s at most\n",
+	    OBL_CONFORM_WAIT_S);
 	for (unsigned waited = 0; waited < OBL_CONFORM_WAIT_S * 2; waited++) {
 		if (obl_conform()) {
 			return;
+		}
+		if (waited && waited % 120 == 0) {
+			IOLog("ONEIOS BACKLIGHT: still no AppleARMBacklight class after %u s\n", waited / 2);
 		}
 		IOSleep(500);
 	}
@@ -426,5 +446,7 @@ oneios_backlight_start(void)
 	thread_t thread;
 	if (kernel_thread_start(obl_conform_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
+	} else {
+		IOLog("ONEIOS BACKLIGHT: the service does not conform to AppleARMBacklight: its thread could not be started\n");
 	}
 }

@@ -90,6 +90,18 @@ brightness bit, asks the host (`OB_BRIGHT_QUERY`) and waits up to 1 s for the an
 `ONEIOS BACKLIGHT: on|off: <why>` line. The guest holds nothing of the host's: when the session ends xnuhost
 writes One UI's level back.
 
+## The phone, 2026-11-12 (session from 11:53, kernel.kc 8eff915f, runtime 0.1.9-dev)
+
+`ONEIOS BACKLIGHT: on` came 1 s into the boot; then, in 18 minutes, no conformance line of either kind (the thread
+waits 600 s at most and then says so) and no request line, though the owner moved iOS's brightness slider twice, and
+the host's panel stayed at One UI's 2890. So CoreBrightness never set a property on the service, most likely because it
+never found it: without conformance `IOObjectConformsTo(service, "AppleARMBacklight")` is false. Why the conformance
+thread said nothing is not known (it may never have run, or it hangs in its look-up of the class). Since then the
+driver logs: the conformance thread's start (`waiting for AppleARMBacklight's class ...`) and every 60 s while it
+waits (`still no AppleARMBacklight class after N s`), a thread that could not start, every request (no longer the
+first 12 and every 200th), and a process that opens the service (`NAME opened the service (type N): 0x...`).
+The next boot shows which of these it is.
+
 ## Only a session can show
 
 1. CoreBrightness finds the service and creates its display (no fault in `_DisplayCreateWithCapabilitiesAndID`).
