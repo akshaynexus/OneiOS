@@ -102,3 +102,8 @@
 # DEVELOPMENT || DEBUG, so the RELEASE reference of the prelink (XNU_FILESET_REFERENCE=1) failed on the Mac (Xcode's
 # clang: implicit declaration is an error; the Linux wrapper's -w hid it). The file is the hosted layer's own (no guard).
 0038-proc-pid-declared.patch
+# gpu: one list of the processes that get a Metal device for both gates. The kernel writes the plug-in's
+# NativeAdrenoMetal.clients beside the bundle at every boot from the list the grant decides by (droidvm-gpu-clients or the
+# GPU archive's default, OneiOSAdreno.cpp; oneios-gpu-plugin-clients for the plug-in alone), so a new list needs no new
+# Data seed. The plug-in's text rows (open types 0x414770cc) are one oneios-gpu-text line a row, not a line a character.
+0039-gpu-client-list-and-texts.patch

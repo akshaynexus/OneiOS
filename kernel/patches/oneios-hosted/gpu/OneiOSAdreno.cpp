@@ -20,7 +20,8 @@
 //   oneios-gpu-metal=0|1     0: nothing is published. 1: published whatever the host offers. Not given: published
 //                            when the host's virtio GPU offers 3D (oneios_gpu3d_state 3). Droid-VM's
 //                            droidvm-gpu-metal is read the same way when oneios-gpu-metal is absent.
-//   droidvm-gpu-clients=...  the processes besides backboardd granted the user client (DroidVMGpu.cpp)
+//   droidvm-gpu-clients=...  the processes besides backboardd that get a Metal device: the grant of the user client
+//                            (DroidVMGpu.cpp) and the plug-in's own list (oneios_gpu_client_list below)
 //   oneios-adreno-selftest=1 after the publish: IOKit's match of IOAcceleratorES, an in-kernel open of the Metal
 //                            plug-in's connection (type 0x4149) and one GETPARAM through its tunnel; one log line
 //                            with each result.
@@ -76,6 +77,29 @@ struct MetaClassHead { void *vtable; void *reserved; const OSMetaClass *superCla
 static const OSMetaClass *boundParent()
 {
     return reinterpret_cast<const OSMetaClass *>(oneios_adreno_parent_meta_link + vm_kernel_slide);
+}
+
+// The processes besides backboardd that get a Metal device: one list for both gates. The kernel's grant
+// (DroidVMGpu.cpp grantedProcesses, staged by build-oneios-gpu.py to read it here) decides the open for the names it
+// holds; the plug-in makes a device only in a process its NativeAdrenoMetal.clients names, and 0039 writes that file
+// beside the bundle from oneios_gpu_plugin_client_list at every boot. Names as the grant and the plug-in take them:
+// "a,b", "X*" (a prefix), "*X*" (a part), "@apps" (every process run from an app bundle), "*" (every process).
+//   droidvm-gpu-clients=...         the list; empty: backboardd alone. Not given: kDefaultGpuClients.
+//   oneios-gpu-plugin-clients=...   the plug-in's list alone, for a test (the processes it names then ask, and the
+//                                   grant or the sandbox decides each open). Not given: the list above.
+static const char kDefaultGpuClients[] = "WidgetRenderer_Default,*Poster*,iconservicesagent,SBRendererService";
+extern "C" void oneios_gpu_client_list(char *out, size_t size)
+{
+    if (!out || size < 2) return;
+    memset(out, 0, size);
+    // The string forms of PE_parse_boot_argn copy up to the length given and terminate after it: one byte is kept.
+    if (!PE_parse_boot_argn("droidvm-gpu-clients", out, int(size - 1))) strlcpy(out, kDefaultGpuClients, size);
+}
+extern "C" void oneios_gpu_plugin_client_list(char *out, size_t size)
+{
+    if (!out || size < 2) return;
+    memset(out, 0, size);
+    if (!PE_parse_boot_argn("oneios-gpu-plugin-clients", out, int(size - 1))) oneios_gpu_client_list(out, size);
 }
 
 bool oneios_adreno_wanted(void)
@@ -216,6 +240,12 @@ extern volatile uint64_t droidvm_virtgpu_stats[8], droidvm_virtgpu_rs_fences[3],
 extern volatile uint64_t droidvm_virtgpu_live[4], droidvm_virtgpu_last_refusal[4], droidvm_virtgpu_closes[4];
 struct DroidVMClientMemory { char name[16]; uint64_t pageBytes, userBytes; uint32_t sizes[8]; };
 extern DroidVMClientMemory droidvm_virtgpu_client_memory[64];
+// NativeAdrenoPublish.cpp: the processes that read the accelerator's MetalPluginName (Metal's discovery, so each process
+// that asked for a Metal device), the first twelve names with their counts.
+struct NativeAdrenoAskerRecord { char name[20]; uint32_t reads; };
+extern NativeAdrenoAskerRecord native_adreno_metal_askers[12];
+// 0039 (IOUserClient.cpp): prints the plug-in's text rows that have been quiet this long.
+void hosted_gpu_text_flush(uint64_t quiet_ns) __attribute__((weak));
 }
 // Which processes use the CPU, the same interval: the client that keeps a still screen redrawing (SpringBoard committing,
 // or only backboardd running an animation of its own), and the heat. The busiest eight, as a percentage of one CPU:
@@ -286,7 +316,7 @@ void report(void *, wait_result_t)
     uint32_t every = 10;
     PE_parse_boot_argn("oneios-gpu-report", &every, sizeof every);
     if (!every) return;
-    uint64_t was[8] = {}, fences[3] = {}, hist[10] = {}, closed[2] = {}, live[4] = {};
+    uint64_t was[8] = {}, fences[3] = {}, hist[10] = {}, closed[2] = {}, live[4] = {}, askedBefore = 0;
     for (uint32_t round = 1;; round++) {
         IOSleep(every * 1000);
         cpu::report(every, round);
@@ -338,6 +368,27 @@ void report(void *, wait_result_t)
                       c.sizes[0], c.sizes[1], c.sizes[2], c.sizes[3], c.sizes[4], c.sizes[5], c.sizes[6], c.sizes[7]);
             }
         }
+        // Who asked for a Metal device (read MetalPluginName), when that changed: with the clients line, a process that
+        // asked and holds no GPU memory had its device refused or made none (its reason: the oneios-gpu-text lines).
+        uint64_t asked = 0;
+        for (const NativeAdrenoAskerRecord &a : native_adreno_metal_askers) asked = asked * 31 + a.reads + uint8_t(a.name[0]);
+        if (asked != askedBefore) {
+            askedBefore = asked;
+            char text[200];
+            size_t at = 0;
+            for (const NativeAdrenoAskerRecord &a : native_adreno_metal_askers) {
+                if (!a.name[0]) continue;
+                char one[40];
+                const int n = snprintf(one, sizeof one, "%.16s %u", a.name, a.reads);
+                if (at && at + 2 + size_t(n) >= sizeof text) {
+                    IOLog("oneios-gpu-askers: %s\n", text);
+                    at = 0;
+                }
+                at += snprintf(text + at, sizeof text - at, "%s%s", at ? ", " : "", one);
+            }
+            if (at) IOLog("oneios-gpu-askers: %s\n", text);
+        }
+        if (hosted_gpu_text_flush) hosted_gpu_text_flush(1000000000ull);
         memcpy(was, now, sizeof was);
         memcpy(fences, rs, sizeof fences);
         memcpy(hist, h, sizeof hist);

@@ -191,6 +191,25 @@ backtrace).
 
 Both built; not run.
 
+## 0039-gpu-client-list-and-texts.patch (gpu, 2026-11-12)
+
+- **One list for both gates of a Metal device.** A process other than backboardd gets a device only when the
+  accelerator's grant (or its sandbox) lets it open the user client and the plug-in's `NativeAdrenoMetal.clients`
+  (beside its bundle) names it. The grant's list was the kernel's (`droidvm-gpu-clients`, default in the GPU archive),
+  the plug-in's the Data seed's (roottweak), so another list needed a new seed, and a new seed starts the Data store
+  over. Now `native_gpu_addon_prepare` (`bsd/kern/kern_exec.c`, before the addon mount) writes the file into the mount's
+  source folder at every boot from `oneios_gpu_plugin_client_list` (`gpu/OneiOSAdreno.cpp`): `oneios-gpu-plugin-clients`
+  when given, else the grant's list. One line: `oneios-gpu-list: <path> "<list>": written (0)` (or `unchanged (-1)`,
+  or `not written (errno)`). A kernel without the GPU archive's Metal side writes nothing.
+- **The plug-in's text rows, one line a row.** The plug-in streams text as open types (`0x41477fff`/`0x41477ffe` start a
+  row, `0x414770cc` appends a character): a client's reason for having no device, the render server's phase results.
+  0031 logged each as an `oneios-gpu-open` line, one character a line, and the render server's rows used most of the
+  boot's 400 lines. `hosted_gpu_open_note` (`iokit/Kernel/IOUserClient.cpp`) now keeps a row per process (8 at once) and
+  prints it whole: `oneios-gpu-text: iconservicesagent[95] no-device device: Vulkan(VkResultCode(-3))`, at the next
+  row or other marker of that process, at 63 characters, or from the GPU report thread once the row is quiet for a
+  second. Telemetry types `0x41478000` and up are not logged. Rows do not count against the 400 lines (at most 2000).
+- Built on the Mac with the series through 0039 and linked into `kernel.kc`; not yet run.
+
 ## 0038-proc-pid-declared.patch (mac-kernel, 2026-11-12)
 
 `hosted_machine.c`'s thread dump (0009, 0012) calls `proc_pid()`, which `osfmk/vm/vm_protos.h` declares only

@@ -1,0 +1,190 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index d41ee27..09a1576 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8812,6 +8812,34 @@ done:
+ 		kfree_data(path, 256);
+ 	}
+ }
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0039): the Metal plug-in's list of the processes that get a device (NativeAdrenoMetal.clients beside its
++ * bundle; the plug-in reads it in every process but backboardd) is written at every boot from the kernel's own list, the
++ * one the accelerator's grant decides the open by (droidvm-gpu-clients or the GPU archive's default, OneiOSAdreno.cpp;
++ * oneios-gpu-plugin-clients for the plug-in alone). Before, the plug-in's list was the Data seed's, fixed when the image
++ * was built: another list needed a new seed, and a new seed starts the Data store over. One line:
++ *   oneios-gpu-list: /private/var/oneios/addons/Extensions/NativeAdrenoMetal.clients "a,b": written (0)
++ */
++extern void oneios_gpu_plugin_client_list(char *, size_t) __attribute__((weak_import));
++static void
++oneios_gpu_clients_file(const char *folder)
++{
++	char list[256], text[260], path[128];
++	if (!oneios_gpu_plugin_client_list) {
++		return;
++	}
++	oneios_gpu_plugin_client_list(list, sizeof(list));
++	size_t length = 0;
++	for (const char *at = list; *at && length + 2 < sizeof(text); at++) {
++		text[length++] = *at == ',' ? '\n' : *at;
++	}
++	text[length++] = '\n';
++	snprintf(path, sizeof(path), "%s/NativeAdrenoMetal.clients", folder);
++	int error = native_gpu_addon_write(path, (const uint8_t *)text, length, 0644, vfs_context_current());
++	printf("oneios-gpu-list: %s \"%s\": %s (%d)\n", path, list, error < 0 ? "unchanged" : error ? "not written" : "written", error);
++}
++#endif
+ static void
+ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+ {
+@@ -8844,6 +8872,7 @@ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+ 	 */
+ 	static const char seed_source[] = "/private/var/oneios/addons/Extensions";
+ 	const int from_addon = native_gpu_addon_files > 0;
++	oneios_gpu_clients_file(from_addon ? extensions_source : seed_source);     /* 0039 */
+ 	native_gpu_addon_mount(p, scratch, 0x400, from_addon ? extensions_source : seed_source,
+ 	    from_addon ? sizeof(extensions_source) : sizeof(seed_source), extensions_point, sizeof(extensions_point),
+ 	    "/System/Library/Extensions/AGXMetalG18P.bundle",
+diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
+index a1cd0c0..e57a16a 100644
+--- a/iokit/Kernel/IOUserClient.cpp
++++ b/iokit/Kernel/IOUserClient.cpp
+@@ -4488,12 +4488,137 @@ native_adreno_connect_granted(io_object_t obj)
+  * kIOReturnUnsupported by design (NativeAdrenoMetalPlugin.mm: 0x6800 entered, 0x6801 Turnip found, 0x6802 device
+  * made, 0x6803 returned to Metal's discovery, 0x68f1 no Turnip, 0x68f2 no device).
+  */
++/*
++ * OneiOS hosted (0039): the plug-in's text rows. The plug-in streams a line of text as open types: 0x41477fff or 0x41477ffe
++ * starts a row and 0x414770cc appends the character cc, at most 63 (NativeAdrenoUserTest.h streamText): a client's reason
++ * for having no device ("no-device device: Vulkan(VkResultCode(-3))"), the render server's phase results. 0031 logged a
++ * line per character, so the render server's rows alone used most of a boot's 400 lines and another process's reason was
++ * one letter a line. Now a row is one line when it ends: at the process's next row or other marker, at 63 characters, or
++ * when the GPU report (OneiOSAdreno.cpp) flushes rows that have been quiet for a second:
++ *   oneios-gpu-text: iconservicesagent[95] no-device device: Vulkan(VkResultCode(-3))
++ * Types 0x41478000 and up (the bridge's telemetry table, two characters a marker) are not logged. Rows do not count
++ * against the 400 lines; at most 2000 rows are printed.
++ */
++#include <kern/clock.h>
++struct hosted_gpu_row {
++	int pid;
++	uint32_t length;
++	uint64_t last;
++	char name[20];
++	char text[64];
++};
++static struct hosted_gpu_row hosted_gpu_rows[8];
++static IOLock * hosted_gpu_rows_lock;
++static SInt32 hosted_gpu_rows_printed;
++
++static void
++hosted_gpu_row_print(struct hosted_gpu_row * row)
++{
++	if (row->pid && row->length && OSIncrementAtomic(&hosted_gpu_rows_printed) < 2000) {
++		IOLog("oneios-gpu-text: %s[%d] %s\n", row->name, row->pid, row->text);
++	}
++	row->pid = 0;
++	row->length = 0;
++	row->text[0] = 0;
++}
++
++static IOLock *
++hosted_gpu_rows_locked(void)
++{
++	if (!hosted_gpu_rows_lock) {
++		IOLock * lock = IOLockAlloc();
++		if (lock && !OSCompareAndSwapPtr(NULL, lock, (void * volatile *)&hosted_gpu_rows_lock)) {
++			IOLockFree(lock);
++		}
++	}
++	if (hosted_gpu_rows_lock) {
++		IOLockLock(hosted_gpu_rows_lock);
++	}
++	return hosted_gpu_rows_lock;
++}
++
++extern "C" void
++hosted_gpu_text_flush(uint64_t quiet_ns)
++{
++	uint64_t quiet = 0;
++	nanoseconds_to_absolutetime(quiet_ns, &quiet);
++	const uint64_t now = mach_absolute_time();
++	IOLock * lock = hosted_gpu_rows_locked();
++	if (!lock) {
++		return;
++	}
++	for (struct hosted_gpu_row & row : hosted_gpu_rows) {
++		if (row.pid && now - row.last >= quiet) {
++			hosted_gpu_row_print(&row);
++		}
++	}
++	IOLockUnlock(lock);
++}
++
++/* True when the type was a text row's (consumed here). Any other marker of a process first ends its pending row. */
++static bool
++hosted_gpu_text(uint32_t type)
++{
++	const uint32_t value = type & 0xffff;
++	const bool marker = (type >> 16) == 0x4147 && value;
++	const int pid = proc_selfpid();
++	IOLock * lock = hosted_gpu_rows_locked();
++	if (!lock) {
++		return marker && value >= 0x7000;
++	}
++	struct hosted_gpu_row * row = NULL;
++	for (struct hosted_gpu_row & r : hosted_gpu_rows) {
++		if (r.pid == pid) {
++			row = &r;
++		}
++	}
++	bool consumed = false;
++	if (marker && value >= 0x8000) {
++		consumed = true;
++	} else if (marker && (value == 0x7fff || value == 0x7ffe)) {
++		if (row) {
++			hosted_gpu_row_print(row);
++		} else {
++			struct hosted_gpu_row * oldest = &hosted_gpu_rows[0];
++			for (struct hosted_gpu_row & r : hosted_gpu_rows) {
++				if (!r.pid) {
++					oldest = &r;
++					break;
++				}
++				if (r.last < oldest->last) {
++					oldest = &r;
++				}
++			}
++			hosted_gpu_row_print(oldest);
++			row = oldest;
++		}
++		row->pid = pid;
++		proc_name(pid, row->name, sizeof(row->name));
++		row->last = mach_absolute_time();
++		consumed = true;
++	} else if (marker && value >= 0x7000) {
++		if (row && value < 0x7100 && row->length < 63) {
++			row->text[row->length++] = (char)(value & 0xff);
++			row->text[row->length] = 0;
++			row->last = mach_absolute_time();
++			if (row->length == 63) {
++				hosted_gpu_row_print(row);
++			}
++		}
++		consumed = true;
++	} else if (row) {
++		hosted_gpu_row_print(row);
++	}
++	IOLockUnlock(lock);
++	return consumed;
++}
++
+ static void
+ hosted_gpu_open_note(IOService * service, uint32_t type, IOReturn res, IOUserClient * client)
+ {
+ 	static SInt32 lines = 0;
+ 	const char * cls = service->getMetaClass()->getClassName();
+-	if (strncmp(cls, "AGX", 3) || lines >= 400 || OSIncrementAtomic(&lines) >= 400) {
++	if (strncmp(cls, "AGX", 3) || hosted_gpu_text(type) || lines >= 400 || OSIncrementAtomic(&lines) >= 400) {
+ 		return;
+ 	}
+ 	char name[33] = {};

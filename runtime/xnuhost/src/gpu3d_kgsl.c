@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/resource.h>
 
 #include "virgl_context.h"
 #include "virgl_resource.h"
@@ -294,6 +295,15 @@ xh_gpu3d *xh_gpu3d_kgsl_open(int ram_fd, uint64_t ram_phys, uint64_t ram_size, v
     int fd = open(nodes[i], (i == 2 ? O_RDONLY : O_RDWR) | O_CLOEXEC);
     if (fd < 0) { snprintf(reason, sizeof reason, "%s: %s", nodes[i], strerror(errno)); return NULL; }
     close(fd);
+  }
+  // Every guest BO is one fd per udmabuf chunk here and one more in each context that imports it, and every Metal client
+  // is a KGSL fd and a dma-heap fd: with many clients the soft limit of open files is what runs out first (Droid-VM's
+  // crosvm ran out of fds under GFXBench and raised it the same way). Up to the hard limit, which needs no privilege.
+  struct rlimit files;
+  if (!getrlimit(RLIMIT_NOFILE, &files) && files.rlim_cur < files.rlim_max) {
+    rlim_t was = files.rlim_cur;
+    files.rlim_cur = files.rlim_max;
+    if (!setrlimit(RLIMIT_NOFILE, &files)) say(1, "gpu: open files: soft limit %llu -> %llu", (unsigned long long)was, (unsigned long long)files.rlim_max);
   }
   uint64_t chunk_bytes;
   unsigned chunk_runs;

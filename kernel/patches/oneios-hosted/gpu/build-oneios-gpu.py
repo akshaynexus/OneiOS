@@ -73,7 +73,8 @@ STAGED = (
     ('#include "NativeAdrenoMemory.h"\n',
      '#include "NativeAdrenoMemory.h"\n'
      'extern "C" bool oneios_adreno_wanted(void);\nextern "C" bool oneios_adreno_parent_bound(void);\n'
-     'extern "C" void oneios_adreno_parent_slide(void);\n'),
+     'extern "C" void oneios_adreno_parent_slide(void);\n'
+     'extern "C" void oneios_gpu_client_list(char *, size_t);\n'),
     # the start is OneiOSAdreno.cpp's decision (the host offers 3D, or oneios-gpu-metal), not two boot arguments
     ('    if (!bootArg("vgpu-3d", 0) || bootArg("droidvm-gpu-metal", 0) != 1) return;\n',
      '    if (!oneios_adreno_wanted()) return;\n'),
@@ -90,12 +91,12 @@ STAGED = (
     # the superclass link is the parent's link address until it is slid (OneiOSAdreno.cpp)
     ('    native_adreno_accelerator_static_init();\n    status = OSMetaClass::postModLoad(handle);\n',
      '    native_adreno_accelerator_static_init();\n    oneios_adreno_parent_slide();\n    status = OSMetaClass::postModLoad(handle);\n'),
-    # Without droidvm-gpu-clients the grant names the image's Metal clients too, not backboardd alone: the list roottweak
-    # writes to NativeAdrenoMetal.clients. iconservicesagent was refused on the phone and drew the icons on the CPU.
-    # droidvm-gpu-clients= (empty) is backboardd alone; a list replaces this one; "*" is every process.
+    # The grant's list is OneiOSAdreno.cpp's oneios_gpu_client_list: droidvm-gpu-clients, or without it the default there,
+    # not backboardd alone (iconservicesagent was refused on the phone and drew the icons on the CPU). The same list is
+    # written for the plug-in as NativeAdrenoMetal.clients at every boot (0039), so the two gates never differ.
+    # droidvm-gpu-clients= (empty) is backboardd alone; a list replaces the default; "*" is every process.
     ('    if (PE_parse_boot_argn("droidvm-gpu-clients", clients, sizeof clients - 1)) {\n',
-     '    if (!PE_parse_boot_argn("droidvm-gpu-clients", clients, sizeof clients - 1))\n'
-     '        strlcpy(clients, "WidgetRenderer_Default,*Poster*,iconservicesagent,SBRendererService", sizeof clients);\n'
+     '    oneios_gpu_client_list(clients, sizeof clients);\n'
      '    {\n'),
 )
 

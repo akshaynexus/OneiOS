@@ -122,6 +122,11 @@ pages without one (the PC). What the 3D path still needs from the display is lis
 KGSL takes the probe), `--gpu 3d` (or do not start), `--gpu 2d`. The reason for 2D is in the log (`gpu: 2D only: ...`).
 drm2kgsl's own switches are environment variables it reads (`DRM2KGSL_PRIORITIES`, `CROSVM_DRM2KGSL_DIAG=1`).
 
+**Open files.** Every guest BO is an fd per udmabuf chunk in xnuhost and one more in each context that imports it,
+and every Metal client is a KGSL fd and a dma-heap fd. The renderer's start raises the soft `RLIMIT_NOFILE` to the
+hard limit (no privilege needed; `gpu: open files: soft limit N -> M` in the log when it changed). Droid-VM's crosvm
+ran out of fds under GFXBench before it did the same.
+
 **Session rules** (`docs/booter.md` 2.9): nothing new outside the process. KGSL contexts, the VBO and the dma-bufs
 are descriptors of xnuhost and go with it at SIGKILL; drm2kgsl's fence threads are ordinary threads.
 
@@ -332,7 +337,8 @@ thread; none was seen.) Boot arguments:
 | Argument | |
 |---|---|
 | `oneios-gpu-metal=0` / `=1` | never / always publish. Not given: published when the host's virtio GPU offers 3D (`oneios_gpu3d_state` 3), so not on the PC. Droid-VM's `droidvm-gpu-metal` is read when this one is absent |
-| `droidvm-gpu-clients=a,b,...` or `*` | the processes besides `backboardd` granted the user client (DroidVMGpu.cpp `grantedProcesses`). Not given: `WidgetRenderer_Default,*Poster*,iconservicesagent,SBRendererService`, the list of the image's `NativeAdrenoMetal.clients`; empty: `backboardd` alone |
+| `droidvm-gpu-clients=a,b,...` or `*` | the processes besides `backboardd` that get a Metal device: the grant of the user client (DroidVMGpu.cpp `grantedProcesses`) and, since `0039`, the plug-in's `NativeAdrenoMetal.clients`, which the kernel writes beside the bundle at every boot from the same list (`oneios_gpu_client_list` in `gpu/OneiOSAdreno.cpp`). Forms: a name, `X*`, `*X*`, `@apps`, `*`. Not given: `WidgetRenderer_Default,*Poster*,iconservicesagent,SBRendererService`; empty: `backboardd` alone |
+| `oneios-gpu-plugin-clients=...` | a test: the plug-in's list alone (the processes it names ask for a device; the grant decides for the names it holds, the sandbox for the rest). Not given: the list above |
 | `vgpu-3d=1` | what `GETPARAM(DEFAULT_3D)` answers the plug-in (DroidVMVirtioGpu3D.cpp reads it with default 0; `vgpu-3d=0` also turns the driver off) |
 | `oneios-adreno-selftest=1` | after the publish: IOKit's match of `IOAcceleratorES`, an in-kernel open with type `0x4149`, `GETPARAM(ABI_VERSION)` through the tunnel; two `oneios-adreno: selftest:` lines |
 
@@ -361,6 +367,22 @@ oneios-gpu-plugin: backboardd[53] code signature of NativeAdrenoMetal: error 0
 oneios-gpu-plugin: backboardd[53] library validation of NativeAdrenoMetal: error 0
 oneios-gpu-open: backboardd[53] AGXAccelerator type 0x4149 -> 0x0, AGXDeviceUserClient
 ```
+
+Since `0039` (gpu, 2026-11-12; built, not yet run), three more:
+
+```
+oneios-gpu-list: /private/var/oneios/addons/Extensions/NativeAdrenoMetal.clients "WidgetRenderer_Default,...": written (0)
+oneios-gpu-text: iconservicesagent[95] no-device device: Vulkan(VkResultCode(-3))
+oneios-gpu-askers: backboardd 3, SpringBoard 2, iconservicesagent 1, ...
+```
+
+`oneios-gpu-list` is the plug-in's list as the kernel wrote it for this boot (`unchanged (-1)` when the file already
+held it). `oneios-gpu-text` is one text row a process's plug-in streamed (its reason for having no device, the render
+server's phase lines), whole; before 0039 each character was an `oneios-gpu-open` line of type `0x414770cc`.
+`oneios-gpu-askers` (with the GPU report, when it changes) names the processes that read the accelerator's
+`MetalPluginName`, the first twelve, with counts: who asked for a Metal device. A process that asked and has no line in
+`oneios-gpu-clients` got no device (the list did not name it, the open was refused, or the device failed: its
+`oneios-gpu-text` line says which).
 
 Reading them, in order: `oneios-gpu-addon` stage 5 means iOS can see the plug-in; `oneios-gpu-plugin` is dyld loading it (no
 line: nobody tried, or the vnode had no name; an error on the first line is the trust cache, on the second AMFI's library
