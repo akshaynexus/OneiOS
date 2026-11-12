@@ -421,7 +421,7 @@ static int boot(void)
         kinds[ndev++] = XL_DEV_NET;
         wifi_up = true;
       } else if (wlan) br_wlan_close();
-    } else LOGI("wifi: off (wifi=off): iOS gets no network device");
+    } else if (strcmp(config.wifi, "sim")) LOGI("wifi: off (wifi=off): iOS gets no network device");
 
     char helper[600];
     void *audio_ctx = NULL;
@@ -438,6 +438,17 @@ static int boot(void)
       camera = br_camera_helper(helper, getenv("ONEIOS_CAMERA_BACKEND"));
       if (camera && br_camera_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, camera)) kinds[ndev++] = XL_DEV_CAMERA;
     }
+  }
+
+  // wifi=sim: a made-up radio (runtime/bridges/wifi/sim.c) for a boot with no phone, with the bridges on or off:
+  // the guest's Wi-Fi driver and wifid get two networks to scan and join; no frame goes anywhere.
+  if (!strcmp(config.wifi, "sim") && ndev < XL_MAX_DEVICES) {
+    br_net_config net;
+    br_net_config_defaults(&net);
+    xl_machine_mac(&machine, 1, net.guest_mac);
+    br_net_open_fn sim = br_wifi_sim_prepare(net.guest_mac);
+    if (sim && br_virtio_net_create_backend(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &net, sim, br_wifi_sim_send))
+      kinds[ndev++] = XL_DEV_NET;
   }
 
   // clusters=EEPPPPPP: the cluster types by hand (a bench run with no host topology to plan from).

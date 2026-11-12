@@ -158,13 +158,13 @@ static void test_station(void)
   const uint8_t *p = f;
   size_t n = 0;
   struct ow_state st;
-  br_wifi_station *sta = br_wifi_station_create(&fake, &r, mac, "IN", take, &s);
+  br_wifi_station *sta = br_wifi_station_create(&fake, &r, mac, NULL, take, &s);
   CHECK(sta != NULL);
   struct ow_hello hello = { OW_VERSION };
   br_wifi_station_message(sta, f, guest_frame(f, OW_HELLO, &hello, sizeof hello));
   CHECK(s.count == 1 && host_message(&s, 0, &p, &n) == OW_STATE && n == sizeof st);
   memcpy(&st, p, sizeof st);
-  CHECK(st.version == OW_VERSION && st.radio == OW_RADIO_OK && st.link == OW_LINK_IDLE && !memcmp(st.mac, mac, 6) && st.country[0] == 'I' && st.country[1] == 'N');
+  CHECK(st.version == OW_VERSION && st.radio == OW_RADIO_OK && st.link == OW_LINK_IDLE && !memcmp(st.mac, mac, 6) && st.country[0] == '0' && st.country[1] == '0');
 
   // A scan: two networks, the second seen twice (the stronger one is the join's), elements cut to whole ones.
   memset(&s, 0, sizeof s);
@@ -173,7 +173,7 @@ static void test_station(void)
   CHECK(r.scans == 1 && s.count == 0);
   static uint8_t ies[1100];
   ies[0] = 0; ies[1] = 4; memcpy(ies + 2, "home", 4);                      // SSID
-  ies[6] = 48; ies[7] = 20;                                                // RSN (20 bytes)
+  ies[6] = 7; ies[7] = 20; ies[8] = 'I'; ies[9] = 'N';                     // Country (20 bytes; the RSN element of a real beacon comes after it)
   for (unsigned at = 28; at + 102 <= sizeof ies; at += 102) { ies[at] = 221; ies[at + 1] = 100; }   // vendor elements up to 1048
   struct ow_bss b = { .bssid = { 1, 2, 3, 4, 5, 6 }, .freq_mhz = 5180, .signal_dbm = -70, .ssid_length = 4, .ssid = "home" };
   br_wifi_scan_add(sta, &b, ies, 1048);
@@ -182,13 +182,17 @@ static void test_station(void)
   struct ow_bss other = { .bssid = { 9, 9, 9, 9, 9, 9 }, .freq_mhz = 2412, .signal_dbm = -80, .ssid_length = 5, .ssid = "other" };
   br_wifi_scan_add(sta, &other, NULL, 0);
   br_wifi_scan_done(sta, 0);
-  CHECK(s.count == 4 && host_message(&s, 0, &p, &n) == OW_BSS && n == sizeof b + 946);     // 28 + 9 * 102: the tenth does not fit 1024
+  // Five frames: three networks, the state with the country the strongest network's Country element names, the end.
+  CHECK(s.count == 5 && host_message(&s, 3, &p, &n) == OW_STATE);
+  memcpy(&st, p, sizeof st);
+  CHECK(st.country[0] == 'I' && st.country[1] == 'N');
+  CHECK(host_message(&s, 0, &p, &n) == OW_BSS && n == sizeof b + 946);     // 28 + 9 * 102: the tenth does not fit 1024
   struct ow_bss got;
   memcpy(&got, p, sizeof got);
   CHECK(got.ie_length == 946 && got.freq_mhz == 5180 && !memcmp(p + sizeof got, ies, 946));
   CHECK(host_message(&s, 2, &p, &n) == OW_BSS && n == sizeof b);
   struct ow_scan_done done;
-  CHECK(host_message(&s, 3, &p, &n) == OW_SCAN_DONE && n == sizeof done);
+  CHECK(host_message(&s, 4, &p, &n) == OW_SCAN_DONE && n == sizeof done);
   memcpy(&done, p, sizeof done);
   CHECK(done.count == 3 && done.error == 0);
 
@@ -237,6 +241,13 @@ static void test_station(void)
   memset(&s, 0, sizeof s);
   br_wifi_station_message(sta, f, guest_frame(f, OW_LEAVE, NULL, 0));
   CHECK(r.leaves == 1 && s.count == 1 && host_message(&s, 0, &p, &n) == OW_STATE);
+  // iOS's Wi-Fi switch: on changes nothing, off leaves the network.
+  struct ow_power power = { 1 };
+  br_wifi_station_message(sta, f, guest_frame(f, OW_POWER, &power, sizeof power));
+  CHECK(r.leaves == 1 && s.count == 1);
+  power.on = 0;
+  br_wifi_station_message(sta, f, guest_frame(f, OW_POWER, &power, sizeof power));
+  CHECK(r.leaves == 2 && s.count == 2 && host_message(&s, 1, &p, &n) == OW_STATE);
   // Malformed: a short frame, a wrong magic, a length past the frame, a join with no name.
   memset(&s, 0, sizeof s);
   br_wifi_station_message(sta, f, 10);
@@ -246,8 +257,63 @@ static void test_station(void)
   br_wifi_station_message(sta, f, n - 1);
   struct ow_join unnamed = { 0 };
   br_wifi_station_message(sta, f, guest_frame(f, OW_JOIN, &unnamed, sizeof unnamed));
-  CHECK(s.count == 0 && r.joins == 3 && r.scans == 1);
+  CHECK(s.count == 0 && r.joins == 3 && r.scans == 1 && r.leaves == 2);
   br_wifi_station_destroy(sta);
+}
+
+// ---- the made-up radio (wifi=sim) through its back-end calls ----
+static void test_sim(void)
+{
+  static sink s;
+  uint8_t f[256];
+  const uint8_t *p = f;
+  size_t n = 0;
+  br_net_open_fn open_fn = br_wifi_sim_prepare(mac);
+  br_net *net = open_fn ? open_fn(NULL, take, &s) : NULL;
+  CHECK(net != NULL);
+  if (!net) return;
+  struct ow_hello hello = { OW_VERSION };
+  CHECK(br_wifi_sim_send(net, f, guest_frame(f, OW_HELLO, &hello, sizeof hello)) == 0 && s.count == 1 && host_message(&s, 0, &p, &n) == OW_STATE);
+  memset(&s, 0, sizeof s);
+  br_wifi_sim_send(net, f, guest_frame(f, OW_SCAN, NULL, 0));
+  struct ow_bss b;
+  CHECK(s.count == 3 && host_message(&s, 0, &p, &n) == OW_BSS && host_message(&s, 2, &p, &n) == OW_SCAN_DONE);
+  CHECK(host_message(&s, 1, &p, &n) == OW_BSS);
+  memcpy(&b, p, sizeof b);
+  br_wifi_security sec;
+  br_wifi_security_parse(p + sizeof b, b.ie_length, &sec);
+  CHECK(b.ssid_length == 11 && !memcmp(b.ssid, "OneiOS WPA2", 11) && sec.rsn && sec.psk && sec.ccmp && (b.capability & 0x10));
+  // The secured network: a wrong passphrase is a refused key, the right one joins; a data frame goes nowhere.
+  struct ow_join j = { .ssid_length = 11, .ssid = "OneiOS WPA2", .security = OW_SECURITY_AUTO, .key_length = 8, .key = "12345678" };
+  struct ow_join_result result;
+  struct ow_state st;
+  memset(&s, 0, sizeof s);
+  br_wifi_sim_send(net, f, guest_frame(f, OW_JOIN, &j, sizeof j));
+  CHECK(s.count == 1 && host_message(&s, 0, &p, &n) == OW_JOIN_RESULT);
+  memcpy(&result, p, sizeof result);
+  CHECK(result.status == OW_JOIN_AUTH && result.code == 15);
+  memcpy(j.key, "password", 8);
+  memset(&s, 0, sizeof s);
+  br_wifi_sim_send(net, f, guest_frame(f, OW_JOIN, &j, sizeof j));
+  CHECK(s.count == 2 && host_message(&s, 0, &p, &n) == OW_STATE);
+  memcpy(&st, p, sizeof st);
+  CHECK(st.link == OW_LINK_UP && st.bss.freq_mhz == 5180 && st.rssi_dbm == -55);
+  CHECK(host_message(&s, 1, &p, &n) == OW_JOIN_RESULT);
+  memcpy(&result, p, sizeof result);
+  CHECK(result.status == OW_JOIN_OK);
+  memset(&s, 0, sizeof s);
+  memset(f, 0xff, 60);
+  CHECK(br_wifi_sim_send(net, f, 60) == 0 && s.count == 0);
+  struct ow_join open = { .ssid_length = 11, .ssid = "OneiOS open", .security = OW_SECURITY_OPEN };
+  br_wifi_sim_send(net, f, guest_frame(f, OW_JOIN, &open, sizeof open));
+  CHECK(s.count == 2 && host_message(&s, 1, &p, &n) == OW_JOIN_RESULT);
+  memcpy(&result, p, sizeof result);
+  CHECK(result.status == OW_JOIN_OK);
+  memset(&s, 0, sizeof s);
+  br_wifi_sim_send(net, f, guest_frame(f, OW_LEAVE, NULL, 0));
+  CHECK(s.count == 1 && host_message(&s, 0, &p, &n) == OW_STATE);
+  memcpy(&st, p, sizeof st);
+  CHECK(st.link == OW_LINK_IDLE);
 }
 
 // ---- the parcels ----
@@ -454,6 +520,7 @@ int main(void)
 {
   test_frames();
   test_station();
+  test_sim();
   test_parcels();
   test_security();
   test_callbacks();

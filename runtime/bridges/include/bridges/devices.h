@@ -45,6 +45,10 @@ void br_wlan_close(void);
 // wlan0's settings back from a state file (`wifictl restore`, after a killed xnuhost). 0, -ENOENT (nothing to give
 // back) or -errno.
 int  br_wlan_restore(const char *state_path);
+// A made-up radio for a boot with no phone (wifi/sim.c): two networks the guest can scan and join, no frames. mac:
+// the guest's en0 address. Used like br_wlan_prepare, with br_wifi_sim_send.
+br_net_open_fn br_wifi_sim_prepare(const uint8_t mac[6]);
+int  br_wifi_sim_send(br_net *n, const uint8_t *frame, size_t length);
 
 // "droidvm,virtio-snd": virtio-snd with one output stream (48 kHz S16 stereo) and one input stream
 // (48 kHz S16 mono), 240-frame periods, as DroidVMVirtioSnd.c asks.

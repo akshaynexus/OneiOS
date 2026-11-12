@@ -142,12 +142,33 @@ void br_wifi_scan_add(br_wifi_station *s, const struct ow_bss *bss, const uint8_
   if (keep) send(s, OW_BSS, &record, sizeof record, ies, ie_length);
 }
 
+// The regulatory country: the Country element (7) of the strongest network that has one, as iOS's own drivers take it.
+static bool scan_country(br_wifi_station *s, char out[2])
+{
+  int best = -32768;
+  bool found = false;
+  for (unsigned i = 0; i < s->nscan; i++) {
+    const br_wifi_bss *b = &s->scan[i];
+    if (b->bss.signal_dbm <= best) continue;
+    for (size_t o = 0; o + 2 <= b->bss.ie_length && o + 2u + b->ies[o + 1] <= b->bss.ie_length; o += 2u + b->ies[o + 1])
+      if (b->ies[o] == 7 && b->ies[o + 1] >= 2 && b->ies[o + 2] >= 'A' && b->ies[o + 2] <= 'Z' && b->ies[o + 3] >= 'A' && b->ies[o + 3] <= 'Z') {
+        out[0] = (char)b->ies[o + 2]; out[1] = (char)b->ies[o + 3]; best = b->bss.signal_dbm; found = true;
+        break;
+      }
+  }
+  return found;
+}
+
 void br_wifi_scan_done(br_wifi_station *s, int error)
 {
+  char country[2];
   pthread_mutex_lock(&s->lock);
   struct ow_scan_done done = { s->nscan, error };
   s->scanning = false;
+  bool changed = scan_country(s, country) && memcmp(country, s->country, 2);
+  if (changed) memcpy(s->country, country, 2);
   pthread_mutex_unlock(&s->lock);
+  if (changed) br_wifi_link_changed(s);              // the state carries the country
   send(s, OW_SCAN_DONE, &done, sizeof done, NULL, 0);
 }
 
@@ -207,6 +228,12 @@ void br_wifi_station_message(br_wifi_station *s, const uint8_t *frame, size_t le
     if (rc < 0) br_wifi_join_done(s, rc == -ENOENT ? OW_JOIN_NO_NETWORK : OW_JOIN_FAILED, 0);
     break;
   }
+  case OW_POWER: {                          // iOS's Wi-Fi switch: off leaves the network; the radio itself stays on
+    struct ow_power power = { 1 };
+    if (h.length >= sizeof power) memcpy(&power, p, sizeof power);
+    if (power.on) break;
+  }
+  // fall through
   case OW_LEAVE:
     pthread_mutex_lock(&s->lock);
     s->joining = s->joined = false;
@@ -215,8 +242,6 @@ void br_wifi_station_message(br_wifi_station *s, const uint8_t *frame, size_t le
     if (s->radio->leave) s->radio->leave(s->radio_ctx);
     br_wifi_link_changed(s);
     break;
-  case OW_POWER:
-    break;                                  // the radio stays on for the session; the guest's power is its own state
   default:
     break;
   }

@@ -12,7 +12,7 @@ XNUHOST := ../xnuhost
 WARN := -Wall -Wextra -Werror
 INC := -Iinclude -I../../drivers/bridge -I../../drivers/net -I$(XNUHOST)/src -I$(XNUHOST)/include
 CFLAGS ?= -O2 -g
-WIFI := wifi/frames wifi/station wifi/wlan wifi/aidl_parcel wifi/aidl_binder wifi/supplicant
+WIFI := wifi/frames wifi/station wifi/wlan wifi/sim wifi/aidl_parcel wifi/aidl_binder wifi/supplicant
 CORE := cpu/topology haptics/haptic net/net bt/hci bt/hidl_parcel bt/hci_hidl audio/backend brightness/brightness battery/battery thermal/thermal $(WIFI)
 DEVICES := devices/bridge_dev devices/virtio_net devices/virtio_snd
 HDR := $(wildcard include/bridges/*.h bt/*.h audio/*.h brightness/*.h battery/*.h thermal/*.h wifi/*.h ../../drivers/bridge/*.h ../../drivers/net/*.h $(XNUHOST)/src/xnuhost.h)
@@ -48,7 +48,7 @@ $(H)/test_bridges: tests/test_bridges.c $(CORE:%=%.c) $(DEVICES:%=%.c) $(XNUHOST
 	$(CC) -std=gnu11 -O1 -g $(WARN) $(INC) -fsanitize=address,undefined tests/test_bridges.c $(CORE:%=%.c) $(DEVICES:%=%.c) $(XNUHOST)/src/virtio.c -lpthread -o $@
 
 # The Wi-Fi bridge's pure parts: frames, the station against a fake radio, the AIDL parcels, the join's plan.
-WIFI_TEST := tests/test_wifi.c wifi/frames.c wifi/station.c wifi/aidl_parcel.c wifi/aidl_binder.c wifi/supplicant.c cpu/topology.c
+WIFI_TEST := tests/test_wifi.c wifi/frames.c wifi/station.c wifi/sim.c wifi/aidl_parcel.c wifi/aidl_binder.c wifi/supplicant.c cpu/topology.c
 $(H)/test_wifi: $(WIFI_TEST) $(HDR)
 	@mkdir -p $(H)
 	$(CC) -std=gnu11 -O1 -g $(WARN) $(INC) -fsanitize=address,undefined $(WIFI_TEST) -lpthread -o $@

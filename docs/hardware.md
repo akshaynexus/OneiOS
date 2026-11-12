@@ -20,7 +20,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 |---|---|---|---|
 | CPU | `droidvm-amp.patch` + `DroidVMCpufreq.c` (UniXNU-droidvm, unchanged) | `runtime/bridges/cpu`: topology, vCPU plan, thread placement, the cpufreq device | host built and tested; kernel side waits for release-kernel (series, archive) and booter (device tree, placement calls) |
 | GPU | UniXNU-droidvm's virtio-gpu 3D + NativeAdreno user client (unchanged) | booter's `virtio_gpu.c` + drm2kgsl | booter's; not owned here (section 2) |
-| Wi-Fi / network | `kernel/patches/oneios-hosted/net`: `IO80211Controller`/`IO80211Interface` under the collection's `IOEthernetController`/`IOEthernetInterface`, a station that asks the host, UniXNU-droidvm's virtio-net transport (section 3) | `runtime/bridges/wifi`: wlan0 is iOS's for the session: frames by AF_PACKET, scans by nl80211, joins by the vendor's supplicant (AIDL V2 over `/dev/binder`); `wifictl`; the old tap/NAT route only with `wifi=tap` | both built; host tested (87 + 35 checks, the binder client on a real binder driver); on the phone beside One UI: the supplicant's service and an nl80211 scan (53 networks) answer our client; **not yet run in a session** (wifid, a join, DHCP) |
+| Wi-Fi / network | `kernel/patches/oneios-hosted/net`: `IO80211Controller`/`IO80211Interface` under the collection's `IOEthernetController`/`IOEthernetInterface`, a station that asks the host, UniXNU-droidvm's virtio-net transport (section 3) | `runtime/bridges/wifi`: wlan0 is iOS's for the session: frames by AF_PACKET, scans by nl80211, joins by the vendor's supplicant (AIDL V2 over `/dev/binder`); `wifictl`; the old tap/NAT route only with `wifi=tap` | both built; host tested (107 + 35 checks, the binder client on a real binder driver); on the phone beside One UI: the supplicant's service and an nl80211 scan (53 networks) answer our client; **not yet run in a session** (wifid, a join, DHCP) |
 | Bluetooth | `drivers/bluetooth` (port of iOSPlus10's transport) on `drivers/bridge` | `runtime/bridges/bt`: the HAL over `/dev/hwbinder` | both built; on by default in a session since 2026-11-11 (before: off, `bluetooth=virtual`); HAL client tested on the PC against a fake HAL on a real binder driver, not yet on the phone |
 | Haptics | `drivers/haptics` (port of iOSPlus10's LaurelVibrator and haptic node) | `runtime/bridges/haptics`: evdev force feedback | both built; host tested with a fake actuator |
 | Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp`: the hosted kernel's audio archive since 2026-11-12 (before: not built, no device in iOS) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | helper run on the phone beside One UI (plays and records, 0 underruns, about 130 ms); host-tested against a fake AAudio; in a session and the guest side not yet run (section 6) |
@@ -272,7 +272,9 @@ the old route; xnuhost runs them only with `wifi=tap`.
    with `PACKET_IGNORE_OUTGOING` and `PACKET_VNET_HDR`. The guest's en0 has wlan0's MAC (a station can send only
    with its own address; iOS's private addresses are refused by the driver: `setHardwareAddress` is not supported).
    Frames from the guest with that source address go out as they are; frames to wlan0's MAC, broadcast and
-   multicast come in. EAPOL (0x888e) is not passed either way: it is the supplicant's. GRO is turned off on wlan0
+   multicast come in (the socket asks for every multicast group, `PACKET_MR_ALLMULTI`: iOS's IPv6 solicited-node group and
+   mDNS are groups Linux has not joined on wlan0; the membership ends with the socket). EAPOL (0x888e) is not
+   passed either way: it is the supplicant's. GRO is turned off on wlan0
    for the session (`ETHTOOL_SGRO`); a coalesced TCP frame that still arrives (its `virtio_net_hdr` says GSO or
    "needs checksum") is cut back into MTU-sized segments with fresh IPv4/TCP checksums. The Linux side keeps quiet
    on wlan0: its IPv4 addresses are removed (`ip -4 addr flush dev wlan0`) and `disable_ipv6` is 1. `ip_forward`
@@ -331,8 +333,9 @@ by its own script), so iOS had no en0 in any boot. Now `build-hosted.sh` builds 
 ### What wifid needs from the interface (Apple80211)
 
 From DroidVMWifi.inc (UniXNU-droidvm f9121cd, written for iPadOS 27 24A446 and shown in Settings by Droid-VM on
-2026-11-02 with `droidvm-wifi-ssid=`) and iOSPlus10's 20H392 trace (`patches/xnu/README-wifi.md`, "How wifid uses
-Apple80211"; iOS 16, so the iOS 27 details are [I] until seen):
+2026-11-02 with `droidvm-wifi-ssid=`), UniXNU-sheng's `package/WifiNet.cpp` (6bc0ce1: a driver that joins real
+networks on 24A446, so its join details are the ones used) and iOSPlus10's 20H392 trace (`patches/xnu/README-wifi.md`,
+"How wifid uses Apple80211"; iOS 16, so what only it says is [I] until seen):
 
 - Found as Wi-Fi only if: the controller's class is `IO80211Controller` (configd), the interface is `IFT_ETHER` with
   `IFNET_SUBFAMILY_WIFI` (IO80211.framework), it has the property `IOInterfaceName` (wifid matches on it), and the
@@ -341,13 +344,21 @@ Apple80211"; iOS 16, so the iOS 27 details are [I] until seen):
   the device: accept it.
 - Requests (type numbers): 1 SSID, 2 AUTH_TYPE, 4 CHANNEL, 5 POWERSAVE, 8 RATE, 9 BSSID, 10 SCAN_REQ, 11 SCAN_RESULT
   (1164-byte records, EIO after the last), 12 CARD_CAPABILITIES, 13 STATE, 14 PHY_MODE, 15 OP_MODE, 16 RSSI, 17 NOISE,
-  19 POWER, 20 ASSOCIATE (592 bytes: SSID, BSSID, cipher, key or passphrase), 21 ASSOCIATE_RESULT (0 while the join
-  runs, 1 success, polled every 20 ms for 8 s), 22 DISASSOCIATE, 27/254 SUPPORTED_CHANNELS, 51 COUNTRY_CODE, 86
+  19 POWER, 20 ASSOCIATE (**656 bytes on 24A446**: version 1, mode, 32-bit lower and upper authentication, then the
+  network at 0x10: SSID, BSSID, key length, key cipher, key; the older layout is 592 bytes with 16-bit authentication
+  fields and the network at 0x0c. The driver takes either by its length and refuses any other. Key cipher 6 is the
+  32-byte pairwise master key the daemon derived, 10 the passphrase itself), 21 ASSOCIATE_RESULT (0 while the join
+  runs, 1 success, 2 failed, 9 timed out, 21 wrong key; polled every 20 ms for 8 s), 22 DISASSOCIATE, 27/254 SUPPORTED_CHANNELS, 51 COUNTRY_CODE, 86
   SCAN_REQ_MULTIPLE, 103 CURRENT_NETWORK, 106 RSSI_BOUNDS, 207 CHANNELS_INFO; many sets accepted with no effect
   (383 SET_PROPERTY, 365 DISPLAY_STATE, 25 HOST_AP_MODE refused).
 - Events (kernel event class 6, subclass 1, the interface name first): 1 POWER_CHANGED, 2 SSID_CHANGED, 3
-  BSSID_CHANGED, 4 LINK_CHANGED (32 bytes: down, RSSI, SNR, noise, reason), 9 ASSOC_DONE, 10 SCAN_DONE; and the
-  link state on the IOKit side (`setLinkStatus`, which configd's DHCP waits for).
+  BSSID_CHANGED, 4 LINK_CHANGED (32 bytes: down, RSSI, SNR, noise, reason), 9 ASSOC_DONE (**on 24A446 with 540
+  bytes**: ten 52-byte access point records, then the result at 0x214 and a flag that it is valid at 0x218; the
+  daemon's `_dispatchAsyncAssocEvent` reads them, so an empty event is not safe), 10 SCAN_DONE; and the link state on
+  the IOKit side (`setLinkStatus`, which configd's DHCP waits for). A join that worked sends, in this order: the
+  IOKit link, ASSOC_DONE, SSID_CHANGED, BSSID_CHANGED, LINK_CHANGED.
+- The regulatory country (51 COUNTRY_CODE) is the Country element of the strongest network of the last scan that
+  has one (the host's station finds it and sends it in `OW_STATE`); "XX" until a scan.
 
 ### The host bridge (`runtime/bridges/wifi`)
 
@@ -356,12 +367,15 @@ Apple80211"; iOS 16, so the iOS 27 details are [I] until seen):
 | `frames.c` | which frames cross (above), and the cut of a coalesced TCP frame |
 | `station.c` | the station the guest's driver talks to: its messages become calls on a radio back end, the radio's reports become messages |
 | `wlan.c` | the back end on the phone: the AF_PACKET socket, nl80211, wlan0's settings kept and given back. Three threads: frames, nl80211 events, control. The guest's vCPU only sends a frame or queues a message; netlink, binder and the join's timeouts are the control thread's |
+| `sim.c` | a made-up radio (`wifi=sim`) |
 | `supplicant.c` | the supplicant's client: the lookup, the interface, the callback object, the join's plan and its outcome |
 | `aidl_parcel.c`, `aidl_binder.c` | stable AIDL over `/dev/binder` with no Android library (xnuhost is static): the interface token (strict mode word, work source, `SYST`), `String` as UTF-16, `byte[]`, binder objects with the stability word (VINTF 0x3f), the status header of a reply; the kernel's binder protocol, one looper thread for the calls into our callback, death notifications |
 | `tools/wifictl.c` | the bridge without xnuhost: `status`, `scan`, `join`, `restore` (`runtime/bridges/README.md`) |
 
 xnuhost: `wifi=auto` (the default; `xnuhost.conf` or `--set wifi=...`) takes wlan0 when the bridges are on, `wifi=off`
-makes no network device, `wifi=tap` is the old route. Log lines: `wifi: wlan0 is iOS's for the session: ...`, `wifi:
+makes no network device, `wifi=tap` is the old route, `wifi=sim` is `sim.c`: a made-up radio with two networks
+("OneiOS open", and "OneiOS WPA2" with the passphrase `password`) for a boot on a PC, where the guest's side can be
+run and read in the log; no frame goes anywhere (unit-tested; not yet run in a boot). Log lines: `wifi: wlan0 is iOS's for the session: ...`, `wifi:
 on: wlan0 (..) is the guest's en0`, `wifi: the vendor's supplicant is the bridge's`, `wifi: the guest's driver is up`,
 `wifi: join: network N in the supplicant, WPA2 (passphrase): selected`, `wifi: supplicant: <state>`, `wifi: join done`
 or `join failed (status S, code C)`, `wifi: link down (reason R)`, `wifi: closed (...)`, `wifi: wlan0 given back`.
@@ -373,7 +387,7 @@ absent: a reason not to run it on the phone as it is.
 
 ### Tested
 
-- Host (arm64 Linux container, `runtime/host-tests.sh`): `test_wifi` 87 checks (frame rules; a 4000-byte coalesced
+- Host (arm64 Linux container, `runtime/host-tests.sh`): `test_wifi` 107 checks (frame rules; a 4000-byte coalesced
   IPv4 frame and a 3000-byte IPv6 one cut into three with right lengths, sequence numbers and checksums; the station
   against a fake radio; the AIDL parcels byte for byte; the join's plan for WPA2, WPA3, transition, WPA with TKIP,
   open, OWE and a network not seen; the supplicant's callbacks decoded); `test_aidl_binder` 35 checks: the client

@@ -507,7 +507,14 @@ static int packet_open(struct br_wlan *w)
   if (setsockopt(w->packet, SOL_PACKET, PACKET_VNET_HDR, &on, sizeof on) ||
       setsockopt(w->packet, SOL_PACKET, PACKET_IGNORE_OUTGOING, &on, sizeof on)) return -errno;
   struct sockaddr_ll ll = { .sll_family = AF_PACKET, .sll_protocol = htons(ETH_P_ALL), .sll_ifindex = w->ifindex };
-  return bind(w->packet, (struct sockaddr *)&ll, sizeof ll) ? -errno : 0;
+  if (bind(w->packet, (struct sockaddr *)&ll, sizeof ll)) return -errno;
+  // Every multicast group: iOS's IPv6 neighbour discovery (its solicited-node group) and mDNS are groups Linux has
+  // not joined on wlan0, and the driver passes up only the groups of the interface's list. The membership is the
+  // socket's: it ends when the socket closes, also after a kill.
+  struct packet_mreq all = { .mr_ifindex = w->ifindex, .mr_type = PACKET_MR_ALLMULTI };
+  if (setsockopt(w->packet, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &all, sizeof all))
+    br_log(0, "wifi: %s: all-multicast not set (%s): IPv6 neighbour discovery and mDNS may not reach iOS", w->ifname, strerror(errno));
+  return 0;
 }
 
 // ---- wlan0's host state -------------------------------------------------------------------------
@@ -575,7 +582,7 @@ static void host_take(struct br_wlan *w)
   (void)gro(w->ifname, 0);
   // One IP stack on the link: One UI's IPv4 addresses on wlan0 go (its framework adds them again after the return).
   char command[200];
-  snprintf(command, sizeof command, "ip -4 addr flush dev %s >/dev/null 2>&1", w->ifname);
+  snprintf(command, sizeof command, "PATH=/system/bin:$PATH ip -4 addr flush dev %s >/dev/null 2>&1", w->ifname);
   (void)!system(command);
   br_log(1, "wifi: %s is iOS's for the session: IPv4 addresses removed, IPv6 off (was %s), GRO off (was %s); the old values are in %s",
          w->ifname, v6 ? "off" : "on", g ? "on" : "off", *w->state_path ? w->state_path : "(nowhere: no session folder)");

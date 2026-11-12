@@ -91,9 +91,13 @@ enum {
 };
 // events: class IEEE 802.11 (6), subclass 1, the data starting with the interface name
 enum { kEvPowerChanged = 1, kEvSsidChanged = 2, kEvBssidChanged = 3, kEvLinkChanged = 4, kEvAssocDone = 9, kEvScanDone = 10 };
-// ASSOCIATE_RESULT as the framework reads it: 0 while the join runs, 1 joined, anything else a failure
-enum { kAssocRunning = 0, kAssocOk = 1, kAssocFailed = 2 };
-enum { kCipherPmk = 6 };   // apple80211_cipher_type: the key is the 32-byte pairwise master key
+// ASSOCIATE_RESULT as the framework reads it: 0 while the join runs, 1 joined, anything else a failure; 9 and 21 are
+// the ones Settings words as a timeout and as a wrong password (UniXNU-sheng's WifiNet.cpp, which joins real networks
+// on this OS build).
+enum { kAssocRunning = 0, kAssocOk = 1, kAssocFailed = 2, kAssocTimeout = 9, kAssocBadKey = 21 };
+// apple80211_cipher_type of an association's key: 6 the 32-byte pairwise master key (the daemon derived it from the
+// passphrase), 10 the passphrase itself
+enum { kCipherPmk = 6, kCipherPassphrase = 10 };
 
 struct channel { uint32_t version, channel, flags; };
 struct channels_list { uint32_t version, count; channel list[401]; uint32_t unused; };
@@ -102,9 +106,24 @@ struct scan_result {
     uint8_t rate_count, unused0; uint32_t rates[15]; uint8_t ssid_length, ssid[32], unused1[3]; uint32_t age_ms; uint8_t flags, unused2;
     uint16_t elements_length; uint8_t elements[1024];
 };
-struct assoc_request {
-    uint32_t version; uint16_t mode, auth_lower, auth_upper, unused0; uint32_t ssid_length; uint8_t ssid[32]; uint8_t bssid[6], unused1[2];
-    uint32_t key_version, key_length, key_cipher; uint16_t key_flags, key_index; uint8_t key[64]; uint8_t rest[0x250 - 0x88];
+// An association request's network: the same in both layouts below.
+struct assoc_parameters {
+    uint32_t ssid_length; uint8_t ssid[32]; uint8_t bssid[6], unused[2];
+    uint32_t key_version, key_length, key_cipher; uint16_t key_flags, key_index; uint8_t key[64];
+};
+struct assoc_request {         // the older layout, 592 bytes (DroidVMWifi.inc's)
+    uint32_t version; uint16_t mode, auth_lower, auth_upper, unused0; assoc_parameters network; uint8_t rest[0x250 - 0x88];
+};
+// 24A446's IO80211 __performAssociation has 32-bit authentication fields: the network moves by four bytes and the
+// request is 656 bytes (UniXNU-sheng's WifiNet.cpp, read from the same OS build). Both layouts say version 1.
+struct assoc_request27 {
+    uint32_t version; uint16_t mode, unused0; uint32_t auth_lower, auth_upper; assoc_parameters network; uint8_t rest[0x290 - 0x8c];
+};
+// 24A446's _dispatchAsyncAssocEvent reads ten 52-byte access point records, then the result at 0x214 and its
+// validity flag at 0x218: an empty ASSOC_DONE event is not safe on this build (the same source).
+struct assoc_event27 {
+    uint8_t attempts[10][52];
+    uint32_t reserved[2], reason, result, has_result;
 };
 struct link_event {
     uint8_t down, unused0[3]; int32_t rssi; uint16_t snr, noise; uint8_t unused1[4]; uint8_t involuntary, unused2[3]; uint32_t reason, subreason;
@@ -113,7 +132,12 @@ struct link_event {
 static_assert(sizeof(apple80211req) == 0x28, "request layout");
 static_assert(sizeof(scan_result) == 1164 && __builtin_offsetof(scan_result, ssid_length) == 0x60 &&
               __builtin_offsetof(scan_result, age_ms) == 0x84 && __builtin_offsetof(scan_result, elements) == 0x8c, "scan result layout");
-static_assert(sizeof(assoc_request) == 592 && __builtin_offsetof(assoc_request, key) == 0x48, "association layout");
+static_assert(sizeof(assoc_parameters) == 0x7c && __builtin_offsetof(assoc_parameters, key) == 0x3c &&
+              __builtin_offsetof(assoc_parameters, key_length) == 0x30 && __builtin_offsetof(assoc_parameters, key_cipher) == 0x34, "association network");
+static_assert(sizeof(assoc_request) == 592 && __builtin_offsetof(assoc_request, network) == 0x0c, "older association layout");
+static_assert(sizeof(assoc_request27) == 656 && __builtin_offsetof(assoc_request27, network) == 0x10, "24A446 association layout");
+static_assert(sizeof(assoc_event27) == 540 && __builtin_offsetof(assoc_event27, result) == 0x214 &&
+              __builtin_offsetof(assoc_event27, has_result) == 0x218, "24A446 association event");
 static_assert(sizeof(channels_list) == 4824, "channel list layout");
 static_assert(sizeof(link_event) == 32, "link event layout");
 static_assert(sizeof(ow_bss) == 56 && sizeof(ow_state) == 92 && sizeof(ow_join) == 108, "OneiOS Wi-Fi message layout");
@@ -132,6 +156,8 @@ static Net gCurrent;                   // the joined network (kStaAuth and above
 static uint32_t gState = kStaIdle;
 static bool gPower = true, gRadio;     // gRadio: the host said it has the phone's radio
 static int gAssocResult = kAssocFailed;
+static bool gAssocModern;              // the last ASSOCIATE had the 24A446 layout: its ASSOC_DONE carries the result
+static bool gKeyed;                    // the last join had a key
 static int32_t gRssi = -127, gNoise = -95;
 static uint32_t gRate;
 static char gCountry[3] = "XX";
@@ -161,7 +187,7 @@ static void send(uint16_t type, const void *payload, uint16_t length) {
 }
 
 static void post_event(uint32_t code, const void *payload, size_t length) {
-    uint8_t data[128]; if (length > sizeof data - 16) length = sizeof data - 16;
+    uint8_t data[16 + sizeof(assoc_event27)]; if (length > sizeof data - 16) length = sizeof data - 16;   // the largest event
     memset(data, 0, 16);
     if (gIf) snprintf(reinterpret_cast<char *>(data), 16, "%s%u", ifnet_name(gIf), ifnet_unit(gIf));
     if (length) memcpy(data + 16, payload, length);
@@ -171,12 +197,29 @@ static void post_event(uint32_t code, const void *payload, size_t length) {
     oneios_kev_msg_post(&msg);
 }
 
-static void link_changed(bool up, bool involuntary, uint32_t reason) {
-    if (gLink) gLink(up);
+// ASSOC_DONE: with the join's result where the daemon reads one.
+static void post_assoc_done() {
+    if (!gAssocModern) { post_event(kEvAssocDone, nullptr, 0); return; }
+    assoc_event27 *ev = static_cast<assoc_event27 *>(IOMallocZeroData(sizeof(assoc_event27)));
+    if (!ev) return;
+    IOLockLock(gLock);
+    ev->result = static_cast<uint32_t>(gAssocResult); ev->has_result = 1;
+    memcpy(ev->attempts[0], gCurrent.bss.bssid, 6);
+    IOLockUnlock(gLock);
+    post_event(kEvAssocDone, ev, sizeof *ev);
+    IOFreeData(ev, sizeof(assoc_event27));
+}
+
+// The link for the network configuration (configd's DHCP waits for it), then the Apple80211 link event.
+static void link_event_post(bool up, bool involuntary, uint32_t reason) {
     link_event ev; memset(&ev, 0, sizeof ev);
     ev.down = up ? 0 : 1; ev.rssi = gRssi; ev.noise = static_cast<uint16_t>(gNoise); ev.snr = static_cast<uint16_t>(gRssi - gNoise);
     ev.involuntary = involuntary ? 1 : 0; ev.reason = reason;
     post_event(kEvLinkChanged, &ev, sizeof ev);
+}
+static void link_changed(bool up, bool involuntary, uint32_t reason) {
+    if (gLink) gLink(up);
+    link_event_post(up, involuntary, reason);
 }
 
 // The joined network went away (a leave, the host's link down, power off): the events a driver sends.
@@ -205,9 +248,9 @@ static void scan_timeout(thread_call_param_t, thread_call_param_t) {
 static void join_timeout(thread_call_param_t, thread_call_param_t) {
     IOLockLock(gLock);
     const bool was = gAssocResult == kAssocRunning && gState >= kStaAuth && gState < kStaUp;
-    if (was) { gAssocResult = kAssocFailed; gState = gPower ? kStaIdle : kStaOff; }
+    if (was) { gAssocResult = kAssocTimeout; gState = gPower ? kStaIdle : kStaOff; }
     IOLockUnlock(gLock);
-    if (was) { log("join: no result from the host in %u ms", kJoinTimeoutMs); post_event(kEvAssocDone, nullptr, 0); }
+    if (was) { log("join: no result from the host in %u ms", kJoinTimeoutMs); post_assoc_done(); }
 }
 static void arm(thread_call_t call, unsigned ms) {
     uint64_t at; clock_interval_to_deadline(ms, kMillisecondScale, &at); thread_call_enter_delayed(call, at);
@@ -224,18 +267,21 @@ static void scan() {
 }
 
 // A join request: the host joins with the vendor's supplicant and answers OW_JOIN_RESULT.
-static int join(const assoc_request &a) {
+static int join(const assoc_parameters &a) {
     ow_join j; memset(&j, 0, sizeof j);
     if (a.ssid_length == 0 || a.ssid_length > 32 || a.key_length > 64) return EINVAL;
     j.ssid_length = static_cast<uint8_t>(a.ssid_length); memcpy(j.ssid, a.ssid, a.ssid_length);
     memcpy(j.bssid, a.bssid, 6);
     j.security = OW_SECURITY_AUTO;
     if (a.key_length == 32 && a.key_cipher == kCipherPmk) { j.key_raw = 1; j.key_length = 32; memcpy(j.key, a.key, 32); }
-    else if (a.key_length >= 8 && a.key_length <= 63) { j.key_length = static_cast<uint8_t>(a.key_length); memcpy(j.key, a.key, a.key_length); }
+    else if (a.key_length >= 8 && a.key_length <= 63) {   // a passphrase (cipher 10; another cipher with such a key is taken as one too, and logged)
+        j.key_length = static_cast<uint8_t>(a.key_length); memcpy(j.key, a.key, a.key_length);
+        if (a.key_cipher != kCipherPassphrase) log("join: a key of %u bytes of kind %u: taken as a passphrase", a.key_length, a.key_cipher);
+    }
     else if (a.key_length) { log("join: a key of %u bytes of kind %u is not one the host can use", a.key_length, a.key_cipher); return EINVAL; }
     else j.security = OW_SECURITY_OPEN;
     IOLockLock(gLock);
-    if (!gRadio || !gPower) { IOLockUnlock(gLock); gAssocResult = kAssocFailed; post_event(kEvAssocDone, nullptr, 0); return ENXIO; }
+    if (!gRadio || !gPower) { gAssocResult = kAssocFailed; IOLockUnlock(gLock); post_assoc_done(); return ENXIO; }
     bool notify = false;
     if (gState == kStaUp) leave_locked(false, 0, &notify);
     memset(&gCurrent, 0, sizeof gCurrent);
@@ -243,7 +289,7 @@ static int join(const assoc_request &a) {
     for (unsigned i = 0; i < gScanCount; i++) {   // what the last scan knew of it, until the host says
         if (gScan[i].bss.ssid_length == j.ssid_length && !memcmp(gScan[i].bss.ssid, j.ssid, j.ssid_length)) { gCurrent = gScan[i]; break; }
     }
-    gState = kStaAuth; gAssocResult = kAssocRunning;
+    gState = kStaAuth; gAssocResult = kAssocRunning; gKeyed = j.key_length != 0;
     IOLockUnlock(gLock);
     if (notify) left(false, 0);
     log("join: a network name of %u bytes, %s", j.ssid_length, j.key_raw ? "a PSK" : j.key_length ? "a passphrase" : "open");
@@ -320,18 +366,23 @@ static void host_message(uint16_t type, const uint8_t *payload, size_t length) {
         const bool pending = gAssocResult == kAssocRunning && gState >= kStaAuth && gState < kStaUp;
         if (pending) {
             if (r.status == OW_JOIN_OK) { gState = kStaUp; gAssocResult = kAssocOk; }
-            else { gState = gPower ? kStaIdle : kStaOff; gAssocResult = kAssocFailed; }
+            else {
+                gState = gPower ? kStaIdle : kStaOff;
+                gAssocResult = r.status == OW_JOIN_AUTH ? kAssocBadKey : r.status == OW_JOIN_TIMEOUT ? kAssocTimeout : kAssocFailed;
+            }
         }
         IOLockUnlock(gLock);
         if (!pending) break;
         thread_call_cancel(gJoinTimeout);
         log("join %s (status %u, 802.11 code %u)", r.status == OW_JOIN_OK ? "done: joined" : "failed", r.status, r.code);
+        // The order of UniXNU-sheng's driver: the link (configd starts DHCP when it comes up), the join's result, then
+        // the network's name and access point and the Apple80211 link event.
+        if (r.status == OW_JOIN_OK && gLink) gLink(true);
+        post_assoc_done();
         if (r.status == OW_JOIN_OK) {
-            // The link first: configd starts DHCP when it comes up, wifid reads the result after ASSOC_DONE.
-            link_changed(true, false, 0);
             post_event(kEvSsidChanged, nullptr, 0); post_event(kEvBssidChanged, nullptr, 0);
+            link_event_post(true, false, 0);
         }
-        post_event(kEvAssocDone, nullptr, 0);
         break;
     }
     default: break;
@@ -391,7 +442,7 @@ static int map_state(uint32_t s) {
 
 static int answer(bool set, apple80211req &rq) {
     const int type = rq.req_type;
-    union Out { uint8_t raw[5120]; channels_list chans; scan_result res; assoc_request assoc; };   // not on the stack
+    union Out { uint8_t raw[5120]; channels_list chans; scan_result res; assoc_request assoc; assoc_request27 assoc27; };   // not on the stack
     Out *outp = static_cast<Out *>(IOMallocData(sizeof(Out)));
     if (!outp) return ENOMEM;
     memset(outp, 0, sizeof(Out));
@@ -415,8 +466,20 @@ static int answer(bool set, apple80211req &rq) {
             post_event(kEvPowerChanged, nullptr, 0); return 0; }
         case kScanReq: case kScanReqMultiple: scan(); return 0;
         case kAssociate: {
-            if (copy_in(rq, &out.assoc, sizeof out.assoc)) return EFAULT;
-            return join(out.assoc); }
+            // Only a layout that was seen: the network is never guessed from the key's bytes.
+            if (rq.req_len != sizeof(assoc_request) && rq.req_len != sizeof(assoc_request27)) {
+                log("join: an association request of %u bytes: not a layout this driver knows (592 or 656)", rq.req_len);
+                return EINVAL;
+            }
+            const bool modern = rq.req_len == sizeof(assoc_request27);
+            if (copy_in(rq, out.raw, rq.req_len)) return EFAULT;
+            if ((modern ? out.assoc27.version : out.assoc.version) != 1) return EINVAL;
+            log("join: layout %u, authentication lower 0x%x upper 0x%x, key of %u bytes of kind %u", rq.req_len,
+                modern ? out.assoc27.auth_lower : out.assoc.auth_lower, modern ? out.assoc27.auth_upper : out.assoc.auth_upper,
+                modern ? out.assoc27.network.key_length : out.assoc.network.key_length,
+                modern ? out.assoc27.network.key_cipher : out.assoc.network.key_cipher);
+            gAssocModern = modern;
+            return join(modern ? out.assoc27.network : out.assoc.network); }
         case kDisassociate: case kDeauth: log("leave"); leave(); return 0;
         // host access point mode: none (wifid sets it to 2 as it starts; accepted, it would offer a personal hotspot)
         case kHostApMode: return EOPNOTSUPP;
@@ -431,6 +494,7 @@ static int answer(bool set, apple80211req &rq) {
     const int32_t rssi = gRssi, noise = gNoise;
     const uint32_t rate = gRate;
     const int assoc = gAssocResult;
+    const bool keyed = gKeyed;
     const bool power = gPower;
     char country[3] = { gCountry[0], gCountry[1], 0 };
     bool have = false;
@@ -442,7 +506,7 @@ static int answer(bool set, apple80211req &rq) {
     case kPower: w[0] = 1; w[1] = 1; w[2] = power ? 1 : 0; return copy_out(rq, w, 24);
     case kState: return answer_value(rq, static_cast<uint32_t>(map_state(state)));
     case kOpMode: return answer_value(rq, 1);   // station
-    case kAuthType: w[0] = 1; w[1] = 1; w[2] = 0; return copy_out(rq, w, 12);   // {version, lower: open system, upper: none}
+    case kAuthType: w[0] = 1; w[1] = 1; w[2] = keyed && state >= kStaAuth ? 0x10 : 0; w[3] = 0; return copy_out(rq, w, 16);   // {version, lower: open system, upper: WPA2 personal or none, extension}
     case kPowerSave: return answer_value(rq, 0);
     case kCardCaps: {   // a bitmap, bit n in byte n / 8: AES, AES-CCM, power management, short slot and preamble, WPA2, WME, short guard interval
         static const uint8_t has[] = { 2, 3, 6, 9, 10, 14, 17, 19 };
@@ -456,11 +520,11 @@ static int answer(bool set, apple80211req &rq) {
     case kBssid: if (state < kStaAssoc) return ENOENT; return answer_bytes(rq, current.bss.bssid, 6);
     case kChannel: if (state < kStaAuth || !current.bss.freq_mhz) return ENOENT; w[0] = 1; fill_channel(*reinterpret_cast<channel *>(out.raw + 4), current.bss.freq_mhz); return copy_out(rq, w, 16);
     case kRssi: case kNoise: {   // {version, radios, unit (0: dBm), per chain[4], aggregate, extension per chain[4], its aggregate}
-        if (state != kStaUp) return ENXIO;
+        if (type == kRssi && state != kStaUp) return ENOENT;
         const uint32_t v = static_cast<uint32_t>(type == kRssi ? rssi : noise);
         w[0] = 1; w[1] = 1; w[2] = 0; for (int i = 3; i < 13; i++) w[i] = v; return copy_out(rq, w, 13 * 4); }
     case kRssiBounds: w[0] = 1; w[1] = static_cast<uint32_t>(-90); w[2] = static_cast<uint32_t>(-40); w[3] = static_cast<uint32_t>(-80); return copy_out(rq, w, 16);
-    case kRate: if (state != kStaUp) return ENXIO; return answer_value(rq, rate ? rate : 54);
+    case kRate: return answer_value(rq, state == kStaUp ? (rate ? rate : 54) : 0);
     case kTxPower: return answer_value(rq, 15);
     case kDriverVersion: case kHardwareVersion: {
         strlcpy(reinterpret_cast<char *>(out.raw), type == kDriverVersion ? "oneios-wifi 1" : "WCN785x (the phone's, through its vendor stack)", 256);

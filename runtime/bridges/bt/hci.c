@@ -20,6 +20,7 @@ struct br_hci {
   int state;
   bool open;
   uint64_t sent, received, dropped;
+  uint64_t reports;               // advertising and inquiry reports: devices the controller heard
 };
 
 bool br_hci_packet_ok(uint8_t type, const uint8_t *p, size_t length)
@@ -87,6 +88,15 @@ void br_hci_deliver(br_hci *h, uint8_t type, const uint8_t *packet, size_t lengt
 {
   if (!br_hci_packet_ok(type, packet, length)) { h->dropped++; return; }
   h->received++;
+  // A device nearby, heard by the controller: an LE advertising report (LE Meta 0x3e, subevents 0x02 and 0x0d) or an
+  // inquiry result (0x02, 0x22, 0x2f). One line for the first and for each power of two after: a scan that finds
+  // devices can be read in the log.
+  if (type == 4 && length >= 3 && ((packet[0] == 0x3e && (packet[2] == 0x02 || packet[2] == 0x0d)) || packet[0] == 0x02 || packet[0] == 0x22 ||
+                                   packet[0] == 0x2f)) {
+    uint64_t n = ++h->reports;
+    if (!(n & (n - 1))) br_log(1, "bluetooth: the controller hears devices: %llu report(s) so far (%s)", (unsigned long long)n,
+                               packet[0] == 0x3e ? "LE advertising" : "inquiry result");
+  }
   if (h->rx) h->rx(h->ctx, type, packet, length);
 }
 

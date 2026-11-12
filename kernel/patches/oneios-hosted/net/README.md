@@ -62,8 +62,9 @@ initializer inside the kernel's own module load and sets the two superclass link
 registered below the collection's IOEthernetController and IOEthernetInterface; starting /arm-io/net`, `on: the
 phone's Wi-Fi, address ..; asking the host for its radio`, `the host has the phone's radio`, `wifid gets|sets N: len
 .. val .. -> error` (each request for the first 150, then a type's first, and every scan, join and leave), `scan
-done: N networks`, `join: a network name of N bytes, a passphrase|a PSK|open`, `join done: joined` or `join failed
-(status S, 802.11 code C)`, `link down (reason R)`. An `off: ...` line names what was missing. For a debugger:
+done: N networks`, `join: layout 656, authentication lower 0x.. upper 0x.., key of N bytes of kind K` (the request's
+length, 656 on 24A446, picks its layout), `join: a network name of N bytes, a passphrase|a PSK|open`, `join done:
+joined` or `join failed (status S, 802.11 code C)`, `link down (reason R)`. An `off: ...` line names what was missing. For a debugger:
 `oneios_wifi_stage` (1 the family loaded, 2 the classes are the bound ones, 3 registered, 4 the controller
 started), `oneios_wifi_requests`, `oneios_wifi_refused`, `oneios_wifi_rx`, `oneios_wifi_tx`, `oneios_wifi_dropped`.
 

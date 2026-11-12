@@ -1051,6 +1051,9 @@ static void test_config(const char *dir)
   char *argv5[] = { "xnuhost", "--image", image, "--set", "wifi=off" };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 5, argv5) == 0 && xh_config_finish(&c) == 0 && !strcmp(c.wifi, "off"));
+  char *argv6[] = { "xnuhost", "--image", image, "--set", "wifi=sim" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 5, argv6) == 0 && xh_config_finish(&c) == 0 && !strcmp(c.wifi, "sim"));
   char *bad_wifi[] = { "xnuhost", "--image", image, "--set", "wifi=nat" };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 5, bad_wifi) == -1);

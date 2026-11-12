@@ -289,7 +289,9 @@ en0 (`br_wlan_prepare`, [hardware.md](hardware.md) section 3): the `net` window'
 address in its configuration, its frames go to and from wlan0 by AF_PACKET, and the guest driver's station messages
 (frames of type 0x88b5) go to nl80211 and the vendor's supplicant. It keeps what it changes on wlan0 (GRO,
 `disable_ipv6`) in `/data/session/wifi.state`. No wlan0: one line (`wifi: off: no wlan0 ...`) and no `net` window.
-`off` makes no network device; `tap` is the old route (a tap and `bin/oneios-net.sh`'s NAT), for a bench.
+`off` makes no network device; `tap` is the old route (a tap and `bin/oneios-net.sh`'s NAT), for a bench; `sim` is a
+made-up radio for a boot with no phone (it also works with the bridges off): two networks, "OneiOS open" and "OneiOS
+WPA2" (passphrase `password`), that the guest can scan and join, and no frames (`runtime/bridges/wifi/sim.c`).
 A bridge whose Linux side is missing logs one line and is left out. At a stop the motor is stopped, the Wi-Fi
 bridge leaves its network and gives wlan0's settings back (`br_wlan_close`), and with `wifi=tap`
 `bin/oneios-net.sh down` removes the tap's rules. Every virtio node carries its SPI as `interrupts` and as

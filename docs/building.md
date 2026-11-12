@@ -213,7 +213,7 @@ with the kernel above, 10 CPUs and 8 GiB, 4 KiB pages). The counts are the same 
 | loader | 160 checks, 0 failed |
 | xnuhost | 13248 checks, 0 failed (udmabuf checked, blobs past its limits split); display mode 5 scenarios, 0 failed; drm2kgsl 3 + 23 checks, 0 failed; leak scenarios 956 checks, 0 failed, LeakSanitizer no leaks; image set 37 checks, 0 failed; `check-arm64` `TESTKERNEL: all passed` and the restart test (8 restarts, then exit 3) |
 | display | 72 checks, 0 failed; mode choice 5 checks, 0 failed |
-| bridges | 200 checks, 0 failed; `test-binder` 38 checks, 0 failed; brightness 74 checks, 0 failures; battery 57 checks, 0 failures |
+| bridges | 201 checks, 0 failed; wifi 107 checks, 0 failed; `test-binder` 38 checks (the Bluetooth HAL client) and 35 (the Wi-Fi supplicant client), 0 failed; brightness 74 checks, 0 failures; battery 57 checks, 0 failures; thermal 56 checks, 0 failed (2026-11-12, after the Wi-Fi bridge) |
 | camera | 131 checks, 0 failed |
 | package (on the Mac) | 19 tests passed (the Apple-file refusals among them) |
 
@@ -266,6 +266,9 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   processes named in the boot argument `sheng-exc-name=SpringBoard,backboardd,...` (default: backboardd, chronod,
   liveactivitiesd; launchd always). `scripts/debug/dsc.py ADDR...` names those addresses in the image set's dyld
   shared cache (it finds the slide from a whole backtrace; its header says how to give it the cache).
+- Wi-Fi on the PC: add `--set wifi=sim`: a made-up radio with two networks for the guest's Wi-Fi driver and wifid
+  (`ONEIOS WIFI:` lines; [hardware.md](hardware.md) section 3). Not possible in the Mac's container: its Linux has no
+  pointer authentication (`xnuhost E an arm64e kernel needs pointer authentication ...; this host has none`).
 - Touch and keys on the PC: add `--input-script runtime/xnuhost/tools/input-demo.script` (keep `--no-input`: the
   evdev reader would open the PC's own devices). The script gives xnuhost's input device a panel's axes and, once
   the guest's driver runs it, repeats a tap, a swipe up from the bottom edge and the three side keys

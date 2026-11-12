@@ -66,7 +66,8 @@ typedef struct {
   char  bluetooth[16];      // "auto" (hidl when the bridges are on and the phone's HAL is registered, else virtual),
                             // "virtual" (no controller, transport 10) or "hidl" (the phone's controller, transport 3)
   char  wifi[8];            // "auto" (the phone's wlan0 for iOS's en0 when the bridges are on), "off" (no network
-                            // device), "tap" (the old route: a tap and bin/oneios-net.sh's NAT)
+                            // device), "tap" (the old route: a tap and bin/oneios-net.sh's NAT), "sim" (a made-up
+                            // radio with two networks, for a boot with no phone; works with the bridges off)
 } xh_config;
 
 void xh_config_defaults(xh_config *c);
