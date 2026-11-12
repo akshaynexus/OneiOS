@@ -125,6 +125,13 @@
 # perf: jobs the Data store's disabled.plist disables but that must run are enabled again before launchd
 # (oneios-enable-jobs=, default com.apple.analyticsd: without it CoreAnalytics' clients retry in a loop; backboardd 217%).
 0044-enable-jobs.patch
+# perf: a TLB lock per user pmap (the kernel pmap keeps the global one): a fill, flush or copy of one task no longer
+# waits for another's (the global lock was waited for up to 1.5 vCPUs on the phone); a flush of the shared region goes
+# only to the tasks that filled pages in its 32 MiB blocks; oneios-perf says where the unmaps come from.
+0045-tlb-lock-per-pmap.patch
+# perf: oneios-fault-around=N (off by default): a fill also maps the other pages of its N-page window that the tables
+# already allow, as a TLB may.
+0046-fault-around.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # net/build-oneios-net.py), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and

@@ -1,0 +1,90 @@
+diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
+--- a/osfmk/arm64/hosted/hosted_pmap.h
++++ b/osfmk/arm64/hosted/hosted_pmap.h
+@@ -158,6 +158,7 @@
+ 
+ /* 0041: the pmap's counters for the oneios-perf report: user maps, user unmaps, kernel maps, kernel unmaps, and the
+  * TLB lock's taken, contended, wait ticks, held ticks. Read without the lock: a report, not an exact sum. */
++static uint64_t hosted_fault_around_maps;          /* 0046 (hosted_fill_around_locked) */
+ void hosted_pmap_perf(uint64_t out[16]);
+ void
+ hosted_pmap_perf(uint64_t out[16])
+@@ -177,7 +178,7 @@
+ 	out[12] = hosted_unmap_stats.fanned;
+ 	out[13] = hosted_unmap_stats.nested_flushes;
+ 	out[14] = hosted_unmap_stats.skipped;
+-	out[15] = 0;
++	out[15] = os_atomic_load(&hosted_fault_around_maps, relaxed);      /* 0046 */
+ }
+ 
+ /*
+@@ -739,6 +740,43 @@
+ }
+ 
+ /*
++ * 0046, oneios-fault-around=N (pages; 0 or 1 = off, the default; at most 16): after a fill, the other pages of the
++ * N-page aligned window around it whose entries already allow access are mapped too, with what their entries allow.
++ * A TLB may hold any entry the tables allow (hardware fetches ahead the same way), and the flush rule is unchanged:
++ * every one of them is mapped under the pmap's TLB word, after its entry was read, so a later change of an entry is
++ * followed by a flush that unmaps it. Entries waiting for their reference fault (no AF) are left: that fault is the
++ * VM's. Only pages of the RAM window, not the GPU pool. On the first phone boot about half the faults were fills of
++ * entries that already allowed the access; each costs a trap and a release, a fault-around map one mmap in the task.
++ */
++static TUNABLE(uint32_t, hosted_fault_around, "oneios-fault-around", 0);
++
++/* The neighbours of a filled page. The pmap's lock (shared) and its TLB word held. */
++static void
++hosted_fill_around_locked(pmap_t pmap, uint64_t va)
++{
++	uint32_t window = hosted_fault_around > 16 ? 16 : hosted_fault_around;
++	if (window < 2 || (window & (window - 1)) != 0) {
++		return;
++	}
++	uint64_t span = (uint64_t)window * ARM_PGBYTES, base = va & ~(span - 1);
++	for (uint64_t at = base; at < base + span; at += ARM_PGBYTES) {
++		if (at == va || at >= hosted_info.user_va_limit) {
++			continue;
++		}
++		pt_entry_t pte = hosted_walk(pmap, at);
++		uint32_t prot = hosted_pte_prot(pte, true);
++		if (prot == 0 || !hosted_pa_in_window(pte_to_pa(pte))) {
++			continue;
++		}
++		hosted_nested_mark(pmap, at);
++		if (HPC(task_map, pmap->hosted_task, at, ARM_PGBYTES, prot, pte_to_pa(pte)) == 0) {
++			os_atomic_inc(&hosted_fault_around_maps, relaxed);
++			hosted_check_filled(pmap, at, pte_to_pa(pte), prot);
++		}
++	}
++}
++
++/*
+  * A user fault at va in pmap: fill it from the tables if they allow `access`. Thread context, no locks held.
+  * The pmap's lock keeps its table pages while they are walked.
+  */
+@@ -763,6 +801,9 @@
+ 		os_atomic_add(&hosted_pmap_stats.user_maps, filled, relaxed);
+ 		if (filled && hosted_pa_in_window(pte_to_pa(pte))) {
+ 			hosted_check_filled(pmap, va, pte_to_pa(pte), prot);
++		}
++		if (filled) {
++			hosted_fill_around_locked(pmap, va);    /* 0046 */
+ 		}
+ 	}
+ 	hosted_utlb_unlock(pmap, old);
+diff --git a/osfmk/arm64/hosted/hosted_user.c b/osfmk/arm64/hosted/hosted_user.c
+--- a/osfmk/arm64/hosted/hosted_user.c
++++ b/osfmk/arm64/hosted/hosted_user.c
+@@ -675,9 +675,9 @@
+ 		    hosted_copyio_stats.copies - copies_last, hosted_copyio_stats.faults - copy_faults_last);
+ 		/* 0045: the user pmaps' own TLB words, and where the user unmaps came from */
+ 		printf("oneios-perf:   user TLB words taken %llu, %llu waited (%llu us waiting); unmaps: %llu for a task's own flushes, "
+-		    "%llu from %llu shared-region or commpage flushes, which skipped %llu tasks that never filled there\n",
+-		    pm[8] - pmap_last[8], pm[9] - pmap_last[9], hosted_perf_us(pm[10] - pmap_last[10]), pm[11] - pmap_last[11],
+-		    pm[12] - pmap_last[12], pm[13] - pmap_last[13], pm[14] - pmap_last[14]);
++		    "%llu from %llu shared-region or commpage flushes, which skipped %llu tasks that never filled there; "
++		    "fault-around maps %llu\n", pm[8] - pmap_last[8], pm[9] - pmap_last[9], hosted_perf_us(pm[10] - pmap_last[10]),
++		    pm[11] - pmap_last[11], pm[12] - pmap_last[12], pm[13] - pmap_last[13], pm[14] - pmap_last[14], pm[15] - pmap_last[15]);
+ #undef D
+ #undef KN
+ #undef KT

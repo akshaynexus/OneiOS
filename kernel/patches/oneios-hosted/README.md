@@ -261,6 +261,35 @@ Built on the Mac (`HOSTED_OUT=perf`, series through 0044, DEVELOPMENT and the RE
   tasks that mapped in it.
 - 0042: no result (the timing fault above; fixed).
 
+## 0045-0046: the TLB lock per task, the shared-region fan-out, fault-around (perf, 2026-11-12)
+
+- **0045, a TLB lock per user pmap.** The one global word (`hosted_tlb_lock`) ordered every task's fills, flushes and
+  copies against every other's, and was held across task orders: on the first combined boot it was waited for up to
+  41-47 s per 30 s. What the lock orders is per address space (a fill of P reads P's entry and maps in P's task; a
+  flush of P unmaps in P's task; a copy reads P's entry and touches the page), so each user pmap now has its own word
+  (`pmap->hosted_tlb_word`), taken the same way. The kernel pmap keeps the global word. A kernel fault inside a user
+  copy no longer meets a held lock (a different word).
+- **0045, the shared-region fan-out.** A flush of a nested pmap (the shared region) sent an unmap order to every task
+  that nests it. Each user pmap now records the 32 MiB blocks of its nested region it filled pages in
+  (`pmap->hosted_nested_seen`, 512 bits; the last means "beyond the 16 GiB covered"); the bit is set under the task's
+  word before the map, and the fan-out reads it under the same word after the entry changed, so a task without the bit
+  has no host mapping in that range and is skipped. A full flush of a task clears its bits. The commpage still goes to
+  every task. pmaps_lock is still held across the remaining orders (it keeps the list; a pmap freed under the loop is the
+  alternative).
+- **madvise (item 3 of the plan): not batched.** arm's pmap strips `PMAP_OPTIONS_NOFLUSH` and makes each page
+  operation complete its own flush (`sync_tlb_flush` before it returns; `pmap_flush` is empty), so unmap orders cannot be
+  joined across pages without changing that contract. 0045's report line says where the unmaps come from instead:
+  `oneios-perf:   user TLB words taken T, W waited (U us waiting); unmaps: A for a task's own flushes, F from N
+  shared-region or commpage flushes, which skipped S tasks that never filled there; fault-around maps M`.
+- **0046, `oneios-fault-around=N`** (pages, a power of two up to 16; off by default). After a fill, the other pages of
+  the N-page aligned window whose entries already allow access (valid, reference bit set, in the RAM window) are mapped
+  too, with what each entry allows, under the same lock and rule as the fill. A TLB may hold any entry the tables allow;
+  a later change is flushed and unmapped as before. On the first phone boot half the faults were fills; each costs a
+  trap and a release (about 40 us), a fault-around map one deferred mmap in the task (about 40 us). Worth it only when
+  most neighbours get used: `filled from the tables` against `fault-around maps` in oneios-perf says.
+- Built on the Mac (`HOSTED_OUT=perf`, series through 0046, DEVELOPMENT and the RELEASE reference). Not run: the hosted
+  kernel cannot run in the Mac's container (no pointer authentication), so these are measured on the phone only.
+
 ## 0039-gpu-client-list-and-texts.patch (gpu, 2026-11-12)
 
 - **One list for both gates of a Metal device.** A process other than backboardd gets a device only when the

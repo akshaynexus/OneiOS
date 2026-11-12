@@ -1,0 +1,407 @@
+diff --git a/osfmk/arm/pmap/pmap.h b/osfmk/arm/pmap/pmap.h
+--- a/osfmk/arm/pmap/pmap.h
++++ b/osfmk/arm/pmap/pmap.h
+@@ -501,6 +501,10 @@
+ 	uint64_t hosted_seq;
+ 	/* hosted_mapcheck=1: what the task has mapped in the host (hosted_pmap.h, struct hosted_check_top). */
+ 	struct hosted_check_top *hosted_check;
++	/* 0045: this user pmap's own TLB lock (the host mapping of its task), and the 32 MiB blocks of its nested region
++	 * (the shared region) it has filled pages in since its last full flush; bit 511 = past the 16 GiB the bits cover. */
++	uint32_t hosted_tlb_word;
++	uint64_t hosted_nested_seen[8];
+ #endif /* XNU_HOSTED */
+ };
+ 
+diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -3140,6 +3140,11 @@
+ 	p->nx_enabled = true;
+ 	p->is_64bit = is_64bit;
+ 	p->nested_pmap = PMAP_NULL;
++#if XNU_HOSTED
++	/* 0045: the task's own TLB word, free, and no block of the nested region filled yet */
++	p->hosted_tlb_word = 0;
++	bzero(p->hosted_nested_seen, sizeof(p->hosted_nested_seen));
++#endif
+ 	p->type = PMAP_TYPE_USER;
+ 
+ #if ARM_PARAMETERIZED_PMAP
+diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
+--- a/osfmk/arm64/hosted/hosted_pmap.h
++++ b/osfmk/arm64/hosted/hosted_pmap.h
+@@ -72,11 +72,95 @@
+ 	hosted_irq_restore(old);
+ }
+ 
++/*
++ * 0045: a TLB lock per user pmap. The global lock above ordered every task's fills, flushes and copies against each
++ * other, held across task orders of about 30 us on the phone: on the first combined boot it was waited for up to
++ * 1.5 vCPUs' worth of time. What the lock orders is per address space: a fill of pmap P reads P's entry and maps it in
++ * P's task, a flush of P unmaps in P's task, a copy reads P's entry and touches the page; nothing of one task's host
++ * mapping depends on another's. So each user pmap has its own word (pmap->hosted_tlb_word), taken the same way (spin,
++ * interrupts masked). The kernel pmap keeps the global word. A flush of a nested pmap (the shared region) or of the
++ * commpage, which is part of every task that uses it, takes each user pmap's word in turn, under pmaps_lock, which
++ * keeps the list. Lock order: pmap_lock (shared) -> the pmap's TLB word; pmaps_lock -> a user pmap's TLB word.
++ */
++static struct {
++	uint64_t taken, contended, wait_ticks;
++} hosted_utlb_stats;                            /* atomically added: the words differ, the counters are shared */
++
++static inline uint32_t
++hosted_utlb_lock(pmap_t pmap)
++{
++	uint32_t old = hosted_irq_mask();
++	if (__improbable(!__sync_bool_compare_and_swap(&pmap->hosted_tlb_word, 0, 1))) {
++		uint64_t began = __builtin_arm_rsr64("CNTVCT_EL0");
++		while (!__sync_bool_compare_and_swap(&pmap->hosted_tlb_word, 0, 1)) {
++			__builtin_arm_yield();
++		}
++		os_atomic_inc(&hosted_utlb_stats.contended, relaxed);
++		os_atomic_add(&hosted_utlb_stats.wait_ticks, __builtin_arm_rsr64("CNTVCT_EL0") - began, relaxed);
++	}
++	os_atomic_inc(&hosted_utlb_stats.taken, relaxed);
++	return old;
++}
++
++static inline void
++hosted_utlb_unlock(pmap_t pmap, uint32_t old)
++{
++	__sync_lock_release(&pmap->hosted_tlb_word);
++	hosted_irq_restore(old);
++}
++
++/* 0045: the nested region's 32 MiB blocks a user pmap filled pages in (pmap->hosted_nested_seen). Its TLB word held. */
++#define HOSTED_NESTED_BLOCK_SHIFT 25
++#define HOSTED_NESTED_BITS        512
++static inline void
++hosted_nested_mark(pmap_t pmap, uint64_t va)
++{
++	pmap_t nested = pmap->nested_pmap;
++	if (nested == NULL || va < nested->nested_region_addr || va - nested->nested_region_addr >= nested->nested_region_size) {
++		return;
++	}
++	uint64_t bit = (va - nested->nested_region_addr) >> HOSTED_NESTED_BLOCK_SHIFT;
++	if (bit >= HOSTED_NESTED_BITS - 1) {
++		bit = HOSTED_NESTED_BITS - 1;
++	}
++	pmap->hosted_nested_seen[bit / 64] |= 1ULL << (bit % 64);
++}
++
++/* Whether the user pmap may have host mappings in [va, end) of its nested region. Its TLB word held. */
++static inline bool
++hosted_nested_seen(pmap_t pmap, pmap_t nested, uint64_t va, uint64_t end)
++{
++	const uint64_t *seen = pmap->hosted_nested_seen;
++	if (seen[(HOSTED_NESTED_BITS - 1) / 64] >> ((HOSTED_NESTED_BITS - 1) % 64) & 1) {
++		return true;
++	}
++	if (end <= nested->nested_region_addr || va >= nested->nested_region_addr + nested->nested_region_size) {
++		return true;            /* not in the region the bits describe: no claim */
++	}
++	uint64_t first = va > nested->nested_region_addr ? (va - nested->nested_region_addr) >> HOSTED_NESTED_BLOCK_SHIFT : 0;
++	uint64_t last = (end - 1 - nested->nested_region_addr) >> HOSTED_NESTED_BLOCK_SHIFT;
++	if (last >= HOSTED_NESTED_BITS - 1) {
++		last = HOSTED_NESTED_BITS - 2;
++	}
++	for (uint64_t bit = first; bit <= last; bit++) {
++		if (seen[bit / 64] >> (bit % 64) & 1) {
++			return true;
++		}
++	}
++	return false;
++}
++
++/* 0045: where the user unmaps come from: a flush of the task's own pmap, a flush of the shared region or commpage
++ * sent to it, and the tasks such a flush skipped because they never filled in that range. */
++static struct {
++	uint64_t own, fanned, nested_flushes, skipped;
++} hosted_unmap_stats;
++
+ /* 0041: the pmap's counters for the oneios-perf report: user maps, user unmaps, kernel maps, kernel unmaps, and the
+  * TLB lock's taken, contended, wait ticks, held ticks. Read without the lock: a report, not an exact sum. */
+-void hosted_pmap_perf(uint64_t out[8]);
++void hosted_pmap_perf(uint64_t out[16]);
+ void
+-hosted_pmap_perf(uint64_t out[8])
++hosted_pmap_perf(uint64_t out[16])
+ {
+ 	out[0] = hosted_pmap_stats.user_maps;
+ 	out[1] = hosted_pmap_stats.user_unmaps;
+@@ -86,6 +170,14 @@
+ 	out[5] = hosted_tlb_stats.contended;
+ 	out[6] = hosted_tlb_stats.wait_ticks;
+ 	out[7] = hosted_tlb_stats.held_ticks;
++	out[8] = os_atomic_load(&hosted_utlb_stats.taken, relaxed);         /* 0045: the user pmaps' words */
++	out[9] = os_atomic_load(&hosted_utlb_stats.contended, relaxed);
++	out[10] = os_atomic_load(&hosted_utlb_stats.wait_ticks, relaxed);
++	out[11] = hosted_unmap_stats.own;
++	out[12] = hosted_unmap_stats.fanned;
++	out[13] = hosted_unmap_stats.nested_flushes;
++	out[14] = hosted_unmap_stats.skipped;
++	out[15] = 0;
+ }
+ 
+ /*
+@@ -421,8 +513,11 @@
+ static void
+ hosted_check_count(uint32_t page, int by)
+ {
+-	if (hosted_check_counts != NULL && page < (hosted_info.ram_size >> 12) && hosted_check_counts[page] != 255) {
+-		hosted_check_counts[page] = (uint8_t)(hosted_check_counts[page] + by);
++	/* 0045: the TLB locks are per task now, and two tasks may count one page at once: a compare and swap */
++	if (hosted_check_counts != NULL && page < (hosted_info.ram_size >> 12)) {
++		uint8_t now = os_atomic_load(&hosted_check_counts[page], relaxed);
++		while (now != 255 && !os_atomic_cmpxchgv(&hosted_check_counts[page], now, (uint8_t)(now + by), &now, relaxed)) {
++		}
+ 	}
+ }
+ 
+@@ -492,10 +587,10 @@
+ 	if (top == NULL) {
+ 		return;
+ 	}
+-	uint32_t old = hosted_tlb_lock();
++	uint32_t old = hosted_utlb_lock(pmap);
+ 	hosted_check_unmapped(pmap, 0, HOSTED_KERNEL_VA_MIN);
+ 	pmap->hosted_check = NULL;
+-	hosted_tlb_unlock(old);
++	hosted_utlb_unlock(pmap, old);
+ 	for (unsigned i = 0; i < HOSTED_CHECK_TOP; i++) {
+ 		if (top->leaf[i] != NULL) {
+ 			kfree_data(top->leaf[i], HOSTED_CHECK_LEAF * sizeof(uint32_t));
+@@ -556,7 +651,7 @@
+ 		return 0;
+ 	}
+ 	pmap_lock(pmap, PMAP_LOCK_SHARED);
+-	uint32_t old = hosted_tlb_lock();
++	uint32_t old = hosted_utlb_lock(pmap);
+ 	struct hosted_check_top *top = pmap->hosted_check;
+ 	hosted_check_stats.audits++;
+ 	for (unsigned i = 0; top != NULL && i < HOSTED_CHECK_TOP; i++) {
+@@ -568,12 +663,12 @@
+ 			}
+ 		}
+ 	}
+-	hosted_tlb_unlock(old);
++	hosted_utlb_unlock(pmap, old);
+ 	pmap_unlock(pmap, PMAP_LOCK_SHARED);
+ 	if (suspected != 0) {
+ 		delay(2000);
+ 		pmap_lock(pmap, PMAP_LOCK_SHARED);
+-		old = hosted_tlb_lock();
++		old = hosted_utlb_lock(pmap);
+ 		top = pmap->hosted_check;
+ 		for (unsigned k = 0; top != NULL && k < suspected; k++) {
+ 			const uint32_t *leaf = top->leaf[suspects[k] >> HOSTED_CHECK_LEAF_SHIFT];
+@@ -583,7 +678,7 @@
+ 			}
+ 		}
+ 		hosted_check_stats.stale += stale;
+-		hosted_tlb_unlock(old);
++		hosted_utlb_unlock(pmap, old);
+ 		pmap_unlock(pmap, PMAP_LOCK_SHARED);
+ 	}
+ 	if (stale != 0) {
+@@ -611,14 +706,14 @@
+ 		printf("hosted: task_create failed (%lld)\n", rc);
+ 		return 0;
+ 	}
+-	uint32_t locked = hosted_tlb_lock();
++	uint32_t locked = hosted_utlb_lock(pmap);
+ 	if (pmap->hosted_task == 0) {
+-		pmap->hosted_seq = ++hosted_task_sequence;
++		pmap->hosted_seq = os_atomic_inc(&hosted_task_sequence, relaxed);
+ 		os_atomic_store(&pmap->hosted_task, task, relaxed);
+-		hosted_pmap_stats.tasks_created++;
++		os_atomic_inc(&hosted_pmap_stats.tasks_created, relaxed);
+ 		task = 0;
+ 	}
+-	hosted_tlb_unlock(locked);
++	hosted_utlb_unlock(pmap, locked);
+ 	if (task != 0) {
+ 		(void)HPC(task_destroy, task, 0, 0, 0, 0);     /* another thread made it first */
+ 	}
+@@ -630,11 +725,11 @@
+ hosted_pmap_destroy(pmap_t pmap)
+ {
+ 	hosted_check_destroy(pmap);
+-	uint32_t old = hosted_tlb_lock();
++	uint32_t old = hosted_utlb_lock(pmap);
+ 	uint64_t task = pmap->hosted_task;
+ 	pmap->hosted_task = 0;
+ 	pmap->hosted_seq = 0;
+-	hosted_tlb_unlock(old);
++	hosted_utlb_unlock(pmap, old);
+ 	if (task != 0) {
+ 		old = hosted_irq_mask();
+ 		(void)HPC(task_destroy, task, 0, 0, 0, 0);
+@@ -658,31 +753,37 @@
+ 	va &= ~(uint64_t)ARM_PGMASK;
+ 	hosted_check_prepare(pmap, va);
+ 	pmap_lock(pmap, PMAP_LOCK_SHARED);
+-	uint32_t old = hosted_tlb_lock();
++	uint32_t old = hosted_utlb_lock(pmap);
+ 	pt_entry_t pte = hosted_walk(pmap, va);
+ 	uint32_t prot = hosted_pte_prot(pte, true);
+ 	if (prot != 0 && !(access & ~prot) && (hosted_pa_in_window(pte_to_pa(pte)) || hosted_pa_in_gpu_pool(pte_to_pa(pte))) &&
+ 	    pmap->hosted_task != 0) {
++		hosted_nested_mark(pmap, va);           /* 0045: before the map, under the same word a flush takes */
+ 		filled = HPC(task_map, pmap->hosted_task, va, ARM_PGBYTES, prot, pte_to_pa(pte)) == 0;
+-		hosted_pmap_stats.user_maps += filled;
++		os_atomic_add(&hosted_pmap_stats.user_maps, filled, relaxed);
+ 		if (filled && hosted_pa_in_window(pte_to_pa(pte))) {
+ 			hosted_check_filled(pmap, va, pte_to_pa(pte), prot);
+ 		}
+ 	}
+-	hosted_tlb_unlock(old);
++	hosted_utlb_unlock(pmap, old);
+ 	pmap_unlock(pmap, PMAP_LOCK_SHARED);
+ 	return filled;
+ }
+ 
+ /* ---- flushes -------------------------------------------------------------------------------- */
+ 
++/* The pmap's TLB word held. */
+ static void
+ hosted_task_unmap_locked(pmap_t pmap, uint64_t va, uint64_t size)
+ {
+ 	if (pmap->hosted_task != 0) {
+ 		(void)HPC(task_unmap, pmap->hosted_task, va, size, 0, 0);
+-		hosted_pmap_stats.user_unmaps++;
++		os_atomic_inc(&hosted_pmap_stats.user_unmaps, relaxed);
+ 		hosted_check_unmapped(pmap, va, size);
++		/* a flush of the whole address space leaves nothing of the nested region mapped */
++		if (va == 0 && va + size >= hosted_info.user_va_limit) {
++			bzero(pmap->hosted_nested_seen, sizeof(pmap->hosted_nested_seen));
++		}
+ 	}
+ }
+ 
+@@ -718,22 +819,34 @@
+ 		return;
+ 	}
+ 	if (pmap->type == PMAP_TYPE_USER) {
+-		uint32_t old = hosted_tlb_lock();
++		uint32_t old = hosted_utlb_lock(pmap);
+ 		hosted_task_unmap_locked(pmap, va, end - va);
+-		hosted_tlb_unlock(old);
++		os_atomic_inc(&hosted_unmap_stats.own, relaxed);
++		hosted_utlb_unlock(pmap, old);
+ 		return;
+ 	}
+-	/* A nested pmap (the shared region) or the commpage: its tables are part of every task that uses them. */
++	/*
++	 * A nested pmap (the shared region) or the commpage: its tables are part of every task that uses them. 0045: a task
++	 * that never filled a page of the nested range in its 32 MiB blocks has no host mapping there and gets no order:
++	 * its fills set the bit under its TLB word before they map, and the bit is read here under the same word, after the
++	 * entry changed (a fill that read the old entry still held the word, so its bit is seen).
++	 */
++	os_atomic_inc(&hosted_unmap_stats.nested_flushes, relaxed);
+ 	pmap_simple_lock(&pmaps_lock);
+-	uint32_t old = hosted_tlb_lock();
+ 	pmap_t user;
+ 	queue_iterate(&map_pmap_list, user, pmap_t, pmaps) {
+ 		if (user->type == PMAP_TYPE_USER && user->hosted_task != 0 &&
+ 		    (pmap->type != PMAP_TYPE_NESTED || user->nested_pmap == pmap)) {
+-			hosted_task_unmap_locked(user, va, end - va);
++			uint32_t old = hosted_utlb_lock(user);
++			if (pmap->type != PMAP_TYPE_NESTED || hosted_nested_seen(user, pmap, va, end)) {
++				hosted_task_unmap_locked(user, va, end - va);
++				os_atomic_inc(&hosted_unmap_stats.fanned, relaxed);
++			} else {
++				os_atomic_inc(&hosted_unmap_stats.skipped, relaxed);
++			}
++			hosted_utlb_unlock(user, old);
+ 		}
+ 	}
+-	hosted_tlb_unlock(old);
+ 	pmap_simple_unlock(&pmaps_lock);
+ }
+ 
+@@ -815,7 +928,7 @@
+ 			*fault_va = uaddr;
+ 			return size;
+ 		}
+-		uint32_t old = hosted_tlb_lock();
++		uint32_t old = hosted_utlb_lock(pmap);
+ 		uint8_t *user = hosted_user_window_locked(pmap, uaddr, need);
+ 		if (user != NULL && kernel != NULL) {
+ 			if (to_user) {
+@@ -824,7 +937,7 @@
+ 				memcpy(bounce, user, chunk);
+ 			}
+ 		}
+-		hosted_tlb_unlock(old);
++		hosted_utlb_unlock(pmap, old);
+ 		pmap_unlock(pmap, PMAP_LOCK_SHARED);
+ 		if (user == NULL) {
+ 			*fault_va = uaddr;
+@@ -860,7 +973,7 @@
+ 	if (!hosted_copy_lock(pmap)) {
+ 		return false;
+ 	}
+-	uint32_t old = hosted_tlb_lock();
++	uint32_t old = hosted_utlb_lock(pmap);
+ 	uint8_t *user = hosted_user_window_locked(pmap, uaddr, op == HOSTED_UA_STORE ? XH_PROT_WRITE : XH_PROT_READ);
+ 	if (user != NULL) {
+ 		if (op == HOSTED_UA_STORE) {
+@@ -874,7 +987,7 @@
+ 			    __atomic_load_n((uint64_t *)user, __ATOMIC_SEQ_CST);
+ 		}
+ 	}
+-	hosted_tlb_unlock(old);
++	hosted_utlb_unlock(pmap, old);
+ 	pmap_unlock(pmap, PMAP_LOCK_SHARED);
+ 	if (user != NULL && op == HOSTED_UA_LOAD) {
+ 		*value = v;
+diff --git a/osfmk/arm64/hosted/hosted_user.c b/osfmk/arm64/hosted/hosted_user.c
+--- a/osfmk/arm64/hosted/hosted_user.c
++++ b/osfmk/arm64/hosted/hosted_user.c
+@@ -598,7 +598,7 @@
+ 
+ /* ---- 0041: the oneios-perf report --------------------------------------------------------------- */
+ 
+-extern void hosted_pmap_perf(uint64_t out[8]);
++extern void hosted_pmap_perf(uint64_t out[16]);
+ struct hosted_copyio_stats {                    /* hosted_copyio.c's, the same layout */
+ 	uint64_t copies, faults, unresolved;
+ };
+@@ -644,14 +644,14 @@
+ hosted_perf_report_thread(__unused void *arg, __unused wait_result_t result)
+ {
+ 	static struct hosted_user_stats user_last;
+-	static uint64_t pmap_last[8], copies_last, copy_faults_last;
++	static uint64_t pmap_last[16], copies_last, copy_faults_last;
+ 	uint64_t last = mach_absolute_time();
+ 	for (;;) {
+ 		assert_wait_timeout((event_t)&hosted_perf_every, THREAD_UNINT, hosted_perf_every * 1000, NSEC_PER_MSEC);
+ 		(void)thread_block(THREAD_CONTINUE_NULL);
+ 		uint64_t now = mach_absolute_time(), wall = now - last;
+ 		struct hosted_user_stats u = hosted_user_stats;
+-		uint64_t pm[8];
++		uint64_t pm[16];
+ 		hosted_pmap_perf(pm);
+ 		static struct hosted_perf_counts c;
+ 		c = hosted_perf;
+@@ -673,6 +673,11 @@
+ 		    hosted_perf_us(pm[6] - pmap_last[6]) * 1000 / wall_us % 10, hosted_perf_us(pm[7] - pmap_last[7]),
+ 		    hosted_perf_us(pm[7] - pmap_last[7]) * 100 / wall_us, hosted_perf_us(pm[7] - pmap_last[7]) * 1000 / wall_us % 10,
+ 		    hosted_copyio_stats.copies - copies_last, hosted_copyio_stats.faults - copy_faults_last);
++		/* 0045: the user pmaps' own TLB words, and where the user unmaps came from */
++		printf("oneios-perf:   user TLB words taken %llu, %llu waited (%llu us waiting); unmaps: %llu for a task's own flushes, "
++		    "%llu from %llu shared-region or commpage flushes, which skipped %llu tasks that never filled there\n",
++		    pm[8] - pmap_last[8], pm[9] - pmap_last[9], hosted_perf_us(pm[10] - pmap_last[10]), pm[11] - pmap_last[11],
++		    pm[12] - pmap_last[12], pm[13] - pmap_last[13], pm[14] - pmap_last[14]);
+ #undef D
+ #undef KN
+ #undef KT
+@@ -680,7 +685,7 @@
+ 		hosted_perf_top("mach traps", c.mach_n, c.mach_t, c0->mach_n, c0->mach_t, HOSTED_PERF_MACH, 8, true);
+ 		hosted_perf_last = c;
+ 		user_last = u;
+-		for (unsigned i = 0; i < 8; i++) {
++		for (unsigned i = 0; i < 16; i++) {
+ 			pmap_last[i] = pm[i];
+ 		}
+ 		copies_last = hosted_copyio_stats.copies;
