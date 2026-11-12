@@ -501,6 +501,45 @@ Python that stays, and why (not ported, or not this tool's business):
 
 Shell that stays: every build script (they call the tool).
 
+### The chain after the retirement (Linux PC, 2026-11-12 to 13, branch at `e2aef0f` + main's `ea06d46`)
+
+Everything below ran with the switched scripts and passed. The box had a load of 3 to 10 (another agent's qemu
+boots and tests on 4 CPUs), so the times are loaded times.
+
+| Step | Result |
+|---|---|
+| `scripts/image/kernel-inputs.sh` (the members from the main checkout's `inputs/24A446`) | `kernelcache.macho` `349c4692...`, the pinned one; the same bytes as before; 2 s |
+| `kernel/prelink/build.sh` on the pc kernel with its reference | `kernel.kc` `ffbe95f7...` (93,700,096 bytes); audit 2,711 paired, 93 on the stub, 9 data unpaired, 0 failures; `stubs-check.py` 666 good; 14 s (once 85 s: the script rebuilt the binary first, after a merge changed its sources) |
+| `scripts/image/build.sh --kernel <pc-24A446/kernel.kc> --no-hook` with the archive | 15 files, 17,860,163,766 bytes; 8 min 8 s (2 min 19 s without the archive; the pack is `imagetool.py`'s) |
+| `scripts/image/verify.sh` on the set folder, and on the `.tar.zst` (11,139,736,211 bytes) | `ok:` both; 57 s (Rust) and 2 min 8 s (Python) |
+| `tests/image/build-golden.sh` | 16 of 16 files the Python tool's set |
+| `tests/prelink/compare-golden.sh`: pc, pc2, the kernelcache alone | 40, 40 and 10 hashes the same |
+| `tests/sym/compare-golden.sh` | 18 of 18 sets |
+| `tests/image/parity.py`; `scripts/image/tests/run.sh` | 138 cases the same; 23 tests pass |
+| `tests/ioslog/compare.sh` on Mandiant's seven archives | all the same, seven times |
+| `tests/phone/run.sh`, `tests/app/run.sh`, `tests/cycle/run.sh` (stand-ins) | pass (the phone suite after the binary was rebuilt with main's `ea06d46`) |
+| `cargo test --release` | 56 tests pass (`oneios-prelink`: 3 new: CPython's set order, `random.sample`, plistlib's writer) |
+| `runtime/host-tests.sh` | loader, xnuhost, display, bridges, camera, package: pass (drm2kgsl and the udmabuf checks skip on this box) |
+| `kernel/tests/host.sh`; `bash -n` of every tracked `.sh`; `py_compile` of every tracked `.py` | pass |
+
+Not run: `tests/image/compare-python.sh` on the real set (its 36 items still compare both tools; unchanged code,
+last run in the Linux round), the real hook (no plug-ins built here), `--seed apfs` (macOS), anything on the
+phone or on the Mac, `shellcheck` (not installed here; CI runs it on `kernel/*.sh` and `runtime/*.sh`), the
+GitHub workflows themselves (they build no image and no collection: `ci.yml` and `release.yml` run
+`runtime/package.sh` and the host tests, which call neither Python tool, so they need no change; a `cargo test`
+step in CI is not added).
+
+Open after this round, in order:
+1. `pyjson` (below).
+2. Port `imagetool.py`'s six subcommands and delete it (above).
+3. A Mac run of the switched scripts: `scripts/lib/oneios-tool.sh` uses `find -newer` and `cargo`; `build.sh`'s
+   macOS path (`hdiutil`) was not run after the switch; `seed-apfs-macos.sh` still asks `imagetool.py` for the
+   profile.
+4. The goldens are for Linux-built kernels and a set without a hook. A Mac-built kernel or a set with the hook
+   has no golden: `UPDATE=1` records one, which is then a regression check, not a comparison with Python.
+5. `oneios-tool phone manifest` (main's `ea06d46`) writes the phone's `manifest.json` with `pyjson` so that
+   key order and layout stay: one more reader to weigh in the `pyjson` replacement.
+
 ### `pyjson` (the owner's addition to item 8, 2026-11-12): the table is here, the replacement is **not done**
 
 `oneios-common/src/pyjson.rs` (a value type that keeps key order, a parser, and a `serde_json` formatter with
