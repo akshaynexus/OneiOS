@@ -1,0 +1,161 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -9072,6 +9072,73 @@
+ 	}
+ }
+ #endif /* XNU_HOSTED */
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0057): the swap files' folder. XNU's compressor swaps to /private/var/vm/swapfileN on the Data volume
++ * (SWAP_FILE_NAME of vm_compressor_backing_store_internal.h, opened O_CREAT | O_TRUNC | O_NOFOLLOW_ANY by
++ * vm_swapfile_open), and nothing makes the folder: iOS's own Data volume has it, the image set's seeds did not. So every
++ * swap file failed ("Failed to open swap file 2", phone 2026-11-12 15:35; the pageout scan at about 95% of a vCPU).
++ * Made here before launchd for every Data store, root:wheel 0755 (the roottweak's swap-folder tweak puts it in new seeds
++ * too); a folder there already keeps its contents and gets that owner and mode if it had others; anything else there
++ * (a file, a link) is left alone and said. The compressor's creation thread tries again 15 s after a failure, so swap
++ * starts once the folder is there. oneios-swap-folder=0: nothing done. One line:
++ *   oneios-swap: /private/var/vm: made, root:wheel 0755 (0), on /private/var (apfs, read-write)
++ */
++int oneios_kern_mkdir(const char *path, int mode, vfs_context_t ctx);      /* 0004 */
++
++static void
++oneios_swap_folder(void)
++{
++	static const char path[] = "/private/var/vm";
++	uint32_t on = 1;
++	(void)PE_parse_boot_argn("oneios-swap-folder", &on, sizeof(on));
++	if (on == 0) {
++		printf("oneios-swap: %s: not looked at (oneios-swap-folder=0)\n", path);
++		return;
++	}
++	vfs_context_t ctx = vfs_context_current();
++	bool made = false;
++	vnode_t vp = NULLVP;
++	int error = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, ctx);
++	if (error == ENOENT) {
++		error = oneios_kern_mkdir(path, 0755, ctx);
++		made = error == 0;
++		if (error == 0) {
++			error = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, ctx);
++		}
++	}
++	if (error) {
++		printf("oneios-swap: %s: %s (%d): no swap files\n", path, made ? "made, then not found" : "could not be made", error);
++		return;
++	}
++	if (vnode_vtype(vp) != VDIR) {
++		printf("oneios-swap: %s: there, but not a folder (type %d): left alone, no swap files\n", path, (int)vnode_vtype(vp));
++		vnode_put(vp);
++		return;
++	}
++	struct vnode_attr va;
++	VATTR_INIT(&va);
++	VATTR_WANTED(&va, va_uid);
++	VATTR_WANTED(&va, va_gid);
++	VATTR_WANTED(&va, va_mode);
++	error = vnode_getattr(vp, &va, ctx);
++	bool set = false;
++	if (error == 0 && (va.va_uid != 0 || va.va_gid != 0 || (va.va_mode & ALLPERMS) != 0755)) {
++		struct vnode_attr want;
++		VATTR_INIT(&want);
++		VATTR_SET(&want, va_uid, 0);
++		VATTR_SET(&want, va_gid, 0);
++		VATTR_SET(&want, va_mode, 0755);
++		error = vnode_setattr(vp, &want, ctx);
++		set = error == 0;
++	}
++	mount_t mp = vnode_mount(vp);
++	printf("oneios-swap: %s: %s%s (%d), on %s (%s, %s)\n", path, made ? "made, root:wheel 0755" : "there already",
++	    set ? ", owner and mode set to root:wheel 0755" : "", error, mp ? vfs_statfs(mp)->f_mntonname : "?",
++	    mp ? vfs_statfs(mp)->f_fstypename : "?", mp && vfs_isrdonly(mp) ? "read-only" : "read-write");
++	vnode_put(vp);
++}
++#endif /* XNU_HOSTED */
+ static void
+ native_ls_store_drop(proc_t p, user_addr_t scratch)
+ {
+@@ -9418,6 +9485,7 @@
+ 	oneios_jobs_enable();                         /* 0044 */
+ 	oneios_feature_flags_off(p, scratch);         /* 0048 */
+ 	oneios_jobs_disable();                        /* 0053 */
++	oneios_swap_folder();                         /* 0057 */
+ #endif
+ }
+ 
+diff --git a/bsd/vm/vm_compressor_backing_file.c b/bsd/vm/vm_compressor_backing_file.c
+--- a/bsd/vm/vm_compressor_backing_file.c
++++ b/bsd/vm/vm_compressor_backing_file.c
+@@ -43,7 +43,62 @@
+ #include <vm/vm_ubc.h>
+ #include <vm/vm_compressor_backing_store_internal.h>
+ 
++#if XNU_HOSTED
++#include <kern/clock.h>
++/*
++ * OneiOS hosted (0057): why a swap file could not be opened, for each errno the first time and then every 64th failure
++ * (the creation thread tries every 15 s): the path, the time since boot, and the deepest folder of the path that is
++ * there, with its volume and whether that is read-only. ENOENT (2): /private/var/vm is not there (0057's
++ * oneios_swap_folder makes it before launchd). EROFS (30): the folder is on a read-only volume: the sealed root before
++ * the Data volume is mounted at /private/var, or a Data volume that went read-only. One line:
++ *   oneios-swap: /private/var/vm/swapfile0: errno 30 at 41 s (failure 1); /private/var/vm is there, on / (apfs, read-only)
++ */
++static void
++oneios_swapfile_failed(const char *path, int error, vfs_context_t ctx)
++{
++	static uint32_t failures, seen;
++	uint32_t n = ++failures;
++	bool first = error > 0 && error < 32 && !(seen & (1u << error));
++	if (error > 0 && error < 32) {
++		seen |= 1u << error;
++	}
++	if (!first && n % 64 != 0) {
++		return;
++	}
++	char dir[128];
++	strlcpy(dir, path, sizeof(dir));
++	vnode_t vp = NULLVP;
++	for (;;) {
++		char *slash = strrchr(dir, '/');
++		if (slash == NULL) {
++			break;
++		}
++		if (slash == dir) {
++			dir[1] = 0;
++			if (vnode_lookup(dir, 0, &vp, ctx)) {
++				vp = NULLVP;
++			}
++			break;
++		}
++		*slash = 0;
++		if (vnode_lookup(dir, 0, &vp, ctx) == 0) {
++			break;
++		}
++		vp = NULLVP;
++	}
++	uint64_t ns = 0;
++	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++	mount_t mp = vp ? vnode_mount(vp) : NULL;
++	printf("oneios-swap: %s: errno %d at %llu s (failure %u); %s is there, on %s (%s, %s)\n", path, error,
++	    (unsigned long long)(ns / NSEC_PER_SEC), n, vp ? dir : "nothing", mp ? vfs_statfs(mp)->f_mntonname : "?",
++	    mp ? vfs_statfs(mp)->f_fstypename : "?", mp ? (vfs_isrdonly(mp) ? "read-only" : "read-write") : "?");
++	if (vp) {
++		vnode_put(vp);
++	}
++}
++#endif /* XNU_HOSTED */
++
+ void
+ vm_swapfile_open(const char *path, vnode_t *vp)
+ {
+ 	int error = 0;
+@@ -58,6 +113,9 @@
+ 		ctx);
+ 	if (error) {
+ 		printf("Failed to open swap file %d\n", error);
++#if XNU_HOSTED
++		oneios_swapfile_failed(path, error, ctx);
++#endif
+ 		*vp = NULL;
+ 		return;
+ 	}

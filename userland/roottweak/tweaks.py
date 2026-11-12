@@ -611,11 +611,14 @@ def data_layout(cx):
     need('mobile/tmp', MOBILE, 0o755)
     need('tmp', ROOT, 0o1777)
     need('run', ROOT, 0o755)
+    # the compressor's swap files (/private/var/vm/swapfileN, XNU's SWAP_FILE_NAME): XNU never makes the folder, and
+    # without it every swap file failed (ENOENT, phone 2026-11-12). The kernel makes it in older stores (hosted 0057).
+    need('vm', ROOT, 0o755)
     # logd stores with their markers, or logd fails with "Failed to migrate directory" (ios-sweet mkiosroot.sh)
     for path, mode in (('db/diagnostics', 0o751), ('db/uuidtext', 0o755), ('db/diagnostics/timesync', 0o755)):
         need(path, LOGD, mode)
         cx.data.write(f'{path}/.migrated', b'', LOGD, 0o644)
-    cx.say('applied' if made else 'kept', 'data layout', f'made {", ".join(made)}' if made else 'containers, keybags, tmp, logd stores')
+    cx.say('applied' if made else 'kept', 'data layout', f'made {", ".join(made)}' if made else 'containers, keybags, tmp, vm, logd stores')
 
     # A MobileGestalt cache from another identity keeps its answers (iOSPlus10 notes 5338-5343): none is carried.
     cache = 'containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist'

@@ -58,8 +58,12 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
      boot with `--ram 9728M` once the IPSW and an image set are built). OOM score unchanged. On the phone: read the
      two `memory:` lines; if `host MemAvailable` falls under ~300 MiB, lower `ram-percent` in the image's
      `xnuhost.conf`.
-   - **Swap:** make `/private/var/vm` (root:wheel 0755) on the Data store before swap starts; find the errno 30
-     cause. Not started.
+   - **Swap: written, applies, not compiled (2026-11-12).** Hosted 0057 makes `/private/var/vm` root:wheel 0755 before
+     launchd in every Data store and, on each swap file failure, logs which volume the folder was on and whether it
+     was read-only; the roottweak's `data_layout` puts the folder in new seeds. errno 30 is not settled (the sealed
+     root before the Data mount, or a Data volume gone read-only: `kernel/patches/oneios-hosted/README.md`, 0057);
+     the next boot's `oneios-swap:` line decides it. Needs a kernel build (the Mac: this PC has no libdispatch for the
+     Linux toolchain).
    - **backboardd's GPU memory growth** (gpu): find what it keeps (pooled 64 MiB metal2vulkan blocks, IOSurfaces,
      released blobs still held) and give memory back. Not started.
 2. **The power key does nothing in iOS** since the haptics change (15:35 boot): the presses reach backboardd (34 HID

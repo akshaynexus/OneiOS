@@ -637,6 +637,36 @@ section 6 ("Very slow" playback).
   returns early).
 - **State.** Built on the Mac (`HOSTED_OUT=cam`, on the series through 0051: before 0052 landed); not run.
 
+## 0057-swap-folder.patch (mem, 2026-11-12)
+
+- **Why.** XNU's compressor swaps to `/private/var/vm/swapfileN` (`SWAP_FILE_NAME` in
+  `osfmk/vm/vm_compressor_backing_store_internal.h`, opened `O_CREAT | O_TRUNC | O_NOFOLLOW_ANY` by
+  `vm_swapfile_open`, `bsd/vm/vm_compressor_backing_file.c`). Nothing in the kernel makes the folder: iOS's own Data
+  volume has it, the image set's seeds did not. In the 15:35 session (phone, 2026-11-12) every swap file failed
+  ("Failed to open swap file", errno 2 and 30) while `VM_pageout_scan` took about 95% of a vCPU. The first try is
+  `vm_compaction_swapper_do_init` at the pageout scan's first wake (it opens `swapfile0` once and marks itself done
+  either way); after that the creation thread tries again 15 s after each failure (`vm_swapfile_creation_delay_ns`),
+  so swap starts once the folder is there.
+- **What.** (1) `oneios_swap_folder` in `kern_exec.c`, called last in the pre-launchd list (after 0053): makes
+  `/private/var/vm` root:wheel 0755 with 0004's `oneios_kern_mkdir`, or gives a folder there that owner and mode;
+  anything else there (a file, a link) is left alone and said. `oneios-swap-folder=0`: nothing done. The roottweak's
+  `data_layout` puts the folder in new seeds too. (2) `oneios_swapfile_failed` in `vm_compressor_backing_file.c`,
+  after XNU's own line: for each errno the first time, then every 64th failure, the path, the seconds since boot, and
+  the deepest folder of the path that is there with its volume and whether that is read-only.
+- **Log.** `oneios-swap: /private/var/vm: made, root:wheel 0755 (0), on /private/var (apfs, read-write)` (later boots:
+  `there already`). If a swap file still fails: `oneios-swap: /private/var/vm/swapfile0: errno N at S s (failure K);
+  DIR is there, on MOUNT (TYPE, read-only|read-write)`. Then XNU's `VM Swap Subsystem is ON` stays as before, and swap
+  in use shows as files in `/private/var/vm` and as `vm.swapusage` (`sysctl vm.swapusage` in iOS).
+- **errno 30 (EROFS), not settled.** `vnode_open` with `O_CREAT` gives EROFS when the folder exists on a read-only
+  volume. Two explanations fit and the session's log (on the Mac) has not been read for the order of the two errors:
+  the pageout scan's first try before the Data volume is mounted at `/private/var` (the sealed root's
+  `/private/var/vm`), or a Data volume that became read-only later. The failure line names the volume, so the next
+  boot decides it. [I]
+- **State.** Written on the Linux PC (2026-11-12): every one of the 23 patches of the build's series that touch
+  `kern_exec.c` (arch, OS, device, hosted through 0056) and then this one apply with `git apply` to xnu-12377.121.6's
+  file, and the swap file hunk to its `vm_compressor_backing_file.c`. **Not compiled**: this PC cannot set up the
+  Linux XNU toolchain (no libdispatch, no root); the Mac builds it. Not run.
+
 ## 0049-wifi-association-event.patch (radio2, 2026-11-12)
 
 `kev_post_msg` (bsd/kern/kern_event.c) refuses an event that does not fit one mbuf without a cluster (`MLEN`), with

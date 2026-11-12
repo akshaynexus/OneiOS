@@ -292,6 +292,10 @@ class Sealed(Case):
             plistlib.dump({'CacheExtra': {'h9jDsbgj7xIVeIQ8S3/X3Q': 'iPad17,3'}}, f)
         self.apply()
         self.assertFalse(os.path.exists(os.path.join(self.data, cache, 'com.apple.MobileGestalt.plist')))
+        # the swap files' folder (XNU's /private/var/vm/swapfileN), root 0755 as the kernel (hosted 0057) makes it
+        vm = os.path.join(self.data, 'vm')
+        self.assertTrue(os.path.isdir(vm))
+        self.assertEqual(os.stat(vm).st_mode & 0o7777, 0o755)
         self.assertEqual(self.states()['MobileGestalt cache'], 'applied')
         self.assertEqual(self.entry('data', 'containers/Bundle')['uid'], 33)
         self.assertEqual(self.entry('data', 'tmp')['mode'], '1777')

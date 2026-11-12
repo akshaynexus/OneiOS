@@ -166,6 +166,11 @@
 # /private/var/oneios/addons/MediaCapture is shown over that empty sealed folder, read-only, as 0031 shows the Metal
 # plug-in (oneios-camera-plugin=0: no mount). Numbered 0056 to stay clear of the 0052-0055 other agents had open.
 0056-camera-plugin-mount.patch
+# mem: the swap files' folder. XNU's compressor swaps to /private/var/vm/swapfileN and never makes the folder; the
+# image set's seeds had none, so every swap file failed ("Failed to open swap file 2" and 30, phone 2026-11-12) and the
+# pageout scan took ~95% of a vCPU. Made root:wheel 0755 before launchd in every Data store (oneios-swap-folder=0: not);
+# each failure to open a swap file says which volume its folder was on and whether that was read-only (errno 30).
+0057-swap-folder.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # net/build-oneios-net.py), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and
