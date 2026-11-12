@@ -18,7 +18,7 @@ command that no longer works, or a status that has moved on. If you are unsure w
 | How the parts fit together (a new component, a moved boundary, a new device or channel) | `docs/architecture.md` |
 | xnuhost, the loader, `hostcall.h` | `docs/booter.md` (`hostcall.h`'s own comments too) |
 | A kernel patch (added, changed, reordered) | `kernel/patches/oneios-hosted/series` comments and `README.md` (or the patch's `000N-README.md`) |
-| The prelink, `kernel.kc`, pairing records | `kernel/prelink/README.md` |
+| The prelink, `kernel.kc`, pairing records | `kernel/prelink/README.md`; a step's rule (the steps are `oneios-tool prelink`): also `tools/oneios-tool/README.md` "prelink" and the goldens (`tools/oneios-tool/tests/prelink/golden/`, regenerated in the same commit, with the reason) |
 | The VM kernel build, pins, the iPhone profile | `kernel/README.md`, `kernel/profiles/iphone18-2-ios27.md` |
 | The image set, the IPSW profile, the fetch | `docs/image-format.md`, the profile's comments |
 | Root tweaks, daemon policy, guest helpers | `docs/userland.md` |

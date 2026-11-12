@@ -1,4 +1,4 @@
-# oneios-tool: state and what is left (2026-11-12, after the third Linux round)
+# oneios-tool: state and what is left (2026-11-12, after the fourth Linux round)
 
 Branch: `rustport`. Commands, crates and every comparison with its result: [README.md](README.md). This file is
 the hand-over: what is done, what is open, and the notes behind the decisions.
@@ -6,7 +6,7 @@ the hand-over: what is done, what is open, and the notes behind the decisions.
 Rounds so far, all on 2026-11-12: the Mac round (sym, log, image written and compared there; stopped by the
 owner), the Linux round (the three built and compared again on a Linux x86_64 PC; `ioslog` written; `image im4p`
 and the APFS file reader added; `prelink roots` and `hosted` ported), the second Linux round (clap for every tool),
-and the third Linux round, the owner's queue of eight items:
+the third Linux round, and the fourth (items 7 and 8 of the owner's queue of eight):
 
 | # | Item | State |
 |---|---|---|
@@ -17,12 +17,10 @@ and the third Linux round, the owner's queue of eight items:
 | 5 | APFS: decmpfs, the apfs-fuse backend | done (`687f0a7`): all 2,910 compressed files as apfs-fuse gives them |
 | 6 | `ioslog` in parallel | **not done**: the library's per-file entry point cannot be used from outside (section 5, "Parallel decoding"). The `sym --slide` question is settled (README "sym") |
 | 7 | `prelink`: the ten remaining steps | **done (fourth Linux round)**: all twelve steps byte for byte Python's on the pc and pc2 kernels (`kernel.kc` `ffbe95f7`, `cdd98e7e`; audit 2,711 paired, 93 on the stub, 0 failures; 666 good stubs); `PRELINK_IMPL=python\|rust` in `kernel/prelink/build.sh`, default `python` (README "prelink") |
-| 8 | Retire the replaced Python and shell code | **in work (fourth Linux round)**: the prelink's eleven Python steps are deleted (goldens in `tests/prelink/golden/`, `kernel/prelink/build.sh` is Rust only); section 7 has the state of the others |
+| 8 | Retire the replaced Python and shell code | **partly done (fourth Linux round)**: the prelink's eleven Python steps and `scripts/debug/dsc.py` are deleted with goldens; every build script calls `oneios-tool` (`PRELINK_IMPL`, `IMAGETOOL_IMPL`, `IM4P_TOOL` gone). `scripts/image/imagetool.py` stays for six subcommands that are not ported; `pyjson` is not replaced (section 7 has the table and what is left) |
 
-**Rule until further notice: Python stays the default and the only path the builds use.** The switches that
-exist (`IMAGETOOL_IMPL` in `scripts/image/build.sh` and `verify.sh`, default `python`; `kernel-inputs.sh` takes
-`oneios-tool image im4p` only when there is no `lzfse` program) change no output. `kernel/prelink/build.sh` has no
-switch.
+**Since the fourth Linux round the builds use `oneios-tool`** (section 7): Rust is a build prerequisite, and the
+scripts build the binary when it is missing or older than its sources (`scripts/lib/oneios-tool.sh`).
 
 ## Summary
 
@@ -473,22 +471,68 @@ section 10 "Rust tools" and section 1 (`kernel-inputs.sh` without `lzfse`), `doc
 inputs' tools), `CLAUDE.md`'s table. Also written: `tests/compare-python.sh`, which runs every tool's comparison whose inputs are named. Not written:
 `kernel/prelink/README.md` (no prelink switch yet).
 
-## 7. Retiring the Python and shell tools (the owner's item 8): not started
+## 7. Retiring the Python and shell tools (the owner's item 8): state after the fourth Linux round
 
-Nothing was retired in the third round. The order the owner gave, for whoever does it:
-1. Freeze the Python reference as goldens under `tests/` (hashes, sizes and names only for anything made from
-   Apple's files) and switch the comparison scripts to them.
-2. Switch every caller: `scripts/image/{build.sh,verify.sh,kernel-inputs.sh}`, `kernel/prelink/build.sh`,
-   `scripts/debug`, `runtime`, `.github/workflows`, and what `grep` finds; drop `IMAGETOOL_IMPL` and `IM4P_TOOL`;
-   Rust becomes a build prerequisite and `build.sh` builds or finds `oneios-tool`.
-3. Delete the Python nothing else uses; one commit per retired tool; then the whole chain on the box.
-What can be retired today by the rule "1:1 or strictly better": `scripts/debug/dsc.py` (`sym`: 18 of 18 sets on
-the Mac and on Linux). `scripts/image/imagetool.py` cannot go whole: `check-ipsw`, `fetch`, `record-plain`,
-`aea-info`, `pack` and `verify` of a `.tar.zst` are not ported (the nine ported subcommands are 1:1, so
-`IMAGETOOL_IMPL=rust` can become the default once the owner says so). The prelink stays Python until its twelve
-steps are 1:1. `scripts/phone/stage.sh` stays until `oneios-tool phone` has run on the phone. Python that is not
-ported and stays: `userland/tweak`, `scripts/fetch`, `scripts/ios`, the display capture, `kernel/prelink/*.py`,
-`runtime/package/pack.py`, the tests' helpers under `tools/oneios-tool/tests/`.
+| Tool | State | Commit | Goldens / comparison |
+|---|---|---|---|
+| The prelink's Python steps (`kernel/prelink/{native-input,merge-reviewed,roots,hosted,align,kclasses,structors,vtables,emit,audit,record}.py`; XnuPrelink's matcher and emitter as run by them) | **retired, deleted**; `kernel/prelink/build.sh` is Rust only (`PRELINK_IMPL` gone) | `06a9222` | `tests/prelink/golden/` (kernelcache alone, kernels `13ed0b70`, `399f50fa`): 10, 40, 40 hashes the same (`tests/prelink/compare-golden.sh`) |
+| `scripts/debug/dsc.py` | **retired, deleted** (no script called it) | `a083125` | `tests/sym/golden/24A446.txt`: 18 of 18 sets (`tests/sym/compare-golden.sh`) |
+| `scripts/image/imagetool.py` | **callers switched, file kept**: `scripts/image/build.sh`, `verify.sh` and `kernel-inputs.sh` call `oneios-tool` (`IMAGETOOL_IMPL` and `IM4P_TOOL` gone, the `lzfse` program is not used). The file stays because six subcommands are not ported (`check-ipsw`, `fetch`, `record-plain`, `aea-info`, `pack`, `verify` of a `.tar.zst`); `build.sh` and `verify.sh` call it for the archive, `scripts/fetch/fetch.sh` for the fetch | this round's "image" commit | the whole build against the Python tool's set: `tests/image/golden/set-24A446-ffbe95f758ed3af3-nohook.txt`, 16 files the same (`tests/image/build-golden.sh`; Python 266 s, Rust 139 s). Subcommand by subcommand: `tests/image/compare-python.sh` and `parity.py` still run both tools |
+| `scripts/phone/stage.sh` | **stays** until `oneios-tool phone` has run on the real phone | - | `tests/phone/run.sh` (stand-in phone) |
+
+To finish `imagetool.py`'s retirement: port `pack` and the archive's `verify` (tar + zstd: the `tar` and `zstd`
+crates; the archive's `.sha256` is made by the same build), `aea-info`, `record-plain`, and `check-ipsw`/`fetch`
+(remote zip over HTTP ranges: `scripts/fetch/remotezip.py`; `zip` + `ureq` as op10tool does), then freeze
+`compare-python.sh`'s 36 items and `parity.py`'s 138 cases as goldens and delete the file and
+`scripts/image/tests/test_image.py`'s module tests (they import `imagetool`).
+
+Python that stays, and why (not ported, or not this tool's business):
+
+| Files | Why |
+|---|---|
+| `scripts/image/imagetool.py`, `scripts/image/tests/{fixtures,test_image}.py` | the six subcommands above; the image tests (they also run `build.sh` and `verify.sh`, so they cover the Rust path) |
+| `scripts/fetch/remotezip.py`, `scripts/serve/rangeserve.py` | the IPSW fetch over HTTP ranges and its test server: network helpers, not ported |
+| `kernel/prelink/{classes,unmapped,port-fixture,stubs-check}.py`, `kernel/prelink/lead/{imports,between}.py` | review helpers run by hand (they read XnuPrelink's `kc_image.py`); `stubs-check.py` is run by `cycle` and the docs: a port is `oneios-tool prelink stubs-check` over `image.rs` (60 lines; not done) |
+| `kernel/build-record.py`, `kernel/hosted-fixup.py`, `kernel/kdk-headers.py`, `kernel/linux/iig-fix.py`, `kernel/tests/series-check.py`, `kernel/device/scripts/build-oneios-board.py`, `kernel/patches/oneios-hosted/*/build-oneios-*.py`, `*/layout.py`, `display/{display-capture,port-legacy-display}.py`, `drivers/build.py` | the kernel build and the board drivers' builders: the kernel agents' code, never part of this port |
+| `userland/roottweak/*.py`, `userland/tests/*.py` | the root tweaks (`userland/tweak`): not ported |
+| `scripts/ios/{ios-sign,macho-check,make-tbds}.py` | the iOS user-space toolchain helpers: not ported |
+| `runtime/package/pack.py` | the runtime package's packer (CI and releases run it): not ported |
+| `tools/oneios-tool/tests/{image/parity.py,sym/make-log.py,ioslog/*.py,app/mkapk.py}` | the tests' own helpers |
+
+Shell that stays: every build script (they call the tool).
+
+### `pyjson` (the owner's addition to item 8, 2026-11-12): the table is here, the replacement is **not done**
+
+`oneios-common/src/pyjson.rs` (a value type that keeps key order, a parser, and a `serde_json` formatter with
+Python's `json.dumps` layout) is used by `oneios-image` (44 calls) and `oneios-prelink` (41). The owner's order:
+replace the parser with `serde_json` and the writer with its standard output, `indexmap` for key order, never
+`preserve_order`; regenerate recorded hashes by the same build; do nothing that changes `data.seed`'s SHA-256.
+What was done: step 1, the list. Steps 2 to 4 were not started (the round's context ended at the retirement).
+
+Every JSON file the tools write (checked in the sources on 2026-11-12; "by grep" means the readers were looked
+for with `grep` over the repository's `.sh`, `.py`, `.c`, `.rs`, not traced further):
+
+| File | Written by | Hash recorded? | Read by |
+|---|---|---|---|
+| `manifest.json` (image set) | `image manifest` | yes, three ways, all made by the build or at staging, none by hand: the archive's `.tar.zst.sha256` (`imagetool.py pack`), the phone's `image.sha256` / `image.ids` (root at staging, `oneos/interface.md`), and the fork's check of the archive | **xnuhost** (`runtime/xnuhost/src/imageset.c`, its own C reader: check it reads serde_json's layout, `tests/test_imageset.c`), the OneOS fork's app (format, sizes, hashes), `scripts/phone/stage.sh`, `oneios-tool phone`, `imagetool.py verify`/`pack`, `scripts/image/tests` |
+| `seed.json`, `data.meta.json`, `hook-info.json` (build work files) | `image seed-pack` (stdout), `image tree-copy` | no | `scripts/image/build.sh` (an inline Python snippet edits `seed.json`), `image manifest --seed-info`, `image seed-pack` |
+| `image profile` (stdout) | `image profile` | no | `scripts/image/seed-apfs-macos.sh` (Python `json.load`); `--shell` and `--members` are not JSON |
+| `data.seed` | `image seed-pack` | **yes: its SHA-256 is in `manifest.json` and pins the phone's Data store** | it is a tar, not JSON; `pyjson` does not write into it (the xattr values are base64 in pax records). A JSON change must leave `d9a7c0ae...` (this box's seed without a hook) as it is: `tests/image/build-golden.sh` shows it |
+| `select.json`, `hosted.json`, `native-input.json`, `match.map.json`, `aligned-*.json`, `kclasses.json`, `structors.json`, `vtables.json` (prelink work files) | the prelink steps | no (`match.key` keys the pairing on its inputs, not on the map's bytes) | the later steps; `kernel/prelink/lead/{imports,between}.py` read `match.map.json` |
+| `reviewed.merged.json` | `prelink merge-reviewed` | yes: `kernel.kc.build.json` `inputs.reviewed.sha256`, by `prelink record` in the same build | `emit`, `audit`, `record`, the inferring steps |
+| `kernel.kc.prelink.json` | `prelink emit` | no | `prelink record`; by grep: `kernel/prelink/{classes,unmapped}.py`, `lead/*.py`, `kernel/patches/oneios-hosted/{hid,net}/layout.py` (Python `json`) |
+| `kernel.kc.binds.json`, `kernel.kc.build.json`, the audit's `--draft` | `prelink audit`, `record` | no | people; `oneios-tool cycle` reads none of them (by grep) |
+| `ioslog` JSON lines | `serde_json` already | no | people |
+
+What the replacement changes: every file above gets serde_json's layout instead of `json.dumps(indent=1)`'s, so
+**all goldens that hash JSON change** (`tests/prelink/golden/*`: the `.json` rows; `tests/image/golden/*`:
+`manifest.json`; `parity.py` and `compare-python.sh` compare JSON byte for byte with `imagetool.py` and must
+compare by meaning first), `kernel.kc` and `data.seed` do not (neither holds this JSON: check with the two golden
+scripts), and the three recordings of `manifest.json`'s hash are regenerated by the build or the staging. The one
+reader to test before the switch is xnuhost's C reader. Numbers: the image's sizes are below 2^63 (serde_json
+integers); the prelink's addresses are hex strings; `align`'s scores are floats that `serde_json` prints with
+`ryu` (shortest round-trip, as Python's `repr`, but `2.0` stays `2.0`: check). Non-ASCII: `pyjson` writes
+`\uXXXX`, serde_json writes UTF-8: valid JSON for every reader in the table.
 
 ## Notes for the next agent
 

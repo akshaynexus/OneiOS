@@ -287,8 +287,9 @@ The same commands on Linux and on macOS; neither needs root. `build.sh` picks th
 | Read the volumes (the seed's `/private/var`, the hook's three roots) | `apfs-fuse`, no root: owners as stored | `hdiutil attach -readonly -owners off`, no root: every file shows as the user's and is readable; the owners of `/private/var` come from the OS image's own APFS records (`imagetool.py tree-copy --owners-from`), checked entry by entry against the mount |
 | Seed as tar | yes | yes (xattrs read with libc's `listxattr`, which Python lacks on macOS) |
 | Seed as APFS (`--seed apfs`) | **no**: nothing on Linux writes this APFS | `newfs_apfs`, as root (`sudo`). Not run |
-| Hash lists, manifest, archive | python3, `zstd` | same (Homebrew's `zstd`) |
-| Kernel inputs | python3, and `lzfse` or `oneios-tool` (`image im4p`; `scripts/image/kernel-inputs.sh` takes the one that is there) | same |
+| Hash lists, manifest | `oneios-tool image` (Rust; `scripts/image/build.sh` builds it when missing) | same |
+| Archive (`pack`, its `verify`) | python3 (`scripts/image/imagetool.py`), `zstd` | same (Homebrew's `zstd`) |
+| Kernel inputs | `oneios-tool` (`image im4p`, built by `scripts/image/kernel-inputs.sh` when missing); python3 only to fetch missing members | same |
 
 **The owners on macOS.** A volume a user attaches with owners honoured keeps root's folders closed to that user,
 and attaching as root needs `sudo`. So `build.sh` attaches with owners ignored and reads the real owner, group and

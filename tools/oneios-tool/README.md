@@ -14,10 +14,14 @@ script before it may replace it; the commands and the results are below. What is
 | `app` | the app lines of `docs/building.md` section 7 (new) | written; **the app was not built or installed with it** (the owner's decision for this box) | not applicable; 65 checks pass with a stand-in checkout, gradlew, gh and phone (`tests/app/run.sh`); `app version` runs on the real clone |
 | `cycle`, `phone log` | the test cycle of `docs/building.md` section 6 by hand (new) | written; **not run on the phone or with real builds** | not applicable; 90 checks pass with a stand-in checkout and phone (`tests/cycle/run.sh`) |
 
-**Python stays the default.** No build script calls `oneios-tool` unless it is asked to
-(`IMAGETOOL_IMPL=rust` for `scripts/image/build.sh` and `verify.sh`), with one exception that changes no output:
-`scripts/image/kernel-inputs.sh` decodes the kernelcache with `oneios-tool image im4p` when the `lzfse` program is
-not installed, and checks the result against the SHA-256 the kernel profile pins.
+**The build scripts call `oneios-tool` (since the fourth Linux round, 2026-11-12).** `kernel/prelink/build.sh`,
+`scripts/image/build.sh`, `verify.sh` and `kernel-inputs.sh` have no Python switch any more
+(`PRELINK_IMPL`, `IMAGETOOL_IMPL` and `IM4P_TOOL` are gone); they find the binary or build it
+(`scripts/lib/oneios-tool.sh`). Retired and deleted: the prelink's eleven Python steps and `scripts/debug/dsc.py`,
+their outputs frozen as goldens under `tests/`. Not retired: `scripts/image/imagetool.py`, which still does the
+six subcommands that are not ported (`check-ipsw`, `fetch`, `record-plain`, `aea-info`, `pack`, the archive's
+`verify`) and is the reference of `tests/image/compare-python.sh` and `parity.py`; [todo_rust.md](todo_rust.md)
+section 7 lists every Python file that stays and why.
 
 ## Build and tests
 
@@ -291,7 +295,19 @@ file that is there and is not APFS, the kernelcache, the two are the same to the
 The whole-volume `apfs-owners` and the two full builds were the open points of the first round (skipped, and
 stopped part way): both are the same. The box's disk and CPUs were shared with other jobs; the hashing commands gain less
 here (1.2 to 2.0 times) than on the Mac (1.9 to 2.9 times).
-`IMAGETOOL_IMPL=rust scripts/image/build.sh ...` uses the Rust tool; the default stays `python`.
+`scripts/image/build.sh` runs the Rust tool since 2026-11-12 (no `IMAGETOOL_IMPL`). The whole build against the
+Python tool's set:
+
+```sh
+tools/oneios-tool/tests/image/build-golden.sh --kernel out/kernel/pc-24A446/kernel.kc --no-hook
+```
+
+It builds the set with `build.sh --no-pack` and compares every file's name, size and SHA-256 with
+`tests/image/golden/set-24A446-ffbe95f758ed3af3-nohook.txt`, which was written from the set the same `build.sh`
+built with `IMAGETOOL_IMPL=python` at commit `a083125` (the last with the switch; 266 s). Result on the Linux PC,
+2026-11-12, with the Linux-built `kernel.kc` `ffbe95f7` and no hook: **16 of 16 files the same** (`manifest.json`
+`cc41e131...`, `data.seed` `d9a7c0ae...`, the images and their hash lists, `kernel.kc.hashes`, the trust files),
+139 s. A golden exists for these inputs only; other inputs exit 3 (`UPDATE=1` records them).
 
 ### seed-pack: where the time goes
 

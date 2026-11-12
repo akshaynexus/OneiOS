@@ -3,10 +3,8 @@
 #
 #   tools/oneios-tool/tests/image/compare-python.sh            everything (about 6 minutes; Python's part is most of it)
 #   SKIP_SLOW=1 tools/oneios-tool/tests/image/compare-python.sh    without apfs-owners of the whole OS volume (Python: 2 minutes)
-#   FULL_BUILD=1 ...                                           also scripts/image/build.sh --no-pack with each tool
-#                                                              (IMAGETOOL_IMPL=python, then rust), and the two sets compared;
-#                                                              BUILD_ARGS: more options for build.sh (--no-hook, or
-#                                                              --systemos-root DIR when the image is attached elsewhere)
+#   (the whole build against the Python tool's frozen set: tests/image/build-golden.sh; scripts/image/build.sh has
+#   no IMAGETOOL_IMPL switch any more)
 #
 # Runs each ported subcommand with the Python tool and with the Rust tool on the same inputs, and compares what
 # they print (stdout, stderr), their exit status and every file they write with cmp. One line per item:
@@ -51,7 +49,7 @@ WORK=${WORK:-$ROOT/out/rustport-image}
 [ -x "$TOOL" ] || die "no $TOOL (build it: cargo build --release --manifest-path tools/oneios-tool/Cargo.toml, or pass TOOL=)"
 [ -f "$PROFILE" ] || die "no profile $PROFILE"
 command -v python3 >/dev/null || die "python3 is missing"
-unset ONEIOS_IMAGE_TIMING ONEIOS_IMAGE_WRITERS IMAGETOOL_IMPL
+unset ONEIOS_IMAGE_TIMING ONEIOS_IMAGE_WRITERS
 export IMAGETOOL_PY=$PY_TOOL
 
 py() { python3 -I "$PY_TOOL" "$@"; }
@@ -366,37 +364,6 @@ pair "verify: a manifest of a newer format" verify "$S/bad"
 bad; rm "$S/bad/manifest.json"
 pair "verify: no manifest" verify "$S/bad"
 rm -rf "$S/bad"
-
-# ---- the whole build with each tool
-if [ "${FULL_BUILD:-0}" = 1 ]; then
-  kernel=(--no-kernel)
-  [ ! -f "$SET/kernel.kc" ] || kernel=(--kernel "$SET/kernel.kc")
-  for impl in python rust; do
-    b=$LOGS/build-$impl
-    # shellcheck disable=SC2086
-    { time env IMAGETOOL_IMPL=$impl ONEIOS_TOOL="$TOOL" INPUTS="$INPUTS_DIR" OUT="$WORK/build-$impl" \
-      "$ROOT/scripts/image/build.sh" --no-pack "${kernel[@]}" ${BUILD_ARGS:-} "$PROFILE" > "$b.out" 2> "$b.err"; echo $? > "$b.status"; } 2> "$b.time"
-  done
-  bad=""
-  [ "$(cat "$LOGS/build-python.status")" = 0 ] && [ "$(cat "$LOGS/build-rust.status")" = 0 ] || bad=" exit-status"
-  # the same lines, apart from the folder each build wrote to
-  sed "s|$WORK/build-python|OUT|g" "$LOGS/build-python.out" > "$LOGS/build-python.lines"
-  sed "s|$WORK/build-rust|OUT|g" "$LOGS/build-rust.out" > "$LOGS/build-rust.lines"
-  cmp -s "$LOGS/build-python.lines" "$LOGS/build-rust.lines" || bad="$bad stdout"
-  if [ -z "$bad" ]; then
-    (cd "$WORK/build-python/$P_BUILD" && find . -type f | sort) > "$LOGS/build-python.files"
-    (cd "$WORK/build-rust/$P_BUILD" && find . -type f | sort) > "$LOGS/build-rust.files"
-    cmp -s "$LOGS/build-python.files" "$LOGS/build-rust.files" || bad="$bad file-names"
-    while IFS= read -r f; do
-      cmp -s "$WORK/build-python/$P_BUILD/$f" "$WORK/build-rust/$P_BUILD/$f" || bad="$bad $f"
-    done < "$LOGS/build-python.files"
-  fi
-  verdict=same
-  if [ -n "$bad" ]; then verdict="DIFFERENT:$bad (see $LOGS/build-*)"; different=$((different + 1)); fi
-  printf '%-46s python %8.2f s   rust %8.2f s   %s\n' "build.sh --no-pack (every file of the set)" \
-    "$(cat "$LOGS/build-python.time")" "$(cat "$LOGS/build-rust.time")" "$verdict"
-  rows+=("build.sh --no-pack (whole script)|$(cat "$LOGS/build-python.time")|$(cat "$LOGS/build-rust.time")|0")
-fi
 
 # ---- the times
 echo

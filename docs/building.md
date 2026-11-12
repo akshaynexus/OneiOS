@@ -44,14 +44,13 @@ scripts/image/kernel-inputs.sh "$P"                 # Apple's kernelcache and de
                                                     # (without inputs/24A446/ it fetches only those, 24 MB)
 ```
 
-`kernel-inputs.sh` decodes the two IM4P members (the kernelcache's payload is LZFSE) with `imagetool.py im4p` when the
-`lzfse` program is on `PATH`, and otherwise with `oneios-tool image im4p` (LZFSE by the `lzfse_rust` crate, no other
-program; build it with `cargo build --release --manifest-path tools/oneios-tool/Cargo.toml`, section 10).
-`IM4P_TOOL=PATH` names a `oneios-tool` binary and makes it the decoder in either case. Whichever ran, the script then
-checks `kernelcache.macho` against the SHA-256 the kernel profile pins (`kernel/unixnu/profiles/os/ios-27.0.1-24A446/
-profile.toml`, `kernelcache_sha256`) and stops when it differs. On the Linux PC on 2026-11-12, without `lzfse`:
-78135296 bytes, sha256 `349c4692...0c57e3`, the pinned one (which was made with the `lzfse` program on the Mac), in
-0.7 s. Not compared: the two decoders run side by side on one host (no `lzfse` program on the PC).
+`kernel-inputs.sh` decodes the two IM4P members (the kernelcache's payload is LZFSE) with `oneios-tool image im4p`
+(DER by `simple_asn1`, LZFSE by `lzfse_rust`: no `lzfse` program and no Python; the script builds the binary when it
+is missing or older than its sources, section 10). It then checks `kernelcache.macho` against the SHA-256 the kernel
+profile pins (`kernel/unixnu/profiles/os/ios-27.0.1-24A446/profile.toml`, `kernelcache_sha256`) and stops when it
+differs. On the Linux PC on 2026-11-12: 78135296 bytes, sha256 `349c4692...0c57e3`, the pinned one (which was made
+with the `lzfse` program on the Mac), in 0.7 s. The `lzfse` path and `IM4P_TOOL` are gone; python3 is needed only
+when the members have to be fetched (`scripts/fetch/fetch.sh`).
 
 The set is built after `kernel.kc` exists (step 3), so that it carries the kernel:
 
@@ -683,13 +682,16 @@ Rust 1.95 or newer (apk-info-zip 1.1.1 needs 1.95; built with 1.98.0 and 1.99.1)
 (macos-unifiedlogs, pinned by commit in `Cargo.lock`). Linux x86_64 and macOS arm64. `oneios-tool --help` and
 `oneios-tool TOOL --help` list every command and option (one clap layout for all tools).
 
-**The builds use the Python tools.** Where a Rust tool can be chosen, Python is the default:
+**The builds use `oneios-tool`** (since 2026-11-12; no switch chooses a Python tool any more). Each script finds
+the binary or builds it (`scripts/lib/oneios-tool.sh`: `cargo build --release` when it is missing or older than its
+sources; `ONEIOS_TOOL=PATH` names another):
 
-| Script | Switch | Effect |
+| Script | Runs | Still Python |
 |---|---|---|
-| `scripts/image/build.sh`, `scripts/image/verify.sh` | `IMAGETOOL_IMPL=rust` (default `python`), `ONEIOS_TOOL=PATH` | `oneios-tool image` runs profile, apfs-info, apfs-owners, hashes, tree-copy, seed-pack, manifest and the set folder's verify; pack and the archive's verify stay with the Python tool. Same files, byte for byte (README "image") |
-| `scripts/image/kernel-inputs.sh` | none needed; `IM4P_TOOL=PATH` forces it | without the `lzfse` program the kernelcache is decoded by `oneios-tool image im4p`; the result is checked against the pinned SHA-256 either way (section 1) |
-| `kernel/prelink/build.sh` | none: Rust only since 2026-11-12 (`ONEIOS_TOOL=PATH` for another binary) | `oneios-tool prelink` runs all twelve steps; the Python steps were deleted after every step's output was compared byte for byte, and their outputs are frozen as hashes (`tests/prelink/compare-golden.sh`). 14 s instead of two minutes |
+| `scripts/image/build.sh` | `oneios-tool image` for profile, apfs-info, apfs-owners, hashes, tree-copy, seed-pack, manifest and the set folder's verify | the archive: `imagetool.py pack` and its `verify` (not ported), and two inline snippets (the hook's tweak list, the seed's format field) |
+| `scripts/image/verify.sh` | `oneios-tool image verify` for a set folder | an archive (`.tar.zst`): `imagetool.py verify` |
+| `scripts/image/kernel-inputs.sh` | `oneios-tool image profile` and `im4p`, `oneios-tool prelink pin` | the fetch of missing members (`scripts/fetch/fetch.sh`) |
+| `kernel/prelink/build.sh` | `oneios-tool prelink` for all twelve steps, `image hashes` (the Python steps were deleted after every step's output was compared byte for byte; their outputs are frozen as hashes, `tests/prelink/compare-golden.sh`). 14 s instead of two minutes | nothing |
 
 `oneios-tool image seed-pack` writes `data.seed`'s members in parallel, each at its own offset (the same bytes as
 `imagetool.py`'s; the SHA-256 is the one the trust list pins). `ONEIOS_IMAGE_TIMING=1` prints each phase's time;
