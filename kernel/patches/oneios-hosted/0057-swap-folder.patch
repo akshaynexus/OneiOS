@@ -86,7 +86,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 diff --git a/bsd/vm/vm_compressor_backing_file.c b/bsd/vm/vm_compressor_backing_file.c
 --- a/bsd/vm/vm_compressor_backing_file.c
 +++ b/bsd/vm/vm_compressor_backing_file.c
-@@ -43,7 +43,62 @@
+@@ -43,7 +43,67 @@
  #include <vm/vm_ubc.h>
  #include <vm/vm_compressor_backing_store_internal.h>
  
@@ -133,11 +133,16 @@ diff --git a/bsd/vm/vm_compressor_backing_file.c b/bsd/vm/vm_compressor_backing_
 +		}
 +		vp = NULLVP;
 +	}
-+	uint64_t ns = 0;
-+	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++	/* Since boot by the calendar: the hosted mach_absolute_time is the host's counter (the phone's since its own boot,
++	 * wall time under qemu-user), not the guest's uptime. */
++	clock_sec_t now_s = 0, boot_s = 0;
++	clock_usec_t now_us = 0, boot_us = 0;
++	clock_get_calendar_microtime(&now_s, &now_us);
++	clock_get_boottime_microtime(&boot_s, &boot_us);
 +	mount_t mp = vp ? vnode_mount(vp) : NULL;
 +	printf("oneios-swap: %s: errno %d at %llu s (failure %u); %s is there, on %s (%s, %s)\n", path, error,
-+	    (unsigned long long)(ns / NSEC_PER_SEC), n, vp ? dir : "nothing", mp ? vfs_statfs(mp)->f_mntonname : "?",
++	    boot_s && now_s >= boot_s ? (unsigned long long)(now_s - boot_s) : 0ull, n, vp ? dir : "nothing",
++	    mp ? vfs_statfs(mp)->f_mntonname : "?",
 +	    mp ? vfs_statfs(mp)->f_fstypename : "?", mp ? (vfs_isrdonly(mp) ? "read-only" : "read-write") : "?");
 +	if (vp) {
 +		vnode_put(vp);
@@ -149,7 +154,7 @@ diff --git a/bsd/vm/vm_compressor_backing_file.c b/bsd/vm/vm_compressor_backing_
  vm_swapfile_open(const char *path, vnode_t *vp)
  {
  	int error = 0;
-@@ -58,6 +113,9 @@
+@@ -58,6 +118,9 @@
  		ctx);
  	if (error) {
  		printf("Failed to open swap file %d\n", error);
