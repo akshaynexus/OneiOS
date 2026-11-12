@@ -611,6 +611,11 @@ Rust 1.88 or newer (built with 1.98.0); the first build downloads the crates and
 | `scripts/image/kernel-inputs.sh` | none needed; `IM4P_TOOL=PATH` forces it | without the `lzfse` program the kernelcache is decoded by `oneios-tool image im4p`; the result is checked against the pinned SHA-256 either way (section 1) |
 | `kernel/prelink/build.sh` | none | Python only; `oneios-tool prelink roots` and `hosted` exist and are compared, the other steps are not ported |
 
+`oneios-tool image seed-pack` writes `data.seed`'s members in parallel, each at its own offset (the same bytes as
+`imagetool.py`'s; the SHA-256 is the one the trust list pins). `ONEIOS_IMAGE_TIMING=1` prints each phase's time;
+`ONEIOS_SEED_SINK=map` (a mapped output, faster on tmpfs) and `plain` (no `copy_file_range`, the macOS path) choose
+another way to write the same bytes. The floor and the numbers: README "seed-pack: where the time goes".
+
 iOS's own log of a session, from a copy of the Data store (replaces the mount-and-copy steps of
 [newtodo.md](newtodo.md) "How to resume" step 2; no mount, Linux and macOS):
 

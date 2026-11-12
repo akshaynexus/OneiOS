@@ -1,6 +1,24 @@
 //! The headers Python's `tarfile` writes in `PAX_FORMAT` (`TarInfo.create_pax_header`), byte for byte: a ustar
 //! header, with a pax extended header in front of it when a name is not ASCII or longer than 100 bytes, a number
 //! does not fit its octal field, or the entry carries its own pax records (the seed's xattrs).
+//!
+//! The 512-byte block is the `tar` crate's `Header` (`new_ustar`, `set_mode`, `set_uid`, `set_gid`, `set_size`,
+//! `set_mtime`, `set_entry_type`: the same zero-padded octal digits and NUL that Python writes). Four things the
+//! crate does differently from Python are done here instead, because `data.seed`'s SHA-256 is pinned in the
+//! image's trust list (measured with tar 0.4.46 against Python 3's tarfile, 2026-11-12):
+//! - the checksum field: the crate's `set_cksum` writes seven octal digits and a NUL (`0010715\0`), Python six
+//!   digits, a NUL and a space (`010715\0 `), in every header;
+//! - names: the crate's `set_path` moves the front of a long name into the ustar `prefix` field and refuses what
+//!   does not fit; Python's pax format never uses `prefix`: the name field gets the first 100 characters with
+//!   `?` for each one that is not ASCII, and the whole name goes into a `path` record;
+//! - the extended header's own block: `Builder::append_pax_extensions` leaves its name empty and its mode, uid
+//!   and gid fields all NUL; Python names it `././@PaxHeader` and writes `0000000\0` in the three fields. (The
+//!   records' text, `LENGTH KEY=VALUE\n`, is the same in both.)
+//! - the end: `Builder::finish` writes two zero blocks; Python fills up to the next multiple of 10240 bytes.
+//! So `Builder` is not used; the seed's members are also written at their offsets in parallel (`seed.rs`), which
+//! a `Builder` over one writer cannot do.
+
+use ::tar::{EntryType, Header};
 
 pub const BLOCK: usize = 512;
 /// `tarfile.RECORDSIZE`: the archive's length is a multiple of this.
@@ -24,105 +42,120 @@ pub struct TarInfo<'a> {
     pub pax: Vec<(String, String)>,
 }
 
+/// One pax record, "LENGTH KEYWORD=VALUE\n", where LENGTH counts its own digits.
+fn record(out: &mut Vec<u8>, keyword: &str, value: &str) {
+    let l = keyword.len() + value.len() + 3;
+    let mut p = 0usize;
+    loop {
+        let n = l + p.to_string().len();
+        if n == p {
+            break;
+        }
+        p = n;
+    }
+    out.extend_from_slice(p.to_string().as_bytes());
+    out.push(b' ');
+    out.extend_from_slice(keyword.as_bytes());
+    out.push(b'=');
+    out.extend_from_slice(value.as_bytes());
+    out.push(b'\n');
+}
+
 impl<'a> TarInfo<'a> {
     /// `TarInfo(name)`: a regular file, mode 0o644, everything else zero or empty.
     pub fn new(name: &'a str) -> TarInfo<'a> {
         TarInfo { name, mode: 0o644, uid: 0, gid: 0, size: 0, mtime: 0, kind: REG, linkname: "", pax: Vec::new() }
     }
 
-    /// `TarInfo.tobuf(PAX_FORMAT)`.
+    /// `TarInfo.tobuf(PAX_FORMAT)`, as a new buffer.
+    #[cfg(test)]
     pub fn header(&self) -> Vec<u8> {
-        let mut name = self.name.to_string();
-        if self.kind == DIR && !name.ends_with('/') {
-            name.push('/');
+        let mut out = Vec::with_capacity(3 * BLOCK);
+        self.write_header(&mut out);
+        out
+    }
+
+    /// `TarInfo.tobuf(PAX_FORMAT)`, appended to `out`: one to three blocks, more with long records.
+    pub fn write_header(&self, out: &mut Vec<u8>) {
+        let dir_name;
+        let name = if self.kind == DIR && !self.name.ends_with('/') {
+            dir_name = format!("{}/", self.name);
+            dir_name.as_str()
+        } else {
+            self.name
+        };
+        let has = |key: &str| self.pax.iter().any(|(k, _)| k == key);
+        // The extended header's block comes first, its records after it: keep its place and fill it in at the end.
+        let start = out.len();
+        out.resize(start + BLOCK, 0);
+        for (keyword, value) in &self.pax {
+            record(out, keyword, value);
         }
-        let mut pax = self.pax.clone();
-        let has = |pax: &Vec<(String, String)>, key: &str| pax.iter().any(|(k, _)| k == key);
         // String fields that are too long or not ASCII. (uname and gname are always empty here.)
-        for (value, hname) in [(name.as_str(), "path"), (self.linkname, "linkpath")] {
-            if has(&pax, hname) {
-                continue;
-            }
-            if !value.is_ascii() || value.chars().count() > 100 {
-                pax.push((hname.to_string(), value.to_string()));
+        for (value, hname) in [(name, "path"), (self.linkname, "linkpath")] {
+            if !has(hname) && (!value.is_ascii() || value.chars().count() > 100) {
+                record(out, hname, value);
             }
         }
         // Number fields that do not fit their octal digits.
         let mut numbers = [("uid", 8u32, self.uid), ("gid", 8, self.gid), ("size", 12, self.size), ("mtime", 12, self.mtime)];
         for (key, digits, value) in numbers.iter_mut() {
             if !(0..8i128.pow(*digits - 1)).contains(value) {
-                if !has(&pax, key) {
-                    pax.push((key.to_string(), value.to_string()));
+                if !has(key) {
+                    record(out, key, &value.to_string());
                 }
                 *value = 0;
             }
         }
-        let mut out = Vec::with_capacity(3 * BLOCK);
-        if !pax.is_empty() {
-            let mut records = Vec::new();
-            for (keyword, value) in &pax {
-                // "LENGTH KEYWORD=VALUE\n", where LENGTH counts its own digits
-                let l = keyword.len() + value.len() + 3;
-                let mut p = 0usize;
-                loop {
-                    let n = l + p.to_string().len();
-                    if n == p {
-                        break;
-                    }
-                    p = n;
-                }
-                records.extend_from_slice(format!("{p} {keyword}={value}\n").as_bytes());
-            }
-            out.extend_from_slice(&ustar("././@PaxHeader", 0, 0, 0, records.len() as i128, 0, XHD, ""));
-            out.extend_from_slice(&records);
+        let records = out.len() - start - BLOCK;
+        if records == 0 {
+            out.truncate(start);
+        } else {
+            let block = ustar("././@PaxHeader", 0, 0, 0, records as u64, 0, XHD, "");
+            out[start..start + BLOCK].copy_from_slice(&block);
             out.resize(out.len().next_multiple_of(BLOCK), 0);
         }
-        out.extend_from_slice(&ustar(&name, self.mode & 0o7777, numbers[0].2, numbers[1].2, numbers[2].2, numbers[3].2, self.kind, self.linkname));
-        out
+        // every number is inside its field's range here, so the casts keep the value
+        let block = ustar(name, (self.mode & 0o7777) as u32, numbers[0].2 as u64, numbers[1].2 as u64, numbers[2].2 as u64, numbers[3].2 as u64, self.kind, self.linkname);
+        out.extend_from_slice(&block);
     }
 }
 
-/// `stn(s, length, "ascii", "replace")`: every character that is not ASCII becomes `?`, the rest is cut or padded.
-fn text(out: &mut Vec<u8>, s: &str, length: usize) {
-    let start = out.len();
-    out.extend(s.chars().take(length).map(|c| if c.is_ascii() { c as u8 } else { b'?' }));
-    out.resize(start + length, 0);
+/// `stn(s, length, "ascii", "replace")`: every character that is not ASCII becomes `?`, the rest is cut; the
+/// field is NUL already.
+fn text(field: &mut [u8], s: &str) {
+    for (slot, c) in field.iter_mut().zip(s.chars()) {
+        *slot = if c.is_ascii() { c as u8 } else { b'?' };
+    }
 }
 
-/// `itn(n, digits)`: octal digits and a NUL.
-fn number(out: &mut Vec<u8>, n: i128, digits: usize) {
-    out.extend_from_slice(format!("{n:0width$o}\0", width = digits - 1).as_bytes());
-}
-
-/// `TarInfo._create_header(info, USTAR_FORMAT, "ascii", "replace")`.
+/// `TarInfo._create_header(info, USTAR_FORMAT, "ascii", "replace")`: the crate's ustar header, field by field.
 #[allow(clippy::too_many_arguments)]
-fn ustar(name: &str, mode: i128, uid: i128, gid: i128, size: i128, mtime: i128, kind: u8, linkname: &str) -> [u8; BLOCK] {
-    let mut buf = Vec::with_capacity(BLOCK);
-    text(&mut buf, name, 100);
-    number(&mut buf, mode & 0o7777, 8);
-    number(&mut buf, uid, 8);
-    number(&mut buf, gid, 8);
-    number(&mut buf, size, 12);
-    number(&mut buf, mtime, 12);
-    buf.extend_from_slice(b"        ");
-    buf.push(kind);
-    text(&mut buf, linkname, 100);
-    buf.extend_from_slice(b"ustar\x0000");
-    text(&mut buf, "", 32); // uname
-    text(&mut buf, "", 32); // gname
-    text(&mut buf, "", 8); // devmajor
-    text(&mut buf, "", 8); // devminor
-    text(&mut buf, "", 155); // prefix
-    buf.resize(BLOCK, 0);
-    let sum: u32 = buf.iter().map(|b| *b as u32).sum();
-    buf[148..155].copy_from_slice(format!("{sum:06o}\0").as_bytes());
-    buf.try_into().expect("a 512-byte header")
+fn ustar(name: &str, mode: u32, uid: u64, gid: u64, size: u64, mtime: u64, kind: u8, linkname: &str) -> [u8; BLOCK] {
+    let mut h = Header::new_ustar();
+    {
+        let fields = h.as_ustar_mut().expect("new_ustar makes a ustar header");
+        text(&mut fields.name, name);
+        text(&mut fields.linkname, linkname);
+    }
+    h.set_mode(mode);
+    h.set_uid(uid);
+    h.set_gid(gid);
+    h.set_size(size);
+    h.set_mtime(mtime);
+    h.set_entry_type(EntryType::new(kind));
+    // Python's checksum field: six octal digits, a NUL, a space (the module comment has the crate's form).
+    let bytes = h.as_mut_bytes();
+    bytes[148..156].fill(b' ');
+    let sum: u32 = bytes.iter().map(|b| *b as u32).sum();
+    bytes[148..155].copy_from_slice(format!("{sum:06o}\0").as_bytes());
+    *bytes
 }
 
-/// The zero bytes after the last member: two blocks, then up to the next multiple of RECORD.
-pub fn trailer(offset: u64) -> Vec<u8> {
-    let end = offset + 2 * BLOCK as u64;
-    vec![0u8; (2 * BLOCK as u64 + (RECORD - end % RECORD) % RECORD) as usize]
+/// The archive's length when its last member ends at `offset`: two zero blocks more, then up to the next
+/// multiple of RECORD.
+pub fn end(offset: u64) -> u64 {
+    (offset + 2 * BLOCK as u64).next_multiple_of(RECORD)
 }
 
 #[cfg(test)]
@@ -208,10 +241,10 @@ mod tests {
 
     #[test]
     fn trailer_fills_the_record() {
-        assert_eq!(trailer(0).len(), 10240);
-        assert_eq!(trailer(512).len(), 10240 - 512);
-        assert_eq!(trailer(10240 - 1024).len(), 1024);
-        assert_eq!(trailer(10240 - 512).len(), 512 + 10240);
-        assert_eq!(trailer(10240).len(), 10240);
+        assert_eq!(end(0), 10240);
+        assert_eq!(end(512), 10240);
+        assert_eq!(end(10240 - 1024), 10240);
+        assert_eq!(end(10240 - 512), 2 * 10240);
+        assert_eq!(end(10240), 2 * 10240);
     }
 }

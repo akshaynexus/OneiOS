@@ -1,12 +1,16 @@
 //! JSON as Python's `json` module reads and writes it.
 //!
+//! `dumps` is serde_json's serializer with a `Formatter` for Python's layout (below); the parser is this module's
+//! own (serde_json does not read Python's `NaN` and `Infinity`, nor integers beyond 64 bits as integers).
 //! `dumps` gives the bytes of `json.dumps(value, indent=..., sort_keys=...)` with Python's defaults
 //! (`ensure_ascii=True`; separators `", "` and `": "` without an indent, `","` + newline and `": "` with one;
 //! floats as `repr(float)`; `NaN`, `Infinity`, `-Infinity`). Objects keep their insertion order, like a Python dict.
 //! `parse` keeps the order of an object's keys and the difference between `1` and `1.0`, so a file read and written
 //! again is the file Python would write.
 
-use std::fmt::Write as _;
+use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
+use serde_json::ser::Formatter;
+use std::io;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -173,104 +177,147 @@ pub fn float_repr(f: f64) -> String {
     }
 }
 
-fn write_str(out: &mut String, s: &str) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 || (c as u32) > 0x7e => {
+/// One value as serde sees it: a dict's entries in their own order (or sorted), an integer of any size.
+struct Py<'a> {
+    value: &'a Value,
+    sort_keys: bool,
+}
+
+impl Serialize for Py<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let inner = |value| Py { value, sort_keys: self.sort_keys };
+        match self.value {
+            Value::Null => s.serialize_unit(),
+            Value::Bool(b) => s.serialize_bool(*b),
+            Value::Int(i) => s.serialize_i128(*i),
+            Value::Float(f) if f.is_finite() => s.serialize_f64(*f),
+            // serde_json writes `null` for these before it asks the formatter; Python writes the word. The
+            // formatter below writes a byte string as it is, and nothing else here is one.
+            Value::Float(f) => s.serialize_bytes(float_repr(*f).as_bytes()),
+            Value::Str(text) => s.serialize_str(text),
+            Value::List(items) => {
+                let mut seq = s.serialize_seq(Some(items.len()))?;
+                for item in items {
+                    seq.serialize_element(&inner(item))?;
+                }
+                seq.end()
+            }
+            Value::Dict(items) => {
+                let mut order: Vec<&(String, Value)> = items.iter().collect();
+                if self.sort_keys {
+                    // Python sorts str keys by code point; UTF-8 byte order is the same order.
+                    order.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+                }
+                let mut map = s.serialize_map(Some(order.len()))?;
+                for (key, value) in order {
+                    map.serialize_entry(key, &inner(value))?;
+                }
+                map.end()
+            }
+        }
+    }
+}
+
+/// The layout of Python's `json.dumps` for serde_json's serializer: `", "` and `": "` without an indent; with
+/// one, `","`, a line end and `indent * level` spaces (`[]` and `{}` stay closed); every character outside
+/// 0x20..0x7e as `\uXXXX` (`ensure_ascii`); floats as `repr(float)`.
+struct PyFormatter {
+    indent: Option<usize>,
+    level: usize,
+    has_value: bool,
+}
+
+impl PyFormatter {
+    fn open<W: ?Sized + io::Write>(&mut self, w: &mut W, bracket: &[u8]) -> io::Result<()> {
+        self.level += 1;
+        self.has_value = false;
+        w.write_all(bracket)
+    }
+    fn close<W: ?Sized + io::Write>(&mut self, w: &mut W, bracket: &[u8]) -> io::Result<()> {
+        self.level -= 1;
+        if self.has_value {
+            self.line(w)?;
+        }
+        w.write_all(bracket)
+    }
+    fn line<W: ?Sized + io::Write>(&mut self, w: &mut W) -> io::Result<()> {
+        if let Some(n) = self.indent {
+            w.write_all(b"\n")?;
+            for _ in 0..n * self.level {
+                w.write_all(b" ")?;
+            }
+        }
+        Ok(())
+    }
+    fn item<W: ?Sized + io::Write>(&mut self, w: &mut W, first: bool) -> io::Result<()> {
+        match (first, self.indent) {
+            (true, _) => {}
+            (false, None) => w.write_all(b", ")?,
+            (false, Some(_)) => w.write_all(b",")?,
+        }
+        self.line(w)
+    }
+}
+
+impl Formatter for PyFormatter {
+    fn write_f64<W: ?Sized + io::Write>(&mut self, w: &mut W, value: f64) -> io::Result<()> {
+        w.write_all(float_repr(value).as_bytes())
+    }
+    fn write_byte_array<W: ?Sized + io::Write>(&mut self, w: &mut W, value: &[u8]) -> io::Result<()> {
+        w.write_all(value)
+    }
+    fn write_string_fragment<W: ?Sized + io::Write>(&mut self, w: &mut W, fragment: &str) -> io::Result<()> {
+        // serde_json escapes the quote, the backslash and everything below 0x20 itself, as Python does
+        let mut plain = 0;
+        for (at, c) in fragment.char_indices() {
+            if (c as u32) > 0x7e {
+                w.write_all(&fragment.as_bytes()[plain..at])?;
                 let mut units = [0u16; 2];
                 for unit in c.encode_utf16(&mut units) {
-                    let _ = write!(out, "\\u{:04x}", unit);
+                    write!(w, "\\u{unit:04x}")?;
                 }
+                plain = at + c.len_utf8();
             }
-            c => out.push(c),
         }
+        w.write_all(&fragment.as_bytes()[plain..])
     }
-    out.push('"');
-}
-
-fn write_value(out: &mut String, v: &Value, indent: Option<usize>, sort_keys: bool, level: usize) {
-    match v {
-        Value::Null => out.push_str("null"),
-        Value::Bool(true) => out.push_str("true"),
-        Value::Bool(false) => out.push_str("false"),
-        Value::Int(i) => {
-            let _ = write!(out, "{i}");
-        }
-        Value::Float(f) => out.push_str(&float_repr(*f)),
-        Value::Str(s) => write_str(out, s),
-        Value::List(items) => {
-            if items.is_empty() {
-                out.push_str("[]");
-                return;
-            }
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                separator(out, i, indent, level + 1);
-                write_value(out, item, indent, sort_keys, level + 1);
-            }
-            close(out, indent, level);
-            out.push(']');
-        }
-        Value::Dict(items) => {
-            if items.is_empty() {
-                out.push_str("{}");
-                return;
-            }
-            out.push('{');
-            let mut order: Vec<&(String, Value)> = items.iter().collect();
-            if sort_keys {
-                // Python sorts str keys by code point; UTF-8 byte order is the same order.
-                order.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-            }
-            for (i, (key, value)) in order.into_iter().enumerate() {
-                separator(out, i, indent, level + 1);
-                write_str(out, key);
-                out.push_str(": ");
-                write_value(out, value, indent, sort_keys, level + 1);
-            }
-            close(out, indent, level);
-            out.push('}');
-        }
+    fn begin_array<W: ?Sized + io::Write>(&mut self, w: &mut W) -> io::Result<()> {
+        self.open(w, b"[")
     }
-}
-
-fn separator(out: &mut String, index: usize, indent: Option<usize>, level: usize) {
-    match indent {
-        None => {
-            if index > 0 {
-                out.push_str(", ");
-            }
-        }
-        Some(n) => {
-            if index > 0 {
-                out.push(',');
-            }
-            out.push('\n');
-            out.extend(std::iter::repeat(' ').take(n * level));
-        }
+    fn end_array<W: ?Sized + io::Write>(&mut self, w: &mut W) -> io::Result<()> {
+        self.close(w, b"]")
     }
-}
-
-fn close(out: &mut String, indent: Option<usize>, level: usize) {
-    if let Some(n) = indent {
-        out.push('\n');
-        out.extend(std::iter::repeat(' ').take(n * level));
+    fn begin_array_value<W: ?Sized + io::Write>(&mut self, w: &mut W, first: bool) -> io::Result<()> {
+        self.item(w, first)
+    }
+    fn end_array_value<W: ?Sized + io::Write>(&mut self, _w: &mut W) -> io::Result<()> {
+        self.has_value = true;
+        Ok(())
+    }
+    fn begin_object<W: ?Sized + io::Write>(&mut self, w: &mut W) -> io::Result<()> {
+        self.open(w, b"{")
+    }
+    fn end_object<W: ?Sized + io::Write>(&mut self, w: &mut W) -> io::Result<()> {
+        self.close(w, b"}")
+    }
+    fn begin_object_key<W: ?Sized + io::Write>(&mut self, w: &mut W, first: bool) -> io::Result<()> {
+        self.item(w, first)
+    }
+    fn begin_object_value<W: ?Sized + io::Write>(&mut self, w: &mut W) -> io::Result<()> {
+        w.write_all(b": ")
+    }
+    fn end_object_value<W: ?Sized + io::Write>(&mut self, _w: &mut W) -> io::Result<()> {
+        self.has_value = true;
+        Ok(())
     }
 }
 
 /// `json.dumps(value, indent=indent, sort_keys=sort_keys)`.
 pub fn dumps(value: &Value, indent: Option<usize>, sort_keys: bool) -> String {
-    let mut out = String::new();
-    write_value(&mut out, value, indent, sort_keys, 0);
-    out
+    let mut out = Vec::new();
+    let mut ser = serde_json::Serializer::with_formatter(&mut out, PyFormatter { indent, level: 0, has_value: false });
+    Py { value, sort_keys }.serialize(&mut ser).expect("a Vec takes every write, and every key is a string");
+    String::from_utf8(out).expect("the formatter writes ASCII only")
 }
 
 /// `json.loads(text)`.

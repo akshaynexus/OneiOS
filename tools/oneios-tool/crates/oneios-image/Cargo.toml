@@ -20,3 +20,6 @@ lzfse_rust = "0.2"
 # The profile (profiles/*.toml), as Python's tomllib reads it: preserve_order keeps the tables' key order, which
 # `image profile PROFILE` prints.
 toml = { version = "1", default-features = false, features = ["std", "serde", "parse", "preserve_order"] }
+tar = { version = "0.4", default-features = false }
+base64 = "0.22"
+percent-encoding = "2"

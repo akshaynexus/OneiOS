@@ -26,7 +26,7 @@ tools/oneios-tool/tests/compare-python.sh [PART...]                    # every c
 ```
 
 Rust 1.88 or newer (macos-unifiedlogs needs it; built with 1.98.0). Linux x86_64 (2026-11-12): clean build 1 min 20 s
-with two jobs, 46 unit tests pass (`oneios-common` 3, `oneios-image` 29, `oneios-log` 7, `oneios-sym` 7),
+with two jobs, 51 unit tests pass (`oneios-common` 3, `oneios-image` 29 + 1, `oneios-ioslog` 4, `oneios-log` 7, `oneios-sym` 7),
 `parity.py`: 138 cases, all the same. macOS arm64: the three first tools were built and compared there on 2026-11-12
 (the numbers in [todo_rust.md](todo_rust.md)); `ioslog`, `prelink`, `image im4p` and the APFS file reader were not
 built on a Mac yet.
@@ -63,7 +63,10 @@ exists or where ours is measured to be faster; each such part says why in its mo
 | `tracing-subscriber` | `ioslog -v`: the decoder's warnings on stderr |
 | `simple_asn1`, `lzfse_rust` | `image im4p`: the IM4P container (DER) and its LZFSE payload |
 | `plist`, `toml` | `prelink roots`: the kernelcache's `__PRELINK_INFO` and the kernel profile; `image profile`: the build profile |
-| `sha2` (`asm`), `rayon`, `memmap2`, `libc`, `anyhow` | hashing, parallel work, file maps (`image`, `sym`, `log`) |
+| `tar` 0.4 (`Header`) | `image seed-pack`: every 512-byte ustar block of `data.seed`, field by field (`crates/oneios-image/src/tar.rs`; what stays ours and why: below) |
+| `serde_json` (`ser::Formatter`), `serde` | every JSON file the tools write: Python's `json.dumps` layout is a `Formatter` (`oneios-common/src/pyjson.rs`) |
+| `base64`, `percent-encoding` | the seed's xattr values and their pax keys (`base64.b64encode`, `urllib.parse.quote`) |
+| `sha2` (`asm`), `rayon`, `memmap2`, `libc`, `anyhow` | hashing (the hash lists are `sha2` and `std::io::Write`), parallel work, file maps, `copy_file_range` (`image`, `sym`, `log`) |
 
 Hand-written, and why:
 
@@ -71,8 +74,10 @@ Hand-written, and why:
 |---|---|
 | The APFS reader (`crates/oneios-image/src/apfs.rs`, `apfs/files.rs`) | no maintained Rust crate reads iOS's sealed volumes, or any volume of a container but the first (`apfs` 0.4.1: neither; `apfs-core`: stubs; checked 2026-11-12, [todo_rust.md](todo_rust.md)). apfs-fuse is GPL, Linux only in practice, and needs FUSE |
 | `ioslog`'s choice of files, filters, text output, checks (`crates/oneios-ioslog`, 950 lines) | this project's own; everything that decodes a log file is the library's |
-| `oneios-common/src/pyjson.rs` | JSON text byte for byte as Python's `json` module writes it (indent, separators, `ensure_ascii`, key order), for files that are hashed or compared with `cmp`. `serde_json` does not write Python's separators and escapes, and its `preserve_order` feature must stay off (below) |
-| `oneios-image`: hash lists, seed tar, manifest, Python's `repr` and messages | output that is hashed (`.hashes`, `data.seed`) or compared byte for byte with the Python tool; one read pass feeds the whole-file SHA-256 and the chunk hashes (1.9 to 2.9 times Python on the Mac) |
+| `oneios-common/src/pyjson.rs`: the value type and the parser | the writer is serde_json's now (a `Formatter`: `", "` and `": "`, Python's indent, `\uXXXX` for everything outside ASCII, `repr(float)`). The value type keeps a dict's insertion order without serde_json's `preserve_order` feature, which must stay off (below); the parser stays ours because serde_json reads neither Python's `NaN` and `Infinity` nor integers beyond 64 bits as integers |
+| The seed's tar: four details of the header and the layout (`crates/oneios-image/src/tar.rs`, 100 lines without its tests) | `data.seed`'s SHA-256 is pinned in the image's trust list, and a changed seed starts the phone's Data store over. The `tar` crate writes the block's fields as Python does, except: **(1)** the checksum field (`set_cksum`: seven octal digits and a NUL, `0010715\0`; Python: six digits, a NUL and a space, `010715\0 `), in every header; **(2)** names (`set_path` moves the front of a long name into the ustar `prefix` field and refuses what does not fit; Python's pax format never uses `prefix`: the first 100 characters with `?` for each one that is not ASCII, and the whole name in a `path` record); **(3)** the extended header's own block (`Builder::append_pax_extensions`: an empty name and NUL mode, uid and gid fields; Python: `././@PaxHeader` and `0000000\0`; the records' text is the same); **(4)** the end (`Builder::finish`: two zero blocks; Python fills up to a multiple of 10240 bytes). So the block is `tar::Header` with these four done by hand, and `Builder` is not used (it also writes through one writer, and the seed is written at offsets in parallel) |
+| `oneios-image`: Python's `repr` and messages (`py.rs`) | compared byte for byte with the Python tool's output |
+| `oneios-image/src/hashes.rs` | one read pass feeds the whole-file SHA-256 and the chunk hashes (1.9 to 2.9 times Python on the Mac); the list itself is a 32-byte header and the digests, written with `std::io::Write` |
 | `oneios-sym`'s index | the project's own on-disk index: answers in 3 to 10 ms where `dsc.py` takes 0.03 to 53 s |
 | `oneios-log` | xnuhost's own log format |
 
@@ -209,7 +214,9 @@ SET=out/image/24A446 tools/oneios-tool/tests/image/compare-python.sh    # the re
 ```
 
 Result on Linux x86_64 (2026-11-12; the set built here from the fetched IPSW with `scripts/image/build.sh --no-kernel
---no-hook --no-pack`, 13 files, 17,766,460,758 bytes; `FULL_BUILD=1 BUILD_ARGS=--no-hook`, nothing skipped): **35
+--no-hook --no-pack`, 13 files, 17,766,460,758 bytes; `FULL_BUILD=1 BUILD_ARGS=--no-hook`, nothing skipped; run
+again in the third round after the seed's writer, the JSON writer and the encoders moved to libraries, with the
+same result: 35 the same, the full builds' sets among them, Python 253 s and Rust 152 s): **35
 items the same** (stdout, stderr, exit status and every file written, with `cmp`), and one that differs as
 documented: `apfs-info kernel.kc`, because this set has no `kernel.kc` (no kernel was built on the box), so both
 tools met a missing file, where Python ends with a traceback and the Rust tool prints one line (both exit 1; on a
@@ -225,7 +232,7 @@ file that is there and is not APFS, the kernelcache, the two are the same to the
 | `apfs-owners os.img private/var`, systemos, app, a folder that is not there | yes (4) | 0.08-12.96 s | 0.00-0.59 s |
 | `apfs-owners os.img` (the whole volume) | yes | 385.1 s | 2.7 s |
 | `tree-copy private/var` (meta and tree), and into a folder that is not empty | yes (2) | 11.4 s | 3.0 s |
-| `seed-pack` (copied tree; changed tree with owner rules; a bad owner rule) | yes (3) | 12.0 s, 26.8 s | 14.9 s, 25.3 s |
+| `seed-pack` (copied tree; changed tree with owner rules; a bad owner rule) | yes (3) | 4.8 s, 7.7 s | 4.0 s, 3.6 s (while the comparison's other jobs ran; "seed-pack" below has the clean numbers) |
 | `manifest` (also the set's own `manifest.json`; a set with a stray file) | yes (3) | 83.9 s | 50.5 s |
 | `verify`, `verify --quick`, and 9 sets with one thing wrong each | yes (11) | 99.8 s | 50.3 s |
 | **`build.sh --no-pack` with each tool: every file of the two sets** | **yes** | 207.9 s | 131.3 s |
@@ -234,6 +241,55 @@ The whole-volume `apfs-owners` and the two full builds were the open points of t
 stopped part way): both are the same. The box's disk and CPUs were shared with other jobs; the hashing commands gain less
 here (1.2 to 2.0 times) than on the Mac (1.9 to 2.9 times).
 `IMAGETOOL_IMPL=rust scripts/image/build.sh ...` uses the Rust tool; the default stays `python`.
+
+### seed-pack: where the time goes
+
+`data.seed` (24A446: 20,798 entries, 6,002 files, 1.2 GB; 243 files of 1 MiB or more hold 1.0 GB) is written in
+five steps, timed with `ONEIOS_IMAGE_TIMING=1`. Since the third Linux round the tar's members are written **in
+parallel, each at its own offset**: every member's place is known once the headers are made, so there is no single
+writer. A file of 1 MiB or more goes straight into its place with `copy_file_range` (Linux; `read` + `pwrite`
+where the kernel or the file system refuses, and on macOS); the headers and the smaller files are gathered in
+runs of about 4 MiB (one reused buffer per thread, one `pwrite` each). The padding of big files and the end of the
+archive are never written: the file is new, and its length is set first. The headers sit in one buffer (no copy
+per member), and the meta file is read while the tree is listed.
+
+The floor on this box (Linux x86_64, 4 CPUs, btrfs with `compress=zstd:3` on a SATA SSD, `vm.dirty_bytes` 256 MB;
+2026-11-12, the box idle, three runs each, the numbers are the three runs' range):
+
+| What | tmpfs (`/tmp`) | the disk |
+|---|---|---|
+| `cat` of the tree's 6,002 files to `/dev/null`, warm cache | 0.19 s | |
+| the same, cold cache (the tree's pages dropped with `posix_fadvise`) | | 5.9-6.4 s (4 and 16 readers at once: 5.9-6.0 s) |
+| `cp --reflink=never` of the finished 1.2 GB seed, warm | 0.35 s | 2.4-3.0 s (earlier, with other jobs on the disk: 3.9-11.8 s) |
+
+| `seed-pack`, warm cache | tmpfs | the disk |
+|---|---|---|
+| Python (`imagetool.py`) | 1.84-1.86 s | 3.8-4.3 s |
+| Rust before (`8cc763e`: one reader thread, one writer) | 0.53-0.56 s | 2.4-3.5 s |
+| **Rust now** | **0.43-0.45 s** | **2.5-2.7 s** |
+| Rust now, `ONEIOS_SEED_SINK=map` | 0.28-0.29 s | 2.3-3.7 s |
+
+Laps, warm, tmpfs: before `meta 0.031, list 0.032, lstat 0.009, headers 0.044, write 0.404-0.421 s`; now `meta +
+list + lstat 0.054, headers 0.025, write 0.335-0.349 s` (`map`: `write 0.195-0.201 s`).
+
+What the numbers say:
+- **On the disk every tool is at the disk's own speed**: writing 1.2 GB there takes what `cp` takes (the kernel
+  holds a writer back once 256 MB are waiting to be written). Python is 1.3 s above that, both Rust versions are
+  within the noise of `cp`. The "5.0-6.0 s against 8.8-9.2 s" of the round before was this disk under other
+  agents' jobs or with a cold cache, not the tool.
+- **With a cold cache every tool is at the disk's read speed** (about 6 s for the tree, the same with 1, 4 or 16
+  readers): Python 8.2-9.7 s, Rust before and now 5.8-6.0 s to tmpfs.
+- **Where the disk does not hold it back (tmpfs)**: 4.2 times Python, 1.25 times the Rust before, and 0.08 s above
+  `cp` of the finished file. Positioned writes do not run side by side on Linux: a buffered write holds the output
+  file's lock while it copies (seen on btrfs and tmpfs: four writers were no faster than one), so the gain is the kernel-side copy and the
+  smaller fixed parts, not four writers.
+- `ONEIOS_SEED_SINK=map` maps the output and reads every file straight into its pages, which does run side by
+  side: 0.28 s on tmpfs, below `cp`. It is **not the default**: on the disk it is no faster (and less even), and
+  a full file system ends the process with SIGBUS instead of an error message. `ONEIOS_SEED_SINK=plain` is the
+  path without `copy_file_range` (what macOS takes). The three write the same bytes (a unit test, and the real
+  tree: sha256 `d9a7c0ae...` from each and from Python).
+- Not measured: macOS (APFS has no 256 MB hold-back; the Mac's numbers of the first round were 1.4-1.5 s Python
+  against 0.56-0.98 s Rust).
 
 ## sym
 

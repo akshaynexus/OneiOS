@@ -630,60 +630,270 @@ fn walk_paths(tree: &str) -> Result<Vec<String>, Fail> {
     Ok(out)
 }
 
-/// A member of the seed: its header, and for a file the path and the size the header names.
+/// A member of the seed: where its header is in the headers' buffer, where the member starts in the tar, and
+/// for a file the size its header names. Member `i` is `paths[i]`.
 struct Member {
-    header: Vec<u8>,
-    file: Option<(String, u64)>,
+    head: usize,
+    head_len: usize,
+    at: u64,
+    file: Option<u64>,
 }
 
 impl Member {
-    fn len(&self) -> usize {
-        self.header.len() + self.file.as_ref().map_or(0, |(_, size)| (*size as usize).next_multiple_of(tar::BLOCK))
+    fn padded(&self) -> u64 {
+        self.file.map_or(0, |size| size.next_multiple_of(tar::BLOCK as u64))
+    }
+    fn end(&self) -> u64 {
+        self.at + self.head_len as u64 + self.padded()
     }
 }
 
-/// Members whose files are read whole into one buffer, in parallel; a larger file is streamed by the writer.
-const STREAM_FROM: u64 = 16 << 20;
-const BATCH_BYTES: usize = 48 << 20;
+/// A file from this size up is copied on its own, straight into its place in the tar; smaller ones are gathered
+/// with the headers around them.
+const BIG_FILE: u64 = 1 << 20;
+/// The members gathered into one piece of work: about this many bytes of headers and small files.
+const BATCH_BYTES: u64 = 4 << 20;
 
-enum Piece {
-    Bytes(Vec<u8>),
-    Stream(Vec<u8>, String, u64),
+/// One piece of the tar. The pieces follow each other without a gap and none depends on another, so they are
+/// written in parallel, each at its own offset.
+enum Work {
+    /// Members `from..to`: their headers, and their files with the padding. When the last one is a big file,
+    /// the piece ends after its header.
+    Batch(usize, usize),
+    /// The content of member `.0`, a big file. Its padding is never written: a new file reads as zeros there.
+    Big(usize),
+}
+
+fn short(path: &str) -> Fail {
+    crash!("{path}: unexpected end of data")
 }
 
 fn read_exact_file(path: &str, out: &mut [u8]) -> Result<(), Fail> {
     let mut f = File::open(path).map_err(|e| os_fail(e, path))?;
     f.read_exact(out).map_err(|e| match e.kind() {
-        std::io::ErrorKind::UnexpectedEof => crash!("{path}: unexpected end of data"),
+        std::io::ErrorKind::UnexpectedEof => short(path),
         _ => os_fail(e, path),
     })
 }
 
-/// The bytes of a run of members: headers, contents, padding. The files are read in parallel, each into its place.
-fn load(members: &[Member]) -> Result<Vec<u8>, Fail> {
-    let mut buf = vec![0u8; members.iter().map(Member::len).sum()];
-    let mut places: Vec<(&Member, &mut [u8])> = Vec::with_capacity(members.len());
-    let mut rest = buf.as_mut_slice();
-    for m in members {
-        let (here, after) = rest.split_at_mut(m.len());
-        places.push((m, here));
-        rest = after;
+/// How the pieces reach the file. Measured on Linux 7.3 (x86_64, 4 CPUs, the tree warm in the page cache; the
+/// numbers are in tools/oneios-tool/README.md "image"): a buffered write holds the output file's lock while it
+/// copies, so writes at offsets do not run side by side; pages of a shared mapping do.
+#[derive(Clone, Copy, PartialEq)]
+enum Sink {
+    /// The output is mapped and every piece is read straight into its pages.
+    Map,
+    /// Positioned writes: `copy_file_range` for a big file (Linux), a buffer and `pwrite` for the rest.
+    Write,
+    /// Positioned writes without `copy_file_range`: what `Write` does on macOS and where the kernel refuses.
+    Plain,
+}
+
+impl Sink {
+    /// `ONEIOS_SEED_SINK=map|write|plain`, to measure; anything else is the default.
+    fn from_env() -> Sink {
+        match std::env::var("ONEIOS_SEED_SINK").as_deref() {
+            Ok("map") => Sink::Map,
+            Ok("plain") => Sink::Plain,
+            _ => Sink::Write,
+        }
     }
-    let done: Vec<Result<(), Fail>> = places
-        .into_par_iter()
-        .map(|(m, place)| {
-            let (head, body) = place.split_at_mut(m.header.len());
-            head.copy_from_slice(&m.header);
-            match &m.file {
-                Some((path, size)) if *size > 0 => read_exact_file(path, &mut body[..*size as usize]),
-                _ => Ok(()),
+}
+
+struct Packer<'a> {
+    tree: &'a str,
+    paths: &'a [String],
+    members: &'a [Member],
+    heads: &'a [u8],
+    out: &'a File,
+    out_path: &'a str,
+    sink: Sink,
+}
+
+impl Packer<'_> {
+    fn span(&self, work: &Work) -> (u64, u64) {
+        match *work {
+            Work::Batch(from, to) => {
+                let last = &self.members[to - 1];
+                let end = if last.file.is_some_and(|size| size >= BIG_FILE) { last.at + last.head_len as u64 } else { last.end() };
+                (self.members[from].at, end)
             }
+            Work::Big(i) => {
+                let m = &self.members[i];
+                (m.at + m.head_len as u64, m.end())
+            }
+        }
+    }
+
+    /// The bytes of a batch, into `place` (as long as the batch).
+    fn fill(&self, from: usize, to: usize, place: &mut [u8]) -> Result<(), Fail> {
+        let start = self.members[from].at;
+        for i in from..to {
+            let m = &self.members[i];
+            let at = (m.at - start) as usize;
+            place[at..at + m.head_len].copy_from_slice(&self.heads[m.head..m.head + m.head_len]);
+            if let Some(size) = m.file.filter(|size| *size < BIG_FILE) {
+                let (body, size) = (at + m.head_len, size as usize);
+                if size > 0 {
+                    read_exact_file(&py::join(self.tree, &self.paths[i]), &mut place[body..body + size])?;
+                }
+                place[body + size..body + m.padded() as usize].fill(0);
+            }
+        }
+        Ok(())
+    }
+
+    /// A big file's content into its pages of the mapping.
+    fn read_into(&self, i: usize, place: &mut [u8]) -> Result<(), Fail> {
+        let path = py::join(self.tree, &self.paths[i]);
+        let size = self.members[i].file.unwrap_or(0) as usize;
+        let mut f = File::open(&path).map_err(|e| os_fail(e, &path))?;
+        advise_sequential(&f);
+        f.read_exact(&mut place[..size]).map_err(|e| match e.kind() {
+            std::io::ErrorKind::UnexpectedEof => short(&path),
+            _ => os_fail(e, &path),
         })
-        .collect();
+    }
+
+    /// A big file's content to its offset of the output: in the kernel where it can, else through `buf`.
+    fn copy_at(&self, i: usize, buf: &mut Vec<u8>) -> Result<(), Fail> {
+        use std::os::unix::fs::FileExt;
+        let m = &self.members[i];
+        let path = py::join(self.tree, &self.paths[i]);
+        let (size, at) = (m.file.unwrap_or(0), m.at + m.head_len as u64);
+        let f = File::open(&path).map_err(|e| os_fail(e, &path))?;
+        advise_sequential(&f);
+        let mut done = if self.sink == Sink::Plain { 0 } else { kernel_copy(&f, self.out, at, size).map_err(|e| os_fail(e, &path))? };
+        if done < size {
+            // no copy_file_range here (another file system, an old kernel, macOS), or it stopped: read and write
+            if buf.len() < BIG_FILE as usize {
+                buf.resize(BIG_FILE as usize, 0);
+            }
+            while done < size {
+                let want = ((size - done) as usize).min(buf.len());
+                match f.read_at(&mut buf[..want], done) {
+                    Ok(0) => return Err(short(&path)),
+                    Ok(n) => {
+                        self.out.write_all_at(&buf[..n], at + done).map_err(|e| os_fail(e, self.out_path))?;
+                        done += n as u64;
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(e) => return Err(os_fail(e, &path)),
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Tell the kernel the file is read from start to end (more read-ahead when it is not in the cache).
+fn advise_sequential(_f: &File) {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    // Safety: the descriptor is open; the call only gives advice.
+    unsafe {
+        libc::posix_fadvise(_f.as_raw_fd(), 0, 0, libc::POSIX_FADV_SEQUENTIAL);
+    }
+}
+
+/// Copy `size` bytes from the start of `from` to `at` of `to` inside the kernel. Returns how many were copied:
+/// fewer than `size` (also 0) where the kernel or the file system cannot, and the caller copies the rest.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn kernel_copy(from: &File, to: &File, at: u64, size: u64) -> std::io::Result<u64> {
+    let (mut off_in, mut off_out) = (0i64, at as i64);
+    let mut done = 0u64;
+    while done < size {
+        let want = ((size - done) as usize).min(1 << 30);
+        // Safety: both descriptors are open, and the two offsets are this function's own.
+        let n = unsafe { libc::copy_file_range(from.as_raw_fd(), &mut off_in, to.as_raw_fd(), &mut off_out, want, 0) };
+        if n > 0 {
+            done += n as u64;
+            continue;
+        }
+        if n == 0 {
+            break;
+        }
+        let e = std::io::Error::last_os_error();
+        match e.raw_os_error() {
+            Some(libc::EINTR) => {}
+            Some(libc::EXDEV | libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP | libc::EPERM | libc::ETXTBSY) => break,
+            _ => return Err(e),
+        }
+    }
+    Ok(done)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn kernel_copy(_from: &File, _to: &File, _at: u64, _size: u64) -> std::io::Result<u64> {
+    Ok(0)
+}
+
+/// Write the members to `out`: every piece at its own offset, in parallel, then the length (the padding of big
+/// files and the end of the archive are zeros that are never written).
+fn write_members(tree: &str, paths: &[String], members: &[Member], heads: &[u8], out: &str, sink: Sink) -> Result<(), Fail> {
+    let total = tar::end(members.last().map_or(0, Member::end));
+    let mut work = Vec::new();
+    let (mut from, mut bytes) = (0, 0u64);
+    for (i, m) in members.iter().enumerate() {
+        if m.file.is_some_and(|size| size >= BIG_FILE) {
+            work.push(Work::Batch(from, i + 1));
+            work.push(Work::Big(i));
+            (from, bytes) = (i + 1, 0);
+        } else {
+            bytes += m.head_len as u64 + m.padded();
+            if bytes >= BATCH_BYTES {
+                work.push(Work::Batch(from, i + 1));
+                (from, bytes) = (i + 1, 0);
+            }
+        }
+    }
+    if from < members.len() {
+        work.push(Work::Batch(from, members.len()));
+    }
+    let o = fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(out).map_err(|e| os_fail(e, out))?;
+    o.set_len(total).map_err(|e| os_fail(e, out))?;
+    let p = Packer { tree, paths, members, heads, out: &o, out_path: out, sink };
+    let done: Vec<Result<(), Fail>> = if sink == Sink::Map {
+        // Safety: the file was made just now by this process, which is the only one that writes it.
+        let mut map = unsafe { memmap2::MmapMut::map_mut(&o) }.map_err(|e| os_fail(e, out))?;
+        let mut places: Vec<(&Work, &mut [u8])> = Vec::with_capacity(work.len());
+        let mut rest = &mut map[..];
+        for w in &work {
+            let (start, end) = p.span(w);
+            let (here, after) = rest.split_at_mut((end - start) as usize);
+            places.push((w, here));
+            rest = after;
+        }
+        let done = places
+            .into_par_iter()
+            .map(|(w, place)| match *w {
+                Work::Batch(from, to) => p.fill(from, to, place),
+                Work::Big(i) => p.read_into(i, place),
+            })
+            .collect();
+        drop(map);
+        done
+    } else {
+        use std::os::unix::fs::FileExt;
+        work.par_iter()
+            .map_init(Vec::new, |buf: &mut Vec<u8>, w| match *w {
+                Work::Batch(from, to) => {
+                    let (start, end) = p.span(w);
+                    let len = (end - start) as usize;
+                    if buf.len() < len {
+                        buf.resize(len, 0);
+                    }
+                    p.fill(from, to, &mut buf[..len])?;
+                    o.write_all_at(&buf[..len], start).map_err(|e| os_fail(e, out))
+                }
+                Work::Big(i) => p.copy_at(i, buf),
+            })
+            .collect()
+    };
+    // the first failure in the tar's order, whatever finished first
     for r in done {
         r?;
     }
-    Ok(buf)
+    Ok(())
 }
 
 /// `seed_pack(tree, meta_path, out, epoch, owners)`: pack TREE as the Data seed: a deterministic pax tar whose
@@ -693,8 +903,41 @@ fn load(members: &[Member]) -> Result<Vec<u8>, Fail> {
 /// parent's owner, its own mode and the time `epoch`. A rewritten file keeps the source's owner and mode and
 /// takes `epoch`. Owner rules override all of that. Returns (entries, added, changed).
 pub fn seed_pack(tree: &str, meta_path: &str, out: &str, epoch: i128, owners: Option<&str>) -> Result<(usize, u64, u64), Fail> {
+    seed_pack_into(tree, meta_path, out, epoch, owners, Sink::from_env())
+}
+
+fn seed_pack_into(tree: &str, meta_path: &str, out: &str, epoch: i128, owners: Option<&str>, sink: Sink) -> Result<(usize, u64, u64), Fail> {
     let mut laps = crate::Laps::start();
-    let meta = pyjson::load(meta_path).map_err(|e| crash!("{e:#}"))?;
+    // The meta file is read while the tree is listed: neither needs the other.
+    let field = |rel: &str, old: &Value, key: &str| -> Result<i128, Fail> {
+        old.get(key).and_then(py::as_int).ok_or_else(|| crash!("{meta_path}: \"{key}\" of {} is not a whole number", py::repr_str(rel)))
+    };
+    type Stat = Result<(fs::Metadata, Option<String>), Fail>;
+    let (meta, listed) = rayon::join(
+        || pyjson::load(meta_path).map_err(|e| crash!("{e:#}")),
+        || -> Result<(Vec<String>, Vec<Stat>), Fail> {
+            let paths = walk_paths(tree)?;
+            // What the file system says about each path (in parallel); the members are made in order below: an
+            // entry's owner can come from its folder, which is earlier in the list.
+            let stats = paths
+                .par_iter()
+                .map(|rel| {
+                    let full = py::join(tree, rel);
+                    let st = fs::symlink_metadata(&full).map_err(|e| os_fail(e, &full))?;
+                    let target = if st.file_type().is_symlink() {
+                        let t = fs::read_link(&full).map_err(|e| os_fail(e, &full))?;
+                        Some(String::from_utf8(t.as_os_str().as_bytes().to_vec()).map_err(|e| not_utf8("the link target", e.as_bytes()))?)
+                    } else {
+                        None
+                    };
+                    Ok((st, target))
+                })
+                .collect();
+            Ok((paths, stats))
+        },
+    );
+    // the order of the failures is the old one: the meta file, the rules, then the tree
+    let meta = meta?;
     let Some(Value::Dict(meta)) = meta.get("entries") else {
         return Err(crash!("{meta_path}: no \"entries\" object"));
     };
@@ -703,31 +946,8 @@ pub fn seed_pack(tree: &str, meta_path: &str, out: &str, epoch: i128, owners: Op
     let exact: HashMap<&str, &Rule> = rules.iter().map(|r| (r.rel.as_str(), r)).collect();
     let mut recursive: Vec<&Rule> = rules.iter().filter(|r| r.recursive).collect();
     recursive.sort_by_key(|r| r.rel.chars().count());
-    laps.lap("seed-pack: read the meta file and the rules");
-    let paths = walk_paths(tree)?;
-    laps.lap("seed-pack: list the tree");
-
-    let field = |rel: &str, old: &Value, key: &str| -> Result<i128, Fail> {
-        old.get(key).and_then(py::as_int).ok_or_else(|| crash!("{meta_path}: \"{key}\" of {} is not a whole number", py::repr_str(rel)))
-    };
-    // What the file system says about each path (in parallel), then the members in order: an entry's owner
-    // can come from its folder, which is earlier in the list.
-    let stats: Vec<Result<(fs::Metadata, Option<String>), Fail>> = paths
-        .par_iter()
-        .map(|rel| {
-            let full = py::join(tree, rel);
-            let st = fs::symlink_metadata(&full).map_err(|e| os_fail(e, &full))?;
-            let target = if st.file_type().is_symlink() {
-                let t = fs::read_link(&full).map_err(|e| os_fail(e, &full))?;
-                Some(String::from_utf8(t.as_os_str().as_bytes().to_vec()).map_err(|e| not_utf8("the link target", e.as_bytes()))?)
-            } else {
-                None
-            };
-            Ok((st, target))
-        })
-        .collect();
-
-    laps.lap("seed-pack: lstat and readlink");
+    let (paths, stats) = listed?;
+    laps.lap("seed-pack: read the meta file and the rules, list the tree, lstat and readlink");
     let top = meta.get(".");
     let top_owner = |key: &str| -> Result<i128, Fail> {
         match top {
@@ -739,6 +959,9 @@ pub fn seed_pack(tree: &str, meta_path: &str, out: &str, epoch: i128, owners: Op
     owner.insert(".", (top_owner("u")?, top_owner("g")?));
     let (mut added, mut changed) = (0u64, 0u64);
     let mut members: Vec<Member> = Vec::with_capacity(paths.len());
+    // every header, one after the other; a member knows its place
+    let mut heads: Vec<u8> = Vec::with_capacity(paths.len() * 640);
+    let mut offset = 0u64;
     for (rel, stat) in paths.iter().zip(stats) {
         let (st, target) = stat?;
         let kind = match st.mode() & S_IFMT {
@@ -817,79 +1040,18 @@ pub fn seed_pack(tree: &str, meta_path: &str, out: &str, epoch: i128, owners: Op
             }
             _ => {
                 info.size = st.size() as i128;
-                file = Some((py::join(tree, rel), st.size()));
+                file = Some(st.size());
             }
         }
-        members.push(Member { header: info.header(), file });
+        let head = heads.len();
+        info.write_header(&mut heads);
+        let m = Member { head, head_len: heads.len() - head, at: offset, file };
+        offset = m.end();
+        members.push(m);
     }
 
     laps.lap("seed-pack: the headers");
-    // One thread reads (runs of small files in parallel), this one writes, so the disk is read while it is written.
-    let mut o = File::create(out).map_err(|e| os_fail(e, out))?;
-    let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Piece, Fail>>(2);
-    let members = &members;
-    let offset = std::thread::scope(|scope| -> Result<u64, Fail> {
-        scope.spawn(move || {
-            let mut at = 0;
-            while at < members.len() {
-                let m = &members[at];
-                let piece = match &m.file {
-                    Some((path, size)) if *size >= STREAM_FROM => {
-                        at += 1;
-                        Ok(Piece::Stream(m.header.clone(), path.clone(), *size))
-                    }
-                    _ => {
-                        let start = at;
-                        let mut bytes = 0;
-                        while at < members.len()
-                            && !matches!(&members[at].file, Some((_, size)) if *size >= STREAM_FROM)
-                            && (at == start || bytes + members[at].len() <= BATCH_BYTES)
-                        {
-                            bytes += members[at].len();
-                            at += 1;
-                        }
-                        load(&members[start..at]).map(Piece::Bytes)
-                    }
-                };
-                let failed = piece.is_err();
-                if tx.send(piece).is_err() || failed {
-                    break;
-                }
-            }
-        });
-        let mut offset = 0u64;
-        for piece in rx {
-            match piece? {
-                Piece::Bytes(bytes) => {
-                    o.write_all(&bytes).map_err(|e| os_fail(e, out))?;
-                    offset += bytes.len() as u64;
-                }
-                Piece::Stream(header, path, size) => {
-                    o.write_all(&header).map_err(|e| os_fail(e, out))?;
-                    let mut f = File::open(&path).map_err(|e| os_fail(e, &path))?;
-                    let mut buf = vec![0u8; 4 << 20];
-                    let mut left = size;
-                    while left > 0 {
-                        let want = (left as usize).min(buf.len());
-                        match f.read(&mut buf[..want]) {
-                            Ok(0) => return Err(crash!("{path}: unexpected end of data")),
-                            Ok(n) => {
-                                o.write_all(&buf[..n]).map_err(|e| os_fail(e, out))?;
-                                left -= n as u64;
-                            }
-                            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                            Err(e) => return Err(os_fail(e, &path)),
-                        }
-                    }
-                    let padded = size.next_multiple_of(tar::BLOCK as u64);
-                    o.write_all(&vec![0u8; (padded - size) as usize]).map_err(|e| os_fail(e, out))?;
-                    offset += header.len() as u64 + padded;
-                }
-            }
-        }
-        Ok(offset)
-    })?;
-    o.write_all(&tar::trailer(offset)).map_err(|e| os_fail(e, out))?;
+    write_members(tree, &paths, &members, &heads, out, sink)?;
     laps.lap("seed-pack: read the files, write the tar");
     Ok((paths.len(), added, changed))
 }
@@ -1245,21 +1407,39 @@ mod tests {
     }
 
     #[test]
-    fn pack_streams_large_files() {
+    fn pack_copies_large_files_the_same_with_every_sink() {
         let tmp = Tmp::new("seed-large");
         fs::create_dir_all(tmp.path("data/d")).unwrap();
-        let big = crate::fixtures::noise(STREAM_FROM as usize + 12345, 9);
+        // two big files next to each other, one whose size is a multiple of the block, and enough small ones
+        // for several batches
+        let big = crate::fixtures::noise(BIG_FILE as usize + 12345, 9);
         fs::write(tmp.path("data/d/big"), &big).unwrap();
+        fs::write(tmp.path("data/d/big2"), crate::fixtures::noise(2 * BIG_FILE as usize, 10)).unwrap();
         fs::write(tmp.path("data/d/small"), b"s").unwrap();
         fs::write(tmp.path("data/a"), b"").unwrap();
+        fs::create_dir_all(tmp.path("data/e")).unwrap();
+        for i in 0..40 {
+            fs::write(tmp.path(&format!("data/e/{i:02}")), crate::fixtures::noise(300_000 + i * 77, i as u64)).unwrap();
+        }
         fs::write(tmp.path("meta.json"), "{\"entries\": {}}").unwrap();
         let out = tmp.path("out.tar");
-        assert_eq!(seed_pack(&tmp.path("data"), &tmp.path("meta.json"), &out, 5, None).unwrap(), (4, 4, 0));
+        let mut packs = Vec::new();
+        for (sink, name) in [(Sink::Write, "write.tar"), (Sink::Plain, "plain.tar"), (Sink::Map, "map.tar")] {
+            let out = tmp.path(name);
+            // a file that is there already and longer must not show through
+            fs::write(&out, vec![0xaa; 20 << 20]).unwrap();
+            assert_eq!(seed_pack_into(&tmp.path("data"), &tmp.path("meta.json"), &out, 5, None, sink).unwrap(), (46, 46, 0));
+            packs.push(fs::read(&out).unwrap());
+        }
+        assert!(packs[0] == packs[1] && packs[0] == packs[2], "the sinks wrote different archives");
+        assert_eq!(packs[0].len() % 10240, 0);
+        fs::write(&out, &packs[0]).unwrap();
         let tar = fs::read(&out).unwrap();
         let m = members(&tar);
-        assert_eq!(m.iter().map(|x| (x.0.as_str(), x.4)).collect::<Vec<_>>(), [("a", 0), ("d/", 0), ("d/big", big.len() as u64), ("d/small", 1)]);
+        assert_eq!(m.len(), 46);
+        assert_eq!(m.iter().take(6).map(|x| (x.0.as_str(), x.4)).collect::<Vec<_>>(), [("a", 0), ("d/", 0), ("d/big", big.len() as u64), ("d/big2", 2 << 20), ("d/small", 1), ("e/", 0)]);
         let at = 512 * 3;
         assert!(tar[at..at + big.len()] == big[..]);
-        assert_eq!(&tar[at + big.len().next_multiple_of(512) + 512..][..1], b"s");
+        assert_eq!(&tar[at + big.len().next_multiple_of(512) + 512 + (2 << 20) + 512..][..1], b"s");
     }
 }

@@ -65,11 +65,11 @@ the default for a tool (then its comparison by meaning replaces the byte compari
 | # | Area | Now | Use | Saves | Do |
 |---|---|---|---|---|---|
 | 1 | `ioslog` | not written | `macos-unifiedlogs` 0.8.0 (Apache-2.0, needs Rust 1.88+): all decoding. `LiveSystemProvider::with_roots(<mnt>/db/diagnostics, <mnt>/db/uuidtext)` reads the mounted Data volume directly (no `.logarchive` copy; keep a copy only as `--save`). Filter in the visit callback on cheap fields (boot, pid, process, subsystem, category, time) before `message()`, which formats lazily. | the whole decoder; our wrapper about 400-600 lines | first |
-| 2 | JSON | `oneios-common/src/pyjson.rs` 552 lines | serde_json with `preserve_order` and derive; a small `Formatter` only where a JSON file's bytes are hashed | about 400 | replace |
+| 2 | JSON | `oneios-common/src/pyjson.rs` 552 lines | serde_json with `preserve_order` and derive; a small `Formatter` only where a JSON file's bytes are hashed | about 400 | **writer done** (third Linux round): `dumps` is serde_json with a `Formatter` for Python's layout. The parser and the value type stay (README "Hand-written, and why") |
 | 3 | CLI | each tool parses argv by hand | clap 4 derive, one style for all subcommands | 150-300 | replace |
 | 4 | xattrs, file calls | raw `libc` list/get/set xattr, futimens, mkfifo in `seed.rs` | `xattr` 1.x, std / `filetime` | 60-100 of unsafe code | replace |
-| 5 | encoders | `oneios-image/src/py.rs` 349 | percent-encoding, base64; drop Python `repr` and `OSError` texts unless a message must match | about 100+ | replace |
-| 6 | pax tar | `oneios-image/src/tar.rs` 217 | `tar` 0.4 (`Builder`, `append_pax_extensions`) once Rust is the default (accept one new seed hash) | about 150 | replace later |
+| 5 | encoders | `oneios-image/src/py.rs` 349 | percent-encoding, base64; drop Python `repr` and `OSError` texts unless a message must match | about 100+ | **base64 and percent-encoding done**; `repr` and the `OSError` texts stay while the comparison is byte for byte |
+| 6 | pax tar | `oneios-image/src/tar.rs` 217 | `tar` 0.4 (`Builder`, `append_pax_extensions`) once Rust is the default (accept one new seed hash) | about 150 | **done with no new seed hash**: the block is `tar::Header`, field by field; four details stay ours because the crate's bytes differ from Python's (README "Hand-written, and why" lists the bytes). `Builder` is not used |
 | 7 | plist, uuid | hand bits | `plist`, `uuid` | small | replace |
 | 8 | dyld cache + Mach-O | `oneios-sym/src/cache.rs` 298 | `object`'s `read::macho::DyldCache` if it reads the `.symbols` local symbols (check first); today 18 of 18 sets match dsc.py | small | only if iOS changes the format |
 | 9 | IPSW / IM4P (prelink inputs, fetch) | Python | `zip` + `ureq` for remote reads, `simple_asn1` + `lzfse_rust` for IM4P, as op10tool | - | for prelink and fetch |
@@ -303,8 +303,10 @@ Left, in order:
 3. `IMAGETOOL_IMPL=rust` as the default: the owner's decision.
 4. `hashes` and `verify` are limited by reading 16 GiB once (the whole-file SHA-256 is sequential). `tree-copy`
    is limited by the file copies. More speed needs fewer passes over the images (for example hash while copying).
-5. `seed-pack` of the copied tree was slower than Python in the Linux run (14.9 s against 12.0 s, one run each on
-   a loaded box): measure it alone before believing either number.
+5. `seed-pack`: **measured and rewritten** (third Linux round; README "seed-pack: where the time goes"). The
+   14.9 s against 12.0 s was the disk under other jobs. Warm, to tmpfs: Python 1.85 s, Rust 0.44 s (before:
+   0.54 s), `cp` of the finished file 0.35 s; on this box's disk every tool is at `cp`'s 2.4-3.0 s. Open: the
+   same on the Mac, and `ONEIOS_SEED_SINK=map` there (0.28 s on tmpfs here, not the default).
 7. Not tested: Linux (apfs-fuse path of the comparison script).
 
 Known differences from the Python tool, on purpose (listed in `crates/oneios-image/src/lib.rs`):

@@ -32,6 +32,8 @@
 #                   under .claude/worktrees/, the main checkout)
 #      TOOL         the Rust binary (default tools/oneios-tool/target/release/oneios-tool)
 #      PROFILE      the profile (default profiles/ios-27.0.1-iPhone18,2.toml)
+#      INPUTS       the folder with the IPSW members (default $ONEIOS_MAIN/inputs/<build>; from a worktree whose
+#                   out/ holds the set, the main checkout's)
 #      WORK, OS_ROOT, SKIP_SLOW, FULL_BUILD  as above
 #      KEEP=1       keep the scratch files
 set -u
@@ -57,7 +59,10 @@ rs() { "$TOOL" image "$@"; }
 eval "$(py profile "$PROFILE" --shell)" || die "the profile does not load"
 SET=${SET:-$MAIN/out/image/$P_BUILD}
 [ -f "$SET/manifest.json" ] || die "no image set at $SET (build it: scripts/image/build.sh $PROFILE; or pass ONEIOS_MAIN= or SET=)"
-INPUTS_JSON=$MAIN/inputs/$P_BUILD/inputs.json
+# the IPSW members: beside the set, or in the main checkout when the set is in a worktree's out/
+INPUTS_DIR=${INPUTS:-$MAIN/inputs/$P_BUILD}
+[ -d "$INPUTS_DIR" ] || case "$ROOT" in */.claude/worktrees/*) INPUTS_DIR=${ROOT%%/.claude/worktrees/*}/inputs/$P_BUILD ;; esac
+INPUTS_JSON=$INPUTS_DIR/inputs.json
 
 LOGS=$WORK/logs
 rm -rf "$LOGS"
@@ -369,7 +374,7 @@ if [ "${FULL_BUILD:-0}" = 1 ]; then
   for impl in python rust; do
     b=$LOGS/build-$impl
     # shellcheck disable=SC2086
-    { time env IMAGETOOL_IMPL=$impl ONEIOS_TOOL="$TOOL" INPUTS="$MAIN/inputs/$P_BUILD" OUT="$WORK/build-$impl" \
+    { time env IMAGETOOL_IMPL=$impl ONEIOS_TOOL="$TOOL" INPUTS="$INPUTS_DIR" OUT="$WORK/build-$impl" \
       "$ROOT/scripts/image/build.sh" --no-pack "${kernel[@]}" ${BUILD_ARGS:-} "$PROFILE" > "$b.out" 2> "$b.err"; echo $? > "$b.status"; } 2> "$b.time"
   done
   bad=""

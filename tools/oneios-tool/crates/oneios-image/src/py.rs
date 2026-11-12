@@ -234,31 +234,17 @@ pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
 }
 
-/// `urllib.parse.quote(s, safe=".-_")`.
+/// `urllib.parse.quote(s, safe=".-_")`: letters, digits and `_.-~` stay, every other byte is `%XX`.
 pub fn url_quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-' | b'~') {
-            out.push(b as char);
-        } else {
-            let _ = write!(out, "%{b:02X}");
-        }
-    }
-    out
+    use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+    const QUOTED: &AsciiSet = &NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~');
+    utf8_percent_encode(s, QUOTED).to_string()
 }
 
 /// `base64.b64encode(data).decode()`.
 pub fn b64(data: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for group in data.chunks(3) {
-        let n = (group[0] as u32) << 16 | (*group.get(1).unwrap_or(&0) as u32) << 8 | *group.get(2).unwrap_or(&0) as u32;
-        out.push(TABLE[(n >> 18) as usize & 63] as char);
-        out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(if group.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if group.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
-    }
-    out
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(data)
 }
 
 /// `str(OSError)` for an error on a path: `[Errno 2] No such file or directory: 'PATH'`.
