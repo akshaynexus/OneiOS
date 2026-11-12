@@ -22,7 +22,8 @@ TMP=/data/local/tmp/oneios-stage-tmp
 die() { echo "stage.sh: $*" >&2; exit 1; }
 root() { adb shell "su -c 'sh -s'"; }
 open_check() {
-	r=$(printf '%s\n' "p=\$(cat $STAGE/session/xnuhost.pid 2>/dev/null); [ -n \"\$p\" ] && [ -d /proc/\$p ] && echo open || echo closed" | root | tr -d '\r')
+	# Open: the recorded pid is alive and still an xnuhost (a pid is reused after the session ends).
+	r=$(printf '%s\n' "p=\$(cat $STAGE/session/xnuhost.pid 2>/dev/null); [ -n \"\$p\" ] && cat /proc/\$p/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q xnuhost && echo open || echo closed" | root | tr -d '\r')
 	[ "$r" = closed ] || die "a session is open: return to One UI first"
 }
 case "${1:-}" in
