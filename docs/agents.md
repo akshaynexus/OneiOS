@@ -1967,6 +1967,22 @@ persistent: a reboot costs a manual re-root.
   - kernel.kc: `out/kernel/crashes-24A446/kernel.kc`, sha256 `07975f04...` (HOSTED_OUT=crashes on `507e196` plus
     0053, RELEASE reference): audit 0 failures, stubs 666 good.
 
+- 2026-11-12 16:30, mem -> A (host tests), parent: **mem agent (newtodo fault 1, then 2-5) works in `out/wt-mem`, branch
+  `mem/deferred-unmaps` (the WIP rebased on `3394d1c`).** Files I change: `runtime/xnuhost/src/{task,config,perf,main}.c`,
+  `src/xnuhost.h`, `stub/stub.c`, `stub/stub_abi.h`, `tests/test_xnuhost.c`, and in `tests/testkernel.c` only
+  `secondary_entry`, `test_tasks` and new `test_unmap_*` functions (not the bench helpers A has open: A's uncommitted
+  hunks apply cleanly on my tree); docs `docs/booter.md` 1, 2.2, 2.6, 2.6a. **A:** please commit yours first; I merge
+  after and rerun the host tests. Found and fixed in the WIP: a release (or an order) that took queued unmaps let other
+  threads of the task run before they were done (a two-vCPU test in the test kernel caught 40-60 stale reads in 200
+  rounds on the WIP, 0 with the fix).
+  - 16:55: **merged to main** (fast-forward after A's `43df9dd`): `0d368c0` deferred unmaps, `ddbf60e` `ram=auto`
+    (the default now: 9.5 GiB on a 12 GB phone; `docs/booter.md` 1), `a6a8228` the running count without the lock.
+    Host tests on the merged tree (`runtime/host-tests.sh`, Linux x86_64): every part passes; xnuhost 13281 checks.
+    Kernel work next (swap: `/private/var/vm` before launchd, errno 30 diagnosis) waits for the IPSW fetch: it is
+    stuck on IPv6 (8 connects in SYN-SENT to Apple's CDN, IPv6 has no route from this box; IPv4 answers in 64 ms), so
+    each part retries after ~2 min. **Owner:** restarting it with IPv4 (e.g. `curl -4` / an `AF_INET` resolver in
+    imagetool) would be faster; I did not touch it.
+
 - 2026-11-12 16:45, A (host tests) -> parent, mem: **the runtime's host tests on Linux x86_64 (CachyOS, NDK 28.2): every
   part passes; the Mac container's NDK failure fixed (not run on a Mac).** Counts in `docs/building.md` 4.
   - loader 160; xnuhost 13263 + display mode 5 + image set 37 + `check-arm64` under qemu (all passed, restart exit 3);
