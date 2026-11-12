@@ -103,6 +103,23 @@ kept a 45 fps redraw constrained. `MIN_RATE=0` still constrains every submission
 queues that ask are constrained (the render server's: `context N: constrained ...` in the log). drm2kgsl's matching vCPU
 clamp looks for threads named `crosvm_vcpu*`; xnuhost's are `xnu-cpuN`, so it does nothing here.
 
+### 2.3 `drm2kgsl/patches/0004-gpu-address-room-by-process.patch`
+
+Every GPU context gets its own part of the VBO's GPU addresses (a KGSL page table is per process, and every guest
+process shares xnuhost's). Upstream cut the VBO into 32 equal slices: 6 GiB each here, so 32 contexts. Every iOS
+process that draws with Metal holds two (phone, 2026-11-12: backboardd, WidgetRenderer_Default and
+iconservicesagent, `contexts +2` each), so that was 16 processes, too few once every process may have a device. The
+patch cuts slices of two sizes from the VBO in 1 GiB units as contexts come, first fit: a context whose name (the
+guest's `xnu:<process>`) is in `DRM2KGSL_VA_RENDER_NAMES` (default `xnu:backboardd`) gets `DRM2KGSL_VA_RENDER_GB`
+(12; the render server maps every client's surfaces into its own addresses, and an iPadOS one used 1.8 GB of a 2 GB
+slice at an idle home screen), any other `DRM2KGSL_VA_CLIENT_GB` (2, upstream's minimum: Turnip takes the size as
+the context's whole budget). On this phone's 192 GiB: the render server's two and 84 others, 42 processes. A
+context with no room is not made: one log line (`context xnu:NAME: no room for 2 GiB of GPU addresses (N contexts
+hold M of 192 GiB): not made`), the device answers `CTX_CREATE` with `ERR_OUT_OF_MEMORY`, the guest's context init
+fails, the plug-in reports no device and the process draws without the GPU (the path an unlisted process takes).
+Each context's own line: `context xnu:NAME: GPU addresses [base, +N GB); N contexts hold M of 192 GiB`
+(drm2kgsl's debug log). Host tests: `test_drm2kgsl` and `test_gpu_leaks` pass with it; not yet run on the phone.
+
 To change it: edit a copy of the pinned file, `diff -u` against the original into `drm2kgsl/patches/`, `make`.
 A new pin of virglrenderer that the patch no longer applies to stops the build (`patch -F0`).
 
@@ -337,7 +354,7 @@ thread; none was seen.) Boot arguments:
 | Argument | |
 |---|---|
 | `oneios-gpu-metal=0` / `=1` | never / always publish. Not given: published when the host's virtio GPU offers 3D (`oneios_gpu3d_state` 3), so not on the PC. Droid-VM's `droidvm-gpu-metal` is read when this one is absent |
-| `droidvm-gpu-clients=a,b,...` or `*` | the processes besides `backboardd` that get a Metal device: the grant of the user client (DroidVMGpu.cpp `grantedProcesses`) and, since `0039`, the plug-in's `NativeAdrenoMetal.clients`, which the kernel writes beside the bundle at every boot from the same list (`oneios_gpu_client_list` in `gpu/OneiOSAdreno.cpp`). Forms: a name, `X*`, `*X*`, `@apps`, `*`. Not given: `WidgetRenderer_Default,*Poster*,iconservicesagent,SBRendererService`; empty: `backboardd` alone |
+| `droidvm-gpu-clients=a,b,...` or `*` | the processes besides `backboardd` that get a Metal device: the grant of the user client (DroidVMGpu.cpp `grantedProcesses`) and, since `0039`, the plug-in's `NativeAdrenoMetal.clients`, which the kernel writes beside the bundle at every boot from the same list (`oneios_gpu_client_list` in `gpu/OneiOSAdreno.cpp`). Forms: a name, `X*`, `*X*`, `@apps`, `*`. Not given: `*`, every process (since 2026-11-12, the owner's decision; before: `WidgetRenderer_Default,*Poster*,iconservicesagent,SBRendererService`, and SpringBoard, the apps, the keyboard and WebKit drew on the CPU). The default is in the kernel, not in xnuhost's boot arguments: the image's `overlay/userland/xnuhost.conf` carries its own `boot-args`, which replace xnuhost's default, so only a kernel default reaches every image without a new image or seed; empty: `backboardd` alone |
 | `oneios-gpu-plugin-clients=...` | a test: the plug-in's list alone (the processes it names ask for a device; the grant decides for the names it holds, the sandbox for the rest). Not given: the list above |
 | `vgpu-3d=1` | what `GETPARAM(DEFAULT_3D)` answers the plug-in (DroidVMVirtioGpu3D.cpp reads it with default 0; `vgpu-3d=0` also turns the driver off) |
 | `oneios-adreno-selftest=1` | after the publish: IOKit's match of `IOAcceleratorES`, an in-kernel open with type `0x4149`, `GETPARAM(ABI_VERSION)` through the tunnel; two `oneios-adreno: selftest:` lines |

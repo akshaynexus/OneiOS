@@ -84,10 +84,14 @@ static const OSMetaClass *boundParent()
 // holds; the plug-in makes a device only in a process its NativeAdrenoMetal.clients names, and 0039 writes that file
 // beside the bundle from oneios_gpu_plugin_client_list at every boot. Names as the grant and the plug-in take them:
 // "a,b", "X*" (a prefix), "*X*" (a part), "@apps" (every process run from an app bundle), "*" (every process).
-//   droidvm-gpu-clients=...         the list; empty: backboardd alone. Not given: kDefaultGpuClients.
+//   droidvm-gpu-clients=...         the list; empty: backboardd alone. Not given: kDefaultGpuClients ("*").
 //   oneios-gpu-plugin-clients=...   the plug-in's list alone, for a test (the processes it names then ask, and the
 //                                   grant or the sandbox decides each open). Not given: the list above.
-static const char kDefaultGpuClients[] = "WidgetRenderer_Default,*Poster*,iconservicesagent,SBRendererService";
+// Every process (the owner's decision, 2026-11-12), as on an iPhone, where every process that asks has a Metal device and
+// the iPad board of Droid-VM runs the same since 2026-11-03. Until then the default named WidgetRenderer_Default, *Poster*,
+// iconservicesagent and SBRendererService: SpringBoard, the apps, the keyboard and WebKit drew on the CPU. The GPU's
+// address room is cut per process for this (drm2kgsl patch 0004): a process the room has no place for gets no device.
+static const char kDefaultGpuClients[] = "*";
 extern "C" void oneios_gpu_client_list(char *out, size_t size)
 {
     if (!out || size < 2) return;

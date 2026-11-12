@@ -1,0 +1,144 @@
+--- a/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-12 10:43:32
++++ b/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-12 10:43:32
+@@ -338,6 +338,65 @@
+ static uint64_t g_va_slices_used; /* bitmask; bit i = slice i in use */
+ static uint64_t g_va_slice_size;  /* per-context slice size (set at init) */
+ static unsigned g_va_nslices;     /* number of slices carved (<= KGSL_VA_MAX_SLICES) */
++/* ONEIOS: slices of two sizes, cut from the VBO in 1 GiB units as contexts come (the equal slices above are not used).
++ * Every process that draws with Metal on an iOS guest holds two contexts, so 32 equal slices of 6 GiB were 16 processes,
++ * too few once every process may use the GPU. The render server maps every client's surfaces into its own address space
++ * (an iPadOS one held 1.8 GB of a 2 GB slice at an idle home screen), a client only its own work. A context whose name
++ * (the guest's "xnu:<process>") is in DRM2KGSL_VA_RENDER_NAMES (default "xnu:backboardd", comma-separated) gets
++ * DRM2KGSL_VA_RENDER_GB (default 12); any other DRM2KGSL_VA_CLIENT_GB (default 2, KGSL_VA_SLICE_MIN: turnip takes va_size
++ * as the context's whole budget). On a 192 GiB VBO: 2 x 12 for the render server and 84 contexts of 2 GiB, 42 processes.
++ * A context that finds no room fails to be made (an error the guest's Metal plug-in reports as no device, and the process
++ * draws without the GPU), and the log says so with the room left. */
++#define ONEIOS_VA_UNIT_SHIFT 30
++#define ONEIOS_VA_MAX_UNITS 512
++static uint64_t g_va_units_used[ONEIOS_VA_MAX_UNITS / 64];
++static unsigned g_va_units;       /* the VBO's size in units (set at init) */
++static unsigned g_va_units_live;  /* units held by live contexts */
++static unsigned g_va_contexts_live;
++
++static bool
++oneios_va_unit_used(unsigned i)
++{
++   return g_va_units_used[i / 64] & (1ull << (i % 64));
++}
++
++static void
++oneios_va_unit_set(unsigned i, bool used)
++{
++   if (used)
++      g_va_units_used[i / 64] |= 1ull << (i % 64);
++   else
++      g_va_units_used[i / 64] &= ~(1ull << (i % 64));
++}
++
++/* How many units a context of this name gets. */
++static unsigned
++oneios_va_units_for(size_t debug_len, const char *debug_name)
++{
++   static uint64_t render_gb = 12, client_gb = KGSL_VA_SLICE_MIN >> ONEIOS_VA_UNIT_SHIFT;
++   static const char *names;
++   static bool read;
++   if (!read) {
++      kgsl_parse_u64_env("DRM2KGSL_VA_RENDER_GB", &render_gb);
++      kgsl_parse_u64_env("DRM2KGSL_VA_CLIENT_GB", &client_gb);
++      names = getenv("DRM2KGSL_VA_RENDER_NAMES");
++      if (!names)
++         names = "xnu:backboardd";
++      if (client_gb < (KGSL_VA_SLICE_MIN >> ONEIOS_VA_UNIT_SHIFT))
++         client_gb = KGSL_VA_SLICE_MIN >> ONEIOS_VA_UNIT_SHIFT;
++      if (render_gb < client_gb)
++         render_gb = client_gb;
++      read = true;
++   }
++   size_t length = debug_name ? strnlen(debug_name, debug_len) : 0;
++   for (const char *at = names; *at;) {
++      size_t n = strcspn(at, ",");
++      if (n && n == length && !strncmp(at, debug_name, n))
++         return (unsigned)MIN2(render_gb, (uint64_t)ONEIOS_VA_MAX_UNITS);
++      at += n + (at[n] == ',');
++   }
++   return (unsigned)MIN2(client_gb, (uint64_t)ONEIOS_VA_MAX_UNITS);
++}
+ 
+ static const char dma_heap_path[] = "/dev/dma_heap/system";
+ 
+@@ -526,16 +585,21 @@
+    return true;
+ }
+ 
++/* ONEIOS: the first run of `units` free units, or -1. */
+ static int
+-kgsl_va_slice_claim(void)
++kgsl_va_slice_claim(unsigned units)
+ {
+    int idx = -1;
+ 
+    pthread_mutex_lock(&g_va_slices_lock);
+-   for (unsigned i = 0; i < g_va_nslices; i++) {
+-      if (!(g_va_slices_used & (1ull << i))) {
+-         idx = i;
+-         g_va_slices_used |= 1ull << i;
++   for (unsigned i = 0, run = 0; units && i < g_va_units; i++) {
++      run = oneios_va_unit_used(i) ? 0 : run + 1;
++      if (run == units) {
++         idx = (int)(i + 1 - units);
++         for (unsigned k = 0; k < units; k++)
++            oneios_va_unit_set((unsigned)idx + k, true);
++         g_va_units_live += units;
++         g_va_contexts_live++;
+          break;
+       }
+    }
+@@ -551,7 +615,11 @@
+       return;
+ 
+    pthread_mutex_lock(&g_va_slices_lock);
+-   g_va_slices_used &= ~(1ull << kctx->va_slice_idx);
++   const unsigned units = (unsigned)(kctx->va_slice_size >> ONEIOS_VA_UNIT_SHIFT);
++   for (unsigned k = 0; k < units; k++)
++      oneios_va_unit_set((unsigned)kctx->va_slice_idx + k, false);
++   g_va_units_live -= units;
++   g_va_contexts_live--;
+    pthread_mutex_unlock(&g_va_slices_lock);
+    kctx->va_slice_idx = -1;
+ }
+@@ -3224,16 +3292,20 @@
+ 
+    /* Claim a disjoint VA slice for this context (geometry set at init). */
+    {
+-      int idx = kgsl_va_slice_claim();
++      const unsigned units = oneios_va_units_for(debug_len, debug_name);
++      int idx = kgsl_va_slice_claim(units);
+       if (idx < 0) {
+-         drm_err("out of VA slices (%u contexts)", g_va_nslices);
++         drm_err("context %.*s: no room for %u GiB of GPU addresses (%u contexts hold %u of %u GiB): not made",
++                 (int)(debug_name ? strnlen(debug_name, debug_len) : 0), debug_name ? debug_name : "", units,
++                 g_va_contexts_live, g_va_units_live, g_va_units);
+          goto fail_early;
+       }
+       kctx->va_slice_idx = idx;
+-      kctx->va_slice_base = g_va_start + (uint64_t)idx * g_va_slice_size;
+-      kctx->va_slice_size = g_va_slice_size;
+-      drm_log("VA slice %d: [0x%" PRIx64 ", +%lluGB)", idx,
+-              kctx->va_slice_base, (unsigned long long)(g_va_slice_size >> 30));
++      kctx->va_slice_base = g_va_start + ((uint64_t)idx << ONEIOS_VA_UNIT_SHIFT);
++      kctx->va_slice_size = (uint64_t)units << ONEIOS_VA_UNIT_SHIFT;
++      drm_log("context %.*s: GPU addresses [0x%" PRIx64 ", +%uGB); %u contexts hold %u of %u GiB",
++              (int)(debug_name ? strnlen(debug_name, debug_len) : 0), debug_name ? debug_name : "",
++              kctx->va_slice_base, units, g_va_contexts_live, g_va_units_live, g_va_units);
+    }
+ 
+    if (!drm_context_init(&kctx->base, fd, ccmd_dispatch, ARRAY_SIZE(ccmd_dispatch)))
+@@ -3403,6 +3475,8 @@
+       }
+       g_va_slice_size = slice;
+       g_va_nslices = want;
++      /* ONEIOS: the room the per-name slices are cut from (oneios_va_units_for). */
++      g_va_units = (unsigned)MIN2(g_va_size >> ONEIOS_VA_UNIT_SHIFT, (uint64_t)ONEIOS_VA_MAX_UNITS);
+       drm_log("VA slices: %u x %lluGB over VBO 0x%" PRIx64,
+               g_va_nslices, (unsigned long long)(slice >> 30), g_va_size);
+    }
