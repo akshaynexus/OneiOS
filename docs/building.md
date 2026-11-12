@@ -667,6 +667,13 @@ cargo build --release --manifest-path tools/oneios-tool/Cargo.toml     # -> tool
 cargo test  --release --manifest-path tools/oneios-tool/Cargo.toml     # unit tests, no Apple file
 ```
 
+Optional on Linux: **apfs-fuse** (github.com/sgan81/apfs-fuse, with `fusermount3`), a second APFS reader that
+`oneios-tool image apfs-ls`, `apfs-copy` and `ioslog` use with `--apfs fuse`, or by themselves when our own reader
+refuses an image (`--apfs auto`, the default); the comparison scripts check our reader against it. Nothing needs
+it: our reader reads the sealed volumes and their compressed files, so the dyld shared cache for `sym` comes out of
+the image with `oneios-tool image apfs-copy out/image/24A446/systemos.img System/Library/Caches/com.apple.dyld DIR`
+(no mount, Linux and macOS).
+
 Rust 1.88 or newer (built with 1.98.0); the first build downloads the crates and one git dependency
 (macos-unifiedlogs, pinned by commit in `Cargo.lock`). Linux x86_64 and macOS arm64. `oneios-tool --help` and
 `oneios-tool TOOL --help` list every command and option (one clap layout for all tools).

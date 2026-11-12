@@ -1,6 +1,7 @@
 //! Tests of `source.rs` on folders made here (no Apple file): the order of the log files, the string files' index,
 //! the two layouts, and the saved archive.
 
+use oneios_image::apfs::fuse::Backend;
 use super::*;
 
 fn scratch(name: &str) -> PathBuf {
@@ -61,7 +62,7 @@ fn a_mounted_volume_and_its_saved_archive() {
     put(&vol, "db/uuidtext/zz/CDEF0123456789ABCDEF0123456789", b"not a hex folder");
     put(&vol, "mobile/x", b"other");
 
-    let source = Source::open(vol.to_str().unwrap(), None, false).unwrap();
+    let source = Source::open(vol.to_str().unwrap(), None, false, Backend::Auto).unwrap();
     assert!(!source.archive);
     assert_eq!(names(&source), ["Special/2.tracev3", "Persist/b.tracev3", "Persist/a.tracev3", "HighVolume/h.tracev3", "Persist/short.tracev3"]);
     assert!(source.tracev3[0].label.ends_with("/db/diagnostics/Special/2.tracev3"), "{}", source.tracev3[0].label);
@@ -79,7 +80,7 @@ fn a_mounted_volume_and_its_saved_archive() {
     assert_eq!(files, 13);
     assert!(saved.join("Persist/notes.txt").is_file() && saved.join("zz").is_dir() && saved.join("dsc").is_dir());
     assert!(!saved.join("mobile").exists() && !saved.join("db").exists());
-    let again = Source::open(saved.to_str().unwrap(), None, false).unwrap();
+    let again = Source::open(saved.to_str().unwrap(), None, false, Backend::Auto).unwrap();
     assert!(again.archive);
     assert_eq!(names(&again), names(&source));
     assert_eq!(again.string_files(), (1, 1));
@@ -90,8 +91,8 @@ fn a_mounted_volume_and_its_saved_archive() {
 
     let empty = dir.join("empty");
     std::fs::create_dir_all(&empty).unwrap();
-    assert!(Source::open(empty.to_str().unwrap(), None, false).is_err());
-    assert!(Source::open(dir.join("nothing").to_str().unwrap(), None, false).is_err());
+    assert!(Source::open(empty.to_str().unwrap(), None, false, Backend::Auto).is_err());
+    assert!(Source::open(dir.join("nothing").to_str().unwrap(), None, false, Backend::Auto).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -77,7 +77,7 @@ Only in this tool (imagetool.py has no such command): read a volume without moun
     oneios-tool image apfs-ls IMAGE [PATH] [--volume N|NAME] [--newest]      a folder's entries: mode, owner, size, name
     oneios-tool image apfs-copy IMAGE SRC DST [--volume N|NAME] [--newest]   copy a file or a folder out of the image
                                                                  (--newest: the newest checkpoint, for a store copied
-                                                                 after use; files kept compressed are skipped and counted)
+                                                                 after use; files kept compressed are decoded)
 
 Run by scripts/image/imagetool.py (python3, found beside this tool's repository or through IMAGETOOL_PY):
     oneios-tool image check-ipsw PROFILE [--source URL|FILE]     compare the profile with the IPSW's directory and BuildManifest
@@ -201,6 +201,9 @@ pub enum Command {
         /// The newest checkpoint, for a store copied after use
         #[arg(long)]
         newest: bool,
+        /// The reader: ours, apfs-fuse (Linux), or ours and apfs-fuse when ours refuses
+        #[arg(long, value_enum, default_value = "auto")]
+        apfs: apfs::fuse::Backend,
     },
     /// Only in this tool: copy a file or a folder out of an image, without a mount
     ApfsCopy {
@@ -212,6 +215,9 @@ pub enum Command {
         /// The newest checkpoint, for a store copied after use
         #[arg(long)]
         newest: bool,
+        /// The reader: ours, apfs-fuse (Linux), or ours and apfs-fuse when ours refuses
+        #[arg(long, value_enum, default_value = "auto")]
+        apfs: apfs::fuse::Backend,
     },
     /// (Python tool) compare the profile with the IPSW's directory and BuildManifest
     CheckIpsw(Raw),
@@ -378,8 +384,8 @@ fn dispatch(command: Command) -> Result<(), Fail> {
             python(&argv)
         }
         Command::Im4p { input, out, .. } => say(&im4p::cmd(&input, &out)?),
-        Command::ApfsLs { image, path, volume, newest } => apfs_tools::ls(&image, path.as_deref().unwrap_or(""), volume.as_deref(), newest),
-        Command::ApfsCopy { image, src, dst, volume, newest } => apfs_tools::copy(&image, &src, &dst, volume.as_deref(), newest),
+        Command::ApfsLs { image, path, volume, newest, apfs } => apfs_tools::ls(&image, path.as_deref().unwrap_or(""), volume.as_deref(), newest, apfs),
+        Command::ApfsCopy { image, src, dst, volume, newest, apfs } => apfs_tools::copy(&image, &src, &dst, volume.as_deref(), newest, apfs),
         Command::CheckIpsw(raw) => python_command("check-ipsw", raw),
         Command::Fetch(raw) => python_command("fetch", raw),
         Command::RecordPlain(raw) => python_command("record-plain", raw),

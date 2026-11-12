@@ -10,7 +10,9 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 
+mod decmpfs;
 mod files;
+pub mod fuse;
 pub use files::{DirEnt, Stat, DT_DIR, DT_LNK, DT_REG};
 
 /// A read outside a block: Python's struct.error, which ends the tool with a traceback.

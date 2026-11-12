@@ -125,9 +125,11 @@ impl ApfsTree {
     }
 
     pub fn stat(&self, oid: u64) -> Result<Stat, Fail> {
-        let mut found = None;
+        let mut found: Option<Stat> = None;
+        // a compressed file's size is in its decmpfs attribute (its inode has no data stream)
+        let mut plain_size = None;
         let bad = || self.bad();
-        self.records(oid, self.root, 0, &mut |kind, _key, val| {
+        self.records(oid, self.root, 0, &mut |kind, key, val| {
             if kind == TYPE_INODE {
                 let mut size = 0;
                 // The extended fields: a count, the bytes used, a table of (type, flags, size), then the values,
@@ -153,26 +155,48 @@ impl ApfsTree {
                     size,
                     mtime: u64_at(val, 24).ok_or_else(bad)?,
                 });
+            } else if kind == TYPE_XATTR && self.xattr_name(key)? == "com.apple.decmpfs" {
+                if let Some(value) = self.xattr_value(val)? {
+                    plain_size = decmpfs::header(&value).map(|(_, size)| size);
+                }
             }
             Ok(())
         })?;
-        found.ok_or_else(|| err!("{}: object {oid} has no inode record", self.path))
+        let mut st = found.ok_or_else(|| err!("{}: object {oid} has no inode record", self.path))?;
+        if let (true, Some(size)) = (st.bsd_flags & UF_COMPRESSED != 0, plain_size) {
+            st.size = size;
+        }
+        Ok(st)
     }
 
-    /// The value of extended attribute `name` of `oid` when the record holds it (`None`: no such attribute, or
-    /// one kept in a data stream). A symbolic link's target is `com.apple.fs.symlink`.
+    fn xattr_name(&self, key: &[u8]) -> Result<String, Fail> {
+        let n = u16_at(key, 8).ok_or_else(|| self.bad())? as usize;
+        let start = 10.min(key.len());
+        self.name(&key[start..(10 + n).min(key.len()).max(start)])
+    }
+
+    /// An attribute record's value: in the record itself (flag 2), or in a data stream of its own (flag 1: the
+    /// stream's id and size), as a resource fork is.
+    fn xattr_value(&self, val: &[u8]) -> Result<Option<Vec<u8>>, Fail> {
+        let bad = || self.bad();
+        let flags = u16_at(val, 0).ok_or_else(bad)?;
+        if flags & 2 != 0 {
+            let len = u16_at(val, 2).ok_or_else(bad)? as usize;
+            Ok(Some(val.get(4..4 + len).ok_or_else(bad)?.to_vec()))
+        } else if flags & 1 != 0 {
+            Ok(Some(self.read_stream(u64_at(val, 4).ok_or_else(bad)?, u64_at(val, 12).ok_or_else(bad)?)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// The value of extended attribute `name` of `oid` (`None`: no such attribute). A symbolic link's target is
+    /// `com.apple.fs.symlink`.
     pub fn xattr(&self, oid: u64, name: &str) -> Result<Option<Vec<u8>>, Fail> {
         let mut found = None;
-        let bad = || self.bad();
         self.records(oid, self.root, 0, &mut |kind, key, val| {
-            if kind == TYPE_XATTR {
-                let n = u16_at(key, 8).ok_or_else(bad)? as usize;
-                let start = 10.min(key.len());
-                let this = self.name(&key[start..(10 + n).min(key.len()).max(start)])?;
-                if this == name && u16_at(val, 0).ok_or_else(bad)? & 2 != 0 {
-                    let len = u16_at(val, 2).ok_or_else(bad)? as usize;
-                    found = Some(val.get(4..4 + len).ok_or_else(bad)?.to_vec());
-                }
+            if kind == TYPE_XATTR && found.is_none() && self.xattr_name(key)? == name {
+                found = self.xattr_value(val)?;
             }
             Ok(())
         })?;
@@ -240,22 +264,32 @@ impl ApfsTree {
         Ok(())
     }
 
-    /// The whole contents of file `oid`. A file kept compressed (decmpfs) is refused: this reader has no decoder
-    /// for it (the Data store's log files are not compressed; most files of the OS volume are).
+    /// The whole contents of file `oid`; a file kept compressed (decmpfs) is decoded.
     pub fn read_file(&self, oid: u64) -> Result<Vec<u8>, Fail> {
         let st = self.stat(oid)?;
         if st.bsd_flags & UF_COMPRESSED != 0 {
-            return Err(err!("{}: object {oid} is a compressed file (decmpfs): not read by this tool", self.path));
+            let attr = self.xattr(oid, "com.apple.decmpfs")?.ok_or_else(|| err!("{}: object {oid} is marked compressed and has no com.apple.decmpfs attribute", self.path))?;
+            let fork = || match self.xattr(oid, "com.apple.ResourceFork") {
+                Ok(Some(fork)) => Ok(fork),
+                Ok(None) => Err("no resource fork".to_string()),
+                Err(e) => Err(e.to_string()),
+            };
+            return decmpfs::decode(&attr, fork).map_err(|e| err!("{}: object {oid}, a compressed file (decmpfs): {e}", self.path));
         }
-        if st.size > self.map.len() as u64 {
-            return Err(err!("{}: object {oid} says it has {} bytes, more than the image", self.path, st.size));
+        self.read_stream(st.private_id, st.size)
+    }
+
+    /// `size` bytes of data stream `id`.
+    fn read_stream(&self, id: u64, size: u64) -> Result<Vec<u8>, Fail> {
+        if size > self.map.len() as u64 {
+            return Err(err!("{}: stream {id} says it has {size} bytes, more than the image", self.path));
         }
-        let mut data = vec![0u8; st.size as usize];
-        for (offset, len, block) in self.extents(st.private_id)? {
-            if block == 0 || offset >= st.size {
+        let mut data = vec![0u8; size as usize];
+        for (offset, len, block) in self.extents(id)? {
+            if block == 0 || offset >= size {
                 continue;
             }
-            let len = len.min(st.size - offset) as usize;
+            let len = len.min(size - offset) as usize;
             let start = self.base as u128 + block as u128 * self.block as u128;
             let end = start + len as u128;
             if end > self.map.len() as u128 {
@@ -266,7 +300,7 @@ impl ApfsTree {
         Ok(data)
     }
 
-    /// Whether `oid`'s contents are kept compressed (decmpfs), which `read_file` refuses.
+    /// Whether `oid`'s contents are kept compressed (decmpfs); `read_file` decodes them.
     pub fn is_compressed(st: &Stat) -> bool {
         st.bsd_flags & UF_COMPRESSED != 0
     }

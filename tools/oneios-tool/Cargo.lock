@@ -784,6 +784,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "clap",
+ "flate2",
  "libc",
  "lzfse_rust",
  "memmap2",
@@ -794,6 +795,7 @@ dependencies = [
  "simple_asn1",
  "tar",
  "toml",
+ "zbitmap",
 ]
 
 [[package]]
@@ -1601,6 +1603,12 @@ dependencies = [
  "spki",
  "tls_codec",
 ]
+
+[[package]]
+name = "zbitmap"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bde9194267e17314ff9f9ec82b2670983e33f2f5fe2027c6de01354050be85b0"
 
 [[package]]
 name = "zerocopy"

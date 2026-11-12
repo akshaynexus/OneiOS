@@ -18,7 +18,7 @@ switch.
 |---|---|---|---|
 | `sym` | done | yes: 18 of 18 address sets byte-identical to `dsc.py`, on the Mac (real logs) and on Linux (stand-in logs from the real cache) | the index's place for the main checkout; a comparison on real logs on Linux |
 | `log` | done (new tool, no Python original) | not applicable; 67 commands on 4 real logs (Mac) and 33 on 2 stand-in logs (Linux) end with status 0 | tables for more line kinds |
-| `image` | 9 subcommands, plus `apfs-ls` and `apfs-copy` | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds (the 36th: no `kernel.kc` in the Linux set, README) | decmpfs (compressed files) in the APFS reader; `IMAGETOOL_IMPL=rust` as the default is the owner's call |
+| `image` | 9 subcommands, plus `apfs-ls` and `apfs-copy` (compressed files too; apfs-fuse as a second backend) | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds (the 36th: no `kernel.kc` in the Linux set, README); the APFS reader: every file of the SystemOS and AppOS images as apfs-fuse gives it | `IMAGETOOL_IMPL=rust` as the default is the owner's call |
 | `ioslog` | done | yes on 7 archives (CSV byte for byte, from an archive, an image and a mounted volume) | **a run on the phone's real Data store**; the Mac's `ios3-log.csv`; `checks` on a real log; `pull` |
 | `prelink` | `roots`, `hosted` (2 of 12 steps) | yes for the two, byte for byte on the real kernelcache | **the other ten steps**, the pairing and the emitter first (section 4) |
 
@@ -378,9 +378,12 @@ Open, in order:
    empty, free disk checked, written sparsely in the tool: skip all-zero 4 MiB blocks with a seek). Not written:
    no phone on the Linux PC. Until then `docs/newtodo.md`'s adb line.
 5. An `Info.plist` in the saved archive, if Apple's `log show --archive` is wanted on it.
-6. The APFS reader does not read compressed files (decmpfs). Log files are not compressed; the OS volumes' files
-   mostly are (2,910 of 3,347 in the SystemOS and AppOS images, the shared cache's `.symbols` among them), so
-   `image apfs-copy` cannot replace a mount for `sym` yet. `flate2` and `lzfse_rust` would do it; LZVN needs a look.
+6. **Done (third Linux round): the APFS reader reads compressed files** (decmpfs: zlib, LZVN, LZFSE and LZBITMAP,
+   inline and in the resource fork; `flate2`, `lzfse_rust`, `zbitmap`; no decoder of our own). All 2,910 compressed
+   files of the SystemOS and AppOS images are byte for byte apfs-fuse's, and `sym`'s index built from
+   `image apfs-copy`'s copy of the cache is the index built through a mount (README "The APFS reader", "sym").
+   Also done: apfs-fuse as an optional backend (`--apfs fuse`, the fallback of `--apfs auto`).
+   Open: `os.img`'s volume through `apfs-read.sh` (10.4 GB; not run); the kinds 4 and 8 on real files.
 
 ## 6. `phone`, `app` and `cycle`: the adb workflow, the fork's app, one test cycle (third Linux round)
 

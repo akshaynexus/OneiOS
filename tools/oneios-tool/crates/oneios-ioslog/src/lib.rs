@@ -76,6 +76,9 @@ pub struct From {
     /// Read the image as its block 0 describes it, not as its newest checkpoint does
     #[arg(long)]
     block0: bool,
+    /// The image's reader: ours, apfs-fuse (Linux), or ours and apfs-fuse when ours finds no log
+    #[arg(long, value_enum, default_value = "auto")]
+    apfs: oneios_image::apfs::fuse::Backend,
     /// Print the decoder's warnings on stderr
     #[arg(short, long)]
     verbose: bool,
@@ -169,7 +172,7 @@ fn open(from: &From) -> Result<Source> {
     if from.verbose {
         let _ = tracing_subscriber::fmt().with_writer(std::io::stderr).with_max_level(tracing::Level::WARN).without_time().try_init();
     }
-    let source = Source::open(&from.source, from.volume.as_deref(), from.block0)?;
+    let source = Source::open(&from.source, from.volume.as_deref(), from.block0, from.apfs)?;
     if source.tracev3.is_empty() {
         bail!("{}: the log folders hold no tracev3 file", source.what);
     }

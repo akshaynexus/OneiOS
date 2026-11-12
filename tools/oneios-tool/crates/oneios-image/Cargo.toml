@@ -17,9 +17,12 @@ oneios-common.workspace = true
 # `image im4p`: the DER container and the LZFSE payload (imagetool.py starts the `lzfse` program for it).
 simple_asn1 = "0.6"
 lzfse_rust = "0.2"
+# decmpfs: the zlib kinds of files kept compressed in an APFS volume (apfs/decmpfs.rs).
+flate2 = "1"
 # The profile (profiles/*.toml), as Python's tomllib reads it: preserve_order keeps the tables' key order, which
 # `image profile PROFILE` prints.
 toml = { version = "1", default-features = false, features = ["std", "serde", "parse", "preserve_order"] }
 tar = { version = "0.4", default-features = false }
 base64 = "0.22"
 percent-encoding = "2"
+zbitmap = "0.1"

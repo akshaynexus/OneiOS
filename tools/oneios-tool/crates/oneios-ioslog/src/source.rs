@@ -6,6 +6,7 @@
 //! `LogarchiveProvider` (macos-unifiedlogs `src/filesystem.rs`): `tests/ioslog/compare.sh` checks that by
 //! comparing this tool's CSV with `unifiedlog_iterator`'s, byte for byte.
 
+use oneios_image::apfs::fuse::{self, Backend};
 use anyhow::{anyhow, bail, Context, Result};
 use macos_unifiedlogs::chunks::{ChunkPreamble, ChunkTag, PREAMBLE_SIZE};
 use macos_unifiedlogs::header::{RawHeaderChunk, RAW_HEADER_CHUNK_SIZE};
@@ -131,6 +132,8 @@ pub struct Source {
     pub timesync: Vec<Item>,
     uuidtext_index: HashMap<Uuid, Node>,
     dsc_index: HashMap<Uuid, Node>,
+    /// The apfs-fuse mount the files are read through (`--apfs fuse`); unmounted when the source is dropped.
+    mount: Option<oneios_image::apfs::fuse::Mount>,
 }
 
 const TRACE_SUBDIRS: [&str; 4] = ["HighVolume", "Persist", "Signpost", "Special"];
@@ -152,13 +155,56 @@ fn only_hex(text: &str) -> bool {
 
 impl Source {
     /// Open `what`: a raw image (its volume chosen by `volume`: a number or a name; default: the first volume
-    /// that has the log folders), or a folder.
-    pub fn open(what: &str, volume: Option<&str>, block0: bool) -> Result<Source> {
+    /// that has the log folders), or a folder. An image is read by our APFS reader, by apfs-fuse (`Backend::Fuse`,
+    /// Linux), or by ours and then apfs-fuse when ours finds no log (`Backend::Auto`).
+    pub fn open(what: &str, volume: Option<&str>, block0: bool, backend: Backend) -> Result<Source> {
         let meta = std::fs::metadata(what).with_context(|| what.to_string())?;
         if meta.is_dir() {
             let root = Node::Path(PathBuf::from(what));
             return Source::layout(Store::Folder, root, what, what.to_string());
         }
+        match backend {
+            Backend::Own => Source::open_image(what, volume, block0),
+            Backend::Fuse => Source::open_mounted(what, volume),
+            Backend::Auto => match Source::open_image(what, volume, block0) {
+                Ok(source) => Ok(source),
+                Err(e) if fuse::available() => {
+                    eprintln!("{e:#}\nour APFS reader found no log; reading through apfs-fuse instead");
+                    Source::open_mounted(what, volume)
+                }
+                Err(e) => Err(e),
+            },
+        }
+    }
+
+    /// The image through apfs-fuse: the volume asked for by its number, else the first of the first eight that
+    /// mounts and holds a log.
+    fn open_mounted(what: &str, volume: Option<&str>) -> Result<Source> {
+        let volumes: Vec<usize> = match volume {
+            None => (0..8).collect(),
+            Some(v) => vec![v.parse().map_err(|_| anyhow!("--apfs fuse takes a volume's number, not its name (--volume {v})"))?],
+        };
+        let mut tried = Vec::new();
+        for index in volumes {
+            let mount = match fuse::Mount::new(what, index) {
+                Ok(mount) => mount,
+                Err(e) => {
+                    tried.push(format!("volume {index}: {e}"));
+                    continue;
+                }
+            };
+            match Source::layout(Store::Folder, Node::Path(mount.root()), what, format!("{what} (volume {index}, through apfs-fuse)")) {
+                Ok(mut source) => {
+                    source.mount = Some(mount);
+                    return Ok(source);
+                }
+                Err(e) => tried.push(format!("volume {index}: {e}")),
+            }
+        }
+        bail!("{what}: no volume with a unified log through apfs-fuse:\n  {}", tried.join("\n  "))
+    }
+
+    fn open_image(what: &str, volume: Option<&str>, block0: bool) -> Result<Source> {
         let count = ApfsTree::volume_count(what).map_err(|e| anyhow!("{e}"))?;
         let open = |index: usize| ApfsTree::open_volume(what, index, !block0).map_err(|e| anyhow!("{e}"));
         let mut tried = Vec::new();
@@ -273,7 +319,7 @@ impl Source {
                 }
             }
         }
-        Ok(Source { store, what, diagnostics, uuidtext, archive, tracev3, timesync, uuidtext_index, dsc_index })
+        Ok(Source { store, what, diagnostics, uuidtext, archive, tracev3, timesync, uuidtext_index, dsc_index, mount: None })
     }
 
     pub fn string_files(&self) -> (usize, usize) {

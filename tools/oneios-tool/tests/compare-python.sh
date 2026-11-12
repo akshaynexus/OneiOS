@@ -6,7 +6,7 @@
 #   units     cargo test                          none
 #   parity    tests/image/parity.py               none (stand-in files)
 #   image     tests/image/compare-python.sh       SET=<image set folder> (or the set in out/image/<build>)
-#   apfs      tests/image/apfs-read.sh            APFS_IMAGES="IMAGE[:VOLUME] ..." and apfs-fuse (Linux)
+#   apfs      tests/image/apfs-read.sh, apfs-fuse.sh   APFS_IMAGES="IMAGE[:VOLUME] ..." and apfs-fuse (Linux)
 #   sym       tests/sym/compare-python.sh         ONEIOS_DSC_DIR, ONEIOS_LOG_DIR (tests/sym/make-log.py makes a log)
 #   log       tests/log/run.sh                    ONEIOS_LOG_DIR or ONEIOS_LOGS
 #   ioslog    tests/ioslog/compare.sh             REF_ITER=<unifiedlog_iterator>, IOSLOG_ARCHIVES="A.logarchive ..."
@@ -44,7 +44,10 @@ for part in $parts; do
     elif ! command -v apfs-fuse >/dev/null; then skip apfs "no apfs-fuse"
     else
       ok=0
-      for item in $APFS_IMAGES; do "$here/image/apfs-read.sh" "${item%%:*}" "$([ "$item" = "${item#*:}" ] && echo 0 || echo "${item#*:}")" || ok=1; done
+      for item in $APFS_IMAGES; do
+        "$here/image/apfs-read.sh" "${item%%:*}" "$([ "$item" = "${item#*:}" ] && echo 0 || echo "${item#*:}")" || ok=1
+        "$here/image/apfs-fuse.sh" "${item%%:*}" "$([ "$item" = "${item#*:}" ] && echo 0 || echo "${item#*:}")" || ok=1
+      done
       run apfs test $ok = 0
     fi ;;
   sym)

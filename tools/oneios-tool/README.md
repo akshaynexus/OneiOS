@@ -64,12 +64,13 @@ exists or where ours is measured to be faster; each such part says why in its mo
 | `clap` 4 (derive) | every tool's command line. Each crate defines its arguments (`Cli` or `Command`); `crates/oneios-tool/src/main.rs` puts them under one command, so `oneios-tool --help` and `oneios-tool TOOL --help` list everything |
 | `csv`, `serde_json`, `chrono`, `uuid`, `regex` | `ioslog`'s CSV and JSON lines (the same crates `unifiedlog_iterator` writes them with), times, `--grep` |
 | `tracing-subscriber` | `ioslog -v`: the decoder's warnings on stderr |
-| `simple_asn1`, `lzfse_rust` | `image im4p`: the IM4P container (DER) and its LZFSE payload |
+| `simple_asn1`, `lzfse_rust` | `image im4p`: the IM4P container (DER) and its LZFSE payload; the LZFSE and LZVN kinds of compressed APFS files |
 | `plist`, `toml` | `prelink roots`: the kernelcache's `__PRELINK_INFO` and the kernel profile; `image profile`: the build profile |
 | `tar` 0.4 (`Header`) | `image seed-pack`: every 512-byte ustar block of `data.seed`, field by field (`crates/oneios-image/src/tar.rs`; what stays ours and why: below) |
 | `serde_json` (`ser::Formatter`), `serde` | every JSON file the tools write: Python's `json.dumps` layout is a `Formatter` (`oneios-common/src/pyjson.rs`) |
 | `base64`, `percent-encoding` | the seed's xattr values and their pax keys (`base64.b64encode`, `urllib.parse.quote`) |
-| `flate2` | `phone pull-data`, `phone sparse-write --gunzip`: the gzip stream of the phone's busybox |
+| `flate2` | `phone pull-data`, `phone sparse-write --gunzip`: the gzip stream of the phone's busybox; the zlib kinds of compressed APFS files |
+| `zbitmap` 0.1 (MIT, github.com/valentinogrande/zbitmap) | LZBITMAP, the compression of most files of iOS 27's OS volumes (decmpfs kinds 13 and 14). A young crate: its output is checked against apfs-fuse on every compressed file of the two images |
 | `apk-info-zip` 1.1 (Apache-2.0, github.com/delvinru/apk-info) | `app`: an APK's signing certificates (schemes v1 to v3.x) |
 | `sha2` (`asm`), `rayon`, `memmap2`, `libc`, `anyhow` | hashing (the hash lists are `sha2` and `std::io::Write`), parallel work, file maps, `copy_file_range` (`image`, `sym`, `log`) |
 
@@ -77,7 +78,7 @@ Hand-written, and why:
 
 | Part | Why |
 |---|---|
-| The APFS reader (`crates/oneios-image/src/apfs.rs`, `apfs/files.rs`) | no maintained Rust crate reads iOS's sealed volumes, or any volume of a container but the first (`apfs` 0.4.1: neither; `apfs-core`: stubs; checked 2026-11-12, [todo_rust.md](todo_rust.md)). apfs-fuse is GPL, Linux only in practice, and needs FUSE |
+| The APFS reader (`crates/oneios-image/src/apfs.rs`, `apfs/files.rs`) | no maintained Rust crate reads iOS's sealed volumes, or any volume of a container but the first (`apfs` 0.4.1: neither; `apfs-core`: stubs; checked 2026-11-12, [todo_rust.md](todo_rust.md)). apfs-fuse is GPL, Linux only in practice, and needs FUSE: it is an optional second backend (`--apfs fuse`), run as a program. The decoders of compressed files are all libraries |
 | `ioslog`'s choice of files, filters, text output, checks (`crates/oneios-ioslog`, 950 lines) | this project's own; everything that decodes a log file is the library's |
 | `oneios-common/src/pyjson.rs`: the value type and the parser | the writer is serde_json's now (a `Formatter`: `", "` and `": "`, Python's indent, `\uXXXX` for everything outside ASCII, `repr(float)`). The value type keeps a dict's insertion order without serde_json's `preserve_order` feature, which must stay off (below); the parser stays ours because serde_json reads neither Python's `NaN` and `Infinity` nor integers beyond 64 bits as integers |
 | The seed's tar: four details of the header and the layout (`crates/oneios-image/src/tar.rs`, 100 lines without its tests) | `data.seed`'s SHA-256 is pinned in the image's trust list, and a changed seed starts the phone's Data store over. The `tar` crate writes the block's fields as Python does, except: **(1)** the checksum field (`set_cksum`: seven octal digits and a NUL, `0010715\0`; Python: six digits, a NUL and a space, `010715\0 `), in every header; **(2)** names (`set_path` moves the front of a long name into the ustar `prefix` field and refuses what does not fit; Python's pax format never uses `prefix`: the first 100 characters with `?` for each one that is not ASCII, and the whole name in a `path` record); **(3)** the extended header's own block (`Builder::append_pax_extensions`: an empty name and NUL mode, uid and gid fields; Python: `././@PaxHeader` and `0000000\0`; the records' text is the same); **(4)** the end (`Builder::finish`: two zero blocks; Python fills up to a multiple of 10240 bytes). So the block is `tar::Header` with these four done by hand, and `Builder` is not used (it also writes through one writer, and the seed is written at offsets in parallel) |
@@ -103,7 +104,7 @@ oneios-tool ioslog show SOURCE [-f text|csv|jsonl] [-o OUT] [filters] [--sort]
 oneios-tool ioslog boots SOURCE                       # the boots: UUID, start, first and last entry, entries
 oneios-tool ioslog checks SOURCE [--boot last|all|UUID] [--examples N]
 oneios-tool ioslog save SOURCE NAME.logarchive        # the copy the manual steps made, for other tools
-# every subcommand: [--volume N|NAME] [--block0] [-v]
+# every subcommand: [--volume N|NAME] [--block0] [--apfs own|fuse|auto] [-v]
 ```
 
 - `SOURCE`: a raw image of the Data store; or a `.logarchive` folder; or a folder that holds `db/diagnostics` and
@@ -181,18 +182,52 @@ archive's. The box ran two other agents' jobs: the times are not clean.
    made by `unifiedlog_iterator` of commit `3d5b27a`; version 0.7.0 formats some messages differently).
 3. `checks` on a real session's log.
 
-The APFS reader against apfs-fuse on images written by Apple's APFS (`tests/image/apfs-read.sh IMAGE [VOLUME]`: both
-copy the volume, every file must be the same, and the names apfs-fuse has more must be exactly the files
-`apfs-copy` says it skipped):
+### The APFS reader
+
+Our reader (`crates/oneios-image/src/apfs.rs`, `apfs/files.rs`) is the default everywhere; apfs-fuse is the
+independent reader it is checked against, and since the third Linux round also an optional second backend.
+
+**Compressed files (decmpfs)** are read since the third Linux round (`apfs/decmpfs.rs`): the inline kinds and the
+resource-fork kinds of zlib (3, 4; `flate2`), LZVN (7, 8), stored (9, 10), LZFSE (11, 12; `lzfse_rust`) and
+**LZBITMAP (13, 14; the `zbitmap` crate)**, which is what iOS 27 uses for most files (869 of the AppOS image's 930
+compressed files). No decoder is ours: a decmpfs LZVN stream is a bare LZVN payload, which `lzfse_rust` decodes
+once it is given the 12-byte header of an LZFSE stream's `bvxn` block and the end mark. A resource fork is an
+attribute kept in a data stream of its own, which the reader now follows; a compressed file's size is its plain
+size (from the attribute's header), as apfs-fuse shows it.
+
+`tests/image/apfs-read.sh IMAGE [VOLUME]`: `apfs-copy` copies the volume, apfs-fuse mounts it, and every file
+must be byte for byte the same, with the same names on both sides (Linux x86_64, 2026-11-12):
 
 | Image | Result |
 |---|---|
-| dfvfs's `apfs.raw` (macOS, unsealed, 1 volume) | 8 files and links the same, with and without `--newest` |
-| 24A446 AppOS image (sealed) | 225 the same, 0 differ; 930 compressed files skipped |
-| 24A446 SystemOS image (sealed; the dyld shared cache) | 214 the same (5,421,894,748 bytes), 0 differ; 1,980 compressed files skipped; 64 s |
+| dfvfs's `apfs.raw` (macOS, unsealed, 1 volume) | 8 files and links the same, with and without `--newest` (the round before; no compressed file) |
+| 24A446 AppOS image (sealed) | **1,155 the same, 0 differ, none skipped** (930 were kept compressed); before decmpfs: 225 the same, 930 skipped |
+| 24A446 SystemOS image (sealed; the dyld shared cache) | **2,194 the same (2,192 files, 7,462,414,742 bytes), 0 differ, none skipped** (1,980 were kept compressed, the shared cache's `.symbols` and `.dyldlinkedit` among them); `apfs-copy` 43 s; before: 214 the same, 1,980 skipped |
 
-Files kept compressed (decmpfs: most of the OS volumes, and the shared cache's `.symbols` and `.dyldlinkedit`) are
-not read: the reader has no decoder for them. The Data store's log files are not compressed.
+So all 2,910 compressed files of the two images come out as apfs-fuse gives them. Not checked: an image whose
+files use the zlib resource-fork kind (4) or LZVN in the resource fork (8) for real (the unit tests make such
+files; which kinds besides LZBITMAP the two images hold was not counted), and the OS image's volume (`os.img`).
+
+**The apfs-fuse backend** (Linux; optional): `--apfs own|fuse|auto` on `image apfs-ls`, `image apfs-copy` and every
+`ioslog` command. `own` is our reader, `fuse` mounts the volume read-only with `apfs-fuse -o ro,vol=N` on a new
+folder under the temporary folder and reads the files there, and `auto` (the default) takes our reader and falls
+back to apfs-fuse only when ours refuses the image or the volume (for `ioslog`: finds no log), saying so on stderr.
+The mount is always taken down again (`fusermount3 -u`, else `fusermount -u`): at the end, after an error, and on
+Ctrl-C or SIGTERM (a lazy unmount from the signal handler, then exit status 130). apfs-fuse is GPL-2.0: it is
+started as a program and never linked. With `fuse`, `--volume` is a number (or a name our reader can look up), and
+`--newest`/`--block0` have no meaning (apfs-fuse reads the container as it finds it).
+
+```sh
+tools/oneios-tool/tests/image/apfs-fuse.sh IMAGE [VOLUME [FOLDER]]     # IOSLOG_IMAGE=FILE adds ioslog with both readers
+```
+
+Result (2026-11-12, the SystemOS image, `System/Library/CoreServices`, and a Data-store stand-in made by
+`mkapfs.py` from the macOS 10.13 archive; the AppOS image the same): `apfs-ls` of the root and of a folder and
+`apfs-copy` of a folder give the same text and files with both readers; a file that is not APFS and a folder that
+is not there end with status 1; with our reader made to refuse (`ONEIOS_APFS_TEST_REFUSE=1`, a hook for this
+test), `auto` answers through apfs-fuse and `own` does not; Ctrl-C in a copy of the whole volume ends with status
+130; `ioslog show -f csv` is the same 116,141,721 bytes with both; and after each of these nothing is left
+mounted and the mount's folder is gone. 16 checks, all ok.
 
 ## image
 
@@ -202,8 +237,9 @@ not read: the reader has no decoder for them. The Data store's log files are not
 `verify` of a `.tar.zst` start the Python tool (`IMAGETOOL_PY` names it). Only here:
 
 ```sh
-oneios-tool image apfs-ls IMAGE [PATH] [--volume N|NAME] [--newest]       # a folder's entries: mode, owner, size, name
-oneios-tool image apfs-copy IMAGE SRC DST [--volume N|NAME] [--newest]    # a file or a folder out of the image, no mount
+oneios-tool image apfs-ls IMAGE [PATH] [--volume N|NAME] [--newest] [--apfs own|fuse|auto]      # a folder's entries: mode, owner, size, name
+oneios-tool image apfs-copy IMAGE SRC DST [--volume N|NAME] [--newest] [--apfs own|fuse|auto]   # a file or a folder out of the image, no mount;
+                                                                                                # compressed files come out plain
 ```
 
 `im4p IN OUT` decodes the LZFSE payload with `lzfse_rust` (imagetool.py starts the `lzfse` program). On
@@ -300,9 +336,14 @@ What the numbers say:
 
 `oneios-tool sym [--slide HEX] ADDR...` names user addresses of a boot log in the image's dyld shared cache, as
 `scripts/debug/dsc.py` does, from an index it builds once (`out/dsc-index/<cache UUID>/`, 1.07 GiB).
-`ONEIOS_DSC_DIR` is the folder with `dyld_shared_cache_arm64e`; on Linux mount the SystemOS image with apfs-fuse
-(`apfs-fuse -o ro inputs/24A446/043-70037-715.dmg out/dsc`; the folder is
-`out/dsc/root/System/Library/Caches/com.apple.dyld`).
+`ONEIOS_DSC_DIR` is the folder with `dyld_shared_cache_arm64e`. **No mount is needed** since the APFS reader
+decodes compressed files: `oneios-tool image apfs-copy out/image/24A446/systemos.img
+System/Library/Caches/com.apple.dyld out/dsc` copies the cache out of the image (82 files, 7,312,005,844 bytes,
+24 s; `.symbols` and `.dyldlinkedit` are kept compressed in the image and come out plain). The index built from
+that copy (18.6 s) is byte for byte the index built through an apfs-fuse mount (26.4 s): `meta.bin`, `syms.bin`,
+`names.bin`, `calls.bin` compared with `cmp`. A mount still works (`apfs-fuse -o ro IMAGE out/dsc`; the folder is
+`out/dsc/root/System/Library/Caches/com.apple.dyld`), but there every open of `.symbols` decompresses it again
+(2.5 s for its first 16 bytes), which is why `dsc.py` is so slow through it.
 
 ```sh
 ONEIOS_DSC_DIR=<cache folder> ONEIOS_LOG_DIR=<folder with *.log> tools/oneios-tool/tests/sym/compare-python.sh
@@ -324,6 +365,12 @@ decompressed on every read: that is why `dsc.py` is far slower here than on the 
 | d1, d2: 2 addresses and 1 address ("NOT reliable") | yes (2) | 35-55 s | 0.10-0.19 s |
 | e1: 4000 addresses with `--slide` | yes | 94 s | 14.4 s |
 | e2: the same 4000, no `--slide` | yes | 649 s | 1.7 s |
+
+**The 14.4 s of e1 was not apfs-fuse and not the tool** (settled in the third round): with `--slide` given, `sym`
+never opens the cache (the same 0.03 s with no cache folder, with a local copy and through a fresh apfs-fuse
+mount, the index warm; the same output each time). The time is the index's own pages coming from the disk: with
+the four index files dropped from the page cache the same command takes 1.7-1.8 s, and in the comparison run it
+was the first use of a just-built 1.07 GiB index on a disk that other jobs were writing. Nothing was changed.
 
 The index: built in 26.4 s (1068.8 MiB; 4,696 images, 11,365,799 symbols kept). The Mac's run of the first round
 (18 of 18 on sets from four real logs; `dsc.py` 0.03-53 s, `sym` 3-170 ms) is in [todo_rust.md](todo_rust.md).
