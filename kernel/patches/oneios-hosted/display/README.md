@@ -21,7 +21,7 @@ iPhone18,2 kernelcache and to xnuhost:
 | `DroidVMVirtioGpuDisplay.cpp` | `external/UniXNU-droidvm/package`, unchanged | The scanout client of the virtio GPU: a resource per IOSurface (up to 32, by its guest pages), `SET_SCANOUT` and `RESOURCE_FLUSH` per frame from its own thread; the boot video as a resource too |
 | `OneiOSDisplay.cpp` | here | The kernel's two entries, the parent class under xnuhost's slide, the display's switches as defaults, the log lines, Droid-VM's default-surface factory |
 | `legacy-display-24A446-v54.json` | `port-legacy-display.py` | The original class in this kernelcache: 379 slots with their diversities, the fields and functions the backend uses |
-| `build-oneios-display.py` | here | The archive (below) |
+| `oneios-tool kernel gen display` | `tools/oneios-tool/crates/oneios-kernel/src/build_oneios_display.rs` (was `build-oneios-display.py` here) | The archive (below) |
 | `display-capture.py` | here | A client of `display.sock` for the PC: says when the picture changed and writes PNGs |
 
 The transport (`DroidVMVirtioGpu.cpp`) and the 3D half are in the GPU's archive (`../gpu`, `docs/gpu.md`).
@@ -51,7 +51,7 @@ kernel/patches/oneios-hosted/display/port-legacy-display.py      # rewrites lega
 
 Both kexts are in the collection's closure as roots (`kernel.kc.prelink.json`), with their personalities.
 
-## The archive (`build-oneios-display.py`)
+## The archive (`oneios-tool kernel gen display`)
 
 `kernel/build-hosted.sh` copies the script into the build's device repository, appends it to the board's archives
 (after the GPU's) and sets `CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y` in the build's copy of the hosted defconfig. With
