@@ -3,7 +3,7 @@
 //! on stdout. The rule and the two lists are that script's (kernel/prelink/README.md); when one changes there it
 //! must change here (tests/prelink/compare-python.sh compares the two on the real kernelcache).
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use oneios_common::pyjson::{self, Value};
 use plist::{Dictionary, Value as Plist};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -164,15 +164,11 @@ fn strings(items: impl IntoIterator<Item = impl Into<String>>) -> Value {
     Value::List(items.into_iter().map(|s| Value::Str(s.into())).collect())
 }
 
-pub fn run(args: &[String]) -> Result<()> {
-    if args.len() < 2 || args.len() > 3 {
-        bail!("usage: oneios-tool prelink roots KERNELCACHE OUT.json [PROFILE.toml]");
-    }
-    let (cache_path, out_path) = (&args[0], &args[1]);
+pub fn run(cache_path: &str, out_path: &str, profile: Option<&str>) -> Result<()> {
     let mut roots_profile: Vec<String> = Vec::new();
-    if let Some(profile) = args.get(2) {
-        let text = std::fs::read_to_string(profile).with_context(|| profile.clone())?;
-        let table: toml::Table = text.parse().with_context(|| profile.clone())?;
+    if let Some(profile) = profile {
+        let text = std::fs::read_to_string(profile).with_context(|| profile.to_string())?;
+        let table: toml::Table = text.parse().with_context(|| profile.to_string())?;
         let roots = table.get("kernel").and_then(|k| k.get("prelink")).and_then(|p| p.get("roots")).and_then(|r| r.as_array());
         let roots = roots.ok_or_else(|| anyhow!("{profile}: no [kernel.prelink] roots"))?;
         roots_profile = roots.iter().filter_map(|r| r.as_str().map(str::to_string)).collect();
@@ -259,7 +255,7 @@ pub fn run(args: &[String]) -> Result<()> {
     record.set("left_out_but_linked", strings(back.iter().map(|s| s.to_string())));
     record.set("closure", strings(closure.iter().cloned()));
     // json.dump(record, f, indent=1): no line end after the last brace
-    std::fs::write(out_path, pyjson::dumps(&record, Some(1), false)).with_context(|| out_path.clone())?;
+    std::fs::write(out_path, pyjson::dumps(&record, Some(1), false)).with_context(|| out_path.to_string())?;
     let missing_text = if missing.is_empty() {
         "none".to_string()
     } else {

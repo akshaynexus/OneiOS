@@ -58,7 +58,8 @@ messages by content). Keep byte-identical output only where a hash is checked: t
 
 Review of this branch (Opus, 2026-11-12), in order. Done in the Linux round: 1 (`ioslog`, with our APFS reader
 instead of a mount, and clap, csv and regex), and of 9 the IM4P part (`image im4p` on simple_asn1 + lzfse_rust).
-Not done: 2 to 8. They change code that is compared byte for byte with Python today; do them when Rust becomes
+Done in the second Linux round: 3 (clap for every tool, one layout in `crates/oneios-tool/src/main.rs`; README
+"The command line"). Not done: 2 and 4 to 8. They change code that is compared byte for byte with Python today; do them when Rust becomes
 the default for a tool (then its comparison by meaning replaces the byte comparison):
 
 | # | Area | Now | Use | Saves | Do |

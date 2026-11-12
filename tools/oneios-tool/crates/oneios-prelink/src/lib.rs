@@ -9,31 +9,60 @@
 mod hosted;
 mod roots;
 
-const USAGE: &str = "\
-usage: oneios-tool prelink STEP ARGS...     (a step of kernel/prelink/build.sh; arguments as the Python step's)
-  roots KERNELCACHE OUT.json [PROFILE.toml]                              roots.py: which kexts go into kernel.kc
-  hosted KERNELCACHE OUT REPORT.json [--closure select.json] [--x18]     hosted.py: the kexts for the hosted kernel
-Not ported yet (kernel/prelink/build.sh runs the Python steps): native-input, merge-reviewed, match, align, kclasses,
-structors, vtables, emit, audit, record.";
+/// `oneios-tool prelink`'s steps (clap): each takes the arguments of the Python step it replaces.
+#[derive(clap::Subcommand, Debug)]
+pub enum Command {
+    /// roots.py: which kexts of the kernelcache go into kernel.kc, and why each one that does not
+    Roots {
+        kernelcache: String,
+        /// OUT.json (select.json)
+        out: String,
+        /// The kernel profile, for its [kernel.prelink] roots
+        profile: Option<String>,
+    },
+    /// hosted.py: the kexts' thread register rewrite and the list of privileged instructions
+    Hosted(hosted::Args),
+}
+
+#[derive(clap::Parser)]
+#[command(
+    name = "oneios-tool prelink",
+    args_override_self = true,
+    after_help = "Not ported yet (kernel/prelink/build.sh runs the Python steps): native-input, merge-reviewed, match, align, \
+                  kclasses, structors, vtables, emit, audit, record."
+)]
+struct Standalone {
+    #[command(subcommand)]
+    command: Command,
+}
+
+/// The exit status of a command line clap refused: 2 for no step or an unknown one, 1 for a step's wrong
+/// arguments, 0 for --help.
+pub fn refused(e: &clap::Error) -> i32 {
+    use clap::error::ErrorKind::*;
+    match e.kind() {
+        DisplayHelp | DisplayVersion => 0,
+        DisplayHelpOnMissingArgumentOrSubcommand | MissingSubcommand | InvalidSubcommand => 2,
+        _ => 1,
+    }
+}
 
 /// Run `oneios-tool prelink ARGS...`; `args` are the arguments after the tool's name. Returns the exit status.
 pub fn run(args: &[String]) -> i32 {
-    let Some(step) = args.first() else {
-        eprintln!("{USAGE}");
-        return 2;
-    };
-    let rest = &args[1..];
-    let result = match step.as_str() {
-        "roots" => roots::run(rest),
-        "hosted" => hosted::run(rest),
-        "-h" | "--help" | "help" => {
-            println!("{USAGE}");
-            return 0;
+    match <Standalone as clap::Parser>::try_parse_from(std::iter::once("prelink".to_string()).chain(args.iter().cloned())) {
+        Ok(parsed) => main(parsed.command),
+        Err(e) => {
+            let _ = e.print();
+            refused(&e)
         }
-        other => {
-            eprintln!("oneios-tool prelink: no step {other:?}\n{USAGE}");
-            return 2;
-        }
+    }
+}
+
+/// Run a parsed step (oneios-tool's main parses it); the exit status.
+pub fn main(command: Command) -> i32 {
+    let (step, result) = match command {
+        Command::Roots { kernelcache, out, profile } => ("roots", roots::run(&kernelcache, &out, profile.as_deref())),
+        Command::Hosted(args) => ("hosted", hosted::run(args)),
     };
     match result {
         Ok(()) => 0,

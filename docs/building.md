@@ -593,7 +593,8 @@ cargo test  --release --manifest-path tools/oneios-tool/Cargo.toml     # unit te
 ```
 
 Rust 1.88 or newer (built with 1.98.0); the first build downloads the crates and one git dependency
-(macos-unifiedlogs, pinned by commit in `Cargo.lock`). Linux x86_64 and macOS arm64.
+(macos-unifiedlogs, pinned by commit in `Cargo.lock`). Linux x86_64 and macOS arm64. `oneios-tool --help` and
+`oneios-tool TOOL --help` list every command and option (one clap layout for all tools).
 
 **The builds use the Python tools.** Where a Rust tool can be chosen, Python is the default:
 

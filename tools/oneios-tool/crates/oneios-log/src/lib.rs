@@ -34,13 +34,97 @@ record gives the fields it still has.
   diff      the kinds of lines one log has and the other does not, with counts and first lines
   gpu, cpu, display, perf   tables over time from the periodic report lines (--json, --csv for machines)";
 
+/// `oneios-tool log`'s subcommands (clap). Every subcommand takes the same options, as before clap: one that a
+/// subcommand has no use for is read and ignored.
+#[derive(clap::Subcommand, Debug)]
+pub enum Command {
+    /// The user backtraces per thread over time, named through `oneios-tool sym`'s index
+    Stacks(Opts),
+    /// The milestones of every boot with time and line
+    Timeline(Opts),
+    /// The kinds of lines one log has and the other does not (two logs)
+    Diff(Opts),
+    /// The GPU report lines as tables over time
+    Gpu(Opts),
+    /// The CPU report lines as tables over time
+    Cpu(Opts),
+    /// The display report lines as tables over time
+    Display(Opts),
+    /// The performance report lines as tables over time
+    Perf(Opts),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct Opts {
+    /// The xnuhost session log (two for diff)
+    #[arg(value_name = "LOG")]
+    paths: Vec<PathBuf>,
+    /// stacks: only this process
+    #[arg(long = "proc", value_name = "NAME")]
+    proc_name: Option<String>,
+    /// stacks: only this thread (hex)
+    #[arg(long, value_name = "0xT")]
+    thread: Option<String>,
+    /// stacks: the slide (hex) instead of the one found per boot
+    #[arg(long, value_name = "HEX")]
+    slide: Option<String>,
+    /// diff: how many words of a line make its kind
+    #[arg(long, value_name = "N", default_value_t = 6)]
+    words: usize,
+    /// stacks: the folder that holds dyld_shared_cache_arm64e
+    #[arg(long, value_name = "DIR")]
+    dsc: Option<PathBuf>,
+    /// stacks: the folder of `oneios-tool sym`'s index
+    #[arg(long, value_name = "DIR")]
+    index: Option<PathBuf>,
+    /// stacks: print the addresses only
+    #[arg(long = "no-sym")]
+    no_sym: bool,
+    /// stacks: only the summary
+    #[arg(long)]
+    summary: bool,
+    /// diff: every kind, not only the first ones
+    #[arg(long)]
+    all: bool,
+    /// The tables as JSON
+    #[arg(long, overrides_with = "csv")]
+    json: bool,
+    /// The tables as CSV
+    #[arg(long, overrides_with = "json")]
+    csv: bool,
+}
+
+#[derive(clap::Parser)]
+#[command(name = "oneios-tool log", args_override_self = true, after_help = USAGE)]
+struct Standalone {
+    #[command(subcommand)]
+    command: Command,
+}
+
 /// Run `oneios-tool log ARGS...`; `args` are the arguments after the tool's name. Returns the exit status.
 pub fn run(args: &[String]) -> i32 {
-    if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("{USAGE}");
-        return if args.is_empty() { 2 } else { 0 };
+    match <Standalone as clap::Parser>::try_parse_from(std::iter::once("log".to_string()).chain(args.iter().cloned())) {
+        Ok(parsed) => main(parsed.command),
+        Err(e) => {
+            let _ = e.print();
+            refused(&e)
+        }
     }
-    match run_inner(args, Locate::from_env(), &mut std::io::stderr()) {
+}
+
+/// The exit status of a command line clap refused: 2 for no subcommand, 1 for anything else wrong, 0 for --help.
+pub fn refused(e: &clap::Error) -> i32 {
+    use clap::error::ErrorKind::*;
+    match e.kind() {
+        DisplayHelp | DisplayVersion => 0,
+        DisplayHelpOnMissingArgumentOrSubcommand | MissingSubcommand => 2,
+        _ => 1,
+    }
+}
+
+/// Run a parsed command (oneios-tool's main parses it); the exit status.
+pub fn main(command: Command) -> i32 {
+    match run_command(command, Locate::from_env(), &mut std::io::stderr()) {
         Ok(text) => {
             let stdout = std::io::stdout();
             let mut out = stdout.lock();
@@ -68,42 +152,48 @@ struct Args {
     format: Format,
 }
 
-fn parse_args(args: &[String], loc: &mut Locate) -> Result<Args> {
-    let mut a = Args { paths: Vec::new(), proc_name: None, thread: None, slide: None, no_sym: false, summary: false, words: 6, all: false, format: Format::Text };
+fn options(o: Opts, loc: &mut Locate) -> Result<Args> {
     let hex = |text: &str| {
         u64::from_str_radix(text.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|_| anyhow!("not a hex number: {text:?}"))
     };
-    let mut i = 0;
-    while i < args.len() {
-        let arg = args[i].as_str();
-        let mut value = || -> Result<&String> {
-            i += 1;
-            args.get(i).ok_or_else(|| anyhow!("{arg} needs a value"))
-        };
-        match arg {
-            "--proc" => a.proc_name = Some(value()?.clone()),
-            "--thread" => a.thread = Some(hex(value()?)?),
-            "--slide" => a.slide = Some(hex(value()?)?),
-            "--words" => a.words = value()?.parse().map_err(|_| anyhow!("--words needs a number"))?,
-            "--dsc" => loc.dsc = Some(PathBuf::from(value()?)),
-            "--index" => loc.index_parent = Some(PathBuf::from(value()?)),
-            "--no-sym" => a.no_sym = true,
-            "--summary" => a.summary = true,
-            "--all" => a.all = true,
-            "--json" => a.format = Format::Json,
-            "--csv" => a.format = Format::Csv,
-            other if other.starts_with("--") => bail!("unknown option {other}"),
-            other => a.paths.push(PathBuf::from(other)),
-        }
-        i += 1;
+    if o.dsc.is_some() {
+        loc.dsc = o.dsc;
     }
-    Ok(a)
+    if o.index.is_some() {
+        loc.index_parent = o.index;
+    }
+    Ok(Args {
+        paths: o.paths,
+        proc_name: o.proc_name,
+        thread: o.thread.as_deref().map(hex).transpose()?,
+        slide: o.slide.as_deref().map(hex).transpose()?,
+        no_sym: o.no_sym,
+        summary: o.summary,
+        words: o.words,
+        all: o.all,
+        format: if o.csv { Format::Csv } else if o.json { Format::Json } else { Format::Text },
+    })
 }
 
-/// The command's whole output (the tests call this).
-pub fn run_inner(args: &[String], mut loc: Locate, err: &mut dyn Write) -> Result<String> {
-    let command = args[0].as_str();
-    let a = parse_args(&args[1..], &mut loc)?;
+/// The command's whole output for a command line (the tests call this).
+pub fn run_inner(args: &[String], loc: Locate, err: &mut dyn Write) -> Result<String> {
+    let parsed = <Standalone as clap::Parser>::try_parse_from(std::iter::once("log".to_string()).chain(args.iter().cloned()))
+        .map_err(|e| anyhow!("{}", e.to_string().trim_end()))?;
+    run_command(parsed.command, loc, err)
+}
+
+/// The command's whole output.
+fn run_command(command: Command, mut loc: Locate, err: &mut dyn Write) -> Result<String> {
+    let (command, opts) = match command {
+        Command::Stacks(o) => ("stacks", o),
+        Command::Timeline(o) => ("timeline", o),
+        Command::Diff(o) => ("diff", o),
+        Command::Gpu(o) => ("gpu", o),
+        Command::Cpu(o) => ("cpu", o),
+        Command::Display(o) => ("display", o),
+        Command::Perf(o) => ("perf", o),
+    };
+    let a = options(opts, &mut loc)?;
     let wanted = if command == "diff" { 2 } else { 1 };
     if a.paths.len() != wanted {
         bail!("{command} takes {wanted} log file(s), {} given\n{USAGE}", a.paths.len());

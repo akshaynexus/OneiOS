@@ -4,7 +4,6 @@
 //! stdout.
 
 use anyhow::{anyhow, Context, Result};
-use clap::Parser;
 use oneios_common::pyjson::{self, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -22,9 +21,8 @@ const EL0: [Register; 16] = [
     (3, 3, 2, 4, 1), (3, 3, 4, 2, 5), (3, 3, 4, 2, 6), (3, 3, 13, 0, 5), (3, 3, 13, 0, 7),
 ];
 
-#[derive(Parser)]
-#[command(name = "oneios-tool prelink hosted", about = "The kexts' thread register rewrite and the list of privileged instructions (kernel/prelink/hosted.py)")]
-struct Args {
+#[derive(clap::Args, Debug)]
+pub struct Args {
     kernelcache: String,
     out: String,
     report: String,
@@ -178,8 +176,7 @@ fn rewrite(kext: &str, segment: &str, address: u64, old: u32, new: u32, instruct
     v
 }
 
-pub fn run(args: &[String]) -> Result<()> {
-    let args = Args::try_parse_from(std::iter::once("hosted".to_string()).chain(args.iter().cloned())).map_err(|e| anyhow!("{e}"))?;
+pub fn run(args: Args) -> Result<()> {
     let source = std::fs::read(&args.kernelcache).with_context(|| args.kernelcache.clone())?;
     let mut data = source.clone();
     let closure: Option<HashSet<String>> = match &args.closure {

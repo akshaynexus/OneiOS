@@ -36,8 +36,9 @@ struct Cli {
     command: Command,
 }
 
+/// `oneios-tool ioslog`'s subcommands (clap).
 #[derive(Subcommand)]
-enum Command {
+pub enum Command {
     /// Write the log entries (all of them, or the ones the filters keep)
     Show(Box<Show>),
     /// Copy the log files out of the image as a .logarchive folder (what the manual steps made)
@@ -66,7 +67,7 @@ enum Command {
 }
 
 #[derive(Args)]
-struct From {
+pub struct From {
     /// The Data store's image, a .logarchive folder, or a folder with db/diagnostics
     source: String,
     /// The image's volume: its number or its name (default: the first volume that holds a log)
@@ -81,7 +82,7 @@ struct From {
 }
 
 #[derive(Clone, Copy, PartialEq, ValueEnum)]
-enum Format {
+pub enum Format {
     /// One line per entry: time, process[pid], type, [subsystem:category], message
     Text,
     /// unifiedlog_iterator's CSV, byte for byte
@@ -91,7 +92,7 @@ enum Format {
 }
 
 #[derive(Args)]
-struct Show {
+pub struct Show {
     #[command(flatten)]
     from: From,
     /// The file to write (default: standard output). An existing file is replaced.
@@ -140,7 +141,12 @@ pub fn run(args: &[String]) -> i32 {
             return if e.use_stderr() { 2 } else { 0 };
         }
     };
-    let result = match cli.command {
+    main(cli.command)
+}
+
+/// Run a parsed command (oneios-tool's main parses it); the exit status.
+pub fn main(command: Command) -> i32 {
+    let result = match command {
         Command::Show(show) => cmd_show(*show),
         Command::Save { from, archive } => cmd_save(from, archive),
         Command::Boots { from } => cmd_boots(from),

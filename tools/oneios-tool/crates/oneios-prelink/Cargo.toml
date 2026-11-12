@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 oneios-common.workspace = true
-clap = { version = "4", features = ["derive"] }
+clap.workspace = true
 # The kernelcache's __PRELINK_INFO (an XML property list) and the kernel profile (TOML), as roots.py reads them
 # with plistlib and tomllib.
 plist = { version = "1", default-features = false }

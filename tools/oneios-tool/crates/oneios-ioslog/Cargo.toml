@@ -11,7 +11,7 @@ oneios-image.workspace = true
 # 0.8.0 is on GitHub only (crates.io has 0.7.0, whose API has no lazy message and no by-UUID string loading), so it
 # is pinned by commit here and in Cargo.lock.
 macos-unifiedlogs = { git = "https://github.com/mandiant/macos-unifiedlogs", rev = "3d5b27a1e2632e6ddca44b25e1d7e37d709114f9" }
-clap = { version = "4", features = ["derive"] }
+clap.workspace = true
 csv = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 uuid = { version = "1", default-features = false }

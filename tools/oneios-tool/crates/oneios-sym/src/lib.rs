@@ -172,27 +172,68 @@ struct Options {
     addrs: Vec<i128>,
 }
 
-fn parse_args(args: &[String], loc: &mut Locate) -> Result<Options> {
-    let mut o = Options { slide: None, stdin: false, no_index: false, force: false, build: false, addrs: Vec::new() };
-    let mut i = 0;
-    let value = |i: &mut usize| -> Result<&String> {
-        *i += 1;
-        args.get(*i).ok_or_else(|| anyhow!("{} needs a value", args[*i - 1]))
-    };
+/// `oneios-tool sym`'s command line (clap). `index` as the first word builds the index; `-` reads the addresses
+/// from standard input, as `--stdin` does.
+#[derive(clap::Args, Debug)]
+pub struct Cli {
+    /// The slide of the addresses (hex). Without it the slide is found from the addresses themselves.
+    #[arg(long, value_name = "HEX")]
+    slide: Option<String>,
+    /// The folder that holds dyld_shared_cache_arm64e (default: ONEIOS_DSC_DIR)
+    #[arg(long, value_name = "DIR")]
+    dsc: Option<PathBuf>,
+    /// The folder the index is kept in (default: ONEIOS_DSC_INDEX, else out/dsc-index)
+    #[arg(long, value_name = "DIR")]
+    index: Option<PathBuf>,
+    /// Read addresses from standard input too
+    #[arg(long)]
+    stdin: bool,
+    /// Read the cache itself instead of the index
+    #[arg(long = "no-index")]
+    no_index: bool,
+    /// `index`: build it again even when it is current
+    #[arg(long)]
+    force: bool,
+    /// Addresses (hex), `-` for standard input, or `index` first to build the index
+    #[arg(value_name = "ADDR", allow_hyphen_values = true)]
+    words: Vec<String>,
+}
+
+#[derive(clap::Parser)]
+#[command(name = "oneios-tool sym", args_override_self = true, disable_help_flag = true)]
+struct Standalone {
+    #[command(flatten)]
+    cli: Cli,
+}
+
+fn options(cli: Cli, loc: &mut Locate) -> Result<Options> {
+    let mut o = Options { slide: None, stdin: cli.stdin, no_index: cli.no_index, force: cli.force, build: false, addrs: Vec::new() };
     let address = |text: &str| parse_hex(text).ok_or_else(|| anyhow!("invalid hex address: {text:?}"));
-    while i < args.len() {
-        match args[i].as_str() {
+    if let Some(slide) = &cli.slide {
+        o.slide = Some(address(slide)?);
+    }
+    if cli.dsc.is_some() {
+        loc.dsc = cli.dsc;
+    }
+    if cli.index.is_some() {
+        loc.index_parent = cli.index;
+    }
+    // An address may be negative (dsc.py's int() takes "-0x20"), so the words may start with a hyphen; clap then
+    // hands over an option that follows a word as a word too. Such an option is read here, as it always was.
+    let mut words = cli.words.iter().enumerate();
+    while let Some((i, word)) = words.next() {
+        let mut value = || words.next().map(|(_, v)| v.as_str()).ok_or_else(|| anyhow!("{word} needs a value"));
+        match word.as_str() {
             "index" if i == 0 => o.build = true,
-            "--slide" => o.slide = Some(address(value(&mut i)?)?),
-            "--dsc" => loc.dsc = Some(PathBuf::from(value(&mut i)?)),
-            "--index" => loc.index_parent = Some(PathBuf::from(value(&mut i)?)),
-            "--stdin" | "-" => o.stdin = true,
+            "-" | "--stdin" => o.stdin = true,
             "--no-index" => o.no_index = true,
             "--force" => o.force = true,
+            "--slide" => o.slide = Some(address(value()?)?),
+            "--dsc" => loc.dsc = Some(PathBuf::from(value()?)),
+            "--index" => loc.index_parent = Some(PathBuf::from(value()?)),
             other if other.starts_with("--") => bail!("unknown option {other}"),
             other => o.addrs.push(address(other)?),
         }
-        i += 1;
     }
     Ok(o)
 }
@@ -212,7 +253,27 @@ pub fn run_with(args: &[String], loc: Locate, input: &mut dyn Read, out: &mut dy
         let _ = writeln!(out, "{USAGE}");
         return 0;
     }
-    match run_inner(args, loc, input, out, err) {
+    let cli = match <Standalone as clap::Parser>::try_parse_from(std::iter::once("sym".to_string()).chain(args.iter().cloned())) {
+        Ok(parsed) => parsed.cli,
+        Err(e) => {
+            let _ = writeln!(err, "oneios-tool sym: {}", e.to_string().trim_end());
+            return 1;
+        }
+    };
+    run_cli(cli, loc, input, out, err)
+}
+
+/// Run a parsed command line (oneios-tool's main parses it); the exit status.
+pub fn main(cli: Cli) -> i32 {
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+    let status = run_cli(cli, Locate::from_env(), &mut std::io::stdin().lock(), &mut out, &mut std::io::stderr());
+    let _ = out.flush();
+    status
+}
+
+fn run_cli(cli: Cli, loc: Locate, input: &mut dyn Read, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    match run_inner(cli, loc, input, out, err) {
         Ok(status) => status,
         // The reader of the output went away (`| head`): not an error.
         Err(e) if e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe) => 0,
@@ -223,8 +284,8 @@ pub fn run_with(args: &[String], loc: Locate, input: &mut dyn Read, out: &mut dy
     }
 }
 
-fn run_inner(args: &[String], mut loc: Locate, input: &mut dyn Read, out: &mut dyn Write, err: &mut dyn Write) -> Result<i32> {
-    let mut o = parse_args(args, &mut loc)?;
+fn run_inner(cli: Cli, mut loc: Locate, input: &mut dyn Read, out: &mut dyn Write, err: &mut dyn Write) -> Result<i32> {
+    let mut o = options(cli, &mut loc)?;
     if o.build {
         return build_command(&o, &loc, out);
     }

@@ -89,16 +89,172 @@ Run by scripts/image/imagetool.py (python3, found beside this tool's repository 
 Formats: docs/image-format.md. The Rust port of scripts/image/imagetool.py: same output, byte for byte.
 ";
 
-/// The subcommands the Python tool runs.
-const PYTHON_ONLY: [&str; 5] = ["check-ipsw", "fetch", "record-plain", "aea-info", "pack"];
+/// Arguments after the ones a command reads. imagetool.py ignores them (it takes its arguments by position and
+/// looks for its options by name), so they are taken and ignored here too.
+#[derive(clap::Args, Debug)]
+pub struct More {
+    #[arg(hide = true, allow_hyphen_values = true)]
+    extra: Vec<String>,
+}
+
+/// The arguments of a command the Python tool runs, as they are.
+#[derive(clap::Args, Debug)]
+pub struct Raw {
+    #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
+    args: Vec<String>,
+}
+
+/// `oneios-tool image`'s subcommands (clap): imagetool.py's commands with its arguments and options. An option
+/// given twice counts once, the first time, as in imagetool.py.
+#[derive(clap::Subcommand, Debug)]
+pub enum Command {
+    /// Check a profile; print it as JSON, shell or a table
+    Profile {
+        profile: String,
+        #[arg(long)]
+        shell: bool,
+        #[arg(long)]
+        members: bool,
+        #[command(flatten)]
+        more: More,
+    },
+    /// Container and volume UUIDs of a raw APFS image
+    ApfsInfo {
+        image: String,
+        #[command(flatten)]
+        more: More,
+    },
+    /// The owners, modes and xattr names in an image's records
+    ApfsOwners {
+        image: String,
+        dir: Option<String>,
+        #[command(flatten)]
+        more: More,
+    },
+    /// The chunk hash list of an image
+    Hashes {
+        image: String,
+        out: String,
+        #[arg(long, value_name = "BYTES")]
+        chunk: Vec<String>,
+        #[command(flatten)]
+        more: More,
+    },
+    /// Copy a tree, recording owners, modes, times, xattrs
+    TreeCopy {
+        src: String,
+        dst: String,
+        meta: String,
+        #[arg(long = "owners-from", value_name = "IMAGE")]
+        owners_from: Vec<String>,
+        #[arg(long = "owners-path", value_name = "DIR")]
+        owners_path: Vec<String>,
+        #[command(flatten)]
+        more: More,
+    },
+    /// Pack the Data seed (deterministic tar)
+    SeedPack {
+        tree: String,
+        meta: String,
+        out: String,
+        #[arg(long, value_name = "N")]
+        epoch: Vec<String>,
+        #[arg(long, value_name = "FILE")]
+        owners: Vec<String>,
+        #[command(flatten)]
+        more: More,
+    },
+    /// Write manifest.json and the hash lists of a set folder
+    Manifest {
+        profile: String,
+        setdir: String,
+        #[arg(long, value_name = "FILE")]
+        inputs: Vec<String>,
+        #[arg(long = "seed-info", value_name = "FILE")]
+        seed_info: Vec<String>,
+        #[arg(long, value_name = "FILE")]
+        tweaks: Vec<String>,
+        #[command(flatten)]
+        more: More,
+    },
+    /// Check a set folder (here) or its .tar.zst (the Python tool)
+    Verify {
+        set: String,
+        #[arg(long)]
+        quick: bool,
+        #[command(flatten)]
+        more: More,
+    },
+    /// The payload of an IM4P (LZFSE decoded here: no `lzfse` program)
+    Im4p {
+        input: String,
+        out: String,
+        #[command(flatten)]
+        more: More,
+    },
+    /// Only in this tool: a folder's entries (mode, owner, size, name), read without a mount
+    ApfsLs {
+        image: String,
+        path: Option<String>,
+        #[arg(long, value_name = "N|NAME")]
+        volume: Option<String>,
+        /// The newest checkpoint, for a store copied after use
+        #[arg(long)]
+        newest: bool,
+    },
+    /// Only in this tool: copy a file or a folder out of an image, without a mount
+    ApfsCopy {
+        image: String,
+        src: String,
+        dst: String,
+        #[arg(long, value_name = "N|NAME")]
+        volume: Option<String>,
+        /// The newest checkpoint, for a store copied after use
+        #[arg(long)]
+        newest: bool,
+    },
+    /// (Python tool) compare the profile with the IPSW's directory and BuildManifest
+    CheckIpsw(Raw),
+    /// (Python tool) fetch the IPSW's members a profile names
+    Fetch(Raw),
+    /// (Python tool) record a decrypted image in inputs.json
+    RecordPlain(Raw),
+    /// (Python tool) the key-service fields of an AEA header
+    AeaInfo(Raw),
+    /// (Python tool) the archive the OneOS fork imports
+    Pack(Raw),
+}
+
+#[derive(clap::Parser)]
+#[command(name = "oneios-tool image", args_override_self = true)]
+struct Standalone {
+    #[command(subcommand)]
+    command: Command,
+}
+
+/// The usage, as a wrong command line prints it (imagetool.py prints its own there).
+pub fn usage() -> &'static str {
+    USAGE
+}
 
 /// Run `oneios-tool image ARGS...`; `args` are the arguments after the tool's name. Returns the exit status.
 pub fn run(args: &[String]) -> i32 {
-    if matches!(args.first().map(String::as_str), Some("-h" | "--help" | "help")) {
-        print!("{USAGE}");
-        return 0;
+    match <Standalone as clap::Parser>::try_parse_from(std::iter::once("image".to_string()).chain(args.iter().cloned())) {
+        Ok(parsed) => main(parsed.command),
+        Err(e) if !e.use_stderr() => {
+            let _ = e.print();
+            0
+        }
+        Err(_) => {
+            eprintln!("{USAGE}");
+            1
+        }
     }
-    match main(args) {
+}
+
+/// Run a parsed command (oneios-tool's main parses it); the exit status.
+pub fn main(command: Command) -> i32 {
+    match dispatch(command) {
         Ok(()) => 0,
         Err(Fail::Error(m)) | Err(Fail::Crash(m)) => {
             eprintln!("imagetool: {m}");
@@ -135,14 +291,6 @@ fn say(text: &str) -> Result<(), Fail> {
     out.write_all(text.as_bytes()).and_then(|_| out.write_all(b"\n")).and_then(|_| out.flush()).map_err(|e| crash!("stdout: {e}"))
 }
 
-/// `_opt(args, name, default)`: the argument after the first NAME. A NAME that is last is Python's IndexError.
-fn opt<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, Fail> {
-    match args.iter().position(|a| a == name) {
-        None => Ok(None),
-        Some(i) => args.get(i + 1).map(|s| Some(s.as_str())).ok_or(Fail::Usage),
-    }
-}
-
 /// `_load_json(path)`.
 fn load_json(path: Option<&str>) -> Result<Option<Value>, Fail> {
     match path.filter(|p| !p.is_empty()) {
@@ -154,53 +302,53 @@ fn load_json(path: Option<&str>) -> Result<Option<Value>, Fail> {
     }
 }
 
-fn arg(args: &[String], i: usize) -> Result<&str, Fail> {
-    args.get(i).map(String::as_str).ok_or(Fail::Usage)
+/// `_opt(args, name)`: the first value of an option.
+fn first(values: &[String]) -> Option<&str> {
+    values.first().map(String::as_str)
 }
 
-fn main(argv: &[String]) -> Result<(), Fail> {
-    // Python: `if len(argv) < 3: sys.exit(__doc__)`, the command and at least one argument.
-    if argv.len() < 2 {
-        return Err(Fail::Usage);
-    }
-    let (cmd, args) = (argv[0].as_str(), &argv[1..]);
-    match cmd {
-        "profile" => {
-            let text = profile::cmd_profile(args)?;
+fn dispatch(command: Command) -> Result<(), Fail> {
+    match command {
+        Command::Profile { profile, shell, members, .. } => {
+            let mut args = vec![profile];
+            if shell {
+                args.push("--shell".into());
+            }
+            if members {
+                args.push("--members".into());
+            }
+            let text = profile::cmd_profile(&args)?;
             let mut out = std::io::stdout().lock();
             out.write_all(text.as_bytes()).and_then(|_| out.flush()).map_err(|e| crash!("stdout: {e}"))
         }
-        "apfs-info" => say(&pyjson::dumps(&apfs::apfs_info(arg(args, 0)?)?.to_value(), Some(2), false)),
-        "apfs-owners" => {
-            let tree = apfs::ApfsTree::open(arg(args, 0)?)?;
-            let walked = tree.walk(args.get(1).map_or("", String::as_str))?;
+        Command::ApfsInfo { image, .. } => say(&pyjson::dumps(&apfs::apfs_info(&image)?.to_value(), Some(2), false)),
+        Command::ApfsOwners { image, dir, .. } => {
+            let tree = apfs::ApfsTree::open(&image)?;
+            let walked = tree.walk(dir.as_deref().unwrap_or(""))?;
             say(&pyjson::dumps(&apfs::owners_value(walked), None, true))
         }
-        "hashes" => {
-            let (image, out) = (arg(args, 0)?, arg(args, 1)?);
-            let chunk = match opt(args, "--chunk")? {
+        Command::Hashes { image, out, chunk, .. } => {
+            let chunk = match first(&chunk) {
                 None => hashes::DEFAULT_CHUNK,
                 Some(text) => py::int(text, 10)
                     .and_then(|n| u64::try_from(n).ok())
                     .ok_or_else(|| crash!("--chunk {}: not a count of bytes", py::repr_str(text)))?,
             };
-            let (size, digest) = hashes::write_hashes(image, out, chunk)?;
+            let (size, digest) = hashes::write_hashes(&image, &out, chunk)?;
             say(&format!("{digest}  {size}  {image}"))
         }
-        "tree-copy" => {
-            let (src, dst, meta) = (arg(args, 0)?, arg(args, 1)?, arg(args, 2)?);
-            let owners_from = opt(args, "--owners-from")?.filter(|s| !s.is_empty());
-            let owners_path = opt(args, "--owners-path")?.unwrap_or("");
-            let (count, skipped) = seed::tree_copy(src, dst, meta, owners_from, owners_path)?;
+        Command::TreeCopy { src, dst, meta, owners_from, owners_path, .. } => {
+            let owners_from = first(&owners_from).filter(|s| !s.is_empty());
+            let owners_path = first(&owners_path).unwrap_or("");
+            let (count, skipped) = seed::tree_copy(&src, &dst, &meta, owners_from, owners_path)?;
             let more = if skipped.is_empty() { String::new() } else { format!(", skipped {} special files", skipped.len()) };
             say(&format!("copied {count} entries{more}"))
         }
-        "seed-pack" => {
-            let (tree, meta, out) = (arg(args, 0)?, arg(args, 1)?, arg(args, 2)?);
+        Command::SeedPack { tree, meta, out, epoch, owners, .. } => {
             // Python: int(None) is a TypeError, int("x") a ValueError
-            let epoch = opt(args, "--epoch")?.ok_or(Fail::Usage)?;
+            let epoch = first(&epoch).ok_or(Fail::Usage)?;
             let epoch = py::int(epoch, 10).ok_or_else(|| crash!("--epoch {}: not a whole number", py::repr_str(epoch)))?;
-            let (count, added, changed) = seed::seed_pack(tree, meta, out, epoch, opt(args, "--owners")?)?;
+            let (count, added, changed) = seed::seed_pack(&tree, &meta, &out, epoch, first(&owners))?;
             let mut info = Value::dict();
             info.set("format", "tar");
             info.set("root", "/private/var");
@@ -209,26 +357,41 @@ fn main(argv: &[String]) -> Result<(), Fail> {
             info.set("changed", changed);
             say(&pyjson::dumps(&info, None, false))
         }
-        "manifest" => {
-            let profile = profile::load_profile(arg(args, 0)?)?;
-            let setdir = arg(args, 1)?;
-            let inputs = load_json(opt(args, "--inputs")?)?;
-            let seed_info = load_json(opt(args, "--seed-info")?)?;
-            let tweaks = load_json(opt(args, "--tweaks")?)?;
-            let (files, bytes) = manifest::make_manifest(&profile, setdir, inputs, seed_info, tweaks)?;
+        Command::Manifest { profile, setdir, inputs, seed_info, tweaks, .. } => {
+            let profile = profile::load_profile(&profile)?;
+            let inputs = load_json(first(&inputs))?;
+            let seed_info = load_json(first(&seed_info))?;
+            let tweaks = load_json(first(&tweaks))?;
+            let (files, bytes) = manifest::make_manifest(&profile, &setdir, inputs, seed_info, tweaks)?;
             say(&format!("manifest.json: {files} files, {bytes} bytes"))
         }
-        "verify" if std::fs::metadata(arg(args, 0)?).map(|m| m.is_dir()).unwrap_or(false) => {
-            let m = manifest::verify_dir(arg(args, 0)?, args.iter().any(|a| a == "--quick"))?;
-            say(&manifest::ok_line(&m))
+        Command::Verify { set, quick, more } => {
+            if std::fs::metadata(&set).map(|m| m.is_dir()).unwrap_or(false) {
+                let m = manifest::verify_dir(&set, quick)?;
+                return say(&manifest::ok_line(&m));
+            }
+            let mut argv = vec!["verify".to_string(), set];
+            if quick {
+                argv.push("--quick".into());
+            }
+            argv.extend(more.extra);
+            python(&argv)
         }
-        "verify" => python(argv),
-        "im4p" => say(&im4p::cmd(arg(args, 0)?, arg(args, 1)?)?),
-        "apfs-ls" => apfs_tools::ls(args),
-        "apfs-copy" => apfs_tools::copy(args),
-        cmd if PYTHON_ONLY.contains(&cmd) => python(argv),
-        _ => Err(Fail::Usage),
+        Command::Im4p { input, out, .. } => say(&im4p::cmd(&input, &out)?),
+        Command::ApfsLs { image, path, volume, newest } => apfs_tools::ls(&image, path.as_deref().unwrap_or(""), volume.as_deref(), newest),
+        Command::ApfsCopy { image, src, dst, volume, newest } => apfs_tools::copy(&image, &src, &dst, volume.as_deref(), newest),
+        Command::CheckIpsw(raw) => python_command("check-ipsw", raw),
+        Command::Fetch(raw) => python_command("fetch", raw),
+        Command::RecordPlain(raw) => python_command("record-plain", raw),
+        Command::AeaInfo(raw) => python_command("aea-info", raw),
+        Command::Pack(raw) => python_command("pack", raw),
     }
+}
+
+fn python_command(name: &str, raw: Raw) -> Result<(), Fail> {
+    let mut argv = vec![name.to_string()];
+    argv.extend(raw.args);
+    python(&argv)
 }
 
 /// Where scripts/image/imagetool.py is: `IMAGETOOL_PY`, or `scripts/image/imagetool.py` in a folder above this

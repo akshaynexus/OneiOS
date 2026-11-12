@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+clap.workspace = true
 memmap2.workspace = true
 rayon.workspace = true
 # asm: sha2 0.10 uses the ARMv8 SHA-256 instructions on aarch64 only with this feature (without it: the plain

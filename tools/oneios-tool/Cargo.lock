@@ -577,6 +577,7 @@ name = "oneios-image"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "libc",
  "lzfse_rust",
  "memmap2",
@@ -609,6 +610,7 @@ name = "oneios-log"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "memmap2",
  "oneios-common",
  "oneios-sym",
@@ -631,6 +633,7 @@ name = "oneios-sym"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "memmap2",
  "oneios-common",
  "rayon",
@@ -640,6 +643,7 @@ dependencies = [
 name = "oneios-tool"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "oneios-image",
  "oneios-ioslog",
  "oneios-log",

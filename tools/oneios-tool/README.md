@@ -34,6 +34,22 @@ built on a Mac yet.
 No Apple file is in the repository: the tests make their own stand-in caches, images and logs, and the comparison
 scripts read Apple's files in place (`inputs/`, `out/`, both git-ignored).
 
+## The command line
+
+One clap layout for all tools (since the second Linux round, 2026-11-12; before, `sym`, `log` and `image` read
+their arguments by hand). The subcommands, options, output and exit statuses are the ones from before: the
+comparisons below were run again after the change and give the same results (cargo test, parity.py, the prelink comparison, ioslog on one archive, the real image set with SKIP_SLOW=1, sym and log). What a wrong command
+line does is kept per tool, because the Python tools' callers and the comparisons see it: `image` prints its usage
+and exits 1 (imagetool.py prints its own and exits 1), `sym` exits 1 (as `dsc.py`), `log` and `prelink` exit 2
+for no subcommand (`prelink` also for an unknown one) and 1 for wrong arguments, `ioslog` and the top level exit
+2. Kept from the hand-written parsers, on purpose:
+- `image`: arguments after the ones a command reads are taken and ignored, and an option given twice counts
+  the first time, as in imagetool.py (it reads its arguments by position and its options by name).
+- `sym`: an address may be negative (`dsc.py`'s `int()` takes `-0x20`), so its words may start with a hyphen;
+  clap then hands an option that follows a word over as a word, and `sym` reads it as the option it is.
+- `log`: every subcommand takes every option (one it has no use for is ignored).
+The help text is clap's now (`--help`); `image`'s old usage text is still what a wrong `image` command prints.
+
 ## The rule for libraries
 
 Use a maintained library for every format and every generic job. A part stays hand-written only where no library
@@ -42,7 +58,7 @@ exists or where ours is measured to be faster; each such part says why in its mo
 | Crate | Used for |
 |---|---|
 | `macos-unifiedlogs` 0.8.0 (Mandiant, Apache-2.0; git commit `3d5b27a`, pinned in `Cargo.lock`) | all decoding of the unified log: tracev3, timesync, uuidtext, shared-cache strings, message formatting. crates.io has 0.7.0 only, whose API has no lazy messages and no loading of string files by UUID, so the dependency names the commit |
-| `clap` 4 (derive) | the command lines of `ioslog` and `prelink hosted` |
+| `clap` 4 (derive) | every tool's command line. Each crate defines its arguments (`Cli` or `Command`); `crates/oneios-tool/src/main.rs` puts them under one command, so `oneios-tool --help` and `oneios-tool TOOL --help` list everything |
 | `csv`, `serde_json`, `chrono`, `uuid`, `regex` | `ioslog`'s CSV and JSON lines (the same crates `unifiedlog_iterator` writes them with), times, `--grep` |
 | `tracing-subscriber` | `ioslog -v`: the decoder's warnings on stderr |
 | `simple_asn1`, `lzfse_rust` | `image im4p`: the IM4P container (DER) and its LZFSE payload |

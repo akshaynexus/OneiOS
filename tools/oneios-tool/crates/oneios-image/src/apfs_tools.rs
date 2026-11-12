@@ -2,23 +2,8 @@
 //! APFS image without mounting it. Only in this tool (imagetool.py has no such command).
 
 use crate::apfs::{ApfsTree, DT_DIR, DT_LNK, DT_REG};
-use crate::{crash, err, opt, say, Fail};
+use crate::{crash, err, say, Fail};
 use std::path::Path;
-
-/// The arguments that are not options (`--volume X` takes the next one, `--newest` none).
-fn plain(args: &[String]) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--volume" => i += 1,
-            "--newest" => {}
-            other => out.push(other),
-        }
-        i += 1;
-    }
-    out
-}
 
 /// The volume `--volume N|NAME` names (default: the first).
 pub fn open(image: &str, volume: Option<&str>, newest: bool) -> Result<ApfsTree, Fail> {
@@ -40,11 +25,8 @@ pub fn open(image: &str, volume: Option<&str>, newest: bool) -> Result<ApfsTree,
     Err(err!("{image}: no volume named {want} (it has: {})", names.join(", ")))
 }
 
-pub fn ls(args: &[String]) -> Result<(), Fail> {
-    let rest = plain(args);
-    let image = *rest.first().ok_or(Fail::Usage)?;
-    let path = rest.get(1).copied().unwrap_or("");
-    let tree = open(image, opt(args, "--volume")?, args.iter().any(|a| a == "--newest"))?;
+pub fn ls(image: &str, path: &str, volume: Option<&str>, newest: bool) -> Result<(), Fail> {
+    let tree = open(image, volume, newest)?;
     let dir = tree.find(path)?.ok_or_else(|| err!("{image}: no /{path} in the volume"))?;
     let mut entries = tree.list(dir)?;
     entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -97,10 +79,8 @@ fn copy_one(tree: &ApfsTree, id: u64, kind: u16, dst: &Path, done: &mut Copied) 
     Ok(())
 }
 
-pub fn copy(args: &[String]) -> Result<(), Fail> {
-    let rest = plain(args);
-    let (image, src, dst) = (arg_at(&rest, 0)?, arg_at(&rest, 1)?, arg_at(&rest, 2)?);
-    let tree = open(image, opt(args, "--volume")?, args.iter().any(|a| a == "--newest"))?;
+pub fn copy(image: &str, src: &str, dst: &str, volume: Option<&str>, newest: bool) -> Result<(), Fail> {
+    let tree = open(image, volume, newest)?;
     let id = tree.find(src)?.ok_or_else(|| err!("{image}: no /{} in the volume", src.trim_matches('/')))?;
     let kind = match tree.stat(id)?.mode & 0o170000 {
         0o040000 => DT_DIR,
@@ -112,8 +92,4 @@ pub fn copy(args: &[String]) -> Result<(), Fail> {
     copy_one(&tree, id, kind, Path::new(dst), &mut done)?;
     let more = if done.compressed == 0 { String::new() } else { format!(", skipped {} compressed files", done.compressed) };
     say(&format!("copied {} files, {} bytes{more}", done.files, done.bytes))
-}
-
-fn arg_at<'a>(rest: &[&'a str], i: usize) -> Result<&'a str, Fail> {
-    rest.get(i).copied().ok_or(Fail::Usage)
 }
