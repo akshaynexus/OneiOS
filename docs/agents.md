@@ -979,6 +979,18 @@ Not started. Do these only when the phone runs iOS with apps, touch and the GPU 
 - **L3: the image names the runtime it needs.** A `min_runtime` field in `manifest.json` (image agent), checked
   by the OneOS app before a switch (oneos), so that a bad image and runtime pair is refused before a boot.
 
+### Phone rule (parent, 2026-11-12): no tree walks of sysfs or /proc as root
+
+The phone did a full reboot at 10:51:54 on 2026-11-12 (boot reason `reboot`, uptime 1 min after) during a stable
+iOS session. Nothing wrote to the phone; the last command was a root `find` + `grep` that read every small file
+under `/sys/kernel`, `/sys/module`, `/sys/devices/platform`, cpufreq, devfreq and `/proc/sys/walt`. Some kernel
+and Samsung vendor nodes act when they are read (debug, watchdog and reset nodes), so that read is the likely
+cause (not proven). The owner's root is not persistent: a reboot costs a manual re-root.
+- On the phone, read **named nodes only** (`cat` of a path you know). Never `find`, `grep -r`, `ls -R`, `du`, or a
+  loop over a whole sysfs, debugfs, configfs or `/proc` tree as root. To find a node, search the kernel source or
+  the device tree on the Mac first, then read that one path.
+- Say in your notes which nodes you read on the phone, so that a reboot can be traced.
+
 ### Rules for the parallel kernel work (lead, 2026-11-10)
 
 - **One work tree per agent.** `out/kernel-hosted` and `out/kernel/current-hosted` are the lead's. Build with
