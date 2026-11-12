@@ -107,6 +107,20 @@
 # GPU archive's default, OneiOSAdreno.cpp; oneios-gpu-plugin-clients for the plug-in alone), so a new list needs no new
 # Data seed. The plug-in's text rows (open types 0x414770cc) are one oneios-gpu-text line a row, not a line a character.
 0039-gpu-client-list-and-texts.patch
+# perf: the idle cache flush (cpu_idle -> platform_cache_idle_enter -> FlushPoU_Dcache) does nothing: a vCPU is a
+# Linux thread that never powers a core down, and each set/way `dc` and cache-geometry access around it is a trapped
+# instruction xnuhost emulates by a signal (6 per idle entry with setway-skip, about 600 entries a second when idle).
+0040-idle-cache-flush-off.patch
+# perf: oneios-perf=SECONDS (default 30, 0 = off), the kernel's share of user traps on the console: syscalls by kind
+# and by number (calls and mean vCPU time from the trap to the next user entry or idle), faults filled from the
+# tables or sent to vm_fault, the pmap's maps and unmaps, the TLB lock's contention and hold time. Counters only.
+0041-perf-report.patch
+# perf: a debugging aid for configd's IOKit-quiet wait (en0 named minutes late): at 30, 60, 120, 240, 480 s the busy
+# services with no busy child and the count (oneios-iobusy=0 turns it off).
+0042-iokit-busy-report.patch
+# perf: lsd's database drop at every boot (native_ls_store_drop) said per file with its size; oneios-ls-keep=1 keeps
+# it (lsd then does not register every app again: 11 minutes on the phone). Default unchanged: dropped.
+0043-ls-store-keep.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # net/build-oneios-net.py), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and

@@ -1,0 +1,28 @@
+diff --git a/osfmk/arm/caches.c b/osfmk/arm/caches.c
+--- a/osfmk/arm/caches.c
++++ b/osfmk/arm/caches.c
+@@ -337,6 +337,16 @@
+ platform_cache_idle_enter(
+ 	void)
+ {
++#if XNU_HOSTED
++	/*
++	 * OneiOS hosted: nothing to do. A vCPU is a thread of a Linux process; it never powers its core down, so no
++	 * line of an L1 has to be written back before it idles, and Linux keeps the caches coherent. The flush is a
++	 * loop of `dc cisw` by set and way: each one, and each CLIDR/CSSELR/CCSIDR access around it, is an undefined
++	 * instruction at EL0 that xnuhost emulates with a signal. With xnuhost's setway-skip that was 6 traps per idle
++	 * entry (1024 without it), at about 600 idle entries a second on an idle lock screen (docs/hardware.md 7d),
++	 * and none of them did anything on the host.
++	 */
++#else
+ 	platform_cache_disable();
+ 
+ 	/*
+@@ -350,6 +360,7 @@
+ 	} else {
+ 		FlushPoU_Dcache();
+ 	}
++#endif
+ }
+ 
+ boolean_t

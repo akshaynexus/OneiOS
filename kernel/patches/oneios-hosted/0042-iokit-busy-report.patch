@@ -1,0 +1,100 @@
+diff --git a/iokit/Kernel/IOService.cpp b/iokit/Kernel/IOService.cpp
+--- a/iokit/Kernel/IOService.cpp
++++ b/iokit/Kernel/IOService.cpp
+@@ -9335,8 +9335,84 @@
+ 	}
+ 
+ 	return status;
++}
++
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0042), a debugging aid: which services keep IOKit busy. configd's InterfaceNamer waits for IOKit to
++ * go quiet (IOKitWaitQuiet) for up to four minutes before it names a network interface: en0 was named 261 s after the
++ * Wi-Fi driver published it (prelink's session 2), so some service stayed busy for minutes. At 30, 60, 120, 240 and
++ * 480 s of uptime (oneios-iobusy=0 turns it off) one line counts the busy services and gives the root's busy count,
++ * and one line each names up to 16 busy services none of whose children is busy (a parent is busy while a child is):
++ *   oneios-iobusy: 60 s: busy 1: AppleSomething (class SomeClass, id 0x100000abc), inactive 0
++ *   oneios-iobusy: 60 s: 7 services busy, the root's count 3
++ */
++static void
++oneios_iokit_busy_report(unsigned seconds)
++{
++	IORegistryIterator * iter = IORegistryIterator::iterateOver(gIOServicePlane, kIORegistryIterateRecursively);
++	OSOrderedSet *       all = iter ? iter->iterateAll() : NULL;
++	unsigned             busy = 0, shown = 0;
++
++	if (all != NULL) {
++		for (unsigned i = 0; i < all->getCount(); i++) {
++			IOService * service = OSDynamicCast(IOService, all->getObject(i));
++			if (service == NULL || service->getBusyState() == 0) {
++				continue;
++			}
++			busy++;
++			bool         leaf = true;
++			OSIterator * children = service->getChildIterator(gIOServicePlane);
++			OSObject *   child;
++			while (children != NULL && leaf && (child = children->getNextObject()) != NULL) {
++				IOService * kid = OSDynamicCast(IOService, child);
++				if (kid != NULL && kid->getBusyState() != 0) {
++					leaf = false;
++				}
++			}
++			OSSafeReleaseNULL(children);
++			if (leaf && shown < 16) {
++				shown++;
++				IOLog("oneios-iobusy: %u s: busy %u: %s (class %s, id 0x%llx), inactive %d\n", seconds, (unsigned)service->getBusyState(),
++				    service->getName(), service->getMetaClass()->getClassName(), service->getRegistryEntryID(), service->isInactive() ? 1 : 0);
++			}
++		}
++	}
++	IOService * root = IOService::getServiceRoot();
++	IOLog("oneios-iobusy: %u s: %u services busy, the root's count %u\n", seconds, busy, root ? (unsigned)root->getBusyState() : 0);
++	OSSafeReleaseNULL(all);
++	OSSafeReleaseNULL(iter);
+ }
+ 
++static void
++oneios_iokit_busy_thread(void *, wait_result_t)
++{
++	static const unsigned at[] = { 30, 60, 120, 240, 480 };
++	for (unsigned i = 0; i < sizeof(at) / sizeof(at[0]); i++) {
++		uint64_t nano = 0;
++		absolutetime_to_nanoseconds(mach_absolute_time(), &nano);
++		uint64_t up = nano / NSEC_PER_SEC;
++		if (up < at[i]) {
++			IOSleep((unsigned)((at[i] - up) * 1000));
++		}
++		oneios_iokit_busy_report(at[i]);
++	}
++	thread_terminate(current_thread());
++}
++
++extern "C" void oneios_iokit_busy_start(void);
++void
++oneios_iokit_busy_start(void)
++{
++	uint32_t on = 1;
++	thread_t thread = THREAD_NULL;
++	(void)PE_parse_boot_argn("oneios-iobusy", &on, sizeof(on));
++	if (on != 0 && kernel_thread_start(&oneios_iokit_busy_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++#endif /* XNU_HOSTED */
++
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ 
+ #if __LP64__
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+--- a/osfmk/arm64/hosted/hosted_machine.c
++++ b/osfmk/arm64/hosted/hosted_machine.c
+@@ -812,6 +812,8 @@
+ 	hosted_display_report_start();
+ 	extern void hosted_perf_report_start(void);
+ 	hosted_perf_report_start();                     /* 0041 */
++	extern void oneios_iokit_busy_start(void);
++	oneios_iokit_busy_start();                      /* 0042 */
+ 	if (!PE_parse_boot_argn("oneios-ubt", hosted_ubt_names, sizeof(hosted_ubt_names)) || hosted_ubt_names[0] == 0) {
+ 		return;
+ 	}

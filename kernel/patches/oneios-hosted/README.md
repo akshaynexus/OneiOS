@@ -191,6 +191,38 @@ backtrace).
 
 Both built; not run.
 
+## 0040-0043: the CPU path's kernel side (perf, 2026-11-12)
+
+- **0040, the idle cache flush off.** `cpu_idle` calls `platform_cache_idle_enter` (this board is not
+  `APPLE_ARM64_ARCH_FAMILY`), which flushes L1 by set and way (`FlushPoU_Dcache`). Under xnuhost each `dc cisw` and each
+  CLIDR, CSSELR and CCSIDR access is an undefined instruction at EL0 that xnuhost emulates with a signal: 6 traps per
+  idle entry with `setway-skip` (1024 without), about 600 idle entries a second on an idle lock screen
+  (`docs/hardware.md` 7d). A vCPU is a Linux thread; it never powers a core down, and Linux keeps the caches coherent,
+  so the flush had no effect. Now the function is empty under `XNU_HOSTED` (in the built kernel: `bti c; ret`). In the
+  phone log, the stop's `emulated: insn` lines should no longer list `0xd5087e42` (`dc cisw`) or the CLIDR/CSSELR/CCSIDR
+  reads among the most frequent.
+- **0041, `oneios-perf=SECONDS`** (default 30, 0 = off). A kernel thread prints, for each period: user stays, system
+  calls by kind (BSD, Mach, platform) with the vCPU time each took (from the trap to the vCPU's next user entry or
+  idle: the work up to the return or the block, not the wait), faults filled from the page tables (with the fill's
+  time) and faults sent to `vm_fault` (with their time), refills, interrupts of user code, twins made and dropped; the
+  pmap's user and kernel maps and unmaps; the TLB lock (`hosted_pmap.h`): times taken, times it was held by another
+  CPU, the time spent waiting and held (and their share of one vCPU); copyio copies and faults; the 12 BSD system
+  calls and 8 Mach traps with the most calls (`NUMBER CALLS xMEAN_US`; `bsd/kern/syscalls.master` and
+  `osfmk/kern/syscall_sw.c` name them; Mach traps are negative). With xnuhost's `perf:` lines (`docs/booter.md`
+  2.6a) this says which calls the kernel's share goes to, and whether the one TLB lock is a bottleneck.
+- **0042, `oneios-iobusy`** (on unless `oneios-iobusy=0`): at 30, 60, 120, 240 and 480 s of uptime, the services
+  that keep IOKit busy and have no busy child (`oneios-iobusy: 60 s: busy 1: NAME (class CLASS, id 0x...), inactive 0`)
+  and the count. configd's InterfaceNamer waits up to 4 minutes for IOKit to go quiet before it names en0 (261 s
+  after the Wi-Fi driver published it in prelink's session 2); these lines name what it waits for.
+- **0043, `oneios-ls-keep`.** The base's `native_ls_store_drop` deletes LaunchServices' database at every boot, on
+  purpose (its comment: the staged apps are registered only by a rebuild, and a database saved before they were
+  registered kept them out). So lsd registers every app again at every boot: about 11 minutes on the phone, with the
+  database's lock held while SpringBoard waits; 0037's semaphore does not change that. Each file is now logged with its
+  size (`oneios-ls: CONTAINER/FILE: N bytes: dropped (...)`), and `oneios-ls-keep=1` keeps it. Default unchanged.
+  Not proven: whether a kept database still has the staged apps after a session that was stopped before lsd saved.
+
+Built on the Mac (`HOSTED_OUT=perf`, series through 0043); not prelinked by me, not run.
+
 ## 0039-gpu-client-list-and-texts.patch (gpu, 2026-11-12)
 
 - **One list for both gates of a Metal device.** A process other than backboardd gets a device only when the

@@ -308,6 +308,8 @@ perf: cpuN: C% of a core; of its wall time K% kernel, U% an iOS thread's turn, I
 
 "An iOS thread's turn" is the time `thread_run` waited (the thread's own code plus both hand-offs); "kernel" is the rest
 of the vCPU's wall time outside `cpu_idle`; "C% of a core" is the vCPU thread's CPU time (Linux's clock of that thread).
+The kernel's side of the same trips (which system calls, the fills, the TLB lock) is the hosted kernel's
+`oneios-perf:` report (patch 0041, `kernel/patches/oneios-hosted/README.md`).
 
 ### 2.7 Devices
 
