@@ -714,7 +714,7 @@ module has its script's name and description, takes what the script took and wri
 | `kernel gen board` | `kernel/device/scripts/build-oneios-board.py` | `build_oneios_board.rs` | compared; Python is the default, `KERNELGEN_IMPL=rust` runs the command |
 | `kernel gen storage` | `kernel/patches/oneios-hosted/storage/build-oneios-hosted-storage.py` | `build_oneios_hosted_storage.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
 | `kernel gen aes` | `.../aes/build-oneios-aes.py` | `build_oneios_aes.rs`, `class_record.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
-| `kernel gen keystore` | `.../keystore/build-oneios-keystore.py` | `build_oneios_keystore.rs` | compared; Python is the default, `KERNELGEN_IMPL=rust` runs the command |
+| `kernel gen keystore` | `.../keystore/build-oneios-keystore.py` | `build_oneios_keystore.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
 | `kernel gen net` | `.../net/build-oneios-net.py` | `build_oneios_net.rs` | compared; Python is the default, `KERNELGEN_IMPL=rust` runs the command |
 | `kernel gen hid` | `.../hid/build-oneios-hid.py` | `build_oneios_hid.rs` | compared; Python is the default, `KERNELGEN_IMPL=rust` runs the command |
 | `kernel gen audio` | `.../audio/build-oneios-audio.py` | `build_oneios_audio.rs` | compared; Python is the default, `KERNELGEN_IMPL=rust` runs the command |

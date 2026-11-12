@@ -492,7 +492,7 @@ is, what it answers and why it is **not a security boundary**: [keystore/README.
 
 | Where | What |
 |---|---|
-| `keystore/OneiOSKeyStore.cpp`, `keystore/build-oneios-keystore.py` | the archive `liboneioskeystore.a` (the component's service and user client, the start, the class keys, wrap and unwrap), added to the link by `kernel/build-hosted.sh` |
+| `keystore/OneiOSKeyStore.cpp`, `oneios-tool kernel gen keystore` | the archive `liboneioskeystore.a` (the component's service and user client, the start, the class keys, wrap and unwrap), added to the link by `kernel/build-hosted.sh` |
 | `osfmk/arm64/oneios_host.c` | `oneios_keystore_start()` (weak default) called from `oneios_board_late_start`, after the GPU, before the first user process |
 | `bsd/vfs/kpi_vfs.c` `native_dataprotect_emulated` | UniXNU's `owner-dataprotect` (a file's protection class kept in the extended attribute `com.unixnu.dataprotect-class` on a volume without content protection) is on unless `owner-dataprotect=0` |
 
