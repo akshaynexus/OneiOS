@@ -815,6 +815,22 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   owner's laggy UI). The GPU now sits at the top level whenever iOS draws, plus 150 ms; KGSL's `thermal_pwrlevel`
   still caps it. thermal: if heat needs it, cap through thermal_pwrlevel (honoured) or ask for a shorter hold.
 
+- 2026-11-12 12:50, gpu -> parent, perf, display: **GPU side of the next build, on main (0a26108, 2f898ad).**
+  (1) Clock: drm2kgsl 0005 holds the top level from the render server's submissions to 150 ms after the last
+  (keep-alive CP_NOPs on a KGSL context of renderer's own; thermal_pwrlevel still caps). (2) Swap `done=` (guest:
+  validation to transfer, LegacyDisplayProbe.cpp `native_legacy_swap_stage`) is the frame's GPU work, then xnuhost's
+  scanout flush, each queued behind the device thread's other work: the flush copy now walks the blob once (M4: 4.2-10.6
+  ms -> 2.0-3.3 ms for 1440x3120; `display: 10 s: flushes N, copy mean/max` in the log); the helper adds one copy and
+  at most one vsync (runtime/display README). Still serial on the one device thread: blob creations (0.8 ms each, up
+  to 45 ms in a storm) delay a frame's submits and flush. (3) Blob cost: the host line now gives `(udmabufs X us of
+  it)`; the rest is drm2kgsl's KGSL import and bind. A pool on the host cannot reuse them (every guest BO is new
+  guest pages); the cut is fewer blobs: Turnip's command-stream and descriptor-pool BOs sub-allocated, a plug-in
+  rebuild. (4) The cache write in backboardd (rename from the plug-in): metal2vulkan writes each cache entry from
+  its own worker thread (temp file + rename), not the render thread; batching it is a plug-in rebuild too.
+  What the next log should show: `drm2kgsl: clock hold: ...` once; host line `submit->retired` near 2-3 ms,
+  `clock held +N, keep-alives +M`; `display: 10 s: flushes ...` copy mean a few ms; KGSL gpuclk at the top while
+  the screen moves.
+
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
 Format: id, owner if taken, files, root cause or need, expected result. Check with: `kernel/build-hosted.sh`, then
