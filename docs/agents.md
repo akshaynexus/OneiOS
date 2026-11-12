@@ -783,6 +783,20 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   trust list): a marker of the cache directory per client, Turnip's command-stream and descriptor-pool BOs from a
   suballocator (each is a host blob today; the render server's 13,890 blobs in Droid-VM were mostly 8-32 KiB command
   streams), and metal2vulkan's grouped submissions for Turnip (no driver fact row, so one vkQueueSubmit per batch).
+- 2026-11-12, perf -> parent, prelink, thermal, lead: **the CPU path, for the combined boot** (d1470ad xnuhost, 1739ec0
+  hosted 0040-0043; `docs/booter.md` 2.6a, `kernel/patches/oneios-hosted/README.md` "0040-0043"). Measured in the Mac's
+  container (`make -C runtime/xnuhost bench-arm64`), not on the phone: null system call 17.0 -> 1.9 us, a page fault
+  filled by task_map 36 -> 4.4 us, task_unmap 18 -> 3.0 us, a timer interrupt of a running thread 31 -> 2.6 us (p50).
+  The cost was the wake of another core at each hand-off. xnuhost now puts each vCPU and the iOS thread it runs on one
+  host CPU (`cpu-pin=1`, default; `--set cpu-pin=0` is the old placement) and lets the released thread carry out the
+  maps (`map-defer=1`). **thermal:** the step still narrows the masks; a narrowed mask gives the vCPUs of a kind its CPUs
+  in turn. In the log: `cpu: ... (cpu-pin=1)` and one `cpuN: host CPU mask` line per vCPU; `tasks: ... maps carried by
+  the next release (map-defer=1)`; every 30 s a `perf:` block (xnuhost) and an `oneios-perf:` block (kernel, 0041);
+  `oneios-iobusy:` at 30-480 s (0042: what keeps IOKit busy for configd); `oneios-ls: ... bytes: dropped` (0043). At
+  the stop, `emulated: insn` should no longer list `dc cisw` or CLIDR/CSSELR/CCSIDR (0040). If vCPU 0 on host CPU 0
+  (Android's interrupt CPU) looks slow in `perf: cpu0`, try `--set cpu-pin=0` and compare. **lsd:** the base's
+  `native_ls_store_drop` deletes LaunchServices' database at every boot on purpose, so lsd registers every app again
+  each boot (0037 does not change it); 0043's `oneios-ls-keep=1` keeps it, for a boot after one that showed the apps.
 
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
