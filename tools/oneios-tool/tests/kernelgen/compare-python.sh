@@ -1,4 +1,8 @@
 #!/bin/bash
+# The Python scripts this compares with were retired on 2026-11-13 (the result: tools/oneios-tool/README.md
+# "kernel"; the frozen output: compare-golden.sh). At commit a5b2d95, the last with every script, all of it runs;
+# since then only `compile-command` can (drivers/build.py stays), and a retired name says so and ends with status 2.
+#
 # The board archive generators: `oneios-tool kernel gen NAME` against the Python script it replaces, in the tree of
 # a finished hosted kernel build. Each generator runs twice in the same place (the Python script, then the Rust
 # command), in the environment and directory UniXNU's driver gave the archive step; every file either one writes
@@ -10,7 +14,7 @@
 #             (its tree/ holds the first pass's compile records and the sources the archives are built from)
 #   ENVFILE   the environment of one archive step of that build: /proc/PID/environ of a `build-oneios-*.py` process,
 #             saved while the build ran (tests/kernelgen/save-env.sh NAME OUTDIR does that)
-#   NAME      board storage aes keystore net hid audio gpu display (default: all of these, then the two below)
+#   NAME      board storage aes keystore net hid audio gpu display, or one of the names below (default: compile-command)
 #             build-record      kernel/build-record.py against `oneios-tool kernel build-record`: --self-test, and
 #                               `finish` on WORK into two scratch folders (the record, series.txt, the kernel, the
 #                               link and stdout compared)
@@ -38,7 +42,8 @@ TOOL=${ONEIOS_TOOL:-$ROOT/tools/oneios-tool/target/release/oneios-tool}
 SCRATCH=${SCRATCH:-$ROOT/out/kernelgen-compare}
 [ -x "$TOOL" ] || { echo "compare-python: no $TOOL (cargo build --release --manifest-path tools/oneios-tool/Cargo.toml)" >&2; exit 2; }
 [ -d "$TREE/build/xnu" ] && [ -s "$ENVFILE" ] || { echo "compare-python: $TREE has no build, or $ENVFILE is empty" >&2; exit 2; }
-[ $# -gt 0 ] || set -- board storage aes keystore net hid audio gpu display build-record compile-command
+# (the default was every generator, build-record and compile-command while the scripts were there)
+[ $# -gt 0 ] || set -- compile-command
 H=$ROOT/kernel/patches/oneios-hosted
 
 script_of() {
@@ -85,6 +90,7 @@ last_source() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]
 compare_build_record() {
   local py=$SCRATCH/py/build-record rs=$SCRATCH/rs/build-record host=linux same=yes differences
   [ "$(uname -s)" = Linux ] || host=macos
+  [ -f "$ROOT/kernel/build-record.py" ] || { echo "compare-python: kernel/build-record.py is not there (retired)" >&2; exit 2; }
   rm -rf "$py" "$rs"; mkdir -p "$py" "$rs"
   python3 -I "$ROOT/kernel/build-record.py" --self-test > "$py/self-test" 2>&1; echo $? >> "$py/self-test"
   "$TOOL" kernel build-record --self-test > "$rs/self-test" 2>&1; echo $? >> "$rs/self-test"

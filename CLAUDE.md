@@ -29,7 +29,7 @@ command that no longer works, or a status that has moved on. If you are unsure w
 | What the OneOS fork reads or does (session ABI, stage layout, start/stop) | `oneos/interface.md` (and the fork's `docs/oneios.md`) |
 | A new reference repo or pin | `docs/references.md`, `scripts/setup/get-references.sh` |
 | A phone check tool's commands or output | its `README.md` "On the phone" section |
-| The Rust tools (`tools/oneios-tool`: sym, log, image, ioslog, prelink, phone, app, cycle), a comparison with the tool they replace | `tools/oneios-tool/README.md` (commands, the comparison and its result, crates), `tools/oneios-tool/todo_rust.md` (what is left), `docs/building.md` section 10 |
+| The Rust tools (`tools/oneios-tool`: sym, log, image, ioslog, prelink, kernel, phone, app, cycle), a comparison with the tool they replace | `tools/oneios-tool/README.md` (commands, the comparison and its result, crates), `tools/oneios-tool/todo_rust.md` (what is left), `docs/building.md` section 10 |
 | The phone and app workflow (`oneios-tool phone`, `app`, `cycle`: a command, an option, a step, a phone rule) | `tools/oneios-tool/README.md` ("phone", "app", "cycle"), `docs/building.md` sections 6 and 7, and the stand-in phone's tests (`tools/oneios-tool/tests/phone`, `app`, `cycle`) |
 
 Write docs as facts: what it does, the exact commands, what was tested and what was not. Mark guesses as guesses.

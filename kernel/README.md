@@ -51,7 +51,8 @@ patched tree with one commit per patch, for writing patches), `kernel/tests/host
    does not leave undefined).
 5. Driver archives linked in: ArmDTPlatform, ArmCpu, libpthread's kernel part, libfirehose, and UniXNU's source
    corecrypto (see "Releases").
-6. The board's own archives, built between the two kernel passes by `oneios-tool kernel gen board` and
+6. The board's own archives, built between the two kernel passes by `oneios-tool kernel gen board` (`tools/oneios-tool`, Rust:
+   the kernel scripts build it when it is missing or stale and put it on `PATH`; it was `device/scripts/build-oneios-board.py`) and
    force-loaded through `CONFIG_XNU_EXTRA_LD_ARCHIVES`: `liboneiosdrivers.a` (`drivers/build.py`: the bridge
    transport, haptics, Bluetooth; 9 sources) and `liboneiosboard.a` (Droid-VM's `DroidVMCpufreq.c`, unchanged).
    `oneios_board_late_start()` (`oneios-board-start.patch`), called from `bsd_init` after the storage hook, runs

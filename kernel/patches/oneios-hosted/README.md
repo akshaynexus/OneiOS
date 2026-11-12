@@ -7,6 +7,12 @@ host-call ABI (`runtime/xnuhost/include/xnuhost/hostcall.h`). Date: 2026-11-10.
 `arm_init`, the whole VM bootstrap and into the first kernel thread (`kernel_bootstrap_thread`). It stops in
 corecrypto's start-up self-test. No user-mode code path has run. Nothing has run on the phone. Details below.
 
+The archives of this layer (the disks, software AES, the key store, the Wi-Fi, HID, audio, the GPU, the display) are
+each built by `oneios-tool kernel gen NAME` (`tools/oneios-tool/crates/oneios-kernel`, one module per archive), which
+`kernel/build-hosted.sh` adds to the board's archives. Until 2026-11-13 these were Python scripts in the archives'
+folders (`NAME/build-oneios-NAME.py`); where a comment in a source or a patch here still names one, it means the
+module `build_oneios_NAME.rs` (the scripts' outputs are frozen in `tools/oneios-tool/tests/kernelgen/golden`).
+
 ## Build and run
 
 ```sh
