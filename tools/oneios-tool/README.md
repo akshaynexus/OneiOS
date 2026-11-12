@@ -642,7 +642,7 @@ SPEED=4096:280 tools/oneios-tool/tests/phone/sparse-compare.sh   # also the time
   are printed. (2) The same streams through the writer against a model of APFS as described above: without the
   punch the short holes are allocated (23.1 MB for 3.4 MB of data in the first stream), with it exactly the
   pages that hold data are, and no punch is off a block's edge or past the file's end. (3) The zero check.
-  (4) An error of the stream and one of the file.
+  (4) An error of the stream and one of the file. `cargo test -p oneios-phone` as a whole: 8 passed.
 - `sparse-compare.sh`: seven streams of `tests/phone/mkstream.py` (`runs`: zero runs and data runs shorter than
   4 KiB, between 4 KiB and 4 MiB, and longer; `tail`: ends inside a block; `zero`; `empty`; `lastbyte`: a data
   byte at the very end; `dense`; `phone`: 64 MiB shaped like the store) through the script, through
@@ -652,16 +652,16 @@ SPEED=4096:280 tools/oneios-tool/tests/phone/sparse-compare.sh   # also the time
   blocks than the script's. The same on a stream of 32 GiB with 2.18 GB of data (`SPEED=32768:2100`, 41
   checks): the script's copy holds 4.52 GB in 459 regions, `sparse-write`'s 2.18 GB in 3648.
 
-Speed (the same machine: i5-7500, 4 cores; other agents' builds ran all the time, load 2 to 10, so wall times
+Speed (the same machine: i5-7500, 4 cores; other agents' builds ran most of the time, load 1 to 10, so wall times
 of one command moved by a third and more from run to run; CPU times did not). Two streams of `mkstream.py
 phone`: 32 GiB with 2.18 GB of data in 3648 runs (1.22 GB packed with `gzip -1`), and 4 GiB with 302 MiB of data
 (165 MB packed).
 
 | Reader | Fed the packed stream: wall, MB/s of the stream | CPU of the reader | Behind `mkstream.py \| gzip -1 -c`: wall |
 |---|---|---|---|
-| 32 GiB: the source alone (`> /dev/null`) | | | 49.6 s, 62.6 s |
-| 32 GiB: `gunzip -c \| sparsewrite.py` | 39.6 s, 868 MB/s | gunzip 11.5 s + python 10.6 s | 60.0 s, 72.7 s |
-| 32 GiB: `sparse-write --gunzip` | 10.7 s, 3218 MB/s | 5.0 s | 52.5 s, 80.9 s |
+| 32 GiB: the source alone (`> /dev/null`) | | | 4 rounds: 49.6, 62.6, 52.6, 53.3 s |
+| 32 GiB: `gunzip -c \| sparsewrite.py` | 39.6 s, 868 MB/s | gunzip 11.5 s + python 10.6 s | 60.0, 72.7, 66.7, 66.3 s |
+| 32 GiB: `sparse-write --gunzip` | 10.7 s, 3218 MB/s | 5.0 s | 52.5, 80.9, 59.0, 60.0 s |
 | 4 GiB: the source alone | | | 5 rounds: 6.7 to 9.4 s, median 7.9 s |
 | 4 GiB: `gunzip -c \| sparsewrite.py` | 2.6 s and 2.9 s, 1633 and 1486 MB/s | gunzip 1.4 s + python 1.3 s | 6.9 to 11.1 s, median 8.1 s |
 | 4 GiB: `sparse-write --gunzip` | 1.1 s and 0.6 s, 3803 and 7469 MB/s | 0.6 s | 7.0 to 8.6 s, median 7.5 s |
@@ -669,10 +669,12 @@ phone`: 32 GiB with 2.18 GB of data in 3648 runs (1.22 GB packed with `gzip -1`)
 Without gzip, from the stream as a sparse file: `sparsewrite.py < FILE` 41.8 s (16.1 s of CPU), `sparse-write <
 FILE` 36.4 s (12.6 s); 4 GiB, two runs: 3.6 and 1.7 s against 2.0 and 1.2 s.
 
-Behind `gzip -1` (the phone's side of the real copy) both readers wait for it, so the pipe is as fast as
-`gzip -1`: `sparse-write` was the faster in the first 32 GiB round (load 3) and in 4 of the 5 rounds at 4 GiB,
-the slower in the second 32 GiB round (load 5); the difference is inside this machine's noise. Its CPU is a
-quarter of gunzip's and the script's. Fed a packed stream as fast as it can read, it is 2.4 to 4.8 times as
+Behind `gzip -1` (the phone's side of the real copy) both readers wait for it, so the pipe is about as fast as
+`gzip -1`. `sparse-write`'s pipe was the faster in three of the four 32 GiB rounds, by 10 to 12 % (the last two,
+the quietest: 59.0 and 60.0 s against 66.7 and 66.3 s, 582 against 517 MB/s of the stream), and in 4 of the 5
+rounds at 4 GiB; in the second round, the one with the most load, it was the slower. Its CPU is a quarter of
+gunzip's and the script's (the whole pipe: 62 s of CPU against 80 s, of which the source is 56 s).
+Fed a packed stream as fast as it can read, it is 2.4 to 4.8 times as
 fast. (Feeding the pipe from the sparse file, `gzip -1 -c FILE |`, was tried first and says nothing about the
 readers: reading 32 GiB of holes fills the page cache with zeros, and `gzip -1 -c FILE > /dev/null` alone took
 68 to 123 s; in five such rounds the script's pipe took 75 to 103 s and `sparse-write`'s 80 to 107 s.) What was
