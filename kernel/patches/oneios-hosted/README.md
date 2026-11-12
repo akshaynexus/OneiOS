@@ -795,7 +795,7 @@ ASSOC_DONE: wifid never learned of the join and Settings stayed at "connecting".
 
 ## net/: the Wi-Fi, en0 on the phone's radio (radio, radio2, 2026-11-12)
 
-No numbered patch: an archive (`net/build-oneios-net.py`, hooked into `kernel/build-hosted.sh` like `hid/`) whose
+No numbered patch: an archive (`oneios-tool kernel gen net`, hooked into `kernel/build-hosted.sh` like `hid/`) whose
 start, `oneios_net_start` (`net/OneiOSWifi.cpp`), `oneios_drivers_start` calls before the audio's (weak in
 `drivers/bridge/OneiOSBridge.c`). Before it the hosted kernel had no network driver and iOS no en0. It holds
 `IO80211Controller` and `IO80211Interface` (the class names wifid and configd know) as subclasses of the
