@@ -129,7 +129,9 @@ SELinux stays as One UI had it, usually Enforcing), detached, in a **new mount n
 What is running around it: One UI's kernel, init, vendor HALs, **surfaceflinger and the vendor composer**
 (left running for a root SurfaceControl layer, plan section 5.5), audioserver, netd, vold, keystore2, the
 radio. The switch holds the kernel wakelock `oneios_session` for the whole session (One UI's power manager is
-gone), and feeds Samsung's software watchdog. Gone: zygote, zygote_secondary, system_server and every app. So no InputDispatcher: read
+gone), and feeds Samsung's software watchdog. It saves One UI's clock caps (each cpufreq policy's
+`scaling_min_freq`/`scaling_max_freq`, `/sys/kernel/gpu/gpu_max_clock`, KGSL's `max_gpuclk`) and, once system_server
+is gone, writes the hardware's range; the return writes One UI's values back before zygote (`docs/hardware.md` 7d). Gone: zygote, zygote_secondary, system_server and every app. So no InputDispatcher: read
 `/dev/input/event*` yourself. Do not `EVIOCGRAB` the volume-key device (see 6), or handle the chord yourself.
 
 ## 5. What xnuhost must do for the switch

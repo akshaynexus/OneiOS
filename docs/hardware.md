@@ -1044,10 +1044,15 @@ cap as `thermal_pwrlevel` 9 (`max_gpuclk` 500000000; its devfreq and `gpu` cooli
 kernel's thermal zones did not set it). The switch stops system_server, so whatever cap One UI last set stays for the
 whole session (sessions A and B ran with these; bringup's sessions 3 and 4, after a cool One UI, had 3340800 and 1000
 MHz). A session that starts after a warm One UI is slowed for its whole length, and one that starts cool has no case
-policy but ours. Proposal (oneos, not done): the switch saves `scaling_max_freq`/`scaling_min_freq` of each policy and
-`gpu_max_clock`, sets the hardware's tops (xnuhost's own step and the kernel's trips then decide), and the return writes
-the saved values back before zygote starts; a SIGKILL of xnuhost does not skip the return, so the restore always runs.
-xnuhost itself writes none of them.
+policy but ours. **The OneOS fork now saves and lifts them** (branch `oneios`, `oneios_switch.sh` `clocks_save` /
+`clocks_tops`, `oneios_return.sh`; the fork's `docs/oneios.md`, "Session flow"): at the baseline it saves
+`scaling_min_freq` and `scaling_max_freq` of each policy, `/sys/kernel/gpu/gpu_max_clock` and KGSL's `max_gpuclk`
+(`control/base/clocks`); once system_server is gone it writes the hardware's range (`cpuinfo_min_freq`,
+`cpuinfo_max_freq`, the top of the GPU tables) and logs each node `old -> new` in `switch.log`; the return writes One
+UI's values back before Gate A and zygote, on every way back but the reboot (a SIGKILL of xnuhost does not skip the
+return), and logs them in `return.log`. The kernel's thermal zones, trips and cooling devices and `/sys/power` are not
+written: the kernel's junction trips, LMh and xnuhost's thermal step are the session's caps. Tested against a fake
+sysfs (`OneiosScriptTest`); not yet run on the phone (it needs the next app build). xnuhost itself writes none of them.
 
 ### Missing, unknown
 
