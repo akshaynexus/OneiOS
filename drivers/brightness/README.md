@@ -202,8 +202,9 @@ ONEIOS BACKLIGHT: DisplayBrightness number 0x0 (32 bits): the integer 0 or 1 (a 
 ```
 
 The third form means the float did not survive the serialization: the fix is then in backboardd (`BacklightMode.inc`:
-send `brightness-nits` from the same request) [I]. Written and host-tested on the Linux PC (the decoder); the driver's
-compile check needs a kernel build's records (`drivers/build.py --check`, the Mac); not run on the phone.
+send `brightness-nits` from the same request) [I]. Written and host-tested on the Linux PC (the decoder); the driver
+compiles: `drivers/build.py --check` against the records of the Linux PC's `HOSTED_OUT=pc` build (2026-11-12, all 16
+sources), and it is in that kernel. Not run on the phone.
 
 ## Only a session can show
 

@@ -15,6 +15,7 @@ and `out/`.
 |---|---|---|
 | python3 3.11+, zstd, tmux, git, curl, patch | everything | `patch`: xnuhost's Makefile applies `runtime/xnuhost/drm2kgsl/patches` to a copy of drm2kgsl |
 | clang (stock, recent) | the kernel | the kernel build uses stock clang plus xnu-linux-toolchain's ld64 (set up by the kernel scripts, no root) |
+| libdispatch with BlocksRuntime (Linux only) | the kernel's toolchain (cctools' ld64) | Arch: `libdispatch` (6.2.2 on the PC of 2026-11-12: `/usr/include/dispatch`, `/usr/lib/libdispatch.so`, `libBlocksRuntime.so`); Debian/Ubuntu: `libdispatch-dev libblocksruntime-dev`. Without it `kernel/linux/setup-toolchain.sh` stops and no kernel builds. Also git, cmake, make, flex, bison, autoconf, automake, pkg-config ([kernel/README.md](../kernel/README.md)) |
 | Android NDK 28.2 | xnuhost, the helpers, the phone tools | `$HOME/Android/Sdk/ndk/28.2.13676358` (Linux), `$HOME/Library/Android/sdk/ndk/28.2.13676358` (macOS), or `$NDK` / `$ANDROID_NDK_HOME` |
 | Android SDK build-tools (`d8`) and a JDK (`javac`) | the display helper's dex | the newest `build-tools/*/d8` beside the NDK's SDK; on a Mac the Homebrew JDK 17 (`brew install openjdk@17`), elsewhere `javac` from `PATH` |
 | Apple's `container` 1.7.1 (Mac only) | the runtime's host tests from a Mac | `brew install container`, then `container system start`; `runtime/host-tests.sh`, section 4 |
@@ -89,6 +90,12 @@ scripts/bg.sh kernel-hosted env HOSTED_OUT=me kernel/build-hosted.sh
   empty tree with UniXNU's source cache (`out/kernel-hosted/unixnu/feeds`) present, the RELEASE reference included;
   the first run also fetches that cache (about 170 MB from GitHub: 14 min on the link of 2026-11-12). An incremental
   rebuild: 30-100 s.
+- On the Linux PC (x86_64, 4 CPUs, clang 23.1.4, 2026-11-12):
+  `scripts/bg.sh k env HOSTED_OUT=pc XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh` took 683 s from an empty tree,
+  the toolchain's first setup (`out/toolchain`), UniXNU's source cache and the RELEASE reference included. The log shows
+  one `ld: symbol(s) not found` early on: that is the "bootstrap pass for the compile records" (XNU linked before the
+  board's archives exist), and the build goes on. The prelink of a Linux-built kernel needs the pair list's
+  toolchain entries ([kernel/prelink/README.md](../kernel/prelink/README.md), "A Linux-built kernel against the list").
 
 - The kernel is built from the checkout whose `kernel/build-hosted.sh` you run: its `drivers/` and
   `kernel/patches/oneios-hosted/*` (the script exports `ONEIOS_REPO`). Before 2026-11-11 the archive scripts

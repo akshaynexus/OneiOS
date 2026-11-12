@@ -58,12 +58,12 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
      boot with `--ram 9728M` once the IPSW and an image set are built). OOM score unchanged. On the phone: read the
      two `memory:` lines; if `host MemAvailable` falls under ~300 MiB, lower `ram-percent` in the image's
      `xnuhost.conf`.
-   - **Swap: written, applies, not compiled (2026-11-12).** Hosted 0057 makes `/private/var/vm` root:wheel 0755 before
+   - **Swap: built (the Linux PC, 2026-11-12), not on the phone.** Hosted 0057 makes `/private/var/vm` root:wheel 0755 before
      launchd in every Data store and, on each swap file failure, logs which volume the folder was on and whether it
      was read-only; the roottweak's `data_layout` puts the folder in new seeds. errno 30 is not settled (the sealed
      root before the Data mount, or a Data volume gone read-only: `kernel/patches/oneios-hosted/README.md`, 0057);
-     the next boot's `oneios-swap:` line decides it. Needs a kernel build (the Mac: this PC has no libdispatch for the
-     Linux toolchain).
+     the next boot's `oneios-swap:` line decides it. Compiled and prelinked on the Linux PC (`HOSTED_OUT=pc`,
+     `kernel.kc` `ffbe95f7...`; `kernel/prelink/README.md`, "A Linux-built kernel against the list").
    - **backboardd's GPU memory growth** (gpu): read, not fixed (2026-11-12). Upstream NativeMetal (at our pin)
      already frees the runtime's empty 64 MiB blocks every 2 s even while backboardd draws (`watchIdleMemory`),
      drops held surface imports and every kept block on a memory-pressure rise and keeps no spare room while it stays
@@ -87,7 +87,7 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
    (xnuhost keeps the socket on transient send errors and logs; the helper logs why its read ended); host tests were
    started, not read; not on the phone.
 4. **Brightness:** requests with the key `DisplayBrightness` were ignored ("no brightness in it"). **Handled (built,
-   host-tested decoder, not on the phone, 2026-11-12):** 24A446's CoreBrightness sends the slider's position 0..1 (a
+   host-tested decoder, the driver compiled into the Linux PC's kernel of 2026-11-12, not on the phone):** 24A446's CoreBrightness sends the slider's position 0..1 (a
    float) or `{Brightness, Commit, Period}`; the driver takes it when unambiguous and logs what came
    (`drivers/brightness/README.md`, "DisplayBrightness"). If the log says `the integer 0 or 1`, the float was lost in
    IOKit's serialization and backboardd's side must send `brightness-nits`. Then check whether the

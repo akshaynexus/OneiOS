@@ -19,6 +19,8 @@ Checks (each failure is printed; the exit status is 1 when there is one):
     the name is our kernel's external definition (a local function of the same name is another function); an entry
     with "leaf" agrees with any native function whose instructions are the original's: a body that only
     computes registers and returns, so its identity does not matter);
+  - an entry with "absent" (its reason) names a function a kernel of the other toolchain does not have: when this
+    kernel does not define the name, the original on the stub is right (counted as "absent"), and bound it fails;
   - a bound original that --pairs does not list fails ("new pair").
 --reviewed: its "sites" are checked one by one (an original pointer site bound to a named object) and left out of the
 per-target check. --against: the a/b/c comparison with another collection (paired there, stubbed here; stubbed there,
@@ -261,6 +263,12 @@ def main():
         if bound in ('stub', 'unpaired'):
             row['callers'] = sum(calls.get(s, 0) for s in entry['sites'])
             counts[bound] += 1
+            want = known.get(target)
+            if want and want.get('absent') and bound == 'stub' and \
+                    want['native'].partition('+')[0] not in collection.by_name:
+                counts['absent'] += 1      # this kernel has no such function (emit.py, "absent")
+                row['absent'] = want['absent']
+                continue
             if stubs is not None and target not in stubbed:
                 failures.append(f'{where}: {bound} without a reason in the stub list; '
                                 f'{row["callers"]} call sites in the kexts')

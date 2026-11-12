@@ -229,6 +229,8 @@ Linux PC's. So the result of the pairing is now a committed list, and every buil
 - `pairs-24A446.json`: 2,712 known-good pairs (2,465 functions, 247 data): every kext import of the collection that
   is bound, original -> our symbol, each with its `why`. `"leaf": true` marks an original that only computes registers
   and returns (`mov w0, #45; ret`): any of our functions with the same instructions is right for it.
+  `"absent"` (a reason) marks a name that a kernel of the other toolchain does not define: without it, the original
+  stays on the stub (below, "A Linux-built kernel against the list").
 - `stubs-24A446.json`: the 92 originals left on the panic stub and the 9 data targets left unpaired, each with its
   reason, the kexts that import it and the count of call sites in their code.
 - `emit.py --pairs --stubs` applies the list over the matcher, the inferred pairs and the reviewed records, and leaves
@@ -302,6 +304,25 @@ Screen, where all of them were on the stub or unpaired too. That is the evidence
 - 36 (functions and data) are not chosen yet: the names between their neighbours in the import tables are several (`imports.py` prints
   them) and the code has not told them apart. A stub panic from one of these names it (`unmapped.py`); its pair goes
   into the list.
+
+### A Linux-built kernel against the list (2026-11-12, pc-kernel)
+
+The list was drafted from the Xcode 27.2 kernel. The first Linux build since (the Linux PC, clang 23.1.4 and
+xnu-linux-toolchain, `HOSTED_OUT=pc` at `7652df1`, series through `0057`, RELEASE reference) stopped in `emit.py` on two
+names Xcode's kernel has and Linux's does not:
+- `0xfffffe000b13ba30` (`bti c; ret`, a leaf) was named by the clang block `___lck_mtx_gate_wait_block_invoke_2`; Linux
+  clang spells block functions `..._block_invoke.NNN`, numbered by the file. Now named by `_panic_display_hibb`, an empty
+  external function both kernels define (the list's own "both" pair of `0xfffffe000ab5a55c`).
+- `0xfffffe000b2ce6a4` is `IODataQueueDispatchSource::DataAvailable_Invoke` with four arguments (the fourth an
+  `OSMetaClass`, OSAction's when null; it checks the action's class against it and calls the handler). Xcode's iig
+  generates that one; the Linux toolchain's iig generates only the three-argument one, which returns
+  `kIOReturnUnsupported` (`0xe00002c7`): not the same function. The entry now has `"absent"`: in a kernel without the
+  name, `emit.py` leaves the original on the stub and `audit.py` accepts that for this entry only (counted `absent`; bound
+  to anything there, it fails). The Linux collection of 2026-11-11, which booted to the Home Screen, had it on the stub too.
+
+Result: `kernel.kc` `ffbe95f7...` (93,700,096 bytes; the pairing cold): 2,711 paired, 93
+on the stub (the 92 of the stub list and the `absent` one), 9 data unpaired, 0 audit failures; `stubs-check.py`: 666
+good, 0 bad. On an Xcode kernel the two entries bind as before. Not booted on the phone.
 
 ### On the phone (2026-11-12, prelink): the Mac collection boots to the Home Screen
 

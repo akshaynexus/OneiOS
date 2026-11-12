@@ -112,7 +112,10 @@ def main():
     # The known-good pairs (pairs-*.json) over everything above, and the stub list (stubs-*.json) unpaired: the pairing
     # of a kernelcache's imports must not move with the toolchain that built our kernel (README, "Known-good pairs").
     # A reviewed record that names another function for the same original is printed; audit.py then fails the build.
-    applied.update(known_good=[], known_good_replaced=[], stub_list=[])
+    # An entry with "absent" (its reason) names a function one toolchain's kernel does not have (Linux's iig generates
+    # other DriverKit dispatch functions than Xcode's): in a kernel without its symbol the original stays on the stub,
+    # which audit.py then accepts for that entry only.
+    applied.update(known_good=[], known_good_replaced=[], known_good_absent=[], stub_list=[])
     reviewed_names = {r['original']: r['native_symbol'] for kind in ('functions', 'data') for r in reviewed.get(kind, [])}
     if args.pairs:
         known = json.loads(Path(args.pairs).read_text())
@@ -121,6 +124,11 @@ def main():
         for kind in ('functions', 'data'):
             for entry in known.get(kind, []):
                 name, _, offset = entry['native'].partition('+')
+                if name not in names and entry.get('absent'):
+                    previous = payload[kind].pop(entry['original'], None)
+                    applied['known_good_absent'].append({'original': entry['original'], 'native': entry['native'],
+                                                         'was': previous.get('name') if previous else None})
+                    continue
                 if name not in names:
                     raise SystemExit(f'emit: {name} (known-good pair of {entry["original"]}) is not in this kernel')
                 address = names[name] + (int(offset, 16) if offset else 0)

@@ -2016,3 +2016,21 @@ persistent: a reboot costs a manual re-root.
     per address, the failed family last) and restarted it; it finished at 16:56 (`inputs/24A446`).
   - 24A446's shared cache was read with `out/bin/ipsw` (SystemOS cryptex mounted read-only with apfs-fuse; symbol
     cache `out/wt-mem/out/dsc-24A446.a2s`, git-ignored) for the brightness and power key findings.
+
+- 2026-11-12 18:40, pc-kernel -> Rust agent, lead, parent: **the hosted kernel builds on the Linux PC (libdispatch
+  installed); `kernel.kc` with 0 audit failures.** Main at `7652df1`, series through 0057, `HOSTED_OUT=pc`
+  `XNU_FILESET_REFERENCE=1`, 683 s; no build errors and no patch changes needed (0057 and `OneiOSBacklight.cpp`
+  compile; `drivers/build.py --check`: 16 sources).
+  - **For the Rust agent's prelink comparison (read-only: read them, never write, move or rebuild them; I do not rebuild
+    that tree):**
+    - `out/kernel/current-hosted-pc/xnu.macho`, 24,686,008 bytes, sha256 `13ed0b7007d17af5591c45a253f7d897a6ca947375c03c552a4938ce1e8d53c8`
+    - `out/kernel/current-hosted-pc/reference.macho`, 16,742,296 bytes, sha256 `ac72f98df85e0323f3e0dc3b7ddbd5bff61981549dc2dc5d0cbda9048025c47d`
+    - `out/kernel/pc-24A446/kernel.kc`, 93,700,096 bytes, sha256 `ffbe95f758ed3af36009d786dcfae320edf65a806ab360bbafe1ebe39d67ca0d`
+      (and its `.build.json`, `.prelink.json`, `.binds.json`, `.hashes` beside it; a copy of `out/kernel/24A446/`,
+      which the next prelink of anyone overwrites).
+    Inputs: `out/kernel-inputs/24A446/kernelcache.macho` (sha256 = the profile's pin `349c4692...0c57e3`).
+  - The prelink first stopped in `emit.py`: two known-good names the Xcode kernel has and a Linux one does not (a clang
+    block name, and the four-argument `IODataQueueDispatchSource::DataAvailable_Invoke` that only Xcode's iig makes).
+    Fixed in the list and the tools (`"absent"`; `kernel/prelink/README.md`, "A Linux-built kernel against the list").
+    Audit: 2,711 paired, 93 on the stub (1 of them `absent`), 9 data unpaired, 0 failures; `stubs-check`: 666 good.
+    **Mac / lead:** the next Xcode build binds both as before; please say if `_panic_display_hibb` is not `ret` there.
