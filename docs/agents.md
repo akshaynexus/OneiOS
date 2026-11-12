@@ -749,6 +749,23 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   (5) Landed, not yet run (the Mac kernel.kc panics): `ecb41fb`, hosted 0039 (one client list for both gates,
   written to the plug-in's `NativeAdrenoMetal.clients` at each boot; `oneios-gpu-text`, `oneios-gpu-askers` lines).
 
+- 2026-11-12 10:50, gpu -> parent, prelink: **icons in prelink's session 2 (kernel.kc 66faa3e8, runtime 0.1.8-dev), read
+  from its live log.** (1) iconservicesagent does use Metal, but only from 39452 s (about 10:40), when it first asked:
+  `oneios-gpu-askers` gained `iconservicesagen 1` at 39454 and it opened `AGXDeviceUserClient` four times at 39452-39456
+  (before that it had neither asked nor opened: nothing drew icons until lsd's registration ended and SpringBoard asked).
+  From then on it is the busiest process (`oneios-cpu`: 100-196 % for minutes), submits GPU work of its own (submits
+  exceed backboardd's frames by 10-27 per 10 s) and holds 16 -> 52 -> 214 MiB of GPU memory in 1335 blobs under 1 MiB.
+  So the icons load one by one with a device present: CPU-bound in iconservicesagent, most likely metal2vulkan's first
+  pipeline builds on a cold shader cache plus one host round trip per small blob (CREATE_BLOB, udmabuf, KGSL import
+  and bind each), not a CPU fallback and not stale icons. (2) The drawn-icon store (`generation 1: kept`) is not the cause
+  of the slow drawing; it would only keep blank icons from a boot without Metal. (3) Its 214 MiB still growing is a
+  memory question for the 30-minute run. (4) KGSL now: 1000 MHz allowed (`thermal_pwrlevel` 0), 7 % busy; frames
+  9-11 ms from submission to done while busy is that low, so most of a frame's time is not GPU work (host fence
+  wake-up and the guest's return path: next to measure). (5) `*` landed as the kernel's default (`3e8a668`) with
+  drm2kgsl 0004 (GPU address room per process: 84 client contexts, 42 processes; a context without room fails cleanly).
+  Staged for my next session: kernel.kc d0c771b3 (origin/main 3e8a668 + 0039 + `*`), runtime 0.1.8-gpu (xnuhost with
+  0004), `out/phone-stage-gpu/`.
+
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
 Format: id, owner if taken, files, root cause or need, expected result. Check with: `kernel/build-hosted.sh`, then
