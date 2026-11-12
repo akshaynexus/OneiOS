@@ -1,0 +1,109 @@
+# Paused work (2026-11-12): what is done, what is next, how to resume
+
+The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the hand-over. Read it with
+`README.md` "Status", `docs/agents.md` (the board) and the docs it names. Facts marked **proven** ran on the phone
+(SM-S928B, KernelSU, One UI); **built** means pushed and host-tested, not run on the phone.
+
+## State at the pause
+
+- `main` is at `2c7bbb5`. The build host is the Mac (Xcode 27.2, the NDK, Apple's `container` for the host tests).
+- The phone is in One UI ("One UI restored in place (Enforcing)" at 15:55:27), with root (KernelSU; root is not
+  persistent: a reboot needs a manual re-root by the owner). No session runs.
+- **Staged on the phone** (`/data/local/tmp/oneios/`): runtime 0.1.12-dev (from `7d6d6a3`), `kernel.kc` `2fdc2d16`
+  (from `7d6d6a3`, series through 0056), the image set of `7d6d6a3` (new `data.seed` `f201d6ca` with the Metal
+  plug-in `f3b2c620` and the camera plug-in `789bcb69`, their `owner-trust.json`), the app from the fork's
+  `f964d6e`, and the session scripts of `f964d6e`. The Data store is the one that boot made fresh (apps registered;
+  the LaunchServices database is kept from now on, 0043). `xnuhost.conf` is the baseline one plus
+  `oneios-ubt=SpringBoard,backboardd oneios-ubt-at=600 oneios-ubt-every=120`; the baseline file is
+  `out/session-logs/2026-11-12/baseline-conf/xnuhost.conf` (sha256 `01679caa...`).
+- **Not on the phone yet:** `2c7bbb5` (the display helper fix): the next runtime build has it.
+- The phone lock (`out/session-logs/2026-11-12/phone-lock.sh`) is held as `parent-hold`; the scratchpad it lived in
+  is temporary: a resumed session makes its own lock or none.
+
+## Proven on the phone (2026-11-12)
+
+| Area | Result | Commits |
+|---|---|---|
+| Mac build | kernel, `kernel.kc` with the pair audit, runtime, image set, iOS code (Metal, camera), the app | 657e8e6, 365a24f, 89e4172, 1367a18 |
+| Boot | no panics; the Apple logo at about +50 s; apps on the Home Screen | 1eed3da |
+| Touch | works from the first swipe (Contact Identifier below 30: backboardd's `MAX_PATH_COUNT`); 0.7 ms scan to driver | a6346c1 |
+| Way back | the chord (rocker chatter), a return during the switch wins | fork 7839e4b, f964d6e |
+| CPU caps | One UI's caps lifted for a session and restored, `cpufreq_limit` too | fork 588b155, 20c6678 |
+| GPU | Metal for every process (`*`); render frames 2.1-2.3 ms, 228-284 per 10 s (15:35 boot) | 3e8a668, 0a2e084 |
+| Wi-Fi | scan (37-64 networks), join of an open network, the 540-byte join event (0049), DHCP: iOS got 172.20.4.69 | 9240f1a, 04ab894, a034098 |
+| Audio | iOS plays through the speaker (owner heard it) | 4947947, abacbe0, 5e426f3 |
+| Boot stalls | LaunchServices database kept (52 of 52 apps), analyticsd on, locationd's crash loop gone | 5134651, 292d64a |
+| Brightness | CoreBrightness now sends requests (`request 458 from backboardd {brightness-nits} -> level 65535`) | 7d6d6a3 |
+| Camera | `AppleH9CamIn` published, the plug-in mounted over `/System/Library/MediaCapture` (the app not tried) | 15467af |
+| Haptics | the Actuator audio device and `/product/haptics closed-loop = 1` published (not felt) | 5e426f3 |
+
+## Open faults, in order
+
+1. **Memory pressure stalls the UI** (15:35 boot, fresh store). The guest has 4,070 MiB; GPU blobs hold about
+   1.6 GB and backboardd's share grows 760 -> 930 MiB in 30 s; swap does not work ("Failed to open swap file",
+   errno 2 and 30); `VM_pageout_scan` takes ~95% of a vCPU; every page it frees fans out unmaps to almost every task
+   (1.47 million round trips per 30 s, ~1.5 vCPUs); page fills ~660 us. Fixes, in order:
+   - **Deferred unmaps** (a task with no running thread gets its unmaps queued, carried out before its next run;
+     the queue to 256; the stub carries unmaps). Unfinished and **not tested**: branch `wip/perf-deferred-unmaps`
+     (`a97687f`, on top of `2c7bbb5`). Finish, add the checks to the test kernel, run the container benchmark.
+   - **RAM: the owner's decision: iOS gets at least 90% of the phone's RAM.** Implement `ram=auto` in xnuhost:
+     guest = min(90% of MemTotal, MemTotal - a host floor of 1.5 GiB), rounded down to 256 MiB (about 9.5 GiB on
+     this phone); settings `ram-percent=`, `ram-host-floor=`; log the choice and the host's MemAvailable every 30 s;
+     check that the guest side scales (memory window, device-tree memory, zone map, GPU pool). Never change xnuhost's
+     OOM score (the way-back rule); if lmkd ends xnuhost, the watcher returns to One UI (the safe failure). Not
+     started.
+   - **Swap:** make `/private/var/vm` (root:wheel 0755) on the Data store before swap starts; find the errno 30
+     cause. Not started.
+   - **backboardd's GPU memory growth** (gpu): find what it keeps (pooled 64 MiB metal2vulkan blocks, IOSurfaces,
+     released blobs still held) and give memory back. Not started.
+2. **The power key does nothing in iOS** since the haptics change (15:35 boot): the presses reach backboardd (34 HID
+   events, 0 dropped) but no `request_power_change`. Hypothesis (not proven): with closed-loop haptics, backboardd's
+   BKButtonHapticsController (its queue waits forever for button "click states") now sits in the button path. Quick
+   test: boot with `oneios-actuator=0`. Fix: satisfy the click-state setup, or tell iOS the side buttons have no
+   haptics. Not started.
+3. **The display helper dropped after 7 frames** (dark panel while iOS drew; restarted by hand). Fixed in `2c7bbb5`
+   (xnuhost keeps the socket on transient send errors and logs; the helper logs why its read ended); host tests were
+   started, not read; not on the phone.
+4. **Brightness:** requests with the key `DisplayBrightness` are ignored ("no brightness in it"); check whether the
+   slider moves the panel; auto-brightness: CoreBrightness refuses the light sensor (`AppleUSBALS: couldn't find the
+   device version`).
+5. **Camera:** try the Camera app; the log lines to read are in `drivers/camera/README.md` / `runtime/bridges/camera/README.md`.
+6. **Audio latency** stays ~130-140 ms (AAudio's fast/MMAP paths need a realtime thread, which is forbidden).
+7. **Bluetooth:** the uart.sk transport (e73c11d) has not been tried in iOS.
+8. **Hotel Wi-Fi:** iOS has an address; check that the captive-portal page shows and the internet works.
+9. **CLAUDE.md's side-key rule** names event0/event2/event4, but the numbers move between boots (in the 15:35 boot
+   event4 was the vibration motor). Proposed wording, by name: never grab `gpio-keys`, `pmic_pwrkey`, `pmic_resin`.
+   Waits for the owner.
+
+## Later
+
+- **Rust tools:** branch `rustport` (sym, log, image done and compared; prelink and ioslog not started);
+  `tools/oneios-tool/todo_rust.md` there has the plan, the library rule (use libraries, keep only what is faster or
+  has no library: our APFS reader, the hashing, the sym index, the log analyzer) and the APFS decision.
+- The board's L1-L3 items (a direct KGSL path after measuring, the Rust ports, `min_runtime` in the image).
+- Turnip sub-allocation and batched pipeline-cache writes (a plug-in rebuild with a new trust list).
+
+## How to resume
+
+1. Read this file, then `docs/agents.md`'s last notes. Saved logs (git-ignored): `out/session-logs/2026-11-12/`:
+   the xnuhost logs of every session of the day (`combo1`, `diag`, `c2`, `c3`, `c5` = the 15:35 boot), iOS's own
+   log of the 14:12 session (`ios3.logarchive`, parsed `ios3-log.csv`), the baseline config and `phone-baseline.txt`.
+2. iOS's own log of a session: copy the Data store after the session (read only, no session running), fast:
+   `adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'" | gunzip -c |
+   python3 -I sparsewrite.py data.img` (writes sparsely: 6 min, 2.2 GB), attach it read-only
+   (`hdiutil attach -readonly -noverify -nobrowse -imagekey diskimage-class=CRawDiskImage -nomount`), mount the
+   Data volume `mount -t apfs -o rdonly,nobrowse,noowners`, copy `db/diagnostics/{Persist,Special,Signpost,
+   HighVolume,timesync}` and `db/uuidtext/*` into a `.logarchive`, and parse it with Mandiant's macos-unifiedlogs
+   (`unifiedlog_iterator -m log-archive -i ARCHIVE -f csv -o OUT`). The planned `oneios-tool ioslog` does this.
+3. Build the set from `main` in a clean worktree (`git worktree add --detach out/parent-wt origin/main`, link
+   `external/`): `scripts/bg.sh k env HOSTED_OUT=prelink XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`, then
+   `env REFERENCE=out/kernel/current-hosted-prelink/reference.macho KERNEL=out/kernel/current-hosted-prelink/xnu.macho
+   kernel/prelink/build.sh` (the audit must show 0 failures), `runtime/package.sh VERSION`, the Metal and camera
+   plug-ins (`userland/metal/build.sh`, `userland/camera/build.sh`, with `out/ios27-tbd` linked), and the image
+   (`env INPUTS=<main>/inputs/24A446 OUT=out/image scripts/image/build.sh --no-pack PROFILE`) only when the seed or
+   the trust list changes (a new seed starts the phone's Data store over).
+4. Stage with `scripts/phone/stage.sh runtime DIR` / `image DIR` (docs/building.md, "Test cycle on the phone"), copy
+   the fork's `oneios_switch.sh`/`oneios_return.sh` into the stage when the app is not used, and start a session
+   with `busybox setsid sh /data/local/tmp/oneios/bin/oneios_root.sh switch 115 1`. End it with
+   `touch /data/local/tmp/oneios/session/return.request`. On the phone read named files only, never a tree walk of
+   sysfs or /proc (one panicked the phone's kernel on 2026-11-12).
