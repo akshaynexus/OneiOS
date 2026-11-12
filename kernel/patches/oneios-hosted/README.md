@@ -554,7 +554,7 @@ lines and what is not tested).
 
 ## hid/: touch, buttons and the light sensor's HID device (fable-hid, 2026-11-11)
 
-No numbered patch: an archive (`hid/build-oneios-hid.py`, hooked into `kernel/build-hosted.sh`) whose start,
+No numbered patch: an archive (`oneios-tool kernel gen hid`, hooked into `kernel/build-hosted.sh`) whose start,
 `oneios_hid_input_start`, is the last call of `oneios_drivers_start` (`drivers/bridge/OneiOSBridge.c`).
 `hid/README.md` has the files, the evidence for the layout header, the buttons table and the log lines.
 
