@@ -17,8 +17,8 @@ ARM64_RUN := $(if $(ARM64_NATIVE),,$(QEMU))
 WARN := -Wall -Wextra -Werror
 INC := -Iinclude -Isrc -Istub -I../loader/include -I../bridges/include -I../../drivers/bridge -I../../drivers/camera
 CFLAGS ?= -O2 -g
-SRC := main log config insn mem mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input virtio_gpu gpu3d display input input_script cpu hostcalls task
-PORTABLE := log config insn mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input input input_script virtio_gpu gpu3d cpu task
+SRC := main log perf config insn mem mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input virtio_gpu gpu3d display input input_script cpu hostcalls task
+PORTABLE := log perf config insn mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input input input_script virtio_gpu gpu3d cpu task
 LOADER_SRC := $(wildcard ../loader/src/*.c)
 HDR := $(wildcard include/xnuhost/*.h src/*.h stub/*.h ../loader/include/xnuloader/*.h)
 A := build/android
@@ -166,6 +166,14 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	     --display none --no-input --width 64 --height 64 --boot-args testkernel-restart > $(A)/restart.log 2>&1; code=$$?; \
 	    [ $$code = 3 ] && [ "$$(grep -c 'TESTKERNEL: restart' $(A)/restart.log)" = 9 ] || { tail -5 $(A)/restart.log; echo "check-arm64: restart: exit $$code"; false; }; }; fi
 
+# The trap path's costs (docs/booter.md 2.6a): the test kernel's benchmarks, then xnuhost's "perf:" report at the stop.
+# BENCH_SET="--set spin-host=5 ..." tries other settings. Native arm64 Linux only (qemu-user has no seccomp).
+bench-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
+	@rm -f $(A)/testdata/data.img
+	timeout 120 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M \
+	   --display none --no-input --width 64 --height 64 --boot-args testkernel-bench$(BENCH_SCALE:%==%) $(BENCH_SET) 2>&1 | \
+	   grep -E 'BENCH|perf:|TESTKERNEL: (all|FAIL)|hand-off'
+
 # The tests create devices and never free them: leak detection off, the other checks on.
 test: $(H)/test_xnuhost $(H)/test_display_mode $(H)/test_imageset $(TEST_DRM2KGSL) $(TEST_GPU_LEAKS) check-arm64
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_xnuhost
@@ -176,4 +184,4 @@ test: $(H)/test_xnuhost $(H)/test_display_mode $(H)/test_imageset $(TEST_DRM2KGS
 
 clean:
 	rm -rf build
-.PHONY: all test check-arm64 clean
+.PHONY: all test check-arm64 bench-arm64 clean

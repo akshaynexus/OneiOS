@@ -34,25 +34,41 @@ struct xs_config {
   struct xs_filter_insn filter[XS_FILTER_MAX];
 };
 
-// One per iOS thread, shared (trap memfd slot): the first page of the thread's area in the task.
-struct xs_trap_page {
-  uint32_t to_task;                    // futex: xnuhost sets 1 to release the thread
-  uint32_t to_host;                    // futex: the stub sets 1 when the thread has trapped
-  uint32_t tid;                        // Linux thread id; the kernel zeroes it when the thread exits
-  uint32_t command;                    // XS_RUN or XS_EXIT, read by the stub when released
-  uint32_t pac_set, pac_enabled;       // apply PR_PAC_SET_ENABLED_KEYS before running
-  uint32_t booted, reserved;
-  struct xh_trap trap;
-  struct xh_user_state state;
-};
-#define XS_RUN  0u
-#define XS_EXIT 1u
-
 struct xs_op {
   uint32_t op, prot;
   uint64_t va, size, offset;
   int64_t  result;                     // 0 or a negative errno
 };
+
+// One per iOS thread, shared (trap memfd slot): the first page of the thread's area in the task.
+// The hand-off each way (docs/booter.md 2.6a): the side that waits spins on its word for a while (xnuhost: spin-host;
+// the stub: spin_ticks, which xnuhost sets), then says it sleeps (host_sleeping, task_sleeping) and waits in a futex;
+// the side that posts stores the word, then issues FUTEX_WAKE only if the other says it sleeps. Both use a full
+// barrier between their store and their load (store word / load flag; store flag / load word), so one of them
+// always sees the other's store.
+struct xs_trap_page {
+  uint32_t to_task;                    // futex: xnuhost sets 1 to release the thread
+  uint32_t to_host;                    // futex: the stub sets 1 when the thread has trapped (or its maps are done)
+  uint32_t tid;                        // Linux thread id; the kernel zeroes it when the thread exits
+  uint32_t command;                    // XS_RUN or XS_EXIT, read by the stub when released
+  uint32_t pac_set, pac_enabled;       // apply PR_PAC_SET_ENABLED_KEYS before running
+  uint32_t booted, reserved;
+  uint32_t host_sleeping;              // xnuhost waits for to_host in a futex (else it spins or is not waiting)
+  uint32_t task_sleeping;              // the stub waits for to_task in a futex
+  uint32_t slept;                      // the stub: its last wait for a release ended in a futex sleep
+  uint32_t nops;                       // xnuhost: maps the released thread carries out before it runs (XS_OPS_OFF)
+  uint32_t ops_done;                   // the stub: set when they are done (results in each op), then to_host is woken
+  uint32_t reserved2;
+  uint64_t spin_ticks;                 // xnuhost: counter ticks the stub spins for its release before it sleeps
+  uint64_t t_enter, t_woken;           // the stub: CNTVCT_EL0 when its handler began, when it saw its release
+  struct xh_trap trap;
+  struct xh_user_state state;
+};
+#define XS_RUN  0u
+#define XS_EXIT 1u
+// Deferred maps (XS_OP_MAP only) after the trap page, in the same slot.
+#define XS_OPS_OFF      0x1000ull
+#define XS_THREAD_OPS   256u
 #define XS_OP_MAP      1u              // mmap(va, size, prot, MAP_SHARED|MAP_FIXED, ram_fd, offset)
 #define XS_OP_UNMAP    2u
 #define XS_OP_PROTECT  3u
@@ -70,7 +86,8 @@ struct xs_service_page {
   struct xs_op ops[XS_OPS_MAX];
 };
 
-_Static_assert(sizeof(struct xs_trap_page) <= 0x1000, "the trap page is one 4 KiB page");
+_Static_assert(sizeof(struct xs_trap_page) <= XS_OPS_OFF, "the trap page is one 4 KiB page");
+_Static_assert(XS_OPS_OFF + XS_THREAD_OPS * sizeof(struct xs_op) <= XS_SLOT_SIZE, "a thread's deferred maps fit its slot");
 _Static_assert(sizeof(struct xs_service_page) <= XS_SLOT_SIZE, "the service page fits a slot");
 _Static_assert(sizeof(struct xs_config) <= 0x1000, "the config fits a page");
 

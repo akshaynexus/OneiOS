@@ -232,6 +232,10 @@ after):
   `EBUSY` ("fake hal: Device or resource busy", then `FAIL tests/test_hidl_binder.c:497`). A race in the test, not in
   the HAL client: the fake HAL now retries `EBUSY` for up to 2 s. Five runs in a row passed.
 - `check-arm64` runs the Android binary without qemu on an arm64 Linux host.
+- `make -C runtime/xnuhost bench-arm64` (in the container, after the Android build) runs the test kernel's benchmarks
+  of the trap path (boot argument `testkernel-bench`) and prints them with xnuhost's `perf:` report;
+  `BENCH_SET="--set cpu-pin=0 --set map-defer=0"` measures other settings, `BENCH_SCALE=2` doubles the loops
+  (`docs/booter.md` 2.6a has the numbers). Not part of `make test`.
 - macOS's `tar` is bsdtar (no `--mtime`): `runtime/package.sh` writes the archive with `pack.py archive` where `tar`
   is not GNU tar. For the same files it is byte-identical to GNU tar 1.35's `--format=ustar` archive (checked).
 - macOS's `wc -l` pads its count: `runtime/package/test.sh` strips it.

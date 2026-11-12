@@ -61,6 +61,12 @@ typedef struct {
   int   log_level;
   bool  legacy_boot_args;
   int   setway_skip;        // a trapped dc set/way ends the guest's set/way loop of its level at once (sysreg.c): 1 (default), 0, -1 = unset
+  int   perf_log;           // perf.c: seconds between two "perf:" reports; 0 = only at the stop and on SIGQUIT; -1 = unset (30)
+  int   spin_host, spin_task;   // task.c: microseconds a vCPU (spin-host) and an iOS thread (spin-task) spin for the other
+                            // side of a hand-off before they sleep in a futex; -1 = unset (the defaults in task.c)
+  int   cpu_pin;            // main.c: a vCPU and the iOS thread it runs share one host CPU of the vCPU's mask: 1, 0, -1 = unset (1);
+                            // 2 = also with no CPU plan (a bench run): vCPU i on host CPU i
+  int   map_defer;          // task.c: task_map orders ride on the next release of one of the task's threads: 1, 0, -1 = unset (1)
   bool  selftest;
   int   bridges;            // runtime/bridges devices (network, sound, haptics, Bluetooth, CPU placement): 1, 0, -1 = by mode
   char  clusters[XH_MAX_CPUS + 1]; // "EEPPPPPP": the cluster type of each vCPU, overriding the bridges' plan ("" = the plan, else all P)
@@ -203,6 +209,40 @@ typedef struct {
   unsigned nshadow;
 } xh_sysreg_state;
 typedef struct xh_vcpu xh_vcpu;
+
+// ---- cost of the trap path (perf.c; docs/booter.md 2.6a) ----------------------------------------
+// Histograms of durations in nanoseconds: 4 buckets per power of two, up to 2^32 ns.
+#define XH_HIST_BUCKETS 128
+typedef struct { uint64_t n, sum_ns, max_ns, b[XH_HIST_BUCKETS]; } xh_hist;
+enum {
+  XP_UP,                    // the stub's handler entered -> the vCPU has the trap (register copy, the hand-off)
+  XP_DOWN,                  // the vCPU released the thread -> the thread's handler has seen it (the hand-off back)
+  XP_K_SYSCALL, XP_K_FAULT, XP_K_IRQ, XP_K_OTHER,   // the kernel's work after a trap of that kind: from thread_run's
+                            // return to this vCPU's next thread_run, the time it idled taken out
+  XP_ORDER_MAP, XP_ORDER_UNMAP, XP_ORDER_PROTECT, XP_ORDER_CLONE,   // one order to a task's service thread, there and back
+  XP_DRAIN,                 // deferred maps carried out by the released thread itself (task.c, map-defer)
+  XP_KICK,                  // the vCPU signalled a running thread (its interrupt line rose) -> it has the thread's trap
+  XP_COUNT
+};
+typedef struct {
+  xh_hist  h[XP_COUNT];
+  uint64_t traps[16];       // by xh_trap kind
+  uint64_t host_sleeps, task_sleeps, host_wakes, task_wakes;   // futex waits and wakes the hand-offs made
+  uint64_t maps_deferred, maps_ordered;   // task_map calls carried by a release / sent to the service thread
+  uint64_t timer_sets, timer_calls;       // the kernel's timer_set calls; those that reached timer_settime
+  uint64_t ticks_user, ticks_idle;        // counter ticks spent inside thread_run (the iOS thread's turn) and cpu_idle
+  // thread_run's bookkeeping between two calls
+  uint64_t ret_at, ret_idle;
+  uint32_t ret_kind;
+} xh_perf;
+void     xh_hist_add(xh_hist *h, uint64_t ns);
+uint64_t xh_hist_quantile(const xh_hist *h, double q);   // ns (the upper bound of the bucket it falls in)
+uint64_t xh_ticks_ns(uint64_t ticks);                   // counter ticks to nanoseconds
+xh_perf *xh_perf_self(void);                            // the calling vCPU's, else a shared one
+void     xh_perf_init(const xh_config *c);
+void     xh_perf_tick(void);                            // main loop: a report every perf-log seconds
+void     xh_perf_log(bool since_start);                 // the report now (the stop, SIGQUIT)
+
 // Emulates the undefined instruction `insn` trapped in kernel context. Returns false if it is not
 // one the host emulates. Advances regs->pc itself.
 bool xh_sysreg_emulate(xh_vcpu *vcpu, xh_regs *regs, uint32_t insn);
@@ -223,6 +263,7 @@ struct xh_vcpu {
   uint64_t  stat_irqs, stat_mmio, stat_sysreg, stat_traps;
   uint64_t  stat_acks, acks_mark;     // interrupts acknowledged; the count when the last interrupt upcall began
   uint64_t  stat_reraised, stat_timer, stat_sgi;   // frame_resume re-raises; INTID 27 and SGIs acknowledged
+  xh_perf   perf;
 };
 extern xh_vcpu g_vcpu[XH_MAX_CPUS];
 extern unsigned g_ncpu;
@@ -368,6 +409,9 @@ int   xh_input_script_start(xh_virtio *dev, const char *path);   // 0: running, 
 void  xh_input_script_stop(void);
 
 // ---- iOS tasks (task.c; aarch64 Linux only) -----------------------------------------------------
+// The hand-off's spin defaults (spin-host, spin-task), in microseconds: docs/booter.md 2.6a has the measurement.
+#define XH_SPIN_HOST_US 0
+#define XH_SPIN_TASK_US 0
 // Forks the task factory. Must run before any other thread exists and before RAM is mapped.
 int     xh_tasks_init(const xh_config *c);
 bool    xh_tasks_available(void);      // tasks can run and their system calls reach the kernel

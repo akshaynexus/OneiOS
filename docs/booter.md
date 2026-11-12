@@ -246,6 +246,69 @@ The same reading goes to the guest on the bridge's channel 6 (`drivers/thermal`)
 - **Plain arm64 binaries**: `thread_set_pac(thread, 0)` turns the keys off for that thread
   (`PR_PAC_SET_ENABLED_KEYS`).
 
+### 2.6a The cost of the trap path (perf, 2026-11-12)
+
+One trip of an iOS thread through the kernel is: the trap in the task process (seccomp's SIGSYS, or SIGSEGV for a
+fault), the stub's handler copies the registers to the trap page and hands them to the vCPU thread (**up**), the kernel
+works (**kernel**), then `thread_run` hands the registers back and the handler returns into user code (**down**). A
+fault adds the map (`task_map`); an interrupt of a running thread adds the kick (a signal to it). Each hand-off is a
+store of a word in the shared trap page and, when the other side sleeps, a futex wake.
+
+**What changed.**
+
+- **`cpu-pin` (default 1).** With the CPU plan (the bridges on: the phone), each vCPU thread is on one host CPU of its
+  plan's mask (the rank-th of its kind: on the S24 Ultra vCPU *i* on CPU *i*), and the iOS thread it runs and the task's
+  service thread, when that vCPU gives it an order, go on the same CPU. A hand-off is then a switch on one core. Across
+  cores it is a wake-up of another CPU (an IPI, the way out of idle) each way. The thermal step's masks still apply: a
+  narrowed mask gives the vCPUs of a kind its CPUs in turn. `cpu-pin=0` is the old placement (any core of the kind).
+  `cpu-pin=2` also pins with no plan, vCPU *i* on CPU *i* (for `make bench-arm64`).
+- **Wakes only for a sleeper.** Each side says when it sleeps (`host_sleeping`, `task_sleeping` in the trap page) and
+  the other side issues `FUTEX_WAKE` only then (`stub/stub_abi.h` has the rule and its barriers).
+- **`map-defer` (default 1).** `task_map` puts the map in the task's queue (up to 64) and returns. The queue goes with
+  the next release of one of the task's threads: that thread carries out the maps in the stub's handler before it runs
+  (`XS_OPS_OFF` in its slot) while xnuhost holds the task's order lock, or it goes at the head of the task's next order
+  (unmap, protect, clone), whichever is first. So a map is in place before any thread of the task runs again and before
+  any later unmap or protect of the task, which is what the kernel's TLB rule needs (`hosted_pmap.h`). `task_read` and
+  `task_write` send the queue first. A failed deferred map is logged (`tasks: pid N: a deferred map ... failed`); the
+  toucher faults again and the kernel fills again. `map-defer=0` orders each map as before.
+- **Spins (`spin-host`, `spin-task`, microseconds, default 0).** Each side may spin before it sleeps. With each thread
+  on its own core this halves nothing that pinning does not already remove, and on a shared core it costs the spin
+  every time (below), so both are off.
+
+**Measured** with `make bench-arm64` (the test kernel's loops on vCPU 0, one iOS thread; native arm64 Linux 6.18 in the
+Mac's container, an M4 with 8 CPUs; the counter is 24 MHz, so a tick is 42 ns). Means, p50 in brackets, 40,000 null
+calls, 10,000 faults, 4,000 interrupts; two runs each, the same within 5%:
+
+| Trip | Before (`cpu-pin=0 map-defer=0`) | After (`cpu-pin=2 map-defer=1`) |
+|---|---|---|
+| null system call, kernel to kernel | 17.0 us (15.7-16.9) | 1.9-2.0 us (1.9) |
+| of it: svc to the kernel / the release to user code | 8.5 / 8.5 us | 1.0 / 1.0 us |
+| page fault filled by `task_map`, as user code sees it | 36.0-36.6 us (36.1) | 4.3-4.5 us (3.8-3.9) |
+| `task_map` host call | 17.0 us | 0.01 us (the map rides on the release: 1.9 us there) |
+| `task_unmap` (an order to the service thread) | 17.8-18.1 us | 3.0-3.1 us |
+| timer interrupt of a running thread, deadline to the kernel | 31.4-39.9 us (31.2) | 5.8-7.0 us (2.6) |
+
+On one shared core (`taskset -c 0`, old code) the null call was 3.2 us at p50 without a spin and 42 us with a 20 us
+spin on each side; with each thread on its own core a 20 us spin gave 1.8 us. So the cost was the wake of another core,
+and on the phone, where two vCPUs and their iOS threads share the two E cores, a spin would cost what it saves. Not
+measured on the phone; the hand-off across cores there may be cheaper or dearer than in this VM.
+
+**The report.** Each vCPU counts its traps by kind and keeps histograms (4 buckets a power of two) of each step
+(`src/perf.c`). The main thread prints them every `perf-log` seconds (default 30, `--set perf-log=0` only at the stop
+and on SIGQUIT), for that period; at the stop and on SIGQUIT since the start:
+
+```text
+perf: 30.0 s: N task traps (R/s): syscall .., fault .., interrupt .., other ..; futex sleeps: vCPU .., iOS thread .. (of .. hand-offs each way); futex wakes .. + ..; task_map .. carried by a release, .. ordered; timer_set .. (.. to the host timer)
+perf:   up (trap->vCPU)    n ... mean ... p50 ... p90 ... p99 ... max ... us      the handler's copy and the hand-off
+perf:   down (vCPU->task)  ...                                                     the release to the handler's wake
+perf:   kernel: syscall    ...      the kernel's work after a trap of that kind, to this vCPU's next thread_run, idle out
+perf:   kernel: fault / interrupt / other, order: map / unmap / protect / clone, maps by release, kick
+perf: cpuN: C% of a core; of its wall time K% kernel, U% an iOS thread's turn, I% idle; T traps/s
+```
+
+"An iOS thread's turn" is the time `thread_run` waited (the thread's own code plus both hand-offs); "kernel" is the rest
+of the vCPU's wall time outside `cpu_idle`; "C% of a core" is the vCPU thread's CPU time (Linux's clock of that thread).
+
 ### 2.7 Devices
 
 All devices are virtio-mmio version 2 windows (`virtio.c`: split queues, indirect descriptors, the status
@@ -276,8 +339,9 @@ measured on the phone.
 
 The bridges are linked in as `libonebridges.a` and come after the GPU in the window order: `bridge`, `net`,
 `virtio-snd`. They are on in a takeover session and off in `--mode bench` (`--set bridges=0|1`). With them,
-`/cpus` gets the host's cluster types (E vCPUs first), each vCPU thread is put on its cluster's host CPUs,
-and so is the iOS thread a vCPU runs (when the vCPU changes). Bluetooth (`--bluetooth`,
+`/cpus` gets the host's cluster types (E vCPUs first), each vCPU thread is put on one host CPU of its cluster
+(`cpu-pin=1`, section 2.6a; `cpu-pin=0`: any CPU of its cluster), and so is the iOS thread a vCPU runs (when the vCPU
+changes). Bluetooth (`--bluetooth`,
 `bluetooth=` in `xnuhost.conf`): `hidl` bridges the phone's controller (`/bluetooth` transport-encoding 1 =
 bluetoothd's H4 UART transport, which on iOS 27 is a Skywalk pipe: [hardware.md](hardware.md) section 4; transport-speed 3000000, the address of `/mnt/vendor/efs/bluetooth/bt_addr`);
 `virtual` gives iOS none (encoding 10, the guest driver hides the nub); the default `auto` is `hidl` when the bridges
@@ -494,8 +558,10 @@ link-time high address (`0xfffffff00719c028`). That is where the hosted layer ha
 - A task that jumps into the stub's `svc` with chosen registers can `mmap` any offset of the RAM memfd: a
   guest kernel compromise by guest code (not a host one beyond what the uid allows). `--set task-uid=N`
   drops tasks to another uid; default is xnuhost's own, because the drop is untested.
-- Trap cost is a signal plus two futex hand-offs per system call or fault; not measured.
-- `task_map` is one round trip to the service thread per call; no batching in the ABI yet.
+- Trap cost is a signal plus two hand-offs per system call or fault: measured in section 2.6a on the Mac's container,
+  not yet on the phone.
+- `task_map` rides on the next release (section 2.6a); `task_unmap` and `task_protect` are one round trip to the
+  service thread each.
 - The GIC model ignores priorities; the shadow registers ignore meaning.
 - A stop does not ask the guest to shut down.
 

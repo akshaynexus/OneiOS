@@ -230,6 +230,22 @@ static void test_tasks(void)
   else check(wrote == 8 && H->task_read(C0, task, data_va + 8, &back, 8) == 8 && back == value &&
              ((uint64_t *)(uintptr_t)kva(data_pa))[1] == value, "task_write and task_read (copyout, copyin)");
   check(H->task_protect(C0, task, data_va, 0x4000, XH_PROT_READ) == 0, "task_protect");
+  // task_map rides on the next release of a thread of the task (map-defer); an order given before that release
+  // (here the protect above, below an unmap) must find it done and keep its place after it.
+  st.pc = code_va + 16;                         // str x0, [x1]
+  st.x[1] = data_va;
+  check(H->thread_run(C0, thread, &st, &trap) == 0 && trap.kind == XH_TRAP_FAULT && trap.far == data_va && st.pc == code_va + 16,
+        "a store to the page made read-only faults");
+  const uint64_t other_va = 0x300000000ull;
+  check(H->task_map(C0, task, other_va, 0x4000, XH_PROT_READ | XH_PROT_WRITE, data_pa) == 0 && H->task_unmap(C0, task, other_va, 0x4000) == 0,
+        "a map and an unmap of another page before the thread runs");
+  st.x[1] = other_va;
+  check(H->thread_run(C0, thread, &st, &trap) == 0 && trap.kind == XH_TRAP_FAULT && trap.far == other_va,
+        "the unmap came after the map: the store faults");
+  check(H->task_map(C0, task, other_va, 0x4000, XH_PROT_READ | XH_PROT_WRITE, data_pa) == 0 &&
+        H->thread_run(C0, thread, &st, &trap) == 0 && trap.kind == XH_TRAP_BRK && st.pc == code_va + 20 &&
+        ((uint64_t *)(uintptr_t)kva(data_pa))[0] == st.x[0], "a map given before the run is in place when the thread runs");
+  H->task_unmap(C0, task, other_va, 0x4000);
   // Preemption: a thread that never traps is stopped when the vCPU's timer fires.
   st.pc = code_va + 24;
   uint32_t fires = timer_fires;
@@ -241,6 +257,132 @@ static void test_tasks(void)
   check(H->thread_destroy(C0, thread) == 0, "thread_destroy");
   check(H->task_unmap(C0, task, data_va, 0x4000) == 0, "task_unmap");
   check(H->task_destroy(C0, task) == 0, "task_destroy");
+}
+
+// ---- benchmarks of the trap path (boot argument testkernel-bench; `make bench-arm64`) -------------
+// Each loop times one kind of trip from the kernel's side, with the counter the iOS thread also reads (CNTVCT_EL0):
+// the user code stamps the time just before its svc (x0) and just after its resume, so the two hand-offs are seen
+// apart. Times are in counter ticks into a table of 4096 ticks (170 us at 24 MHz); later ones count in the last.
+#define BT 4096
+static void dec(uint64_t v)
+{
+  char b[21];
+  int i = 20;
+  b[i] = 0;
+  do { b[--i] = (char)('0' + v % 10); v /= 10; } while (v);
+  put(b + i);
+}
+typedef struct { uint32_t *t; uint64_t n, sum; } bhist;
+static void bh_init(bhist *h) { h->t = (uint32_t *)(uintptr_t)kva(page_alloc()); h->n = h->sum = 0; }   // 4096 x 4 = one 16 KiB page
+static void bh_add(bhist *h, uint64_t ticks) { h->t[ticks < BT ? ticks : BT - 1]++; h->n++; h->sum += ticks; }
+static uint64_t bh_q(const bhist *h, uint64_t per_mille)
+{
+  uint64_t want = h->n * per_mille / 1000, seen = 0;
+  for (uint64_t i = 0; i < BT; i++) { seen += h->t[i]; if (seen > want) return i; }
+  return BT;
+}
+static void bh_put(const char *name, const bhist *h)
+{
+  uint64_t hz = H->info->timebase_hz;
+  put("BENCH ");
+  put(name);
+  put(": n ");
+  dec(h->n);
+  if (!h->n) { put("\n"); return; }
+  put(" mean ");
+  dec(h->sum * 1000000000ull / h->n / hz);
+  put(" ns, p50 ");
+  dec(bh_q(h, 500) * 1000000000ull / hz);
+  put(" p90 ");
+  dec(bh_q(h, 900) * 1000000000ull / hz);
+  put(" p99 ");
+  dec(bh_q(h, 990) * 1000000000ull / hz);
+  put(" ns\n");
+}
+
+static void bench(unsigned scale)
+{
+  uint64_t task = 0, thread = 0;
+  if (H->task_create(C0, &task) < 0) { put("BENCH skipped: no task layer\n"); return; }
+  uint64_t code_pa = page_alloc(), data_pa = page_alloc();
+  uint32_t *code = (uint32_t *)(uintptr_t)kva(code_pa);
+  // 0x00: the null system call               0x40: a store to an unmapped page, then a system call   0x80: a loop
+  static const uint32_t syscall_loop[] = { 0xd53be040, 0xd4001001, 0x17fffffe };              // mrs x0, cntvct; svc #0x80; b 0
+  static const uint32_t fault_loop[] = { 0xd53be040, 0xf9000041, 0xd53be043, 0xd4001001, 0x17fffffc };   // mrs x0; str x1, [x2]; mrs x3; svc; b 0x40
+  for (unsigned i = 0; i < 3; i++) code[i] = syscall_loop[i];
+  for (unsigned i = 0; i < 5; i++) code[16 + i] = fault_loop[i];
+  code[32] = 0x14000000;                                                                        // b .
+  H->text_fixup(C0, code, 33 * 4);
+  const uint64_t code_va = 0x100000000ull, data_va = 0x200000000ull;
+  H->task_map(C0, task, code_va, 0x4000, XH_PROT_READ | XH_PROT_EXEC, code_pa);
+  if (H->thread_create(C0, task, &thread)) { put("BENCH skipped: no thread\n"); return; }
+  static struct xh_user_state st;
+  struct xh_trap trap;
+  C0->irq_masked = 1;
+  H->timer_set(C0, UINT64_MAX);
+  irq_upcall(C0, NULL);
+
+  // 1. The null system call: svc, trap, the kernel hands it straight back.
+  bhist up, down, round;
+  bh_init(&up); bh_init(&down); bh_init(&round);
+  zero(&st, sizeof st);
+  st.pc = code_va;
+  uint64_t n = 20000ull * scale, before = 0, last = 0, bad = 0;
+  for (uint64_t i = 0; i < n; i++) {
+    before = now();
+    if (H->thread_run(C0, thread, &st, &trap) || trap.kind != XH_TRAP_SYSCALL) { bad++; if (trap.kind == XH_TRAP_INTERRUPT) irq_upcall(C0, NULL); continue; }
+    uint64_t t = now();
+    if (i && st.x[0] >= before && st.x[0] <= t) { bh_add(&up, t - st.x[0]); bh_add(&down, st.x[0] - before); }
+    if (last) bh_add(&round, t - last);
+    last = t;
+  }
+  bh_put("null syscall, round trip (kernel to kernel)", &round);
+  bh_put("  svc -> the kernel has the trap", &up);
+  bh_put("  the kernel releases -> user code runs", &down);
+  if (bad) { put("BENCH   (other traps: "); dec(bad); put(")\n"); }
+
+  // 2. A page fault the kernel resolves by mapping the page, then the page is unmapped again (svc).
+  bhist fault, map, unmap;
+  bh_init(&fault); bh_init(&map); bh_init(&unmap);
+  zero(&st, sizeof st);
+  st.pc = code_va + 0x40;
+  st.x[2] = data_va;
+  n = 5000ull * scale;
+  for (uint64_t i = 0; i < n; i++) {
+    if (H->thread_run(C0, thread, &st, &trap) || trap.kind != XH_TRAP_FAULT) { bad++; if (trap.kind == XH_TRAP_INTERRUPT) irq_upcall(C0, NULL); continue; }
+    uint64_t a = now();
+    H->task_map(C0, task, data_va, 0x4000, XH_PROT_READ | XH_PROT_WRITE, data_pa);
+    bh_add(&map, now() - a);
+    if (H->thread_run(C0, thread, &st, &trap) || trap.kind != XH_TRAP_SYSCALL) { bad++; continue; }
+    bh_add(&fault, st.x[3] - st.x[0]);
+    a = now();
+    H->task_unmap(C0, task, data_va, 0x4000);
+    bh_add(&unmap, now() - a);
+  }
+  bh_put("page fault filled by task_map, as user code sees it", &fault);
+  bh_put("  task_map (host call)", &map);
+  bh_put("  task_unmap (host call; an order to the service thread)", &unmap);
+
+  // 3. The interrupt of a running thread: the timer fires 50 us into a loop that never traps.
+  bhist kick;
+  bh_init(&kick);
+  zero(&st, sizeof st);
+  st.pc = code_va + 0x80;
+  n = 2000ull * scale;
+  for (uint64_t i = 0; i < n; i++) {
+    uint64_t deadline = now() + H->info->timebase_hz / 20000;
+    H->timer_set(C0, deadline);
+    if (H->thread_run(C0, thread, &st, &trap) || trap.kind != XH_TRAP_INTERRUPT) { bad++; continue; }
+    uint64_t t = now();
+    if (t >= deadline) bh_add(&kick, t - deadline);
+    irq_upcall(C0, NULL);
+  }
+  bh_put("timer interrupt of a running thread: deadline -> the kernel has the trap", &kick);
+  H->timer_set(C0, UINT64_MAX);
+  irq_upcall(C0, NULL);
+  H->thread_destroy(C0, thread);
+  H->task_destroy(C0, task);
+  put("BENCH done\n");
 }
 
 __attribute__((noreturn)) void kernel_main(const struct boot_args *args, const struct xh_vector *vector, struct xh_cpu *cpu);
@@ -413,6 +555,13 @@ void kernel_main(const struct boot_args *args, const struct xh_vector *vector, s
   check(H->ram_discard(cpu, scratch, 0x4000) == 0 && *(volatile uint64_t *)(uintptr_t)kva(scratch) == 0, "ram_discard gives pages back (they read as zero)");
   check(H->wall_time(cpu) > 1700000000ull, "wall_time");
   test_tasks();
+  // boot-args "testkernel-bench" (`make bench-arm64`): the trap path's costs, after the checks.
+  for (const char *c = args->command_line; *c; c++) {
+    static const char want[] = "testkernel-bench";
+    unsigned i = 0;
+    while (want[i] && c[i] == want[i]) i++;
+    if (!want[i]) { bench(c[i] == '=' && c[i + 1] >= '1' && c[i + 1] <= '9' ? (unsigned)(c[i + 1] - '0') : 1); break; }
+  }
 
   put(failures ? "TESTKERNEL: FAILED\n" : "TESTKERNEL: all passed\n");
   H->halt(cpu, failures ? XH_HALT_PANIC : XH_HALT_OFF, (uint32_t)failures);

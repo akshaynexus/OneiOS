@@ -88,6 +88,35 @@ static void wake(uint32_t *word)
   sys(NR_futex, word, FUTEX_WAKE, 0x7fffffff);
 }
 
+static inline uint64_t counter(void) { uint64_t v; __asm__ volatile("isb\n mrs %0, cntvct_el0" : "=r"(v) : : "memory"); return v; }
+
+// stub_abi.h, the hand-off: store the word, then wake the other side only if it said it sleeps.
+static void post(uint32_t *word, uint32_t *sleeping)
+{
+  __atomic_store_n(word, 1, __ATOMIC_RELEASE);
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  if (__atomic_load_n(sleeping, __ATOMIC_RELAXED)) sys(NR_futex, word, FUTEX_WAKE, 0x7fffffff);
+}
+
+// Spins up to `ticks` for *word to become non-zero, then sleeps for it. Returns 1 if it slept.
+static uint32_t await(uint32_t *word, uint32_t *sleeping, uint64_t ticks)
+{
+  if (__atomic_load_n(word, __ATOMIC_ACQUIRE)) return 0;
+  if (ticks) {
+    uint64_t began = counter();
+    while (!__atomic_load_n(word, __ATOMIC_ACQUIRE)) {
+      if (counter() - began > ticks) break;
+      __asm__ volatile("yield");
+    }
+    if (__atomic_load_n(word, __ATOMIC_ACQUIRE)) return 0;
+  }
+  __atomic_store_n(sleeping, 1, __ATOMIC_RELAXED);
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  while (__atomic_load_n(word, __ATOMIC_ACQUIRE) == 0) sys(NR_futex, word, FUTEX_WAIT, 0, 0);
+  __atomic_store_n(sleeping, 0, __ATOMIC_RELAXED);
+  return 1;
+}
+
 // ---- the signal frame, as the arm64 kernel lays it out ------------------------------------------
 struct k_siginfo { int signo, err, code, pad; uint64_t addr; uint32_t syscall, arch; };
 struct k_sigcontext { uint64_t fault_address, regs[31], sp, pc, pstate; uint8_t reserved[4096] __attribute__((aligned(16))); };
@@ -118,6 +147,7 @@ void xs_handler(int signo, struct k_siginfo *info, struct k_ucontext *uc)
   struct xh_user_state *st = &tp->state;
   struct xh_trap *trap = &tp->trap;
 
+  tp->t_enter = counter();
   copy(st->x, mc->regs, sizeof st->x);
   st->sp = mc->sp;
   st->pc = mc->pc;
@@ -168,9 +198,26 @@ void xs_handler(int signo, struct k_siginfo *info, struct k_ucontext *uc)
   }
 
   __atomic_store_n(&tp->to_task, 0, __ATOMIC_RELEASE);
-  wake(&tp->to_host);
-  wait_for(&tp->to_task);
+  if (trap->kind == XH_TRAP_BOOT) wake(&tp->to_host);      // thread_create waits for this one in a timed futex
+  else post(&tp->to_host, &tp->host_sleeping);
+  tp->slept = await(&tp->to_task, &tp->task_sleeping, tp->spin_ticks);
+  tp->t_woken = counter();
   if (tp->command == XS_EXIT) sys(NR_exit, 0);
+
+  // Maps the kernel gave for this task since its last order (task.c, map-defer): carried out here, before the
+  // thread runs again, while xnuhost holds the task's order lock; then to_host is woken for them.
+  uint32_t nops = tp->nops;
+  if (nops) {
+    struct xs_op *ops = (struct xs_op *)((uint8_t *)tp + XS_OPS_OFF);
+    for (uint32_t i = 0; i < nops && i < XS_THREAD_OPS; i++) {
+      long r = ops[i].op == XS_OP_MAP ? sys(NR_mmap, ops[i].va, ops[i].size, ops[i].prot & 7, MAP_SHARED | MAP_FIXED, config->ram_fd, ops[i].offset) : -38;
+      ops[i].result = r > 0 ? 0 : r;
+    }
+    tp->nops = 0;
+    __atomic_store_n(&tp->ops_done, 1, __ATOMIC_RELEASE);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (__atomic_load_n(&tp->host_sleeping, __ATOMIC_RELAXED)) sys(NR_futex, &tp->to_host, FUTEX_WAKE, 0x7fffffff);
+  }
 
   if (tp->pac_set) {
     tp->pac_set = 0;

@@ -81,6 +81,8 @@ void xh_cpu_line(unsigned index, bool line)
 void xh_cpu_timer_set(xh_vcpu *v, uint64_t deadline)
 {
   struct itimerspec spec = { 0 };
+  v->perf.timer_sets++;
+  v->perf.timer_calls++;
   if (deadline == UINT64_MAX) {
     __atomic_store_n(&v->timer_armed, false, __ATOMIC_RELEASE);
     timer_settime(*(timer_t *)v->timer, 0, &spec, NULL);
@@ -107,6 +109,7 @@ void xh_cpu_timer_set(xh_vcpu *v, uint64_t deadline)
 
 void xh_cpu_idle(xh_vcpu *v)
 {
+  uint64_t began = xh_counter();
   __atomic_store_n(&v->idle, 1, __ATOMIC_RELEASE);
   while (!__atomic_load_n(&v->cpu.irq_pending, __ATOMIC_ACQUIRE)) {
     if (xh_stopping()) { pause(); continue; }
@@ -126,6 +129,7 @@ void xh_cpu_idle(xh_vcpu *v)
     futex(&v->cpu.irq_pending, FUTEX_WAIT_PRIVATE, 0, &step);
   }
   __atomic_store_n(&v->idle, 0, __ATOMIC_RELEASE);
+  v->perf.ticks_idle += xh_counter() - began;
 }
 
 // ---- signals ------------------------------------------------------------------------------------

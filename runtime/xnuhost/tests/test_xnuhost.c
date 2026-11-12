@@ -1153,6 +1153,36 @@ static void test_config(const char *dir)
   CHECK(xh_config_args(&c, 3, bad3) == 0 && xh_config_finish(&c) == -1);
 }
 
+// perf.c: the histograms of the trap path's steps, and the keys that tune the path.
+static void test_perf(void)
+{
+  static xh_hist h;
+  memset(&h, 0, sizeof h);
+  CHECK(xh_hist_quantile(&h, 0.5) == 0);
+  for (uint64_t ns = 1; ns <= 1000; ns++) xh_hist_add(&h, ns * 1000);       // 1 us .. 1 ms, evenly
+  CHECK(h.n == 1000 && h.max_ns == 1000000 && h.sum_ns == 500500000ull);
+  uint64_t p50 = xh_hist_quantile(&h, 0.5), p99 = xh_hist_quantile(&h, 0.99);
+  CHECK(p50 >= 500000 && p50 <= 500000 * 5 / 4);                            // a bucket is a quarter of a power of two
+  CHECK(p99 >= 990000 && p99 <= 1000000);                                    // never above the maximum
+  for (uint64_t ns = 0; ns < 70000; ns += 7) {                               // every value lands at or below its bucket's top
+    memset(&h, 0, sizeof h);
+    xh_hist_add(&h, ns);
+    if (xh_hist_quantile(&h, 0) != ns) { CHECK(xh_hist_quantile(&h, 0) == ns); break; }
+  }
+  memset(&h, 0, sizeof h);
+  xh_hist_add(&h, ~0ull >> 1);                                               // past 2^32 ns: the last bucket
+  CHECK(h.b[XH_HIST_BUCKETS - 1] == 1);
+  xh_config c;
+  xh_config_defaults(&c);
+  CHECK(c.perf_log == -1 && c.spin_host == -1 && c.spin_task == -1 && c.map_defer == -1 && c.cpu_pin == -1);
+  CHECK(xh_config_set(&c, "perf-log", "10") == 0 && c.perf_log == 10);
+  CHECK(xh_config_set(&c, "perf-log", "ten") == -1 && xh_config_set(&c, "perf-log", "-1") == -1);
+  CHECK(xh_config_set(&c, "spin-host", "20") == 0 && c.spin_host == 20 && xh_config_set(&c, "spin-task", "5000") == -1);
+  CHECK(xh_config_set(&c, "map-defer", "0") == 0 && c.map_defer == 0);
+  CHECK(xh_config_set(&c, "cpu-pin", "0") == 0 && c.cpu_pin == 0 && xh_config_set(&c, "cpu-pin", "2") == 0 && c.cpu_pin == 2);
+  CHECK(xh_config_set(&c, "cpu-pin", "3") == -1);
+}
+
 int main(void)
 {
   char dir[] = "/tmp/xnuhost-test-XXXXXX";
@@ -1170,6 +1200,7 @@ int main(void)
   test_input_filter();
   test_input_script();
   test_filter();
+  test_perf();
   if (!freopen("/dev/null", "w", stderr)) failures++;   // the refusals below print their reasons
   test_config(dir);
   char command[300];

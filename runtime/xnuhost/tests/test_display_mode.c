@@ -13,6 +13,9 @@
 #include <time.h>
 #include <unistd.h>
 
+// display.c ends input.c's touch-to-frame measurement at each shown frame; input.c is not linked here.
+void xh_input_frame_shown(void) {}
+
 struct message { char magic[4]; uint32_t a, b, c, d; };
 static struct { char path[300]; uint32_t w, h, stride, format; off_t memfd_size; int ok; } helper;
 

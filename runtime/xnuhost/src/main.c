@@ -5,6 +5,7 @@
 #include "gpu3d.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -209,7 +210,29 @@ static bool net_up;
 static bool wifi_up;                // wlan0 is the guest's en0 (runtime/bridges/wifi)
 
 static void bridge_log(int level, const char *line) { xh_log(level == 0 ? XH_LOG_ERROR : level == 1 ? XH_LOG_INFO : XH_LOG_DEBUG, "%s", line); }
-static void place(int tid, unsigned vcpu) { br_cpu_place(tid, &cpu_plan, vcpu); }
+// cpu-pin (default on): vCPU `vcpu`'s one host CPU, the rank-th CPU of its plan's mask among the vCPUs of its kind (so
+// the vCPUs of a kind take different CPUs while there are enough). The iOS thread a vCPU runs goes on the same CPU:
+// the hand-off between them is then a switch on one core, not a wake-up of another (docs/booter.md 2.6a: 3 us for a
+// system call there and back against 30 us across cores). Otherwise the plan's whole mask.
+static uint64_t place_mask(unsigned vcpu)
+{
+  uint64_t mask = __atomic_load_n(&cpu_plan.v[vcpu].affinity, __ATOMIC_ACQUIRE);     // the thermal step may narrow it
+  if (!config.cpu_pin || !mask) return mask;
+  unsigned rank = 0;
+  for (unsigned j = 0; j < vcpu; j++) rank += cpu_plan_base.v[j].type == cpu_plan_base.v[vcpu].type;
+  unsigned k = rank % (unsigned)__builtin_popcountll(mask);
+  for (unsigned i = 0; i < 64; i++) if (mask >> i & 1 && k-- == 0) return 1ull << i;
+  return mask;
+}
+static void place(int tid, unsigned vcpu)
+{
+  if (vcpu >= cpu_plan.nvcpu) return;
+  uint64_t mask = place_mask(vcpu);
+  cpu_set_t set;
+  CPU_ZERO(&set);
+  for (unsigned i = 0; i < 64 && i < CPU_SETSIZE; i++) if (mask >> i & 1) CPU_SET(i, &set);
+  if (sched_setaffinity(tid, sizeof set, &set) && tid == 0) LOGE("cpu: vCPU %u on host CPUs 0x%llx: %s", vcpu, (unsigned long long)mask, strerror(errno));
+}
 static int vcpu_tid(unsigned vcpu) { return vcpu < g_ncpu ? g_vcpu[vcpu].tid : 0; }
 // The thermal bridge's step (br_thermal_cap_for): the vCPUs and the iOS threads they run keep to fewer, slower cores
 // while the phone is hot. Affinities of xnuhost's own threads and its tasks' only: they end with the session, nothing
@@ -220,7 +243,7 @@ static void thermal_step(void *ctx, const br_thermal_state *state)
   if (!cpu_planned) return;
   br_cpu_plan_cap(&cpu_plan, &cpu_plan_base, &cpu_host, state->cap);
   __atomic_fetch_add(&xh_cpu_place_epoch, 1, __ATOMIC_ACQ_REL);
-  for (unsigned i = 0; i < cpu_plan.nvcpu; i++) { int tid = vcpu_tid(i); if (tid > 0) br_cpu_place(tid, &cpu_plan, i); }
+  for (unsigned i = 0; i < cpu_plan.nvcpu; i++) { int tid = vcpu_tid(i); if (tid > 0) place(tid, i); }
   uint64_t p = cpu_plan.nvcpu ? __atomic_load_n(&cpu_plan.v[cpu_plan.nvcpu - 1].affinity, __ATOMIC_ACQUIRE) : 0;
   LOGI("thermal: step %u (%s): P vCPUs on host CPUs 0x%llx%s", state->cap, br_thermal_level_name(state->level), (unsigned long long)p,
        state->cap ? "" : " (all of their kind)");
@@ -375,8 +398,21 @@ static int boot(void)
         machine.cpufreq_base = XL_BOARD_CPUFREQ;
         machine.cpufreq_size = (uint64_t)config.ncpu * BR_CPUFREQ_WINDOW;
       }
-      LOGI("cpu: %u E + %u P vCPUs on the host's %u E + %u P cores", cpu_plan.n_e, cpu_plan.n_p, host.n_e, host.n_p);
+      LOGI("cpu: %u E + %u P vCPUs on the host's %u E + %u P cores%s", cpu_plan.n_e, cpu_plan.n_p, host.n_e, host.n_p,
+           config.cpu_pin ? "; each vCPU and the iOS thread it runs on one core (cpu-pin=1)" : " (cpu-pin=0: a vCPU on any core of its kind)");
+      if (config.cpu_pin)
+        for (unsigned i = 0; i < config.ncpu; i++) LOGI("cpu%u: host CPU mask 0x%llx", i, (unsigned long long)place_mask(i));
     } else LOGI("cpu: no host topology under /sys: vCPUs are not placed");
+  }
+  if (!cpu_planned && config.cpu_pin == 2) {
+    // A bench run (make bench-arm64): vCPU i and the iOS thread it runs on host CPU i, as cpu-pin does on the phone.
+    cpu_plan.nvcpu = config.ncpu;
+    for (unsigned i = 0; i < config.ncpu; i++) cpu_plan.v[i].affinity = cpu_plan_base.v[i].affinity = 1ull << (i % 64), cpu_plan_base.v[i].type = 'P';
+    config.cpu_pin = 0;                       // the masks are single CPUs already
+    xh_cpu_place = place;
+    LOGI("cpu: cpu-pin=2: vCPU i and the iOS thread it runs on host CPU i");
+  }
+  if (config.bridges) {
 
     // Bluetooth: the phone's controller through its HAL (hidl), or none (virtual). auto: hidl when the HAL is
     // registered; the HAL itself is opened only when bluetoothd connects.
@@ -680,6 +716,7 @@ int main(int argc, char **argv)
   if (xh_display_init(&config, &fb_width, &fb_height, &fb_hz)) return EXIT_SETUP;
   // The display driver's scale and refresh rate go on the kernel's command line (a value given there stays).
   if (xh_display_boot_args(config.boot_args, sizeof config.boot_args, config.scale, fb_hz)) { LOGE("no room in the boot arguments for the display's switches"); return EXIT_SETUP; }
+  xh_perf_init(&config);
   if (boot()) { xh_tasks_shutdown(); return EXIT_SETUP; }
 
   sigset_t waited;
@@ -688,12 +725,13 @@ int main(int argc, char **argv)
   while (!xh_stopping()) {
     struct timespec tick = { 0, 100 * 1000 * 1000 };
     int signo = sigtimedwait(&waited, NULL, &tick);
-    if (signo == SIGQUIT) { xh_cpu_dump_all(); xh_tasks_dump(); xh_sysreg_stats_log(); continue; }      // debugging: where each vCPU is
+    if (signo == SIGQUIT) { xh_cpu_dump_all(); xh_tasks_dump(); xh_sysreg_stats_log(); xh_perf_log(true); continue; }      // debugging: where each vCPU is
     if (signo > 0) {
       char why[48];
       snprintf(why, sizeof why, "signal %d", signo);
       xh_stop(XH_HALT_OFF, 0, why);
     }
+    xh_perf_tick();                         // "perf:" lines every perf-log seconds
     // Until the guest's display driver presents, show what its kernel console draws.
     xh_display *d = xh_display_get();
     uint8_t *fb = xh_ram(boot_fb_pa, (uint64_t)fb_width * fb_height * 4);
@@ -711,6 +749,7 @@ int main(int argc, char **argv)
          (unsigned long long)g_vcpu[i].stat_reraised, (unsigned long long)g_vcpu[i].stat_mmio, (unsigned long long)g_vcpu[i].stat_sysreg,
          (unsigned long long)g_vcpu[i].stat_traps);
   xh_sysreg_stats_log();                    // which trapped instructions kept the vCPUs busy
+  xh_perf_log(true);                        // what the trap path cost, step by step (perf.c)
   // Debugging aid: XNUHOST_DUMP=FILE writes the first 64 MiB of the kernel's window at the stop (XNUHOST_DUMP_MB=N
   // for more: a kernel collection's data is past 64 MiB).
   if (getenv("XNUHOST_DUMP")) {
