@@ -428,8 +428,10 @@ and the 7 unit tests on synthetic log text.
 
 ## phone
 
-`oneios-tool phone [--serial S] CMD`: the phone on adb. **Not run on the real phone yet**: written and tested on a
-box with no phone, against a stand-in (`tests/phone/fake-adb.sh`). `scripts/phone/stage.sh` stays until it has.
+`oneios-tool phone [--serial S] CMD`: the phone on adb. Written against a stand-in (`tests/phone/fake-adb.sh`);
+**run on the real phone on 2026-11-12** (the Mac, SM-S928B): `status`, `stage runtime` (runtime 0.1.7 from the
+release's asset), `stage image`, `sums`, `image-check`, `switch`, `log --follow --markers`, `log --list`, `log --file`.
+`return` and `pull-data` have not run on it yet. `scripts/phone/stage.sh` stays until they have.
 
 ```sh
 oneios-tool phone status                      # root, the installed app, the session, `oneios_root.sh status` (read only)
@@ -440,6 +442,8 @@ oneios-tool phone status --watch [SECONDS]    # the same again every 5 s until C
 oneios-tool phone log [--file NAME] [--tail N] [--follow] [--save PATH | --save-auto] [filters] [--since S] [--analyze]
 oneios-tool phone log --list                  # the logs by name, with sizes
 oneios-tool phone sums                        # sha256 of the staged kernel.kc, its hash list, manifest.json, data.seed's line, xnuhost.conf, the runtime
+oneios-tool phone image-check                 # the staged manifest.json against the staged files (image.sha256), as xnuhost will (read only)
+oneios-tool phone manifest DIR [--out FILE] [--stage]   # the phone's manifest.json with DIR's files' entries set to theirs
 oneios-tool phone switch [--version-code N]   # busybox setsid sh oneios_root.sh switch <the installed app's versionCode> 1
 oneios-tool phone return [--timeout 180] [--note TEXT]   # session/return.request, then waits for "One UI restored"
 oneios-tool phone pull-data OUT [--ioslog]    # data/data.img: gzip -1 on the phone, zero runs as holes here
@@ -462,6 +466,19 @@ The rules of `docs/building.md` section 6 are in the tool (`crates/oneios-phone/
   refused or cut down unless they are letters, digits and `._+-/,`.
 
 What each does:
+- `image-check` reads the staged `image/manifest.json` and `image.sha256` (the sums the app and `stage image` write
+  when they stage a file; nothing is hashed on the phone) and names every entry whose staged file has another
+  SHA-256 or is missing. xnuhost refuses such a set ("trust caches of /data/image: a file of the image set is not
+  the one manifest.json lists"): on 2026-11-12 23:04 a cycle staged the Mac's own `out/image/24A446/manifest.json`
+  (another set: `data.seed` `58db87e4`, the phone's is `f201d6ca`) with a new kernel, and the session ended 2 s
+  after One UI was stopped. `switch` runs it first and refuses before anything is stopped; `stage image` runs it
+  after staging and warns.
+- `manifest DIR` makes the manifest for files staged on their own (a new `kernel.kc` and `kernel.kc.hashes`): the
+  phone's `manifest.json` (read with `pyjson`, so the key order and Python's layout are kept), each entry of DIR's
+  files set to their SHA-256 and size. Every other entry must already list the staged file, and a file of DIR
+  that the manifest does not list is refused. Printed, `--out FILE`, or `--stage`: DIR's files and the manifest
+  staged together, then `image-check`. Run on the phone: the manifest it replaced by hand that night (21 entries,
+  all equal to `image.sha256`).
 - `switch` reads the versionCode from `dumpsys package com.fahadali.oneos` (not a fixed 115; `--version-code`
   for a phone without the app). A refusal of the preflight (`@@REFUSED ...`) is printed and is exit status 1. If
   `setsid` lets adb go before the script answers, the new `epoch` line of `switch.log` is the proof it started.

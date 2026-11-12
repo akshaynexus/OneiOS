@@ -180,7 +180,13 @@ struct xh_vector {
   void     (*mmio_write)(struct xh_cpu *, uint64_t phys, uint32_t size, uint64_t value);
 
   // memory
-  int64_t  (*ram_discard)(struct xh_cpu *, uint64_t phys, uint64_t size);      // give free pages back to Linux
+  // Give free pages back to Linux: a hole punched in the RAM memfd (fallocate PUNCH_HOLE, the size kept). Only
+  // inside the kernel's window [info->ram_phys, +ram_size), host-page aligned, size > 0, else -EINVAL; fallocate's
+  // errno otherwise. Afterwards the range reads as zero in every mapping (the window, every task that maps it; a
+  // task's mapping is not removed, its next access gets the new page) and the host holds no memory for it until it
+  // is touched again (a read through a shared mapping fills it too). Kernel 0058's free-page reporting calls it for
+  // pages on XNU's free queue only (free_report.h); xnuhost counts it for its `memory:` log line.
+  int64_t  (*ram_discard)(struct xh_cpu *, uint64_t phys, uint64_t size);
   // User text, exactly once per page of original text, before it is mapped executable: `mrs xN,
   // TPIDRRO_EL0` becomes `mrs xN, TPIDR_EL0` (the TSD base), `mrs xN, TPIDR_EL0` becomes `mov xN, #0`
   // (iOS's CPU number: always 0) and `msr TPIDR_EL0, xN` becomes `nop`. A second pass over a

@@ -23,6 +23,15 @@ make_phone() {
   local P=$1 S=$1/data/local/tmp/oneios f
   rm -rf "$P"
   mkdir -p "$P/.fake/bin" "$S/bin" "$S/session" "$S/image/overlay/userland" "$S/runtime/bin" "$S/data" "$S/control" "$P/data/adb/ksu/bin"
+  # macOS has no setsid (util-linux): the stand-in's busybox and fake-root.sh need one, so a host without it gets
+  # perl's POSIX::setsid (every check that starts a stand-in session failed on the Mac before, 2026-11-12)
+  if ! command -v setsid >/dev/null 2>&1; then
+    cat > "$P/.fake/bin/setsid" <<'SH'
+#!/bin/sh
+exec perl -MPOSIX -e 'POSIX::setsid(); exec { $ARGV[0] } @ARGV or die "setsid: $ARGV[0]: $!\n"' "$@"
+SH
+    chmod +x "$P/.fake/bin/setsid"
+  fi
   chmod 700 "$S"
   ln -s "$HERE/../phone/fake-root.sh" "$S/bin/oneios_root.sh"
   printf '#!/bin/sh\nexec "$@"\n' > "$P/data/adb/ksu/bin/busybox"
@@ -51,9 +60,16 @@ Packages:
 PKG
   echo "kernel collection stand-in" > "$S/image/kernel.kc"
   echo "hash list stand-in" > "$S/image/kernel.kc.hashes"
-  echo '{"format": 1, "build": "24A446"}' > "$S/image/manifest.json"
   echo "seed stand-in" > "$S/image/data.seed"
   echo "boot-args=stand-in" > "$S/image/overlay/userland/xnuhost.conf"
+  # a manifest that lists the set's files, as imagetool.py writes it (json.dumps indent 2): switch checks it
+  python3 -I - "$S/image" <<'PY'
+import hashlib, json, os, sys
+d = sys.argv[1]
+files = [{"path": p, "size": os.path.getsize(f"{d}/{p}"), "sha256": hashlib.sha256(open(f"{d}/{p}", "rb").read()).hexdigest()}
+         for p in ("data.seed", "kernel.kc", "kernel.kc.hashes", "overlay/userland/xnuhost.conf")]
+open(f"{d}/manifest.json", "w").write(json.dumps({"format": 1, "build": "24A446", "files": files}, indent=2) + "\n")
+PY
   (cd "$S/image" && for f in kernel.kc kernel.kc.hashes manifest.json data.seed overlay/userland/xnuhost.conf; do
     sha256sum "$f" >> ../image.sha256; echo "$(stat -c '%d:%i:%s:%Y' "$f") $f" >> ../image.ids; done)
   echo "xnuhost stand-in" > "$S/runtime/bin/xnuhost"

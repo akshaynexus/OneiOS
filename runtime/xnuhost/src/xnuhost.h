@@ -181,6 +181,12 @@ int64_t xh_mem_kernel_unmap(uint64_t va, uint64_t size);
 void xh_mem_map_limit(void);                       // raises vm.max_map_count when it can
 // Host pointer for guest physical [pa, pa+len), NULL if not inside RAM.
 void *xh_ram(uint64_t pa, uint64_t len);
+// ram_discard (discard.c): pages the guest gave back, a hole punched in the RAM memfd. Counted for the log's
+// `memory:` line: calls that punched, bytes given back, failures of fallocate, calls refused (unaligned or outside
+// the RAM), nanoseconds spent in fallocate.
+typedef struct { uint64_t calls, bytes, failed, refused, ns; } xh_discard_stats;
+extern xh_discard_stats g_discard;
+int64_t xh_ram_discard_fd(int fd, uint64_t fd_base, uint64_t lo, uint64_t len, uint64_t phys, uint64_t size, uint64_t page);
 
 // ---- MMIO dispatch (mmio.c) ---------------------------------------------------------------------
 typedef struct xh_mmio_region {

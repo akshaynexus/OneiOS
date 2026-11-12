@@ -237,6 +237,20 @@ static void test_unmap_queue(uint64_t task, uint64_t thread, uint64_t code_va, u
   if (read == -38) { put("SKIP task_read after queued maps and unmaps: this host has no process_vm_readv\n"); H->task_unmap(C0, task, x_va, 0x4000); }
   else check(read == 8 && back == 0x1111 && H->task_unmap(C0, task, x_va, 0x4000) == 0 && H->task_read(C0, task, x_va, &back, 8) < 0,
              "task_read after a queued map reads the page, after a queued unmap it fails");
+  // ram_discard (the kernel's free-page reporting, 0058) and a task's mapping of the page. One page in every
+  // mapping: given back, the task reads zero; written again by the kernel, the task reads the new value.
+  const uint64_t d_va = 0x600000000ull;
+  uint64_t d_pa = page_alloc();
+  *(volatile uint64_t *)(uintptr_t)kva(d_pa) = 0x3333;
+  check(H->task_map(C0, task, d_va, 0x4000, XH_PROT_READ, d_pa) == 0 && load_once(C0, thread, code_va, d_va, &trap, &got) == XH_TRAP_BRK &&
+        got == 0x3333 && H->ram_discard(C0, d_pa, 0x4000) == 0 && load_once(C0, thread, code_va, d_va, &trap, &got) == XH_TRAP_BRK && got == 0 &&
+        (*(volatile uint64_t *)(uintptr_t)kva(d_pa) = 0x4444, load_once(C0, thread, code_va, d_va, &trap, &got)) == XH_TRAP_BRK && got == 0x4444,
+        "ram_discard of a page a task maps: the task reads zero, then what the kernel writes into the page again");
+  // The page's unmap queued (the thread is stopped), the page given back and used again by the kernel before the
+  // task runs: the task's next run carries the unmap out first and faults; it never sees the page's new data.
+  check(H->task_unmap(C0, task, d_va, 0x4000) == 0 && H->ram_discard(C0, d_pa, 0x4000) == 0 &&
+        (*(volatile uint64_t *)(uintptr_t)kva(d_pa) = 0x5555, load_once(C0, thread, code_va, d_va, &trap, NULL)) == XH_TRAP_FAULT && trap.far == d_va,
+        "ram_discard of a page whose unmap is queued: the task faults at its next run, the page's new data is not seen");
 }
 
 // Two threads of one task on two vCPUs. Thread A is stopped with the page at x_va mapped in its process; the kernel
@@ -318,6 +332,9 @@ static void test_tasks(void)
   check(st.tsd == 0x1234500 && st.v[3].lo == 0x1122334455667788ull, "the thread register and a vector register came back unchanged");
   check(H->task_map(C0, task, data_va, 0x4000, XH_PROT_READ | XH_PROT_WRITE, data_pa) == 0, "the kernel maps the page (pmap_enter)");
   check(H->thread_run(C0, thread, &st, &trap) == 0 && trap.kind == XH_TRAP_BRK && st.pc == code_va + 20, "the store is retried, then brk traps");
+  // the store's fault came just before on this task: Linux's SIGTRAP carries that fault's syndrome as its own
+  // (stub.c), and the kernel would have reported the brk as a data abort
+  if (trapped) check(trap.esr == 0 && trap.insn == 0xd4200020, "brk after a fault: no syndrome of that fault, and the brk instruction for the kernel");
   check(*(uint64_t *)(uintptr_t)kva(data_pa) == 7, "the task's store is visible in the kernel's view of the page (shared memory)");
   uint64_t value = 0xfeedfacecafebeefull, back = 0;
   int64_t wrote = H->task_write(C0, task, data_va + 8, &value, 8);
@@ -496,6 +513,46 @@ static void bench(unsigned scale)
   bh_put("timer interrupt of a running thread: deadline -> the kernel has the trap", &kick);
   H->timer_set(C0, UINT64_MAX);
   irq_upcall(C0, NULL);
+
+  // 4. Free-page reporting (kernel 0058): ram_discard of one page and of 64 consecutive pages, and what a page costs
+  // when it is used again, as XNU zero-fills a page it takes (16 KiB of 8-byte stores): resident, or given back (the
+  // host's first touch of each 4 KiB part allocates and zeroes it).
+  bhist give1, give64, fill_res, fill_given;
+  bh_init(&give1); bh_init(&give64); bh_init(&fill_res); bh_init(&fill_given);
+  uint64_t run = page_alloc();
+  for (unsigned i = 1; i < 64; i++) page_alloc();
+  n = 50ull * scale;
+  for (uint64_t i = 0; i < n; i++) {
+    for (unsigned p = 0; p < 64; p++) {
+      volatile uint64_t *w = (volatile uint64_t *)(uintptr_t)kva(run + p * 0x4000ull);
+      uint64_t a = now();
+      for (unsigned k = 0; k < 0x4000 / 8; k++) w[k] = 0;
+      bh_add(&fill_res, now() - a);
+    }
+    uint64_t a = now();
+    if (H->ram_discard(C0, run, 64 * 0x4000ull)) bad++;
+    bh_add(&give64, now() - a);
+    for (unsigned p = 0; p < 64; p++) {
+      volatile uint64_t *w = (volatile uint64_t *)(uintptr_t)kva(run + p * 0x4000ull);
+      a = now();
+      for (unsigned k = 0; k < 0x4000 / 8; k++) w[k] = 0;
+      bh_add(&fill_given, now() - a);
+    }
+    for (unsigned p = 0; p < 64; p++) {
+      a = now();
+      if (H->ram_discard(C0, run + p * 0x4000ull, 0x4000)) bad++;
+      bh_add(&give1, now() - a);
+    }
+    for (unsigned p = 0; p < 64; p++) {                                  // all of each page resident again
+      volatile uint64_t *w = (volatile uint64_t *)(uintptr_t)kva(run + p * 0x4000ull);
+      for (unsigned k = 0; k < 0x4000 / 8; k += 512) w[k] = 1;
+    }
+  }
+  bh_put("ram_discard of one 16 KiB page (host call)", &give1);
+  bh_put("ram_discard of 64 consecutive pages, 1 MiB (host call)", &give64);
+  bh_put("zero-fill of a resident 16 KiB page", &fill_res);
+  bh_put("zero-fill of a 16 KiB page given back (the host fills it again)", &fill_given);
+  if (bad) { put("BENCH   (failed calls or other traps: "); dec(bad); put(")\n"); }
   H->thread_destroy(C0, thread);
   H->task_destroy(C0, task);
   put("BENCH done\n");
@@ -676,6 +733,21 @@ void kernel_main(const struct boot_args *args, const struct xh_vector *vector, s
   uint64_t scratch = page_alloc();
   *(volatile uint64_t *)(uintptr_t)kva(scratch) = 5;
   check(H->ram_discard(cpu, scratch, 0x4000) == 0 && *(volatile uint64_t *)(uintptr_t)kva(scratch) == 0, "ram_discard gives pages back (they read as zero)");
+  {
+    // A run of three pages and its neighbours: only the run reads zero; refused: unaligned, empty, outside the RAM.
+    uint64_t run = page_alloc();
+    page_alloc(); page_alloc(); page_alloc(); page_alloc();
+    for (unsigned i = 0; i < 5; i++) *(volatile uint64_t *)(uintptr_t)kva(run + i * 0x4000ull) = 0x70 + i;
+    int zeroed = H->ram_discard(cpu, run + 0x4000, 3 * 0x4000) == 0;
+    for (unsigned i = 1; i < 4; i++) zeroed = zeroed && *(volatile uint64_t *)(uintptr_t)kva(run + i * 0x4000ull) == 0;
+    check(zeroed && *(volatile uint64_t *)(uintptr_t)kva(run) == 0x70 && *(volatile uint64_t *)(uintptr_t)kva(run + 4 * 0x4000ull) == 0x74,
+          "ram_discard of a run of pages: the run reads zero, the pages beside it keep their data");
+    check(H->ram_discard(cpu, run + 0x800, 0x4000) == -22 && H->ram_discard(cpu, run, 0x800) == -22 && H->ram_discard(cpu, run, 0) == -22 &&
+          H->ram_discard(cpu, H->info->ram_phys - 0x4000, 0x4000) == -22 &&
+          H->ram_discard(cpu, H->info->ram_phys + H->info->ram_size + (1ull << 30), 0x4000) == -22 &&
+          *(volatile uint64_t *)(uintptr_t)kva(run) == 0x70,
+          "ram_discard refuses an unaligned range, an empty one and one outside the RAM (-EINVAL), and changes nothing");
+  }
   check(H->wall_time(cpu) > 1700000000ull, "wall_time");
   test_tasks();
   // boot-args "testkernel-bench" (`make bench-arm64`): the trap path's costs, after the checks.

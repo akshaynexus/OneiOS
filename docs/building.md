@@ -305,9 +305,12 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
 - `-cpu cortex-a710`, never qemu's default `max`: its 512-byte `DC ZVA` breaks XNU's `bzero`.
 - `--ram 4G`: without it xnuhost takes `ram=auto` (90% of the PC's MemTotal or all but 1.5 GiB: 13.75 GiB
   of this 15 GiB box, which leaves too little for qemu and the build). It boots (2026-11-12: 14,080 MiB, to SpringBoard
-  in 420 s), but the guest's RAM fills with its file cache (8 GiB held after 7 min) and the PC's MemAvailable fell to
-  about 5.9 GiB. `--ram 9728M` is the phone's size
-  ([booter.md](booter.md) 1).
+  in 420 s). Before hosted 0058 the memfd filled with pages XNU had freed (12 GiB held after 16.5 min with 9 GiB free
+  in XNU; the PC's MemAvailable fell under 1 GiB); with 0058 it holds about what XNU uses (5 GiB at 16.5 min).
+  `--ram 9728M` is the phone's size ([booter.md](booter.md) 1).
+- What XNU sees of its memory: `oneios-mem:` lines every 30 s (free, given back to the host, in use, memorystatus
+  available); `oneios-free-report=0` turns 0058's free-page reporting off for a comparison
+  ([kernel/patches/oneios-hosted/README.md](../kernel/patches/oneios-hosted/README.md), 0058).
 - `oneios-data-wait=3000`: under qemu the first boot spends minutes re-deriving the shared cache's 4 KiB code
   hashes (emulated SHA); the committed default (300 s) is for the phone.
 - `hosted_mapcheck=1` (boot argument, debugging only): the kernel records every page it maps into and unmaps
@@ -383,6 +386,8 @@ $T phone status                    # root, the installed app, the session, oneio
 $T phone stage runtime DIR         # an unpacked runtime package        (scripts/phone/stage.sh runtime DIR)
 $T phone stage image DIR           # kernel.kc, kernel.kc.hashes, manifest.json, overlay/... at their paths
 $T phone sums                      # the staged files' sha256
+$T phone image-check               # the staged manifest.json lists the staged files (switch checks it first)
+$T phone manifest DIR --stage      # DIR's files (a new kernel.kc, kernel.kc.hashes) with the phone's manifest, their entries new
 $T phone switch                    # oneios_root.sh switch <the installed app's versionCode> 1
 $T phone log --follow --markers    # kernel, launchd, backboardd, SpringBoard, the first frame, a panic, as they come
 $T phone log --gpu --tail 200      # named filters: --panic --markers --display --gpu --wifi --hid --mem; --grep REGEX; --since SECONDS
@@ -404,11 +409,11 @@ $T cycle --only return,collect --name NAME                 # end a session that 
 
 | Step | What it does |
 |---|---|
-| `build` | Only what changed. The hosted kernel (`scripts/bg.sh cycle-kernel env HOSTED_OUT=NAME XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`) when `--kernel-out NAME` is given and `xnu.macho` is older than the newest file of `kernel/patches/oneios-hosted` (or missing). The collection (`kernel/prelink/build.sh` with `KERNEL=` and `REFERENCE=` of that tree) when the kernel is newer than `out/kernel/24A446/kernel.kc`; **the cycle stops unless the build ends with status 0 (the audit: 0 failures) and `stubs-check.py` says `0 bad`**. The runtime (`runtime/package.sh V`, unpacked into `out/cycle/runtime-V`) with `--runtime-version V`; `--runtime DIR` takes one that is built. The image parts (`kernel.kc`, `kernel.kc.hashes`, `manifest.json`, `overlay/userland/xnuhost.conf`) are gathered in `out/cycle/image`; `--image DIR` takes a folder instead, which is also where iOS plug-ins built elsewhere go. The iOS plug-ins build on macOS only (`--force plugins`). The app: its source's version is said; `--force app` runs `app build` and `app install`. `--force kernel,prelink,...` builds a part whatever its state. Long builds run in tmux and the cycle waits for their exit code |
+| `build` | Only what changed. The hosted kernel (`scripts/bg.sh cycle-kernel env HOSTED_OUT=NAME XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`) when `--kernel-out NAME` is given and `xnu.macho` is older than the newest file of `kernel/patches/oneios-hosted` (or missing). The collection (`kernel/prelink/build.sh` with `KERNEL=` and `REFERENCE=` of that tree) when the kernel is newer than `out/kernel/24A446/kernel.kc`; **the cycle stops unless the build ends with status 0 (the audit: 0 failures) and `stubs-check.py` says `0 bad`**. The runtime (`runtime/package.sh V`, unpacked into `out/cycle/runtime-V`) with `--runtime-version V`; `--runtime DIR` takes one that is built. The image parts (`kernel.kc`, `kernel.kc.hashes`; not `manifest.json` or `xnuhost.conf`: `out/image/24A446` is the Mac's own set, not the phone's) are gathered in `out/cycle/image`; `--image DIR` takes a folder instead, which is also where iOS plug-ins built elsewhere go. The iOS plug-ins build on macOS only (`--force plugins`). The app: its source's version is said; `--force app` runs `app build` and `app install`. `--force kernel,prelink,...` builds a part whatever its state. Long builds run in tmux and the cycle waits for their exit code |
 | `tests` | `--tests`: `runtime/host-tests.sh`; a failure stops the cycle before the phone is touched |
-| `stage` | `phone sums`, then `stage image` with only the files whose SHA-256 differs from the phone's and `stage runtime` when a file of it differs, then `phone sums` again, which must equal the local hashes (`sums.txt`). `data.seed` is never staged |
+| `stage` | `phone sums`, then `stage image` with only the files whose SHA-256 differs from the phone's and `stage runtime` when a file of it differs, then `phone sums` again, which must equal the local hashes (`sums.txt`). Files staged with no `manifest.json` of their own get one made from the phone's (`phone manifest`); then `phone image-check`. `data.seed` is never staged |
 | `switch` | First the way back: root, no session, `oneios_return.sh`, `oneios_switch.sh` and `bin/oneios_root.sh` staged, no import in progress (`runtime.new`, `image.new`), and the root script's preflight says `ready 1`. Then `phone switch` |
-| `watch` | Reads `session/xnuhost.log`'s new lines every 2 s and prints each marker once with its time: xnuhost, kernel, darwin, bsd-root, init, launchd, backboardd, SpringBoard, ready (the first frame), PANIC, end. On a panic, when the session ends by itself, or after `--ready-timeout` (300 s) without the first frame: straight to the return, and the cycle's status is 1 |
+| `watch` | Reads `session/xnuhost.log`'s new lines every 2 s, and after a switch only once the file changed at or after the phone's second of the switch (until the switch replaces it, about 40 s in, it is the last session's: its first-frame line made the watch say "ready after 0 s", 2026-11-12) and prints each marker once with its time: xnuhost, kernel, darwin, bsd-root, init, launchd, backboardd, SpringBoard, ready (the first frame), PANIC, end. On a panic, when the session ends by itself, or after `--ready-timeout` (300 s) without the first frame: straight to the return, and the cycle's status is 1 |
 | `hold` | `--hold S` seconds, else until Ctrl-C. Ctrl-C returns, unless `--stay`, which leaves the session open (end it with `phone return` or `cycle --only return,collect`). A panic or the session's own end during the hold returns |
 | `return` | `session/return.request`, then waits (180 s) for `One UI restored` in what `return.log` gained |
 | `collect` | `out/session-logs/DATE/NAME/`: `xnuhost.log`, the last 2000 lines of `switch.log` and `return.log`, `return.outcome`, `sums.txt`, and `summary.md` (versions, hashes, each step's time and result, the markers with their times, the panics, the way back). `--pull-data` adds the Data store's copy and `ioslog` |
@@ -434,8 +439,9 @@ restore the baseline (`phone-baseline.txt` next to that script) before you relea
 
    Unpack a package with `mkdir -p D && zstd -dc out/release/oneios-runtime-V-arm64.tar.zst | tar -xf - -C D`.
    `image` replaces only the files given and writes their lines in `image.sha256` and `image.ids` again (the
-   preflight checks both); give it a `manifest.json` whose `kernel.kc` entry has the new size and SHA-256 (xnuhost
-   does not check the kernel against the manifest, but keep them equal). Never stage `data.seed` from the Mac's
+   preflight checks both); give it a `manifest.json` whose entries list the staged files: xnuhost checks the set against it and
+   refuses a file the manifest does not list (2026-11-12: another set's manifest ended a session 2 s in).
+   `oneios-tool phone manifest DIR --stage` makes it from the phone's and stages both; `phone image-check` checks. Never stage `data.seed` from the Mac's
    `out/image/24A446`: it differs from the phone's, and a new seed makes the Data store start over.
    `runtime-asis DIR` puts back a backed-up stage whose files were replaced by hand.
 2. **Start** (the app's own path, the same preflight and the tick):

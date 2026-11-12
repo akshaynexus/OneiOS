@@ -676,7 +676,8 @@ static void ram_choice_log(void)
 }
 
 // Every host-mem-log seconds: what the host has left and how much of the guest's RAM it holds (the memfd's pages that
-// were touched; the guest's free pages that were never touched, or were given back with ram_discard, are not). The
+// were touched; the guest's free pages that were never touched, or were given back with ram_discard, are not), and what
+// the guest gave back with ram_discard. The
 // host's low-memory killer may end xnuhost when the host runs out: then the watcher returns to One UI. Read only.
 static void host_memory_tick(bool now)
 {
@@ -690,8 +691,13 @@ static void host_memory_tick(bool now)
   struct stat st;
   uint64_t held = g_mem.fd >= 0 && fstat(g_mem.fd, &st) == 0 ? (uint64_t)st.st_blocks * 512 : 0;
   if (xh_meminfo(config.ram_meminfo, &total, &available)) return;
-  LOGI("memory: host MemAvailable %llu MiB of %llu MiB; the guest's RAM holds %llu of %llu MiB", (unsigned long long)(available >> 20),
-       (unsigned long long)(total >> 20), (unsigned long long)(held >> 20), (unsigned long long)(g_mem.size >> 20));
+  // What the guest gave back since the start (ram_discard: its free pages, kernel 0058), and the time it took.
+  uint64_t calls = __atomic_load_n(&g_discard.calls, __ATOMIC_RELAXED), bytes = __atomic_load_n(&g_discard.bytes, __ATOMIC_RELAXED);
+  uint64_t failed = __atomic_load_n(&g_discard.failed, __ATOMIC_RELAXED), ns = __atomic_load_n(&g_discard.ns, __ATOMIC_RELAXED);
+  LOGI("memory: host MemAvailable %llu MiB of %llu MiB; the guest's RAM holds %llu of %llu MiB; given back %llu MiB of free pages "
+       "in %llu calls (%llu failed, %llu ms)", (unsigned long long)(available >> 20), (unsigned long long)(total >> 20),
+       (unsigned long long)(held >> 20), (unsigned long long)(g_mem.size >> 20), (unsigned long long)(bytes >> 20),
+       (unsigned long long)calls, (unsigned long long)failed, (unsigned long long)(ns / 1000000));
 }
 
 int main(int argc, char **argv)

@@ -674,8 +674,14 @@ section 6 ("Very slow" playback).
   - Not seen on the PC: a swap file. In 20 minutes at 2 GiB (to SpringBoard and the daemons, no panic) nothing asked for
     a swap-out, so the thread never tried again and `/private/var/vm` stayed empty. Whether swap starts under the phone's
     pressure is for the phone's log: a `Failed to open swap file` after the Data mount (and its `oneios-swap:` line), or
-    `swapfile0` in `/private/var/vm`. [I] On iOS the swap-out of compressed segments may serve only the freezer (frozen
-    apps); then swap does not relieve the pageout scan of the 15:35 session at all.
+    `swapfile0` in `/private/var/vm`. **Swap serves only the freezer on iOS** (read in xnu-12377, 2026-11-12): with
+    `CONFIG_FREEZE` the default `vm_compressor_mode` is `VM_PAGER_FREEZER_WITH_SWAP` (0x20; the PC's log: `"vm_compressor_mode"
+    is 32`), which sets `freezer_swap_is_active` and not `swap_is_active` (`vm_config_init`, `vm_pageout.c`); a
+    general compressed segment goes on the swap-out queue only with `VM_CONFIG_SWAP_IS_ACTIVE` (`C_SWAPOUT_REG`,
+    `vm_compressor.c`), so only frozen apps' segments (`C_SWAPOUT_FREEZER`), donated early ones (`C_SWAPOUT_DONATE`) and,
+    with `vm_compressor_scavenger_enabled=1` (off by default), old ones (`C_SWAPOUT_RIPE`) are swapped. Swap does not
+    relieve the pageout scan of the 15:35 session; [I] it helps only when iOS's freezer freezes apps, which user space
+    asks for. `/defaults kern.vm_compressor` in the device tree would set another mode (the phone's log line says).
 - **The time in the failure line** is seconds since boot from the calendar (`clock_get_calendar_microtime` less
   `clock_get_boottime_microtime`): the hosted `mach_absolute_time` is the host's counter (wall time under qemu, the
   phone's own uptime on the phone); the first build printed `at 1794488403 s`.
@@ -684,6 +690,95 @@ section 6 ("Very slow" playback).
   file, and the swap file hunk to its `vm_compressor_backing_file.c`. Compiled on the Linux PC once libdispatch was
   installed (`HOSTED_OUT=pc` at `7652df1`; with the time fix `HOSTED_OUT=pc2`, `kernel.kc` `cdd98e7e`; no warnings from
   it) and run on the PC as above. Not run on the phone.
+
+## 0058-free-page-report.patch (mem, 2026-11-12)
+
+**The goal: iOS keeps all of its ram=auto memory; the host gets back only pages iOS has freed.** (The owner's
+decision, 2026-11-12: no pressure feedback, no cache cap, no change to XNU's free targets, memorystatus or jetsam.)
+
+- **Why.** xnuhost's RAM is a memfd: the host holds a page from its first touch until the guest gives it back
+  (`ram_discard`, a hole punched in the memfd), and before this patch the kernel never gave anything back. Stock arm64
+  XNU enters a freed page at the tail of its free queue and allocates from the head (FIFO), so even a small working set
+  walks through every never-touched page: at `ram=auto` on the PC (14,080 MiB) the host held 8,567 MiB after 7 min
+  while XNU itself had 11,310 MiB free, and 12,266 MiB after 16.5 min (9,048 MiB free in XNU), when the PC's
+  MemAvailable fell to 903 MiB (the run below). What fills the memfd is not the file cache: it is free pages that the
+  boot's reads and allocations went through. On the phone (9.5 GiB guest of about 11.2 GiB) that memory would never
+  go back to One UI.
+- **What.** (`osfmk/vm/vm_resident.c`, `vm_page.h`, `vm_pageout.c`, `arm64/hosted/hosted_pmap.h`,
+  `arm64/hosted/free_report.h`; all `#if XNU_HOSTED`.)
+  - Only pages on XNU's own free queue are given back: memory iOS is not using at all. Cached, compressed and wired
+    pages are never touched, and nothing changes `vm_page_free_count` (but for the moment a batch is out, below), the
+    free target or what memorystatus counts.
+  - The free queues keep two kinds of page in order: `[pages iOS freed: the host holds them][pages given back]`. A
+    freed page enters at the head (taken first: memory the host still holds), a given-back one at the tail (taken
+    last). Pages released at startup were never touched and enter as given back. `vm_page`'s spare bit
+    (`__vmp_reserved3`) is `vmp_hosted_reported`; per colour queue, a count of held pages and the first given-back
+    page, all under the free queue lock (`vm_page_free_queue_enter/remove/grab`).
+  - A thread (`oneios_free_report`, utility priority) wakes every second. When the held free pages pass keep +
+    hysteresis it gives back down to keep, coldest first, in batches: up to 64 pages taken off the queue with its lock,
+    given back as runs of consecutive pages with the lock dropped and interrupts masked for each host call, put back
+    at the tail with the lock (waiters woken, memorystatus updated). keep = `vm_page_free_target` +
+    `oneios-free-report-keep` MiB (32): the pages the next allocations take; under pressure XNU keeps its free count
+    between its free minimum and target, so pages that cycle through the free queue are never given back. While a
+    batch is out (at most 256 KiB with 4 KiB pages, for the host calls' time, only far above the free target) the free
+    count is that much lower. Nothing can allocate a page whose hole is being punched; the contiguous allocator does not
+    take a page that is on no queue (`vm_page_is_relocatable`: `VM_PAGE_NOT_ON_Q`).
+  - The decisions (`xh_fr_batch`: the hysteresis and the batch; `xh_fr_runs`: sorted runs; `xh_fr_keep_per_queue`)
+    are `osfmk/arm64/hosted/free_report.h`, the same file as `runtime/xnuhost/include/xnuhost/free_report.h`; the host
+    tests check that the two are one and test the functions.
+  - Deferred unmaps (`docs/booter.md` 2.6): XNU's pmap removes every mapping of a page before it reaches the free
+    queue; xnuhost may still have a stopped task's unmap queued. The punch drops the page from that task's process too,
+    and the task cannot run before the stub has carried the queue out (test kernel: "ram_discard of a page whose unmap
+    is queued"). With `hosted_mapcheck=1` each page given back is checked: no task mapping recorded for any 4 KiB part
+    and `pmap_verify_free`; a failure prints `hosted check: page 0x... is given back to the host (0058) while N task
+    mapping(s) of it remain`.
+- **Boot arguments.** `oneios-free-report=0` (off: stock FIFO order, nothing given back; the `oneios-mem:` lines stay),
+  `oneios-free-report-keep=MiB` (32), `oneios-free-report-hysteresis=MiB` (16), `oneios-free-report-batch=PAGES` (64,
+  the most), `oneios-free-report-ms=MS` (1000), `oneios-free-report-log=SECONDS` (30; 0: no lines). A check, not a setting:
+  `oneios-free-report-stress=1` makes keep 0, so every held free page above the hysteresis goes back and pages come
+  back used at once (with `hosted_mapcheck=1`: the races of the paths above).
+- **Log.** At the pageout daemon's start: `oneios-mem: free-page reporting on (oneios-free-report=1): keep 16192 pages
+  (free target 8000 + 32 MiB), hysteresis 16 MiB, batch 64 pages, every 1000 ms; 3506783 of 3506783 free pages never
+  touched`. Every 30 s, three lines (the console cuts a line past about 256 characters):
+  `oneios-mem: free F MiB (G given back, H held), active, inactive, speculative, throttled, wired, compressor C MiB
+  holding P MiB`, `oneios-mem: purgeable, file-backed, anonymous, secluded MiB; memorystatus available M MiB; RAM T
+  MiB`, `oneios-mem: given back X MiB since boot in B batches, R runs, N rounds (0 failed, 0 out of order), D ms`.
+  xnuhost's `memory:` line adds what it was given (`given back N MiB of free pages in C calls (F failed, T ms)`).
+- **Measured on the PC (2026-11-12, qemu-aarch64, 8 vCPUs, `--ram auto` = 14,080 MiB, the first boot of a fresh Data
+  store, `HOSTED_OUT=fpr`, `out/kernel/fpr-24A446/kernel.kc`: `216b73ba` for the control, `c8d36270` with it on; they
+  differ from the committed patch only in how the `oneios-mem:` lines are cut and in the stress check).** The same kernel with `oneios-free-report=0` (control)
+  and with the default (on), 18 min each; the control was stopped at 1,003 s by the run's watchdog (the PC's
+  MemAvailable under 1,000 MiB). XNU's view is its `oneios-mem:` lines (MiB):
+
+  | | control, 420 s | on, 420 s | control, 990 s | on, 990 s |
+  |---|---|---|---|---|
+  | memfd held by the host | 8,567 | 3,160 | 12,266 | 4,973 |
+  | host MemAvailable | 4,588 | 8,903 | 1,084 | 3,769 |
+  | XNU free | 11,310 | 11,032 | 9,048 | 9,084 |
+  | XNU active / inactive / speculative / wired | 78 / 78 / 2,099 / 481 | 137 / 85 / 2,306 / 485 | 942 / 165 / 3,259 / 629 | 929 / 157 / 3,258 / 616 |
+  | XNU RAM, compressor | 13,761, 0 | 13,761, 0 | 13,761, 0 | 13,761, 0 |
+
+  iOS's usable memory is the same (its RAM 13,761 MiB, free plus cache plus in use within the run-to-run spread;
+  memorystatus available 13,088 MiB at 990 s with it on), and the host holds about what XNU uses (active + inactive +
+  speculative + wired = 4,960 MiB at 990 s). Stages: launchd 306 s / 292 s, SpringBoard 361 s / 333 s (control / on),
+  no panic in either. With it on nothing reached keep + hysteresis, so 0 MiB was given back: the head-first order
+  alone keeps the memfd at the working set; giving back is for bulk frees (an app's exit, a purge). A third boot
+  (4 GiB, `hosted_mapcheck=1 oneios-free-report-stress=1 oneios-free-report-hysteresis=1`, the final patch,
+  `out/kernel/fpr2-24A446/kernel.kc` `ff87a7ee`) gives back pages all the time: launchd 267 s, SpringBoard 310 s and the daemons (analyticsd 716 s) in 840 s, no panic, no `hosted check:` line, and
+  893 MiB given back in 3,650 batches (215,240 runs; 0 failed, 0 out of order), also under pressure (free 28 MiB at
+  810 s: by design this check gives back pages that cycle, 35 s of the thread's time in 840 s; the default keep
+  never does). A first `hosted_mapcheck=1` boot with the default keep (4 GiB): launchd 299 s, SpringBoard 366 s, no
+  panic, no `hosted check:` line, nothing given back.
+- **The cost to iOS** (test kernel, `make -C runtime/xnuhost bench-arm64`, under qemu on the PC; times about 10x the
+  phone's): `ram_discard` of one 16 KiB page 5.2 us, of 1 MiB in one run 90 us (1.4 us a page); zero-filling a 16 KiB
+  page that was given back 11.7 us against 6.0 us resident (the host's first touch of each 4 KiB part): +5.7 us per
+  16 KiB, about 0.36 ms per MiB used again, paid only for pages given back and reused (never for pages cycling
+  through keep). With the order change the boots were faster, not slower (above). So the default is on.
+- **Not run on the phone.** Risks: a host with shmem huge pages for the memfd (`shmem_enabled` `always`/`within_size`,
+  or a per-size mTHP setting) may split or merely zero a punched range instead of freeing it (this PC: `advise`; the
+  phone's: unknown, read `/sys/kernel/mm/transparent_hugepage/shmem_enabled`); a page XNU frees while the GPU's
+  renderer still holds its udmabuf stays held by Linux (the import pins it) and the guest's reuse gets a new page (a
+  guest bug either way).
 
 ## 0049-wifi-association-event.patch (radio2, 2026-11-12)
 

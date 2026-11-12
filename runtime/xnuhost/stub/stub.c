@@ -188,6 +188,10 @@ void xs_handler(int signo, struct k_siginfo *info, struct k_ucontext *uc)
   } else if (signo == SIGTRAP) {
     trap->kind = XH_TRAP_BRK;
     trap->far = st->pc;
+    // Linux's SIGTRAP carries no syndrome of its own: its esr_context is the task's last fault's (cpu.c says
+    // why), which the kernel would report as that fault. The instruction gives the kernel the brk's immediate.
+    trap->esr = 0;
+    trap->insn = *(volatile uint32_t *)st->pc;
   } else if (signo == SIGFPE) {
     trap->kind = XH_TRAP_FPE;
     trap->far = st->pc;

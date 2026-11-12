@@ -65,6 +65,8 @@ stage_sh() { (export FAKE_PHONE=$P2 PATH="$W/bin:$PATH"; sh "$ROOT/scripts/phone
 same() { # NAME: the two outputs and the two stages
   local name=$1
   sed -i 's/^staged=[0-9]*/staged=TIME/' "$W/rs.out" "$W/sh.out"   # runtime.conf's time of staging
+  # the set's check after `stage image` is this tool's own (stage.sh has none)
+  sed -i -E '/^(image: manifest.json and the|warning: the staged image set|  [^ ]+: manifest.json lists|make a manifest for the files)/d' "$W/rs.out"
   if ! cmp -s "$W/rs.out" "$W/sh.out"; then bad "$name: output as stage.sh's" "$(diff "$W/sh.out" "$W/rs.out" | head -n 4 | tr '\n' '|')"; return; fi
   # the ids lines hold inode numbers and times, which differ between two folders: compare the paths they list
   local d; d=$(diff -r -x '*.ids' -I '^staged=' "$P/data/local/tmp/oneios" "$P2/data/local/tmp/oneios" 2>&1 | head -n 5)
@@ -117,6 +119,19 @@ if [ -n "$FORK" ]; then
   cmp -s "$R/bin/xnuhost" "$S/runtime/bin/xnuhost" && ok "stage runtime-asis: the replaced file is staged" || bad "stage runtime-asis: the file"
 else echo "skipped stage runtime, runtime-asis (no fork root script)"; fi
 check "stage runtime: a folder without runtime.json" 1 "no runtime.json" phone stage runtime "$I"
+
+# ---- the set's manifest: a staged kernel whose manifest still lists the old one
+check "stage image: says the manifest no longer lists the staged files" 0 "warning: the staged image set's manifest.json does not list" sh -c "'$TOOL' phone stage image '$I' 2>&1"
+check "image-check: names each file the manifest does not list" 1 "kernel.kc: manifest.json lists [0-9a-f]{16}, the staged file is [0-9a-f]{16}" phone image-check
+check "switch: refused before One UI is touched when xnuhost would refuse the set" 1 "does not list the staged files" phone switch
+[ -z "$(session_pid "$P")" ] && ok "switch refused by the set's check: no session" || bad "switch refused by the set's check: a session started"
+check "manifest DIR: the phone's, with DIR's entries" 0 "\"sha256\": \"$(sha256sum < "$I/kernel.kc" | cut -d' ' -f1)\"" phone manifest "$I"
+check "manifest DIR: a file that is not in the set is refused" 1 "other.bin is not a file of the phone's image set" phone manifest "$W/notstaged"
+phone manifest "$I" --out "$W/manifest.json" > /dev/null 2>&1
+python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); assert [f["path"] for f in m["files"]] == ["data.seed","kernel.kc","kernel.kc.hashes","overlay/userland/xnuhost.conf"] and m["build"] == "24A446"' "$W/manifest.json" \
+  && ok "manifest --out: every entry and key kept, in order" || bad "manifest --out: the file"
+check "manifest DIR --stage: the files and their manifest, then the check" 0 "image: manifest.json and the 4 files it lists agree" phone manifest "$I" --stage
+check "image-check: the set agrees again" 0 "image: manifest.json and the 4 files it lists agree" phone image-check
 
 # ---- switch, the refusals in a session, return
 echo "the phone is too warm (stand-in)" > "$P/.fake/preflight-refuses"

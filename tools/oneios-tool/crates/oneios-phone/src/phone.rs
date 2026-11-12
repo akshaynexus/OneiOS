@@ -4,7 +4,9 @@
 use crate::adb::{last_lines, plain, Adb, BUSYBOX, STAGE};
 use crate::sparse;
 use anyhow::{anyhow, bail, Context, Result};
+use oneios_common::pyjson;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::IsTerminal;
 use std::time::{Duration, Instant};
@@ -62,6 +64,9 @@ pub fn status(adb: &Adb) -> Result<()> {
 pub fn switch(adb: &Adb, version_code: Option<u64>) -> Result<u64> {
     adb.need_root()?;
     adb.refuse_in_session()?;
+    // before One UI is stopped: a set xnuhost would refuse ends the session seconds after the switch
+    let n = image_check(adb)?;
+    println!("image: manifest.json and the {n} files it lists agree");
     let code = match version_code {
         Some(code) => code,
         None => installed_app(adb, APP_ID)?
@@ -276,6 +281,13 @@ pub fn stage(adb: &Adb, kind: &str, dir: &str) -> Result<()> {
     if !r.ok() {
         bail!("staging stopped on the phone with status {} (the files pushed are still in {TMP})", r.status);
     }
+    if kind == "image" {
+        // said now, not at the switch: the files staged may need a manifest of their own
+        match image_check(adb) {
+            Ok(n) => println!("image: manifest.json and the {n} files it lists agree"),
+            Err(e) => eprintln!("warning: {e:#}"),
+        }
+    }
     Ok(())
 }
 
@@ -285,6 +297,141 @@ pub fn sums_text(adb: &Adb) -> Result<String> {
     adb.need_root()?;
     adb.refuse_in_session()?;
     adb.root_ok(SUMS_SCRIPT, "reading the staged sums")
+}
+
+// ---------------------------------------------------------------- the image set's manifest
+
+/// `image.sha256`'s lines (`sha256  path`, paths under image/) as path -> sha256.
+pub fn parse_image_sums(text: &str) -> BTreeMap<String, String> {
+    text.lines()
+        .filter_map(|line| line.split_once("  "))
+        .map(|(sha, path)| (path.trim().trim_start_matches("./").to_string(), sha.trim().to_string()))
+        .collect()
+}
+
+/// The staged set's own record: its manifest.json and image.sha256 (the sums `stage image` and the app write when
+/// they stage a file). Read only, and cheap: nothing is hashed on the phone.
+pub fn phone_image_record(adb: &Adb) -> Result<(pyjson::Value, BTreeMap<String, String>)> {
+    let text = adb.root_ok(&format!("cat {STAGE}/image/manifest.json\n"), "reading image/manifest.json")?;
+    let manifest = pyjson::parse(&text).map_err(|e| anyhow!("the phone's image/manifest.json: {e}"))?;
+    let sums = adb.root_ok(&format!("cat {STAGE}/image.sha256\n"), "reading image.sha256")?;
+    Ok((manifest, parse_image_sums(&sums)))
+}
+
+/// manifest.json's `files`: (path, sha256, size) of each entry.
+pub fn manifest_entries(manifest: &pyjson::Value) -> Result<Vec<(String, String, u64)>> {
+    let files = manifest.get("files").and_then(|f| f.as_list()).ok_or_else(|| anyhow!("manifest.json has no \"files\" list"))?;
+    files
+        .iter()
+        .map(|f| {
+            let path = f.get("path").and_then(|p| p.as_str()).ok_or_else(|| anyhow!("a manifest.json entry has no path"))?;
+            let sha = f.get("sha256").and_then(|s| s.as_str()).ok_or_else(|| anyhow!("manifest.json's {path} has no sha256"))?;
+            Ok((path.to_string(), sha.to_string(), f.get("size").and_then(|s| s.as_u64()).unwrap_or(0)))
+        })
+        .collect()
+}
+
+/// Where manifest.json and the staged files (image.sha256) disagree, one line each; `skip`: paths not to look at.
+/// xnuhost refuses a set whose files are not the ones its manifest lists ("trust caches of /data/image: a file of
+/// the image set is not the one manifest.json lists", phone 2026-11-12 23:04: a manifest of another set was staged,
+/// and the session ended 2 s after One UI was stopped).
+pub fn manifest_problems(manifest: &pyjson::Value, sums: &BTreeMap<String, String>, skip: &[String]) -> Result<Vec<String>> {
+    let mut problems = Vec::new();
+    for (path, sha, _) in manifest_entries(manifest)? {
+        if skip.contains(&path) {
+            continue;
+        }
+        match sums.get(&path) {
+            None => problems.push(format!("{path}: manifest.json lists it, image.sha256 has no staged file of that name")),
+            Some(staged) if *staged != sha => {
+                problems.push(format!("{path}: manifest.json lists {}, the staged file is {}", &sha[..16.min(sha.len())], &staged[..16.min(staged.len())]))
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(problems)
+}
+
+/// The check before a switch: the staged manifest.json lists the staged files. Err with every difference.
+pub fn image_check(adb: &Adb) -> Result<usize> {
+    let (manifest, sums) = phone_image_record(adb)?;
+    let problems = manifest_problems(&manifest, &sums, &[])?;
+    if !problems.is_empty() {
+        bail!(
+            "the staged image set's manifest.json does not list the staged files (xnuhost would refuse the set):\n  {}\nmake a manifest for the files you staged: oneios-tool phone manifest DIR --stage",
+            problems.join("\n  ")
+        );
+    }
+    Ok(manifest_entries(&manifest)?.len())
+}
+
+/// The phone's manifest.json with the entries of DIR's files (at their paths in the set) set to those files'
+/// SHA-256 and size. Every other entry must already list the staged file. DIR's own manifest.json is ignored.
+pub fn manifest_for(adb: &Adb, dir: &str) -> Result<(String, Vec<String>)> {
+    let (mut manifest, sums) = phone_image_record(adb)?;
+    let local: Vec<String> = local_files(dir)?.into_iter().filter(|p| p != "manifest.json").collect();
+    if local.is_empty() {
+        bail!("{dir} has no file of the image set (kernel.kc, kernel.kc.hashes, ... at their paths)");
+    }
+    let listed: Vec<String> = manifest_entries(&manifest)?.into_iter().map(|e| e.0).collect();
+    if let Some(p) = local.iter().find(|p| !listed.contains(p)) {
+        bail!("{p} is not a file of the phone's image set (its manifest.json does not list it)");
+    }
+    let problems = manifest_problems(&manifest, &sums, &local)?;
+    if !problems.is_empty() {
+        bail!("the phone's image set is not consistent apart from DIR's files; a new manifest would not fix it:\n  {}", problems.join("\n  "));
+    }
+    let mut changed = Vec::new();
+    if let Some(pyjson::Value::List(files)) = manifest.get_mut("files") {
+        for f in files.iter_mut() {
+            let Some(path) = f.get("path").and_then(|p| p.as_str()).map(str::to_string) else { continue };
+            if !local.contains(&path) {
+                continue;
+            }
+            let bytes = fs::read(format!("{dir}/{path}")).with_context(|| format!("{dir}/{path}"))?;
+            let sha = sha256_of(&bytes);
+            if f.get("sha256").and_then(|s| s.as_str()) != Some(sha.as_str()) {
+                changed.push(format!("{path} {} ({} bytes)", &sha[..16], bytes.len()));
+            }
+            f.set("sha256", pyjson::Value::str(sha));
+            f.set("size", pyjson::Value::Int(bytes.len() as i128));
+        }
+    }
+    Ok((pyjson::dumps(&manifest, Some(2), false) + "\n", changed))
+}
+
+/// `phone manifest DIR`: write the manifest for DIR's files (to --out, or print it); with `stage`, stage DIR's
+/// files and that manifest together.
+pub fn manifest_cmd(adb: &Adb, dir: &str, out: Option<&str>, stage_too: bool) -> Result<()> {
+    adb.need_root()?;
+    adb.refuse_in_session()?;
+    let dir = dir.trim_end_matches('/');
+    let (text, changed) = manifest_for(adb, dir)?;
+    eprintln!("manifest.json: the phone's, {}", if changed.is_empty() { "no entry changed".to_string() } else { format!("new entries: {}", changed.join(", ")) });
+    if let Some(path) = out {
+        fs::write(path, &text).with_context(|| path.to_string())?;
+        eprintln!("written: {path}");
+    } else if !stage_too {
+        print!("{text}");
+    }
+    if stage_too {
+        let part = std::env::temp_dir().join(format!("oneios-manifest-stage-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&part);
+        for p in local_files(dir)?.into_iter().filter(|p| p != "manifest.json") {
+            let dst = part.join(&p);
+            fs::create_dir_all(dst.parent().expect("a file's folder"))?;
+            if fs::hard_link(format!("{dir}/{p}"), &dst).is_err() {
+                fs::copy(format!("{dir}/{p}"), &dst).with_context(|| format!("{dir}/{p}"))?;
+            }
+        }
+        fs::write(part.join("manifest.json"), &text)?;
+        let r = stage(adb, "image", &part.display().to_string());
+        let _ = fs::remove_dir_all(&part);
+        r?;
+        let n = image_check(adb)?;
+        println!("image: manifest.json and the {n} files it lists agree");
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- pull-data and sparse-write

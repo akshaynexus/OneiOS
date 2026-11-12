@@ -67,10 +67,12 @@ host has left:
 
 ```text
 memory: ram=auto: host MemTotal M MiB, MemAvailable A MiB; the guest gets G MiB: the least of 90% (.. MiB) and MemTotal less the host's floor of 1536 MiB (.. MiB), in 256 MiB steps
-memory: host MemAvailable A MiB of M MiB; the guest's RAM holds H of G MiB          every host-mem-log seconds, and at the stop
+memory: host MemAvailable A MiB of M MiB; the guest's RAM holds H of G MiB; given back N MiB of free pages in C calls (F failed, T ms)
+                                                                                     every host-mem-log seconds, and at the stop
 ```
 
-`H` is the memfd's resident pages (what the guest has touched and not given back). xnuhost never changes its own
+`H` is the memfd's resident pages (what the guest has touched and not given back); `N` what the kernel gave back
+with `ram_discard` since the start (section 2.2, "Free pages back to the host"), in `C` host calls that took `T` ms. xnuhost never changes its own
 OOM score (the way back to One UI, section 2.9): if the host runs out and its low-memory killer ends xnuhost, the
 watcher returns to One UI, the safe failure. The GPU's host allocations (KGSL, the renderer) come out of the floor
 too: if `host MemAvailable` runs low in a session, lower `ram-percent` or raise `ram-host-floor` in the image set's
@@ -149,6 +151,18 @@ multiple of 2 MiB away from the link base, which is the slide the kernel finds w
   Linux-built kernel under qemu): `ram=auto` gave 14,080 MiB and the kernel booted through launchd to SpringBoard with
   no panic (`zones` 24G there and at 2 GiB; `kmem_ptr_range_0` and the two data ranges 18G each); 9.5 GiB, which is less,
   was not run on its own.
+- **Free pages back to the host (kernel 0058, 2026-11-12).** The goal: iOS keeps all of its ram=auto memory; the host
+  gets back only pages iOS has freed. The kernel gives back pages on XNU's own free queue (never cached, compressed or
+  wired ones) with `ram_discard`: `xh_ram_discard_fd` (`src/discard.c`) punches a hole in the memfd
+  (`FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE`, allowed under the GPU's shrink seal), only inside the kernel's window
+  (never the boot framebuffer or the GPU's pool above it), host-page aligned, else -EINVAL; the range then reads as
+  zero in every mapping and the host holds nothing for it until it is touched again (a read through a shared mapping
+  fills it too). xnuhost counts calls, bytes, failures and time for the `memory:` line. The kernel's side (what is
+  given back, when, in what order) is in `kernel/patches/oneios-hosted/README.md`, 0058; its decisions are
+  `include/xnuhost/free_report.h`, which the kernel carries as a copy (the host tests check they are one file). Run on
+  the PC at `ram=auto` (14,080 MiB): the host held 4,973 MiB after 16.5 min instead of 12,266 MiB, with XNU's own
+  view of its memory unchanged. A task that still has the page mapped (an unmap xnuhost has queued, 2.6) loses it in
+  the punch and cannot run before the queue is carried out (test kernel). Not run on the phone.
 - **The kernel's own address space** outside the window (zones, kalloc, stacks, IOKit buffers) is a
   no-access reservation from the end of the RAM, rounded up to 1 GiB, to `0x3c00000000`
   (`xh_info.kva_base/kva_size`). `kernel_map(va, size, prot, phys)` maps RAM pages into it and
@@ -262,7 +276,15 @@ The same reading goes to the guest on the bridge's channel 6 (`drivers/thermal`)
   in interrupted `futex`/`usleep` calls ends in milliseconds. An order that is not answered in 10 s, or a
   thread that does not exit, is logged with each Linux thread's state and system call from `/proc`.
 - **Faults, undefined instructions, breakpoints, FP exceptions** arrive the same way as SIGSEGV/SIGBUS,
-  SIGILL, SIGTRAP, SIGFPE, with the fault address and Linux's ESR when it gives one.
+  SIGILL, SIGTRAP, SIGFPE, with the fault address and Linux's ESR when it gives one. **A SIGTRAP never has an ESR
+  of its own:** Linux sends every SIGTRAP (brk, single step, watchpoint) through `send_user_sigtrap()`, which leaves
+  `thread.fault_code` alone, and `fault_code` is written only when a fault signal is delivered; the signal frame's
+  `esr_context` is then the thread's last fault's. xnuhost passes no ESR with a SIGTRAP, in the kernel's upcall
+  (`cpu.c`: the kernel reads the `brk` at pc, `hosted_kernel_esr`) and in a task's trap (`stub.c`: `esr` 0 and the
+  instruction in `insn`, for 0002's `hosted_trap_esr`). Before that (phone, 2026-11-12 23:15), a UBSan soft trap in
+  `tcp_input` (`compute_iaj_meat`'s `cur_iaj_dev * cur_iaj_dev`, a signed multiply of a wrapped `uint32_t`
+  difference) came with a software-TLB fill's data abort and panicked iOS: "Unexpected fault in kernel physical
+  aperture"; an app's `brk` (Swift traps, `__builtin_trap`) reached iOS as that fault too, not as `EXC_BREAKPOINT`.
 - **Running a thread.** `thread_run(thread, state, trap)` releases the thread with the given registers (the
   handler returns through `rt_sigreturn`) and blocks the vCPU until the thread traps again: the vCPU "is in
   user mode". If the vCPU's interrupt line rises meanwhile, xnuhost signals the thread and it stops with
@@ -622,7 +644,8 @@ The test kernel (`tests/testkernel.c`) is our own freestanding program wrapped a
 vCPU 0) and it checks: `boot_args` and the tree; the emulated registers; the timer waking `cpu_idle`; five
 timer interrupts taken inside a running computation with integer and floating-point state intact; the timer
 by `CNTV_*`; a second CPU by `cpu_start` with an SGI back; a third by PSCI `CPU_ON` (entered with the vector and its `xh_cpu`); a RAM page mapped into the kernel's address space; the GIC and a virtio
-disk by trapped loads and stores, with a sector read through a virtqueue; `text_fixup`, `ram_discard`; and a
+disk by trapped loads and stores, with a sector read through a virtqueue; `text_fixup`, `ram_discard` (a page, a run of
+pages and its neighbours, the refusals, a page a task maps, a page whose unmap is queued: 0058); and a
 task: a mapped code page, a fault on an unmapped page, the kernel mapping it, the store retried and visible
 in the kernel's view, a breakpoint, a looping thread preempted by the timer; the deferred maps and unmaps (in the
 queue's order, more unmaps than the queue holds, and two threads of one task released on vCPUs 0 and 1 while one of

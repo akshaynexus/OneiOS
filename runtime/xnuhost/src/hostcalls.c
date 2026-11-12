@@ -85,10 +85,8 @@ void xh_impl_mmio_write(struct xh_cpu *cpu, uint64_t phys, uint32_t size, uint64
 int64_t xh_impl_ram_discard(struct xh_cpu *cpu, uint64_t phys, uint64_t size)
 {
   (void)cpu;
-  uint8_t *p = xh_ram(phys, size);
-  if (!p || ((phys | size) & (g_info.host_page_size - 1))) return -EINVAL;
-  // The pages go back to Linux and read as zero afterwards, in every mapping of them.
-  return fallocate(g_mem.fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, (off_t)(phys - g_mem.phys), (off_t)size) ? -errno : 0;
+  // The pages go back to Linux and read as zero afterwards, in every mapping of them (discard.c).
+  return xh_ram_discard_fd(g_mem.fd, g_mem.phys, g_info.ram_phys, g_info.ram_size, phys, size, g_info.host_page_size);
 }
 
 uint32_t xh_impl_text_fixup(struct xh_cpu *cpu, void *text, uint64_t size) { (void)cpu; return xh_text_fixup(text, size); }
