@@ -152,6 +152,11 @@ if unknown:
     sys.exit('metal: shared cache addresses in the arm64e code that the hooks file does not name: ' + ', '.join(unknown))
 plugin.write_text(text)
 EOF
+  # drivers/brightness/BacklightMode.inc (owner: brightness): backboardd's CoreBrightness gets BLControl, not the
+  # VMBLControl that vmm-present selects, so the slider reaches the backlight service. The plug-in is the OneiOS code
+  # that runs in backboardd; the file is appended whole, so its constructor is in the plug-in's image.
+  cat "$ROOT/drivers/brightness/BacklightMode.inc" >> "$R/drivers/AdrenoMetal/NativeAdrenoMetalPlugin.mm"
+  say "staged NativeAdrenoMetalPlugin.mm: drivers/brightness/BacklightMode.inc appended (backboardd: initBLControl: mode 3 -> 1)"
 }
 
 turnip() {

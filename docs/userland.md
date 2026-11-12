@@ -325,6 +325,13 @@ is where they are placed; `<Name>.clients` is read by the kernel's GPU driver, n
 plug-in's debug switches are fixed paths under `/private/var/ngpu/debug`, not under `/private/var/oneios`.
 GPU tests once it runs: droidvm `package/metalcheck`, `gfxprobe`, `gfxbench`.
 
+**It also carries backboardd's brightness mode** (since 2026-11-12): `build.sh stage` appends
+`drivers/brightness/BacklightMode.inc` to the staged `NativeAdrenoMetalPlugin.mm`. In backboardd only, its constructor
+gives CoreBrightness's `-[BrightnessSystemInternal initBLControl:]` mode 1 (BLControl) where vmm-present selects 3
+(VMBLControl, which never reaches the backlight service). It runs because the plug-in loads on backboardd's main thread
+before that thread instantiates BrightnessSystem; a session without the plug-in keeps VMBLControl. `oneios-bl-mode=0`
+in the kernel's boot arguments turns it off. Why and what to look for: `drivers/brightness/README.md`.
+
 ## 8. What launchd, backboardd and SpringBoard need
 
 | Stage | Needs | Who |
