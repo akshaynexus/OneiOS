@@ -7,9 +7,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <unistd.h>
+
 #define NET_F_MAC 5
 #define NET_HDR 12u
 #define FRAME_MAX 1514u
+// A frame of the Wi-Fi station's own type (drivers/net/oneios_wifi_proto.h: scan records, the scan's end, a join's
+// result) is not traffic that may be dropped when the guest has no buffer free: it waits for one, up to this long.
+// A scan sends as many frames as the receive ring has buffers (64), and the one that was dropped was its end.
+#define CONTROL_TYPE 0x88b5u
+#define CONTROL_WAIT_MS 50u
 
 typedef struct {
   xh_virtio *dev;
@@ -54,9 +61,16 @@ static void net_rx(void *ctx, const uint8_t *frame, size_t length)
   xh_viov iov[4];
   uint16_t head;
   if (length > FRAME_MAX) return;
-  xh_virtio_lock(s->dev);
-  unsigned n = xh_virtio_pop(s->dev, 0, &head, iov, 4);
-  if (!n) { s->rx_dropped++; xh_virtio_unlock(s->dev); return; }     // the guest has no buffer: as a full NIC ring
+  const bool control = length >= 14 && frame[12] == (uint8_t)(CONTROL_TYPE >> 8) && frame[13] == (uint8_t)CONTROL_TYPE;
+  unsigned n = 0;
+  for (unsigned waited = 0;; waited++) {
+    xh_virtio_lock(s->dev);
+    n = xh_virtio_pop(s->dev, 0, &head, iov, 4);
+    if (n) break;                                                      // the lock stays for the copy below
+    xh_virtio_unlock(s->dev);
+    if (!control || waited >= CONTROL_WAIT_MS) { s->rx_dropped++; return; }   // the guest has no buffer: as a full NIC ring
+    usleep(1000);
+  }
   uint8_t packet[NET_HDR + FRAME_MAX] = { 0 };
   packet[10] = 1;                              // num_buffers = 1
   memcpy(packet + NET_HDR, frame, length);

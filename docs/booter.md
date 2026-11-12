@@ -29,7 +29,7 @@ Command line (the first line is what the OneOS fork runs, `oneos/interface.md` s
 
 ```sh
 xnuhost --session-abi 1 --mode takeover --runtime DIR --image DIR --data DIR --session DIR
-        [--kernel FILE] [--cpus N] [--ram SIZE] [--boot-args TEXT] [--display shm|drm|none]
+        [--kernel FILE] [--cpus N] [--ram SIZE|auto] [--boot-args TEXT] [--display shm|drm|none]
         [--width W --height H] [--hz N] [--scale 2|3] [--no-input] [--input-script FILE] [--no-tasks]
         [--config FILE] [--set KEY=VALUE] [-v]
 xnuhost --selftest            # on the phone: page size, address bits, PAC keys across fork, memfd, seccomp
@@ -41,7 +41,7 @@ xnuhost --selftest            # on the phone: page size, address bits, PAC keys 
 | `--kernel FILE` | `DIR/kernel.kc`, else `DIR/kernel.macho` | the kernel collection: `MH_FILESET`, or an `MH_EXECUTE` kernel |
 | `FILE.trustcache`, `.vroot`, `.gpuaddon`, `.ramdisk`, `.adt` | optional | DarwinBoot's sidecars beside the kernel, same formats and checks |
 | `DIR/identity.adt` | optional | the device's own decoded device tree: model, target-type, board name and `/product` are taken from it |
-| `DIR/xnuhost.conf` | optional | `key=value` lines: `boot-args`, `disk`, `disk-rw`, `data-store`, `scale`, `scale-fixup`, `text-fixup`; the command line wins |
+| `DIR/xnuhost.conf` | optional | `key=value` lines: `boot-args`, `disk`, `disk-rw`, `data-store`, `scale`, `scale-fixup`, `text-fixup`, `ram`, `ram-percent`, `ram-host-floor`, `host-mem-log`; the command line wins |
 | `DIR/overlay/userland/xnuhost.conf` | optional | the same, written by the userland hook: `scale=3` or `scale=2`, the UI scale the image's Data seed was made for (`docs/userland.md` "The screen") |
 | `--width W --height H`, `--hz N` (or `width=`, `height=`, `hz=` in the image set's `xnuhost.conf`) | the display helper's report of the panel | the guest's display mode (section 2.8); for a PC run or another panel |
 | `--scale 2\|3` (`--set scale=2`) | the image set's, else 3 | the UI scale: pixels per point |
@@ -49,7 +49,32 @@ xnuhost --selftest            # on the phone: page size, address bits, PAC keys 
 | `--data DIR` | none | `data.img`: the Data store, sparse, created on the first start; `unique-chip-id` |
 | `DIR/data.seed` | as present | a tar seed is served as the last read-only disk (the guest makes the Data volume and unpacks it); an APFS seed image is copied into a new store |
 | `--session DIR` | none | `xnuhost.pid`, `ready`, `return.request`, `display.sock` |
-| `--cpus`, `--ram` | 4, 4G | 1 to 8; a multiple of 2 MiB |
+| `--cpus` | the host's cores, at most 8 | 1 to 8 |
+| `--ram SIZE` or `--ram auto` (`ram=`) | `auto` | the guest's RAM: a multiple of 2 MiB, 256 MiB to 64 GiB. `auto`: the least of `ram-percent` of the host's `MemTotal` and `MemTotal` less `ram-host-floor`, rounded down to 256 MiB (below) |
+| `--set ram-percent=N` | 90 | `ram=auto`'s share of `MemTotal`, 10 to 100 |
+| `--set ram-host-floor=SIZE` | 1.5G | what `ram=auto` always leaves the host |
+| `--set host-mem-log=SECONDS` | 30 | a `memory: host MemAvailable` line every so often; 0 = only at the start and the stop |
+| `--set ram-meminfo=FILE` | `/proc/meminfo` | where `ram=auto` reads `MemTotal` and `MemAvailable` (tests) |
+
+**The guest's RAM (`ram=auto`, the owner's decision of 2026-11-12: iOS gets at least 90% of the phone's RAM).**
+In a session One UI's apps and system_server are gone, so the host needs little: the guest gets
+`min(ram-percent% of MemTotal, MemTotal - ram-host-floor)`, rounded down to 256 MiB. On a 12 GB phone (MemTotal
+about 11.2 GiB, an assumed figure until the first log line from the phone) that is the floor's 9.5 GiB (9728 MiB); 90%
+would be 10.0 GiB. A host where that leaves the guest less than 1 GiB is refused (exit 2, "give --ram SIZE"); a host
+with no `/proc/meminfo` gets the old 4 GiB. The RAM is a memfd that is never populated or locked: the host gives it
+pages only as the guest touches them (`ram_discard` gives them back). The log says what was chosen, and then what the
+host has left:
+
+```text
+memory: ram=auto: host MemTotal M MiB, MemAvailable A MiB; the guest gets G MiB: the least of 90% (.. MiB) and MemTotal less the host's floor of 1536 MiB (.. MiB), in 256 MiB steps
+memory: host MemAvailable A MiB of M MiB; the guest's RAM holds H of G MiB          every host-mem-log seconds, and at the stop
+```
+
+`H` is the memfd's resident pages (what the guest has touched and not given back). xnuhost never changes its own
+OOM score (the way back to One UI, section 2.9): if the host runs out and its low-memory killer ends xnuhost, the
+watcher returns to One UI, the safe failure. The GPU's host allocations (KGSL, the renderer) come out of the floor
+too: if `host MemAvailable` runs low in a session, lower `ram-percent` or raise `ram-host-floor` in the image set's
+`xnuhost.conf` (no new runtime needed).
 
 Log: standard error (the switch appends it to `session/xnuhost.log`). Lines `xnuhost I/E/D` are the host's,
 `guest` lines are the kernel's console, `xnuhost !!` lines come from signal context.
@@ -105,7 +130,7 @@ multiple of 2 MiB away from the link base, which is the slide the kernel finds w
 
 ### 2.2 Memory
 
-- One memfd is the guest's RAM. xnuhost maps it once at `0x2000000000 + (link base mod 2 MiB)` (retrying
+- One memfd is the guest's RAM (its size: section 1, `ram=auto`). xnuhost maps it once at `0x2000000000 + (link base mod 2 MiB)` (retrying
   higher), read-write-execute. **Physical address = that address** (`boot_args.physBase == virtBase`):
   one number names a byte for the kernel's pointers, its physical addresses (DMA addresses in virtqueues,
   page tables it may still write) and, minus the base, the offset a task maps.
@@ -115,6 +140,13 @@ multiple of 2 MiB away from the link base, which is the slide the kernel finds w
 - The board's device windows are a `PROT_NONE` reservation at their physical addresses
   (`0x08000000..0x0b000000`), so a device register's physical address is also its pointer and every access
   traps.
+- **What follows the RAM's size** (checked for `ram=auto` by the test kernel, `make check-arm64`'s third boot): the
+  window is the RAM less the boot framebuffer and the GPU's pool (8 MiB, the renderer's response buffers; fixed: the
+  GPU's blobs are guest pages, udmabufs of the window, and grow with it); `boot_args.memSize`, `/chosen dram-size` and
+  `xh_info.ram_size` all name the window; `kern.maxvnodes` in `/defaults` is the window / 64 KiB + 1024. The kernel's
+  own range below starts at the next GiB after the RAM, so a larger guest leaves it less: 102 GiB with 9.5 GiB of RAM
+  (107 GiB with 4 GiB). XNU sizes its zone map and its kernel ranges from `memSize` inside that range; that a hosted
+  kernel boots with 9.5 GiB has **not** been run yet (a PC boot with `--ram 9728M`, section 5 of building.md).
 - **The kernel's own address space** outside the window (zones, kalloc, stacks, IOKit buffers) is a
   no-access reservation from the end of the RAM, rounded up to 1 GiB, to `0x3c00000000`
   (`xh_info.kva_base/kva_size`). `kernel_map(va, size, prot, phys)` maps RAM pages into it and
@@ -264,13 +296,29 @@ store of a word in the shared trap page and, when the other side sleeps, a futex
   `cpu-pin=2` also pins with no plan, vCPU *i* on CPU *i* (for `make bench-arm64`).
 - **Wakes only for a sleeper.** Each side says when it sleeps (`host_sleeping`, `task_sleeping` in the trap page) and
   the other side issues `FUTEX_WAKE` only then (`stub/stub_abi.h` has the rule and its barriers).
-- **`map-defer` (default 1).** `task_map` puts the map in the task's queue (up to 64) and returns. The queue goes with
+- **`map-defer` (default 1).** `task_map` puts the map in the task's queue (up to 256) and returns. The queue goes with
   the next release of one of the task's threads: that thread carries out the maps in the stub's handler before it runs
   (`XS_OPS_OFF` in its slot) while xnuhost holds the task's order lock, or it goes at the head of the task's next order
   (unmap, protect, clone), whichever is first. So a map is in place before any thread of the task runs again and before
   any later unmap or protect of the task, which is what the kernel's TLB rule needs (`hosted_pmap.h`). `task_read` and
-  `task_write` send the queue first. A failed deferred map is logged (`tasks: pid N: a deferred map ... failed`); the
-  toucher faults again and the kernel fills again. `map-defer=0` orders each map as before.
+  `task_write` send the queue first. The queue has its own lock: a `task_map` never waits for a release whose thread
+  is carrying out earlier maps (on the phone that made the kernel's fills wait about 100 us each, with the task's TLB
+  lock held). A failed deferred map is logged (`tasks: pid N: a deferred map ... failed`); the
+  toucher faults again and the kernel fills again. `map-defer=0` orders each map (and each unmap) as before.
+- **Deferred unmaps (with `map-defer`, 2026-11-12).** `task_unmap` is the kernel's TLB flush: when it returns, no thread
+  of the task may use the old mapping. A task none of whose threads is released (`task.running`: released by
+  `thread_run` and not yet back, counted under the queue's lock in the same hold that takes the queue) cannot use it
+  either, so its unmap goes into the same queue, after the maps queued before it, and returns (`XS_OP_UNMAP`: the stub
+  carries out `munmap` in the queue's order). A task with a running thread, or a full queue, gets an order at once (the
+  order takes the queue first). The count takes no lock on a release (that cost every trip two lock pairs): a release
+  adds 1 and then reads the queue, an unmap adds itself to the queue and then reads the count (and takes itself back to
+  be ordered if a thread is counted), all sequentially consistent, so one of the two always sees the other. Whoever takes queued unmaps (a release that carries the queue, or an order) holds the
+  task's order lock until they are done and marks them out (`task.unmaps_out`); until then no other thread of the task
+  is released (it waits for that lock) and `task_read`/`task_write` wait too (a read through a flushed mapping would see
+  a page that may be someone else's by now; it must fail, so the kernel fills it). A batch of maps only marks nothing:
+  the other releases still go at once. The test kernel checks it on two vCPUs: thread B released on vCPU 1 while thread A
+  (or an order) on vCPU 0 carries 128 maps and the unmap, 200 rounds; both threads' loads fault every time. Without the
+  `unmaps_out` wait (the first draft, `a97687f`) 40-60 of 200 rounds saw the old page.
 - **Spins (`spin-host`, `spin-task`, microseconds, default 0).** Each side may spin before it sleeps. With each thread
   on its own core this halves nothing that pinning does not already remove, and on a shared core it costs the spin
   every time (below), so both are off.
@@ -293,6 +341,27 @@ spin on each side; with each thread on its own core a 20 us spin gave 1.8 us. So
 and on the phone, where two vCPUs and their iOS threads share the two E cores, a spin would cost what it saves. Not
 measured on the phone; the hand-off across cores there may be cheaper or dearer than in this VM.
 
+**Deferred unmaps, measured on the x86_64 PC** (2026-11-12, `make -C runtime/xnuhost bench-arm64 BENCH_SET="--set
+cpu-pin=2"`, the Android binary under qemu-aarch64 11.1.3 on 4 host CPUs; qemu's counter is 1 GHz and its times are
+qemu's, about ten times the container's: compare these with each other only). Three runs each, before (`main`
+`43df9dd`) and after, alternated; mean (p50); 20,000 null calls, 5,000 faults, 2,000 interrupts:
+
+| Trip | Before | After |
+|---|---|---|
+| null system call, kernel to kernel | 18.8-19.2 us (18.0-19.0) | 19.2-19.6 us (19.0) |
+| page fault filled by `task_map`, as user code sees it | 35.1-35.3 us (34.0) | 34.1-34.7 us (32.0-36.0) |
+| `task_map` host call | 0.94-1.10 us (0.98) | 0.94-1.11 us (0.98) |
+| `task_unmap` host call | 17.0-17.9 us (14.0): an order | 1.0-1.2 us (0.98): queued; 5,505 queued, 1 ordered |
+| timer interrupt of a running thread | 66.4-71.3 us (26.0-27.0) | 68.4-70.1 us (26.0-27.0) |
+
+So a fault, its fill and the later unmap of the page cost about 53 us of the vCPU's time before and 36 us after: the
+unmap's round trip to the service thread is gone and the `munmap` rides on the next release with the maps (the fault
+row, which includes that release, did not grow). The other rows did not move beyond the runs' spread. A first version
+that counted `task.running` under the queue's lock (two more lock pairs per release) cost every null call about 1 us
+here (p50 21.0 us); the lock-free count does not. On the phone (15:35 boot) the pageout's unmaps were 1.47 million
+round trips per 30 s (about 1.5 vCPUs); how many of them this queues depends on how many of those tasks were running
+then: not measured yet (the `perf:` line's `task_unmap N queued, M ordered`).
+
 **On the phone** (combined boot of 2026-11-12 12:30, kernel.kc 1e297354, runtime 0.1.10-dev; `cpu-pin=1`, vCPU *i*
 on CPU *i*; 30 s windows during the boot): 17,000-22,600 task traps a second, two to three faults for each system
 call. Each hand-off took 10-12 us at p50 (up and down alike), ten times the container's: the cores were slow then (the
@@ -307,7 +376,7 @@ faults are now the larger costs, not the hand-off (the kernel side: `kernel/patc
 and on SIGQUIT), for that period; at the stop and on SIGQUIT since the start:
 
 ```text
-perf: 30.0 s: N task traps (R/s): syscall .., fault .., interrupt .., other ..; futex sleeps: vCPU .., iOS thread .. (of .. hand-offs each way); futex wakes .. + ..; task_map .. carried by a release, .. ordered; timer_set .. (.. to the host timer)
+perf: 30.0 s: N task traps (R/s): syscall .., fault .., interrupt .., other ..; futex sleeps: vCPU .., iOS thread .. (of .. hand-offs each way); futex wakes .. + ..; task_map .. carried by a release, .. ordered; task_unmap .. queued, .. ordered; timer_set .. (.. to the host timer)
 perf:   up (trap->vCPU)    n ... mean ... p50 ... p90 ... p99 ... max ... us      the handler's copy and the hand-off
 perf:   down (vCPU->task)  ...                                                     the release to the handler's wake
 perf:   kernel: syscall    ...      the kernel's work after a trap of that kind, to this vCPU's next thread_run, idle out
@@ -553,7 +622,9 @@ timer interrupts taken inside a running computation with integer and floating-po
 by `CNTV_*`; a second CPU by `cpu_start` with an SGI back; a third by PSCI `CPU_ON` (entered with the vector and its `xh_cpu`); a RAM page mapped into the kernel's address space; the GIC and a virtio
 disk by trapped loads and stores, with a sector read through a virtqueue; `text_fixup`, `ram_discard`; and a
 task: a mapped code page, a fault on an unmapped page, the kernel mapping it, the store retried and visible
-in the kernel's view, a breakpoint, a looping thread preempted by the timer.
+in the kernel's view, a breakpoint, a looping thread preempted by the timer; the deferred maps and unmaps (in the
+queue's order, more unmaps than the queue holds, and two threads of one task released on vCPUs 0 and 1 while one of
+them, or an order, carries a queued unmap: 200 rounds, 2026-11-12; under qemu on the PC, 5 runs in a row passed).
 
 **Not covered anywhere**: qemu-user has no seccomp and no `process_vm_writev`, so the `svc #0x80` trap and
 `task_read/write` have run nowhere (the test prints SKIP). The filter's logic is tested in the interpreter

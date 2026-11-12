@@ -665,6 +665,15 @@ static br_net *open_wire(const br_net_config *c, br_net_rx_fn rx, void *ctx)
   return wire_net = br_net_open_fd(c, wire_pair[0], rx, ctx);
 }
 
+typedef struct { guest *g; uint8_t *buffer; } late_post;
+static void *post_later(void *arg)
+{
+  late_post *l = arg;
+  usleep(10000);
+  post1(l->g, 0, l->buffer, 2048, true);
+  return NULL;
+}
+
 static void test_net_device(void)
 {
   br_net_config c;
@@ -697,6 +706,21 @@ static void test_net_device(void)
   CHECK(send(wire_pair[1], seen, 60, 0) == 60);
   usleep(20000);
   CHECK(reap(&g, 0) == -1);
+  // A frame of the Wi-Fi station's own type (0x88b5) is not dropped at once: it waits for a buffer. One posted 10 ms
+  // later takes it; with none, it is dropped after the wait (50 ms).
+  static uint8_t control[60];
+  control[12] = 0x88; control[13] = 0xb5; control[14] = 0x77;
+  late_post late = { &g, rxbuf[0] };
+  pthread_t poster;
+  CHECK(pthread_create(&poster, NULL, post_later, &late) == 0);
+  guest_rx(guest_rx_ctx, control, sizeof control);
+  pthread_join(poster, NULL);
+  CHECK(reap(&g, 0) == 72 && rxbuf[0][12 + 12] == 0x88 && rxbuf[0][12 + 14] == 0x77);
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  guest_rx(guest_rx_ctx, control, sizeof control);
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  CHECK(reap(&g, 0) == -1 && (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000 >= 40);
   (void)wire;
   br_net_close(wire_net);
   close(wire_pair[1]);

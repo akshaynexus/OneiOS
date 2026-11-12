@@ -6,7 +6,8 @@
 #                                  small VM, booted with the kernel below) with the checkout mounted at its own path,
 #                                  then runtime/package/test.sh here (it needs the NDK).
 #   runtime/host-tests.sh --kernel macOS: (re)build that kernel only, then stop
-#   runtime/host-tests.sh --suite  the suite alone, where it is (the container runs this)
+#   runtime/host-tests.sh --suite  the suite alone, where it is (the container runs this, with STRICT=1 and PREBUILT=1:
+#                                  the Android xnuhost and test kernel are the Mac's and are never remade there)
 # The suite, one line each at the end (pass, FAIL or skipped):
 #   loader    make -C runtime/loader test
 #   xnuhost   make -C runtime/xnuhost test: the unit tests, drm2kgsl and its leak test (LeakSanitizer) when
@@ -68,7 +69,18 @@ summary() {
 
 suite() {
   part loader make -s -C runtime/loader test
-  part xnuhost make -s -C runtime/xnuhost test
+  # PREBUILT=1 (the Mac's container): the Mac built the Android binary and the test kernel with its NDK just before,
+  # and the container has no NDK. make -o keeps them as they are and never walks their prerequisites (the bridges'
+  # and camera's sub-makes, the gpu3d stamp): with a source that looked newer than its object over the mount, make
+  # called the NDK's clang here ("aarch64-linux-android30-clang: No such file", error 127 on build/android/gpu3d.o).
+  local xn=(make -s -C runtime/xnuhost)
+  if [ "${PREBUILT:-0}" = 1 ]; then
+    xn+=(-o build/android/xnuhost -o build/android/testkernel.elf)
+    for f in runtime/xnuhost/build/android/xnuhost runtime/xnuhost/build/android/testkernel.elf; do
+      [ -f "$f" ] || xn=(sh -c "echo 'host-tests: no $f: the Mac builds it before the container (runtime/host-tests.sh)'; exit 1")
+    done
+  fi
+  part xnuhost "${xn[@]}" test
   part display make -s -C runtime/display test
   part bridges runtime/bridges/tests/host.sh
   part camera runtime/bridges/camera/tests/host.sh
@@ -141,7 +153,7 @@ part android-build sh -c 'make -s -C runtime/loader android && make -s -C runtim
 case "${results[*]}" in *FAIL*) summary; exit 1 ;; esac
 results=()
 
-container run --rm --progress none --cap-drop ALL --cap-add SETFCAP --kernel "$KERNEL" --cpus "$JOBS" --memory "$MEMORY" -e JOBS="$JOBS" -e STRICT=1 \
+container run --rm --progress none --cap-drop ALL --cap-add SETFCAP --kernel "$KERNEL" --cpus "$JOBS" --memory "$MEMORY" -e JOBS="$JOBS" -e STRICT=1 -e PREBUILT=1 \
   -v "$ROOT:$ROOT" -w "$ROOT" "$IMAGE" runtime/host-tests.sh --suite
 inside=$?
 part package runtime/package/test.sh

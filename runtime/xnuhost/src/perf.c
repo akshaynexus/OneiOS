@@ -115,7 +115,7 @@ void xh_perf_log(bool since_start)
     for (unsigned k = 0; k < XP_COUNT; k++) hist_delta(&sum.h[k], &p->h[k], then ? &then->h[k] : NULL);
     for (unsigned k = 0; k < 16; k++) sum.traps[k] += p->traps[k] - (then ? then->traps[k] : 0);
 #define D(f) sum.f += p->f - (then ? then->f : 0)
-    D(host_sleeps); D(task_sleeps); D(host_wakes); D(task_wakes); D(maps_deferred); D(maps_ordered); D(timer_sets); D(timer_calls);
+    D(host_sleeps); D(task_sleeps); D(host_wakes); D(task_wakes); D(maps_deferred); D(maps_ordered); D(unmaps_deferred); D(unmaps_ordered); D(timer_sets); D(timer_calls);
 #undef D
   }
   uint64_t traps = 0;
@@ -123,11 +123,12 @@ void xh_perf_log(bool since_start)
   uint64_t other = traps - sum.traps[XH_TRAP_SYSCALL] - sum.traps[XH_TRAP_FAULT] - sum.traps[XH_TRAP_INTERRUPT];
   LOGI("perf: %.1f s%s: %llu task traps (%.0f/s): syscall %llu, fault %llu, interrupt %llu, other %llu; futex sleeps: vCPU %llu, "
        "iOS thread %llu (of %llu hand-offs each way); futex wakes %llu + %llu; task_map %llu carried by a release, %llu ordered; "
-       "timer_set %llu (%llu to the host timer)", seconds, since_start ? " since the start" : "", (unsigned long long)traps, (double)traps / seconds,
+       "task_unmap %llu queued, %llu ordered; timer_set %llu (%llu to the host timer)", seconds, since_start ? " since the start" : "", (unsigned long long)traps, (double)traps / seconds,
        (unsigned long long)sum.traps[XH_TRAP_SYSCALL], (unsigned long long)sum.traps[XH_TRAP_FAULT], (unsigned long long)sum.traps[XH_TRAP_INTERRUPT],
        (unsigned long long)other, (unsigned long long)sum.host_sleeps, (unsigned long long)sum.task_sleeps, (unsigned long long)sum.h[XP_UP].n,
        (unsigned long long)sum.host_wakes, (unsigned long long)sum.task_wakes, (unsigned long long)sum.maps_deferred,
-       (unsigned long long)sum.maps_ordered, (unsigned long long)sum.timer_sets, (unsigned long long)sum.timer_calls);
+       (unsigned long long)sum.maps_ordered, (unsigned long long)sum.unmaps_deferred, (unsigned long long)sum.unmaps_ordered,
+       (unsigned long long)sum.timer_sets, (unsigned long long)sum.timer_calls);
   for (unsigned k = 0; k < XP_COUNT; k++) hist_line(names[k], &sum.h[k]);
   for (unsigned i = 0; i < g_ncpu; i++) {
     xh_vcpu *v = &g_vcpu[i];

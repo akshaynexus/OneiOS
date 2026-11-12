@@ -11,12 +11,18 @@ parallel chunks into NAME.part; finished chunks are listed in NAME.part.done, so
 resumes. Deflated members are inflated locally. The CRC-32 of the ZIP directory is checked before the
 file gets its final name. Standard library only; Linux and macOS.
 
+Connections try each address of the host for at most CONNECT_TRY seconds before the next one, and an address
+family that failed to connect is tried last from then on. Without that, a host whose IPv6 has no route (seen on a
+Linux PC on 2026-11-12: Apple's CDN answers AAAA first) waited the whole request timeout on each IPv6 address of
+every range request before it reached IPv4, about 1.6 MB/s instead of the line's speed.
+
 Same idea as iOSPlus10's `op10tool ipsw-get` and UniXNU's scripts/unixnu/ipsw.py.
 """
 import concurrent.futures
 import io
 import os
 import re
+import socket
 import struct
 import sys
 import threading
@@ -28,6 +34,39 @@ import zlib
 
 CHUNK = 8 << 20
 AGENT = "oneios-image-build"
+CONNECT_TRY = 5
+
+_failed_families = set()
+_system_create_connection = socket.create_connection
+
+
+def _create_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, **kw):
+    """socket.create_connection with a short try per address and failed families last (see the header)."""
+    if kw:
+        return _system_create_connection(address, timeout, source_address, **kw)
+    host, port = address
+    infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    infos.sort(key=lambda i: i[0] in _failed_families)
+    full = None if timeout is socket._GLOBAL_DEFAULT_TIMEOUT else timeout
+    last = None
+    for n, (family, kind, proto, _, addr) in enumerate(infos):
+        s = socket.socket(family, kind, proto)
+        try:
+            s.settimeout(full if n == len(infos) - 1 else min(full or CONNECT_TRY, CONNECT_TRY))
+            if source_address:
+                s.bind(source_address)
+            s.connect(addr)
+            s.settimeout(full)
+            _failed_families.discard(family)
+            return s
+        except OSError as e:
+            s.close()
+            _failed_families.add(family)
+            last = e
+    raise last or OSError(f"getaddrinfo returned nothing for {host}")
+
+
+socket.create_connection = _create_connection
 
 
 class Error(Exception):

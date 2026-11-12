@@ -1,0 +1,58 @@
+--- a/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-12 14:17:58
++++ b/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-12 14:17:58
+@@ -1694,6 +1694,7 @@
+    uint64_t ib, ib_bytes;
+    uint32_t ib_id;
+    uint64_t holds, keepalives, failures;
++   uint64_t last_render;    /* ONEIOS (0006): the render server's last submission, CLOCK_MONOTONIC ns */
+ } g_hold = { .lock = PTHREAD_MUTEX_INITIALIZER, .wake = PTHREAD_COND_INITIALIZER, .fd = -1 };
+ 
+ static uint64_t
+@@ -1822,10 +1823,37 @@
+          }
+       }
+       if (!g_hold.failed) {
+-         g_hold.until = oneios_now_ns() + hold_ms * 1000000ull;
++         g_hold.last_render = oneios_now_ns();
++         g_hold.until = g_hold.last_render + hold_ms * 1000000ull;
+          pthread_cond_signal(&g_hold.wake);
+       }
++   }
++   pthread_mutex_unlock(&g_hold.lock);
++}
++
++/* ONEIOS (0006): a submission of any other context. An app's own Metal work (Settings opening: its first frames, its
++ * views' textures) runs while the render server waits for it, and with the hold started by the render server alone
++ * those frames ran at the governor's 231 MHz and the render server's took 25 ms (phone, 2026-11-12). So within
++ * DRM2KGSL_PWR_FOLLOW_MS (1000; 0: the render server's alone) of the render server's last submission, any context's
++ * submission extends the hold too. A client that keeps submitting with the screen still (a widget, an icon agent)
++ * does not hold the clock past that second. */
++static void
++oneios_hold_follow(void)
++{
++   static uint64_t follow_ms = 1000, hold_ms = 150;
++   static bool read;
++   pthread_mutex_lock(&g_hold.lock);
++   if (!read) {
++      kgsl_parse_u64_env("DRM2KGSL_PWR_FOLLOW_MS", &follow_ms);
++      kgsl_parse_u64_env("DRM2KGSL_PWR_HOLD_MS", &hold_ms);
++      read = true;
+    }
++   const uint64_t now = oneios_now_ns();
++   if (g_hold.started && !g_hold.failed && hold_ms && g_hold.last_render && now - g_hold.last_render < follow_ms * 1000000ull &&
++       now + hold_ms * 1000000ull > g_hold.until) {
++      g_hold.until = now + hold_ms * 1000000ull;
++      pthread_cond_signal(&g_hold.wake);
++   }
+    pthread_mutex_unlock(&g_hold.lock);
+ }
+ 
+@@ -2519,6 +2547,8 @@
+    unsigned ring_idx = (uintptr_t)entry->data & ~KGSL_RING_IDX_CONSTRAINED;
+    if ((uintptr_t)entry->data & KGSL_RING_IDX_CONSTRAINED)
+       kgsl_constraint_update(kctx, req->queue_id);
++   else
++      oneios_hold_follow();
+    if (kctx->report_resets && kctx->shmem)
+       kgsl_note_reset(kctx, req->queue_id);
+ 

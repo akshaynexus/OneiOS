@@ -30,6 +30,9 @@ bool br_wifi_to_guest(const uint8_t *frame, size_t length, const uint8_t mac[6])
 typedef void (*br_wifi_segment_fn)(void *ctx, const uint8_t *frame, size_t length);
 size_t br_wifi_segment(const uint8_t *frame, size_t length, uint16_t mss, bool coalesced, br_wifi_segment_fn fn, void *ctx);
 
+// A DHCP message: its type, the address it gives and the server's (frames.c). For the log.
+bool br_wifi_dhcp(const uint8_t *frame, size_t length, uint8_t *type, uint8_t address[4], uint8_t server[4]);
+
 // One multicast group of a generic netlink family (the attributes nested in one entry of CTRL_ATTR_MCAST_GROUPS):
 // true and its id when its name is `name`. The kernel writes the id before the name.
 bool br_wifi_nl_group(const uint8_t *attrs, size_t length, const char *name, uint32_t *id);

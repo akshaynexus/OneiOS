@@ -75,6 +75,7 @@ typedef struct {
   xh_gpu3d *b;
   xh_virtio *dev;
   uint32_t ctx[MAX_CTX];               // live context ids
+  bool ctx_fast[MAX_CTX];              // that context's commands are the fast lane's (the render server's: "xnu:backboardd")
   blob *blobs;                         // BLOB_SLOTS of them; id 0 = free
   unsigned nblobs;
   struct { uint32_t width, height, format, stride, offset; } scan;      // the scanout when it is a blob
@@ -84,7 +85,24 @@ typedef struct {
   uint64_t gen, kicks, served;
   bool reset_requested;
   int wake;                            // eventfd: the control queue was kicked (written from the trap handler)
+  // Two lanes. The queue's thread serves the render server's contexts and every command of no context (the display,
+  // the 2D commands) at once, and hands every other context's commands, in their order, to the slow lane's thread.
+  // An app that makes 100 blobs at its launch (1-30 ms each on the phone: udmabufs, KGSL's import and bind) then no
+  // longer holds back the render server's next frame and the display's flush behind them. `cmd` makes the two take
+  // turns at the state above and the renderer (a frame waits for one blob at most, not for all of them).
+  pthread_mutex_t cmd;
+  pthread_cond_t slow_cv;
+  struct slow_job *slow_head, **slow_tail;
+  uint64_t slow_queued, slow_done;
 } gpu_state;
+
+typedef struct slow_job {
+  struct slow_job *next;
+  uint16_t head;
+  unsigned n;
+  uint64_t gen;
+  xh_viov iov[];
+} slow_job;
 
 static resource *find(gpu_state *g, uint32_t id)
 {
@@ -314,6 +332,7 @@ static uint32_t command3d(gpu_state *g, const gpu_hdr *h, const uint8_t *body, s
     int r = b->ctx_create(b, h->ctx, a[1] & 0xff, (const char *)body + 8, name);
     if (r) return r == -ENOMEM ? RESP_ERR_OUT_OF_MEMORY : RESP_ERR_UNSPEC;
     *slot = h->ctx;
+    g->ctx_fast[slot - g->ctx] = name >= 14 && !memcmp(body + 8, "xnu:backboardd", 14);
     return RESP_OK_NODATA;
   }
   case CMD_CTX_DESTROY: {
@@ -643,24 +662,94 @@ static void gpu_reset_3d(xh_virtio *dev)
   wake(g, true);
 }
 
-static void work(gpu_state *g, uint16_t head, xh_viov *iov, unsigned n, uint64_t gen)
+// A command of the fast lane that names a resource the slow lane has not made yet (an app's IOSurface the render
+// server attaches, the unref of an app's blob) waits for the slow lane's commands that came before it, and runs again.
+static bool missing_resource(uint32_t status)
+{
+  return status == RESP_ERR_INVALID_RESOURCE_ID;
+}
+
+enum { RESP_PENDING_RETRY = 1 };                     // work(): not answered; run it again once the slow lane caught up
+
+static bool slow_pending(gpu_state *g)
+{
+  pthread_mutex_lock(&g->pl);
+  bool pending = g->slow_done != g->slow_queued;
+  pthread_mutex_unlock(&g->pl);
+  return pending;
+}
+
+// Serves a chain and answers it (now, or when its fence retires). With `may_wait`, a command that names a resource
+// the slow lane may still be making is not answered: RESP_PENDING_RETRY, and the caller runs it again later.
+static uint32_t work(gpu_state *g, uint16_t head, xh_viov *iov, unsigned n, uint64_t gen, bool may_wait)
 {
   gpu_hdr in;
   uint32_t status = 0;
   int64_t written = serve(g, 0, iov, n, &in, &status);
+  if (may_wait && missing_resource(status) && slow_pending(g)) return RESP_PENDING_RETRY;
   // A command fenced on a context's ring is returned when the ring passes the fence; any other at once (a fence on
   // the device's own ring has nothing to wait for: the 2D commands are done when they return).
   bool hold = written > 0 && status < RESP_ERR_UNSPEC && (in.flags & FLAG_FENCE) && (in.flags & FLAG_RING_IDX) && ctx_find(g, in.ctx);
   pending *p = calloc(1, sizeof *p);
-  if (!p) return;                                    // the chain is lost; so is the guest's command
+  if (!p) return status;                             // the chain is lost; so is the guest's command
   *p = (pending){ .head = head, .written = (uint32_t)written, .ctx = in.ctx, .ring = in.ring, .fence = in.fence, .gen = gen };
-  if (!hold) { push_pending(g, p); return; }
+  if (!hold) { push_pending(g, p); return status; }
   pthread_mutex_lock(&g->pl);
   p->next = g->fences;
   g->fences = p;
   pthread_mutex_unlock(&g->pl);
   // May retire it before it returns. A refused fence is retired here.
   if (g->b->submit_fence(g->b, in.ctx, in.ring, in.fence)) retire(g, in.ctx, (int)in.ring, in.fence);
+  return status;
+}
+
+// The header of a chain, read without taking it (false: shorter than a header).
+static bool peek_hdr(const xh_viov *iov, unsigned n, gpu_hdr *h)
+{
+  size_t at = 0;
+  for (unsigned i = 0; i < n && at < sizeof *h; i++) {
+    if (iov[i].writable) continue;
+    size_t k = iov[i].length < sizeof *h - at ? iov[i].length : sizeof *h - at;
+    memcpy((uint8_t *)h + at, iov[i].data, k);
+    at += k;
+  }
+  return at == sizeof *h;
+}
+
+// Whether a command is the slow lane's: a context's, and not the render server's. Context creation stays here (it
+// decides the lane of what follows).
+static bool slow_lane(gpu_state *g, const gpu_hdr *h)
+{
+  if (!h->ctx || h->type == CMD_CTX_CREATE) return false;
+  for (unsigned i = 0; i < MAX_CTX; i++) if (g->ctx[i] == h->ctx) return !g->ctx_fast[i];
+  return false;
+}
+
+static void *slow_worker(void *arg)
+{
+  gpu_state *g = arg;
+  pthread_mutex_lock(&g->pl);
+  for (;;) {
+    while (!g->slow_head) pthread_cond_wait(&g->slow_cv, &g->pl);
+    slow_job *j = g->slow_head;
+    g->slow_head = j->next;
+    if (!g->slow_head) g->slow_tail = &g->slow_head;
+    pthread_mutex_unlock(&g->pl);
+    xh_virtio_lock(g->dev);
+    bool current = j->gen == g->gen;                 // a chain from before a reset is the old queue's: dropped
+    xh_virtio_unlock(g->dev);
+    if (current) {
+      pthread_mutex_lock(&g->cmd);
+      work(g, j->head, j->iov, j->n, j->gen, false);
+      pthread_mutex_unlock(&g->cmd);
+    }
+    free(j);
+    pthread_mutex_lock(&g->pl);
+    g->slow_done++;
+    pthread_cond_broadcast(&g->slow_cv);
+    pthread_cond_broadcast(&g->idle);
+  }
+  return NULL;
 }
 
 static void *worker(void *arg)
@@ -675,7 +764,7 @@ static void *worker(void *arg)
     bool reset = g->reset_requested;
     g->reset_requested = false;
     pthread_mutex_unlock(&g->pl);
-    if (reset) teardown(g);
+    if (reset) { pthread_mutex_lock(&g->cmd); teardown(g); pthread_mutex_unlock(&g->cmd); }
     for (;;) {
       uint16_t head;
       xh_virtio_lock(g->dev);
@@ -683,7 +772,37 @@ static void *worker(void *arg)
       unsigned n = xh_virtio_pop(g->dev, 0, &head, iov, WORKER_IOV);
       xh_virtio_unlock(g->dev);
       if (!n) break;
-      work(g, head, iov, n, gen);
+      gpu_hdr h;
+      pthread_mutex_lock(&g->cmd);
+      bool slow = peek_hdr(iov, n, &h) && slow_lane(g, &h);
+      pthread_mutex_unlock(&g->cmd);
+      if (slow) {
+        slow_job *j = malloc(sizeof *j + n * sizeof *iov);
+        if (!j) continue;                            // the chain is lost; so is the guest's command
+        *j = (slow_job){ .head = head, .n = n, .gen = gen };
+        memcpy(j->iov, iov, n * sizeof *iov);
+        pthread_mutex_lock(&g->pl);
+        *g->slow_tail = j;
+        g->slow_tail = &j->next;
+        g->slow_queued++;
+        pthread_cond_broadcast(&g->slow_cv);
+        pthread_mutex_unlock(&g->pl);
+        continue;
+      }
+      pthread_mutex_lock(&g->pl);
+      uint64_t before = g->slow_queued;              // the slow lane's commands that came before this one
+      pthread_mutex_unlock(&g->pl);
+      pthread_mutex_lock(&g->cmd);
+      uint32_t status = work(g, head, iov, n, gen, true);
+      pthread_mutex_unlock(&g->cmd);
+      if (status == RESP_PENDING_RETRY) {
+        pthread_mutex_lock(&g->pl);
+        while (g->slow_done < before) pthread_cond_wait(&g->slow_cv, &g->pl);
+        pthread_mutex_unlock(&g->pl);
+        pthread_mutex_lock(&g->cmd);
+        work(g, head, iov, n, gen, false);
+        pthread_mutex_unlock(&g->cmd);
+      }
     }
     pthread_mutex_lock(&g->pl);
     g->served = upto;
@@ -698,7 +817,7 @@ void xh_virtio_gpu_idle(xh_virtio *dev)
   gpu_state *g = xh_virtio_opaque(dev);
   if (!g->blobs) return;
   pthread_mutex_lock(&g->pl);
-  while (g->served != g->kicks) pthread_cond_wait(&g->idle, &g->pl);
+  while (g->served != g->kicks || g->slow_done != g->slow_queued) pthread_cond_wait(&g->idle, &g->pl);
   pthread_mutex_unlock(&g->pl);
 }
 
@@ -729,10 +848,15 @@ xh_virtio *xh_virtio_gpu_create_3d(uint64_t base, unsigned spi, unsigned width, 
   g->wake = eventfd(0, EFD_CLOEXEC);
   pthread_mutex_init(&g->pl, NULL);
   pthread_cond_init(&g->idle, NULL);
+  pthread_mutex_init(&g->cmd, NULL);
+  pthread_cond_init(&g->slow_cv, NULL);
+  g->slow_tail = &g->slow_head;
   if (!g->blobs || g->wake < 0 || !(g->dev = xh_virtio_create(base, spi, &gpu_3d_ops, g, "virtio-gpu"))) return NULL;
   b->retire = gpu_retire;
   b->dev = g->dev;
   if (pthread_create(&thread, NULL, worker, g)) return NULL;
+  pthread_detach(thread);
+  if (pthread_create(&thread, NULL, slow_worker, g)) return NULL;
   pthread_detach(thread);
   return g->dev;
 }

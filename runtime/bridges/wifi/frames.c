@@ -128,3 +128,29 @@ bool br_wifi_nl_group(const uint8_t *attrs, size_t length, const char *name, uin
   *id = value;
   return true;
 }
+
+// A DHCP message in an Ethernet frame (IPv4, UDP between ports 67 and 68, the BOOTP header and the magic cookie):
+// its type (option 53: 1 DISCOVER, 2 OFFER, 3 REQUEST, 5 ACK, 6 NAK ...), the address it gives (yiaddr) and the
+// server's (option 54). For the log only: what the bridge carries is not changed.
+bool br_wifi_dhcp(const uint8_t *frame, size_t length, uint8_t *type, uint8_t address[4], uint8_t server[4])
+{
+  if (length < 14 + 20 + 8 + 240 || br_wifi_ethertype(frame, length) != 0x0800) return false;
+  const uint8_t *ip = frame + 14;
+  const size_t ihl = (size_t)(ip[0] & 15) * 4;
+  if ((ip[0] >> 4) != 4 || ihl < 20 || ip[9] != 17 || length < 14 + ihl + 8 + 240) return false;
+  const uint8_t *udp = ip + ihl, *b = udp + 8;
+  const uint16_t sport = be16(udp), dport = be16(udp + 2);
+  if (!((sport == 68 && dport == 67) || (sport == 67 && dport == 68)) || be32(b + 236) != 0x63825363u) return false;
+  *type = 0;
+  memcpy(address, b + 16, 4);
+  memset(server, 0, 4);
+  const uint8_t *end = frame + length;
+  for (const uint8_t *o = b + 240; o < end && *o != 255;) {
+    if (*o == 0) { o++; continue; }
+    if (o + 2 > end || o + 2 + o[1] > end) break;
+    if (*o == 53 && o[1] == 1) *type = o[2];
+    if (*o == 54 && o[1] == 4) memcpy(server, o + 2, 4);
+    o += 2u + o[1];
+  }
+  return *type != 0;
+}

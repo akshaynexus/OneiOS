@@ -1,0 +1,79 @@
+diff --git a/osfmk/arm64/hosted/hosted_user.c b/osfmk/arm64/hosted/hosted_user.c
+--- a/osfmk/arm64/hosted/hosted_user.c
++++ b/osfmk/arm64/hosted/hosted_user.c
+@@ -636,6 +636,67 @@
+ 		taken[best] = 1;
+ 		used += (unsigned)snprintf(line + used, sizeof(line) - used, " %s%u %llu x%llu", negative ? "-" : "", best,
+ 		    best_n, hosted_perf_us(t[best] - t0[best]) / best_n);
++	}
++	printf("oneios-perf:   %s us\n", line);
++}
++
++/*
++ * 0051: where kernel_task's CPU goes. kernel_task is the kernel's own threads (the pager, the compressor, IOKit work
++ * loops, thread calls, the idle threads with the interrupts they take); the kernel's work for a user trap is charged to
++ * the user thread. On the phone a stall showed kernel_task at 127 %. For each period: its threads' CPU time (recount)
++ * summed, and the 8 threads that used most, by name (thread_get_thread_name) or else by where they continue next
++ * (the continuation, unslid: name it against the kernel). A thread's previous reading is kept by its id.
++ */
++#define HOSTED_PERF_KTHREADS 1024
++static struct {
++	uint64_t id, last;
++} hosted_perf_kt[HOSTED_PERF_KTHREADS];
++
++static void
++hosted_perf_kernel_threads(uint64_t wall_us)
++{
++	struct {
++		uint64_t id, ticks, cont;
++		char     name[24];
++	} top[8];
++	char line[640];
++	unsigned used = 0, threads = 0;
++	uint64_t total = 0;
++	bzero(top, sizeof(top));
++	task_lock(kernel_task);
++	thread_t th;
++	queue_iterate(&kernel_task->threads, th, thread_t, task_threads) {
++		uint64_t now = recount_thread_time_mach(th), id = th->thread_id, ticks;
++		unsigned slot = (unsigned)(id % HOSTED_PERF_KTHREADS);
++		ticks = hosted_perf_kt[slot].id == id && now >= hosted_perf_kt[slot].last ? now - hosted_perf_kt[slot].last : now;
++		hosted_perf_kt[slot].id = id;
++		hosted_perf_kt[slot].last = now;
++		total += ticks;
++		threads++;
++		unsigned k = 8;
++		while (k > 0 && top[k - 1].ticks < ticks) {
++			k--;
++		}
++		if (k < 8) {
++			memmove(&top[k + 1], &top[k], (7 - k) * sizeof(top[0]));
++			char name[MAXTHREADNAMESIZE] = "";
++			thread_get_thread_name(th, name);
++			top[k].id = id;
++			top[k].ticks = ticks;
++			top[k].cont = (uint64_t)VM_KERNEL_UNSLIDE((vm_offset_t)th->continuation);
++			strlcpy(top[k].name, name, sizeof(top[k].name));
++		}
++	}
++	task_unlock(kernel_task);
++	used += (unsigned)snprintf(line + used, sizeof(line) - used, "kernel_task: %u threads, %llu us of CPU (%llu%% of a vCPU); most:",
++	    threads, hosted_perf_us(total), hosted_perf_us(total) * 100 / (wall_us ? wall_us : 1));
++	for (unsigned k = 0; k < 8 && top[k].ticks != 0 && used < sizeof(line) - 60; k++) {
++		if (top[k].name[0]) {
++			used += (unsigned)snprintf(line + used, sizeof(line) - used, " %s %llu", top[k].name, hosted_perf_us(top[k].ticks));
++		} else {
++			used += (unsigned)snprintf(line + used, sizeof(line) - used, " #%llu@0x%llx %llu", top[k].id, top[k].cont,
++			    hosted_perf_us(top[k].ticks));
++		}
+ 	}
+ 	printf("oneios-perf:   %s us\n", line);
+ }
+@@ -684,6 +745,7 @@
+ #undef KT
+ 		hosted_perf_top("bsd (number calls x mean)", c.bsd_n, c.bsd_t, c0->bsd_n, c0->bsd_t, HOSTED_PERF_BSD, 12, false);
+ 		hosted_perf_top("mach traps", c.mach_n, c.mach_t, c0->mach_n, c0->mach_t, HOSTED_PERF_MACH, 8, true);
++		hosted_perf_kernel_threads(wall_us);    /* 0051 */
+ 		hosted_perf_last = c;
+ 		user_last = u;
+ 		for (unsigned i = 0; i < 18; i++) {

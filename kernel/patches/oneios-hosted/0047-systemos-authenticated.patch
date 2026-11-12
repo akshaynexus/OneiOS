@@ -1,0 +1,92 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8124,6 +8124,13 @@
+ 	cache_authorized = cache_authorized && native_union;
+ #endif
+ 	if (!cache_authorized) { error = EAUTH; goto done; }
++#if XNU_HOSTED
++	{
++		/* OneiOS hosted (0047): this checked mount answers FSIOC_AUTH_FS for AMFI (oneios_hosted_root.c). */
++		extern void oneios_systemos_verified(mount_t);
++		oneios_systemos_verified(cache_mount);
++	}
++#endif
+ 	native_owner_cache_stage = 5;
+ #if !defined(XNU_OWNER_UNION_SYSTEMOS) || !XNU_OWNER_UNION_SYSTEMOS
+ 	if ((error = copyout(environment, environment_vector[0], strlen(environment) + 1)) != 0 ||
+diff --git a/bsd/kern/oneios_hosted_root.c b/bsd/kern/oneios_hosted_root.c
+--- a/bsd/kern/oneios_hosted_root.c
++++ b/bsd/kern/oneios_hosted_root.c
+@@ -1034,26 +1034,62 @@
+  */
+ static fsid_t oneios_app_cryptex_fsid;
+ static volatile int oneios_app_cryptex_known;    /* set once, before launchd's first exec, then read only */
++
++/*
++ * OneiOS hosted (0047): the SystemOS volume (the OS cryptex, systemos.img) answers the same. Its programs that carry a
++ * self launch constraint of their own in the code signature (SafariConfigurationSubscriber.xpc of SafariFoundation:
++ * on-system-volume or on-authorized-authapfs-volume, and validation-category 1) failed it with "c[4]p[1]m[1]e[0]" and
++ * were killed at each launch: the volume is the upper layer of the root union, not the root mount itself (MNT_ROOTFS
++ * stays with os.img), and APFS cannot authorize it without a personalized manifest. native_owner_cache_prepare
++ * (kern_exec.c) names the mount once it has checked it: read-only, APFS, on the device the image set names, which
++ * xnuhost verifies chunk by chunk (the same check the App volume gets below).
++ */
++static fsid_t oneios_systemos_fsid;
++static volatile int oneios_systemos_known;       /* set once, before launchd's first exec, then read only */
++
++void oneios_systemos_verified(mount_t mp);
++void
++oneios_systemos_verified(mount_t mp)
++{
++	if (mp == NULL || !(vfs_flags(mp) & MNT_RDONLY)) {
++		return;
++	}
++	oneios_systemos_fsid = vfs_statfs(mp)->f_fsid;
++	oneios_systemos_known = 1;
++}
++
++static bool
++oneios_fsid_is(mount_t mp, const fsid_t *want)
++{
++	fsid_t *fsid = &vfs_statfs(mp)->f_fsid;
++	return fsid->val[0] == want->val[0] && fsid->val[1] == want->val[1];
++}
+ 
+ bool oneios_app_cryptex_authenticated(vnode_t vp);
+ bool
+ oneios_app_cryptex_authenticated(vnode_t vp)
+ {
+-	static volatile int logged;
++	static volatile int logged, logged_systemos;
+ 
+ 	mount_t mp = vnode_mount(vp);
+-	if (!oneios_app_cryptex_known || mp == NULL || !(vfs_flags(mp) & MNT_RDONLY)) {
++	if (mp == NULL || !(vfs_flags(mp) & MNT_RDONLY)) {
+ 		return false;
+ 	}
+-	fsid_t *fsid = &vfs_statfs(mp)->f_fsid;
+-	if (fsid->val[0] != oneios_app_cryptex_fsid.val[0] || fsid->val[1] != oneios_app_cryptex_fsid.val[1]) {
+-		return false;
++	if (oneios_app_cryptex_known && oneios_fsid_is(mp, &oneios_app_cryptex_fsid)) {
++		if (!logged) {
++			logged = 1;
++			printf("OneiOS: AMFI launch constraints: App cryptex volume answered as authenticated (FSIOC_AUTH_FS)\n");
++		}
++		return true;
+ 	}
+-	if (!logged) {
+-		logged = 1;
+-		printf("OneiOS: AMFI launch constraints: App cryptex volume answered as authenticated (FSIOC_AUTH_FS)\n");
++	if (oneios_systemos_known && oneios_fsid_is(mp, &oneios_systemos_fsid)) {
++		if (!logged_systemos) {
++			logged_systemos = 1;
++			printf("OneiOS: AMFI launch constraints: SystemOS volume answered as authenticated (FSIOC_AUTH_FS)\n");
++		}
++		return true;
+ 	}
+-	return true;
++	return false;
+ }
+ 
+ /* The App cryptex (app.img) at /private/preboot/Cryptexes/App, and the SystemOS volume, already the upper layer

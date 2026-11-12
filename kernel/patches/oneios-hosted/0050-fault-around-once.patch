@@ -1,0 +1,133 @@
+diff --git a/osfmk/arm/pmap/pmap.h b/osfmk/arm/pmap/pmap.h
+--- a/osfmk/arm/pmap/pmap.h
++++ b/osfmk/arm/pmap/pmap.h
+@@ -505,6 +505,8 @@
+ 	 * (the shared region) it has filled pages in since its last full flush; bit 511 = past the 16 GiB the bits cover. */
+ 	uint32_t hosted_tlb_word;
+ 	uint64_t hosted_nested_seen[8];
++	/* 0050: the fault-around windows done since the task's last flush of them (base | 1; 16 slots by the base's bits) */
++	uint64_t hosted_around[16];
+ #endif /* XNU_HOSTED */
+ };
+ 
+diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -3144,6 +3144,7 @@
+ 	/* 0045: the task's own TLB word, free, and no block of the nested region filled yet */
+ 	p->hosted_tlb_word = 0;
+ 	bzero(p->hosted_nested_seen, sizeof(p->hosted_nested_seen));
++	bzero(p->hosted_around, sizeof(p->hosted_around));            /* 0050 */
+ #endif
+ 	p->type = PMAP_TYPE_USER;
+ 
+diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
+--- a/osfmk/arm64/hosted/hosted_pmap.h
++++ b/osfmk/arm64/hosted/hosted_pmap.h
+@@ -159,9 +159,10 @@
+ /* 0041: the pmap's counters for the oneios-perf report: user maps, user unmaps, kernel maps, kernel unmaps, and the
+  * TLB lock's taken, contended, wait ticks, held ticks. Read without the lock: a report, not an exact sum. */
+ static uint64_t hosted_fault_around_maps;          /* 0046 (hosted_fill_around_locked) */
+-void hosted_pmap_perf(uint64_t out[16]);
++static uint64_t hosted_fault_around_skipped;       /* 0050: windows done already */
++void hosted_pmap_perf(uint64_t out[18]);
+ void
+-hosted_pmap_perf(uint64_t out[16])
++hosted_pmap_perf(uint64_t out[18])
+ {
+ 	out[0] = hosted_pmap_stats.user_maps;
+ 	out[1] = hosted_pmap_stats.user_unmaps;
+@@ -179,6 +180,8 @@
+ 	out[13] = hosted_unmap_stats.nested_flushes;
+ 	out[14] = hosted_unmap_stats.skipped;
+ 	out[15] = os_atomic_load(&hosted_fault_around_maps, relaxed);      /* 0046 */
++	out[16] = os_atomic_load(&hosted_fault_around_skipped, relaxed);   /* 0050 */
++	out[17] = 0;
+ }
+ 
+ /*
+@@ -759,6 +762,20 @@
+ 		return;
+ 	}
+ 	uint64_t span = (uint64_t)window * ARM_PGBYTES, base = va & ~(span - 1);
++	/*
++	 * 0050: once per window until the task's next flush of it. On the phone (oneios-fault-around=8) fault-around made
++	 * three maps per fault, 500,000-930,000 per 30 s, mostly again for windows it had done: every fault that goes to
++	 * vm_fault is filled again at the return (the refill) and did its window again. Each map is an mmap in the task
++	 * (about 30 us) carried by a release. A page of a done window that becomes valid later gets its own fault and
++	 * fill, and only that page is mapped. hosted_task_unmap_locked forgets the windows a flush covers. The pmap's TLB
++	 * word is held by both, as by the fill.
++	 */
++	uint64_t *slot = &pmap->hosted_around[(base / span) & 15];
++	if (*slot == (base | 1)) {
++		os_atomic_inc(&hosted_fault_around_skipped, relaxed);
++		return;
++	}
++	*slot = base | 1;
+ 	for (uint64_t at = base; at < base + span; at += ARM_PGBYTES) {
+ 		if (at == va || at >= hosted_info.user_va_limit) {
+ 			continue;
+@@ -821,6 +838,13 @@
+ 		(void)HPC(task_unmap, pmap->hosted_task, va, size, 0, 0);
+ 		os_atomic_inc(&hosted_pmap_stats.user_unmaps, relaxed);
+ 		hosted_check_unmapped(pmap, va, size);
++		/* 0050: the fault-around windows the flush touches are to be done again */
++		for (unsigned i = 0; i < sizeof(pmap->hosted_around) / sizeof(pmap->hosted_around[0]); i++) {
++			uint64_t base = pmap->hosted_around[i] & ~1ULL;
++			if (pmap->hosted_around[i] != 0 && base < va + size && base + 16 * ARM_PGBYTES > va) {
++				pmap->hosted_around[i] = 0;
++			}
++		}
+ 		/* a flush of the whole address space leaves nothing of the nested region mapped */
+ 		if (va == 0 && va + size >= hosted_info.user_va_limit) {
+ 			bzero(pmap->hosted_nested_seen, sizeof(pmap->hosted_nested_seen));
+diff --git a/osfmk/arm64/hosted/hosted_user.c b/osfmk/arm64/hosted/hosted_user.c
+--- a/osfmk/arm64/hosted/hosted_user.c
++++ b/osfmk/arm64/hosted/hosted_user.c
+@@ -598,7 +598,7 @@
+ 
+ /* ---- 0041: the oneios-perf report --------------------------------------------------------------- */
+ 
+-extern void hosted_pmap_perf(uint64_t out[16]);
++extern void hosted_pmap_perf(uint64_t out[18]);
+ struct hosted_copyio_stats {                    /* hosted_copyio.c's, the same layout */
+ 	uint64_t copies, faults, unresolved;
+ };
+@@ -644,14 +644,14 @@
+ hosted_perf_report_thread(__unused void *arg, __unused wait_result_t result)
+ {
+ 	static struct hosted_user_stats user_last;
+-	static uint64_t pmap_last[16], copies_last, copy_faults_last;
++	static uint64_t pmap_last[18], copies_last, copy_faults_last;
+ 	uint64_t last = mach_absolute_time();
+ 	for (;;) {
+ 		assert_wait_timeout((event_t)&hosted_perf_every, THREAD_UNINT, hosted_perf_every * 1000, NSEC_PER_MSEC);
+ 		(void)thread_block(THREAD_CONTINUE_NULL);
+ 		uint64_t now = mach_absolute_time(), wall = now - last;
+ 		struct hosted_user_stats u = hosted_user_stats;
+-		uint64_t pm[16];
++		uint64_t pm[18];
+ 		hosted_pmap_perf(pm);
+ 		static struct hosted_perf_counts c;
+ 		c = hosted_perf;
+@@ -676,8 +676,9 @@
+ 		/* 0045: the user pmaps' own TLB words, and where the user unmaps came from */
+ 		printf("oneios-perf:   user TLB words taken %llu, %llu waited (%llu us waiting); unmaps: %llu for a task's own flushes, "
+ 		    "%llu from %llu shared-region or commpage flushes, which skipped %llu tasks that never filled there; "
+-		    "fault-around maps %llu\n", pm[8] - pmap_last[8], pm[9] - pmap_last[9], hosted_perf_us(pm[10] - pmap_last[10]),
+-		    pm[11] - pmap_last[11], pm[12] - pmap_last[12], pm[13] - pmap_last[13], pm[14] - pmap_last[14], pm[15] - pmap_last[15]);
++		    "fault-around maps %llu, windows done already %llu\n", pm[8] - pmap_last[8], pm[9] - pmap_last[9],
++		    hosted_perf_us(pm[10] - pmap_last[10]), pm[11] - pmap_last[11], pm[12] - pmap_last[12], pm[13] - pmap_last[13],
++		    pm[14] - pmap_last[14], pm[15] - pmap_last[15], pm[16] - pmap_last[16]);
+ #undef D
+ #undef KN
+ #undef KT
+@@ -685,7 +686,7 @@
+ 		hosted_perf_top("mach traps", c.mach_n, c.mach_t, c0->mach_n, c0->mach_t, HOSTED_PERF_MACH, 8, true);
+ 		hosted_perf_last = c;
+ 		user_last = u;
+-		for (unsigned i = 0; i < 16; i++) {
++		for (unsigned i = 0; i < 18; i++) {
+ 			pmap_last[i] = pm[i];
+ 		}
+ 		copies_last = hosted_copyio_stats.copies;

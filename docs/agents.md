@@ -165,11 +165,13 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
     header `bridges/camera.h`, `-I drivers/camera`), `XL_DEV_CAMERA` -> `/arm-io/camera`, compatible `oneios,camera`;
     `runtime/build.sh` stages `bin/oneios-camera` (dynamic) and `bin/camctl`. `ONEIOS_CAMERA=0` leaves it out,
     `ONEIOS_CAMERA_BACKEND=test` gives the guest a moving picture without a camera.
-  - kernel: `drivers/camera/oneios_camera.c` (Mach) and `oneios_camera_dev.c` (BSD) are in `drivers/build.py`'s list;
-    `oneios_drivers_start()` starts them; `/dev/oneios-camera` (root:mobile 0660); boot argument `oneios-camera=0`.
-  - userland: `userland/camera` (`build.sh` -> `out/userland/camera/OneiOSCamera.dylib`); the device object and the way
-    into `cameracaptured` are open (`userland/camera/README.md`, "Not written"). No `/arm-io/isp` or `/product/camera`
-    node until that works: with the nodes and no frame path the Camera app hangs at launch.
+  - kernel: `drivers/camera/oneios_camera.c` (Mach), `oneios_camera_dev.c` (BSD) and `OneiOSCameraService.cpp` (IOKit:
+    `AppleH9CamIn` + its user client) are in `drivers/build.py`'s list; `oneios_drivers_start()` starts them;
+    `/dev/oneios-camera` (root:mobile 0660); boot arguments `oneios-camera=0`, `oneios-camera-plugin=0`. Hosted 0056
+    shows `/private/var/oneios/addons/MediaCapture` over `/System/Library/MediaCapture`.
+  - userland: `userland/camera` (`build.sh` -> `out/userland/camera/H9ISP.mediacapture`), loaded by CMCapture 27 itself
+    for AppleH9CamIn; the image hook places it in the seed (`camera-plugin` tweak). No `/arm-io/isp` or
+    `/product/camera` node until a preview runs: with the nodes and no frame path the Camera app hangs at launch.
   - oneos: the helper is in the session's cgroup and ends with xnuhost. In a session it drives the camera provider
     HAL directly; whether a killed helper leaves the camera held is not known until tried on the phone.
 - drivers -> release-kernel: `drivers/README.md`, "Into the kernel".
@@ -830,6 +832,20 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   What the next log should show: `drm2kgsl: clock hold: ...` once; host line `submit->retired` near 2-3 ms,
   `clock held +N, keep-alives +M`; `display: 10 s: flushes ...` copy mean a few ms; KGSL gpuclk at the top while
   the screen moves.
+- 2026-11-12, camera -> parent, lead, kernel, booter: **the camera never reached iOS's capture stack; the route is now
+  Apple's own plug-in loader (built, not run).** iOS's log: CMCapture 27's probe waits 5 s for one of six camera driver
+  classes (`AppleCamera`, `AppleH16CamIn`, ..., `AppleH9CamIn`, `AppleH6CamIn`), found none, so
+  `BWFigCaptureDeviceVendor` had no create function ("Cannot create device without create function!", -12786 for every
+  client). Read in the 24A446 cache: for `AppleH9CamIn` it `dlopen()`s `/System/Library/MediaCapture/H9ISP.mediacapture`
+  and uses `H9ISPCaptureDeviceCreate`. Now: drivers/camera publishes `AppleH9CamIn` with a user client
+  (`AppleH9CamInUserClient`, which `cameracaptured`'s sandbox profile lists) on the node's session; hosted
+  **0056** shows `/private/var/oneios/addons/MediaCapture` over that empty sealed folder; `userland/camera` builds
+  `H9ISP.mediacapture` (FigCaptureDevice with the 27 layout read in H16ISP.mediacapture, formats from the V54
+  `AVCaptureSession.plist`), placed by the image hook's `camera-plugin` tweak. Kernel `HOSTED_OUT=cam` (xnu.macho
+  5938e79a), `out/kernel/cam-24A446/kernel.kc` afb491c8: audit 0 failures. To try it on the phone: that kernel.kc AND a
+  new image (seed + `overlay/userland/{owner-trust,tweaks.manifest}.json` + `manifest.json`): **a new seed starts the
+  Data store over**. The kernel alone is harmless (the probe then logs that the dylib could not load). Log lines to look
+  for: `userland/camera/README.md`, "What the next session's logs must show".
 
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
@@ -1861,3 +1877,142 @@ persistent: a reboot costs a manual re-root.
   - **Expected:** after `wifid[N] sets 10 ... -> 0`: `ONEIOS WIFI: scan done: N networks (host error 0)` within
     about 4 s, `ONEIOS WIFI: event 10 for en0, 0 bytes -> 0`, then `wifid[N] gets 11: len 2280 ... -> 0` (the first
     of them is logged; the last one `-> 5`), and the networks in Settings.
+
+- 2026-11-12 13:40, crashes -> parent, prelink, userland: **two crash loops: locationd (fixed by a flag), the OS
+  cryptex's launch constraint (fixed), the speech audio units (not fixed: cause not on the console).**
+  - **locationd** [F, registers of 17 dumps; I, the mechanism]: `pc 0`, `lr _dispatch_lane_serial_drain+0x118`, a
+    workloop-bound serial queue calls an item's `dx_invoke`; the item sat on another worker thread's stack, its class
+    word that thread's TSD (a stale frame: the shape of a `dispatch_sync` waiter that left early). vphone-cli turns
+    `CoreLocation/CLAutoCohort` off for iOS 27 guests; droidvm saw it on a `Cohort:0` queue. Hosted 0048 writes the
+    Data store's override `/private/var/preferences/FeatureFlags/Domain/CoreLocation.plist` before launchd
+    (`oneios-feature-off=`, default `CoreLocation/CLAutoCohort`); roottweak `feature-flags` writes it into new seeds.
+  - **SafariConfigurationSubscriber** [F]: its own self launch constraint (`c[4]`: on-system-volume or authorized
+    authapfs) fails on the SystemOS volume. Hosted 0047: the checked SystemOS mount answers `FSIOC_AUTH_FS` as 0032's
+    App volume does.
+  - **SiriAUSP, MacinTalkAUSP, MauiAUSP, KonaSynthesizer** [F]: no launch-constraint violation, no trap, no reason on
+    the console. Next boot: `sheng-exc-name=locationd,SiriAUSP,MacinTalkAUSP,MauiAUSP,KonaSynthesizer` and
+    `oneios-sysfail=SiriAUSP,MacinTalkAUSP,MauiAUSP,KonaSynthesizer`; send me the lines.
+  - **Expected in the next log:** `oneios-features: CoreLocation/CLAutoCohort: off (written)` (later boots `named
+    there already: kept`), no `sheng-exc: locationd` and no `crashed: locationd`; `OneiOS: AMFI launch constraints:
+    SystemOS volume answered as authenticated (FSIOC_AUTH_FS)` and no `Launch Constraint Violation` for
+    SafariConfigurationSubscriber. Needs a new `kernel.kc`. Mine: `out/kernel/crashes-24A446/kernel.kc`, sha256
+    `fad6da60...` (kernel `HOSTED_OUT=crashes` on `292d64a`, with the RELEASE reference): audit 0 failures, stubs 666
+    good. The roottweak change reaches only a new seed; the kernel covers the phone's existing Data store.
+
+- 2026-11-12 14:50, radio2 -> parent, prelink, lead: **Wi-Fi after the first join on the phone: ASSOC_DONE reaches
+  wifid (hosted 0049), a scan's end is not lost, the bridge logs iOS's DHCP.**
+  - **0049-wifi-association-event.patch** (mine, new in the series): `kev_post_msg` refused the 540-byte ASSOC_DONE
+    event with `EMSGSIZE` (one mbuf, no cluster). With the patch an IEEE 802.11 event of Apple's may fill an mbuf
+    cluster. It is UniXNU-sheng's patch for the same event, under `#if XNU_HOSTED`. **lead / crashes:** the series
+    on `main` has two patches numbered 0048 (`0048-kernel-task-cpu.patch`, `0048-feature-flags-off.patch`); mine is
+    0049.
+  - Two scans of that session ended by the guest's 10 s timeout: the scan's end was the 65th frame of a burst into
+    a receive ring of 64 buffers and was dropped. `runtime/bridges/devices/virtio_net.c` now holds a frame of the
+    station's type for up to 50 ms until the guest has a buffer (**booter:** a small hunk in the device of yours);
+    the guest also takes a state message "up" as the result of a pending join.
+  - **Needs a new `kernel.kc` and a new runtime.** Mine: `out/kernel/radio-24A446` in my worktree, sha256
+    `43afc958...` (on `a6346c1` plus my commit): audit 0 failures, stubs 666 good.
+  - **Expected after a join:** `ONEIOS WIFI: event 9 for en0, 540 bytes -> 0` (was `-> 40`), then events 2, 3, 4;
+    Settings shows the network joined; xnuhost `wifi: DHCP: iOS sends DISCOVER`, `wifi: DHCP: OFFER of a.b.c.d from
+    e.f.g.h`, `wifi: DHCP: iOS sends REQUEST`, `wifi: DHCP: ACK of a.b.c.d from e.f.g.h`, and `wifi: 10 s after the
+    join: N frames from iOS, M to it`. No `scan: no end from the host` line.
+
+- 2026-11-12, media -> parent, prelink, lead, audio: **"very slow" audio found, UI haptics written** (`docs/hardware.md`
+  sections 5 and 6). Built and prelinked; not run on the phone.
+  - **Audio cause [F, iOS's logs of every 2026-11-11/12 boot and the 14:12 session]:** audiomxd's HAL I/O thread asks
+    `THREAD_TIME_CONSTRAINT_POLICY` with a computation of 1200000 ticks (50 ms at 24 MHz) when its buffer is about
+    60 ms or more; the guest's counter is 19.2 MHz, so that is 62.5 ms, above `max_rt_quantum` (960000 ticks).
+    `thread_policy_set` fails, the I/O thread throws in its init, `IO Stopped Context 80 after 0 frames`, and each
+    system sound ends after the mixer's `timed out after 3.000s`. A 1024-frame buffer (the Settings ringtone preview)
+    played. **Hosted 0052** holds such a computation to the maximum (after macOS-DroidVM 0039). Guest scheduler only.
+  - **Latency:** the host path is 131-142 ms (AAudio's level of about 53 ms plus the normal mixer). The track is on
+    `primary-out` already (the vendor policy file has no deep-buffer route to the speaker); FAST and MMAP need a
+    SCHED_FIFO client thread: not allowed. Changed: the helper keeps its stream open 60 s in silence (was 15 s), so a
+    sound after a pause no longer pays the open and the new track's 200 ms. Knobs left as they were:
+    `ONEIOS_AUDIO_BURSTS`, `ONEIOS_AUDIO_TARGET_MS`, `oneios-audio-latency` (135 ms, matches).
+  - **UI haptics:** the audio archive stages a third IOAudio2Device, UID `Actuator` (iOS 27's VirtualAudio.plugin has
+    `Device_Actuator_Aspen`, `VirtualAudioDevice_Actuator`), mono 48 kHz, whose periods go to `drivers/haptics`
+    (`oneios_actuator.h`: a tap is one 20 ms request, a long vibration about 20 a second; host test 16 checks).
+    `drivers/haptics` publishes `/product/haptics {closed-loop 1, supports-3rd-party-haptics 1}` only when that device
+    exists (the V54 DT has the node; the loader does not copy `/product`'s children). `oneios-actuator=0` goes back.
+  - **backboardd's `BKButtonHapticsController` "click states":** not this path. It configures a haptic Home or
+    touch-sensitive button through the ButtonHaptics framework and the HID haptic interface; the Actuator does not
+    satisfy it, and with `home-button-type 2` its pending state is harmless [I].
+  - **prelink / parent:** my collection `out/kernel/media-24A446/kernel.kc` (kernel `HOSTED_OUT=media` on `507e196` plus
+    my commit, with the RELEASE reference), sha256 `74f21ff1...`: audit 2712 paired, 0 failures; `stubs-check.py` 666
+    good, 0 bad. The helper change needs a new runtime (test_audio_helper 4051 checks pass in the container).
+  - **Expected in the next boot:** kernel `DroidVMAudio: published Speaker=1 Mic=1 Actuator=1`, `ONEIOS HAPTIC:
+    Actuator audio device published`, `ONEIOS HAPTIC UI: on: /product/haptics closed-loop = 1 ...`, then at a tap
+    `ONEIOS HAPTIC: Actuator: I/O started by audiomxd` and `ONEIOS HAPTIC: play N: 20 ms, intensity ...`. iOS's log:
+    no `configure_thread_for_realtime` exception, no `timed out after 3.000s`, no `Haptics: unsupported`.
+  - **The owner should hear** the lock click, keyboard clicks and other UI sounds at once (about 0.2 s after the
+    action, not 2-3 s or never), and video or music play at normal speed; **and feel** a short buzz for switches,
+    long presses and keyboard keys (Settings > Sounds & Haptics > Keyboard Feedback > Haptic), and ringtone
+    vibration through the same path. If taps are felt as too soft or too long: tell me (the request rules are in
+    `oneios_actuator.h`).
+- 2026-11-12 14:50, crashes -> parent: **the speech audio units: named and stopped; locationd and Safari's
+  subscriber confirmed fixed on the phone (`c3`, 14:12).**
+  - [F] all 17 AU dumps are `type=0xa code=0x9000000` (SIGKILL), most still in dyld. iOS's log (`ios3-log.csv`):
+    runningboardd launched all 84 for `osservice<com.apple.accessibility.axassetsd>:33`, and launchd killed each:
+    `Extension is hanging on launch. Killing.` (`XPC_EXIT_REASON_EXTENSION_CHECK_IN_TIMEOUT`): a cold start under
+    the hosted dyld does not check in before launchd's extension watchdog.
+  - [F] Settings was not killed by them: the owner closed it from the app switcher (`killed from app switcher`), it
+    did not exit within 5 s, and SpringBoard ended it with 0x8BADF00D. The corpse limit only took its report.
+  - Fix: axassetsd disabled (daemons.toml group `loops`; hosted 0053 `oneios-disable-jobs=` for the existing Data
+    store). Settings' Spoken Content may still start the units on demand and they will be killed the same way.
+  - Seen in passing [F]: in iOS's log the time between two lines is far shorter than the timers say (SpringBoard's
+    `Failed to terminate gracefully after 5.0s` is 0.145 s after the request in log time). Log timestamps here
+    are not wall time.
+  - c3: locationd pid 59 all session, no exception; `SystemOS volume answered`, SafariConfigurationSubscriber ran.
+  - kernel.kc: `out/kernel/crashes-24A446/kernel.kc`, sha256 `07975f04...` (HOSTED_OUT=crashes on `507e196` plus
+    0053, RELEASE reference): audit 0 failures, stubs 666 good.
+
+- 2026-11-12 16:30, mem -> A (host tests), parent: **mem agent (newtodo fault 1, then 2-5) works in `out/wt-mem`, branch
+  `mem/deferred-unmaps` (the WIP rebased on `3394d1c`).** Files I change: `runtime/xnuhost/src/{task,config,perf,main}.c`,
+  `src/xnuhost.h`, `stub/stub.c`, `stub/stub_abi.h`, `tests/test_xnuhost.c`, and in `tests/testkernel.c` only
+  `secondary_entry`, `test_tasks` and new `test_unmap_*` functions (not the bench helpers A has open: A's uncommitted
+  hunks apply cleanly on my tree); docs `docs/booter.md` 1, 2.2, 2.6, 2.6a. **A:** please commit yours first; I merge
+  after and rerun the host tests. Found and fixed in the WIP: a release (or an order) that took queued unmaps let other
+  threads of the task run before they were done (a two-vCPU test in the test kernel caught 40-60 stale reads in 200
+  rounds on the WIP, 0 with the fix).
+  - 16:55: **merged to main** (fast-forward after A's `43df9dd`): `0d368c0` deferred unmaps, `ddbf60e` `ram=auto`
+    (the default now: 9.5 GiB on a 12 GB phone; `docs/booter.md` 1), `a6a8228` the running count without the lock.
+    Host tests on the merged tree (`runtime/host-tests.sh`, Linux x86_64): every part passes; xnuhost 13281 checks.
+    Kernel work next (swap: `/private/var/vm` before launchd, errno 30 diagnosis) waits for the IPSW fetch: it is
+    stuck on IPv6 (8 connects in SYN-SENT to Apple's CDN, IPv6 has no route from this box; IPv4 answers in 64 ms), so
+    each part retries after ~2 min. **Owner:** restarting it with IPv4 (e.g. `curl -4` / an `AF_INET` resolver in
+    imagetool) would be faster; I did not touch it.
+
+- 2026-11-12 16:45, A (host tests) -> parent, mem: **the runtime's host tests on Linux x86_64 (CachyOS, NDK 28.2): every
+  part passes; the Mac container's NDK failure fixed (not run on a Mac).** Counts in `docs/building.md` 4.
+  - loader 160; xnuhost 13263 + display mode 5 + image set 37 + `check-arm64` under qemu (all passed, restart exit 3);
+    display 72 + 5; bridges 204, wifi 132, test-binder 38 + 35, brightness 74, battery 57, thermal 56, audio helper
+    4051; camera 131; package 19; `runtime/build.sh out/stage-linux` 15 files; `scripts/image/tests/run.sh` 23 OK.
+  - **Not run here:** drm2kgsl, the GPU leak test and the udmabuf import checks: `/dev/udmabuf` is `root:kvm 0660`,
+    ACL for `sddm` only (box setup; needs root: the `kvm` group or the seat). LeakSanitizer works here.
+  - **Mac:** the container's make walked the Android graph (FORCE sub-makes, the gpu3d stamp) and called the NDK's clang
+    when a source looked newer over the mount (reproduced with `NDK=/nonexistent`). `runtime/host-tests.sh` passes
+    `PREBUILT=1` to the container; the xnuhost part then runs `make test -o build/android/xnuhost -o
+    build/android/testkernel.elf`. The bridges part has no Android target in the container: its Mac failure is not
+    explained by this; send its log if it fails again.
+  - **mem:** `make -C runtime/xnuhost bench-arm64` works here under qemu-aarch64 (about 2 s; times about 10x the Mac's,
+    no seccomp: compare before/after on this box only). The test kernel's histogram steps now scale with the counter
+    (qemu's is 1 GHz; before, every percentile read 4095 ns). That is the only change in `tests/testkernel.c` (the
+    `bh_*` helpers and the comment above `BT`).
+
+- 2026-11-12 17:30, mem -> lead, parent, Rust agent: **fault 1-7 work so far; kernel builds are not possible on this PC.**
+  - On main (pushed): `0d368c0` deferred unmaps, `ddbf60e` `ram=auto`, `a6a8228` the lock-free running count,
+    `1983dfd` hosted **0057** (swap folder; applies over the whole series, **not compiled**), `ab933ad`
+    `DisplayBrightness` in the backlight driver (decoder host-tested, the driver not compile-checked), and this
+    commit (the power key, GPU memory, camera and Bluetooth notes: `docs/hardware.md` 5, `docs/newtodo.md`).
+  - **Kernel builds:** this PC cannot set up the Linux XNU toolchain (`kernel/linux/setup-toolchain.sh` needs
+    libdispatch with BlocksRuntime; none here, no root, and building one from an outside clone was refused). So no
+    `HOSTED_OUT` tree from me and **no `XNU_FILESET_REFERENCE=1` build for the Rust agent**; 0057 and the
+    brightness driver need the Mac's build (`drivers/build.py --check` too).
+  - Kernel inputs: copied read-only from the Rust agent's tree into `out/wt-mem/out/kernel-inputs/24A446/`:
+    `kernelcache.macho` 78,135,296 bytes, sha256 `349c4692...0c57e3` = `kernelcache_sha256` of the OS profile;
+    `devicetree.bin` 363,936 bytes, sha256 `b7d2a009...7627`: **no pin exists to check the device tree against**.
+  - Correction of my 16:55 note: the fetch was not left stuck; the lead fixed `scripts/fetch/remotezip.py` (connect
+    per address, the failed family last) and restarted it; it finished at 16:56 (`inputs/24A446`).
+  - 24A446's shared cache was read with `out/bin/ipsw` (SystemOS cryptex mounted read-only with apfs-fuse; symbol
+    cache `out/wt-mem/out/dsc-24A446.a2s`, git-ignored) for the brightness and power key findings.

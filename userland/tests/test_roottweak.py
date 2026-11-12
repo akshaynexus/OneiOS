@@ -268,8 +268,22 @@ class Sealed(Case):
         self.assertEqual(digest(self.data), first)
         self.assertEqual(entries(), manifest)
         states = self.states()
-        for item in ('disabled.plist', 'preferences: setup', 'preferences: coreanimation', 'data layout'):
+        for item in ('disabled.plist', 'preferences: setup', 'preferences: coreanimation', 'data layout', 'CoreLocation flags'):
             self.assertEqual(states[item], 'kept', item)
+
+    def test_corelocation_cohorts_are_off_on_the_data_volume(self):
+        flags = 'preferences/FeatureFlags/Domain/CoreLocation.plist'
+        os.makedirs(os.path.join(self.data, os.path.dirname(flags)))
+        with open(os.path.join(self.data, flags), 'wb') as f:
+            plistlib.dump({'Somebody': {'Enabled': True}}, f)
+        self.apply()
+        have = self.plist(self.data, flags)
+        self.assertEqual(have, {'Somebody': {'Enabled': True}, 'CLAutoCohort': {'Enabled': False}})
+        with open(os.path.join(self.data, flags), 'rb') as f:
+            self.assertTrue(f.read().startswith(b'<?xml'), 'XML, as the kernel (hosted 0048) reads it')
+        self.assertEqual(self.states()['CoreLocation flags'], 'applied')
+        # the sealed root keeps Apple's defaults and gets no ExtensionKit flag
+        self.assertFalse(os.path.exists(os.path.join(self.data, 'preferences/FeatureFlags/Domain/ExtensionKit.plist')))
 
     def test_the_data_layout(self):
         cache = 'containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches'
@@ -278,6 +292,10 @@ class Sealed(Case):
             plistlib.dump({'CacheExtra': {'h9jDsbgj7xIVeIQ8S3/X3Q': 'iPad17,3'}}, f)
         self.apply()
         self.assertFalse(os.path.exists(os.path.join(self.data, cache, 'com.apple.MobileGestalt.plist')))
+        # the swap files' folder (XNU's /private/var/vm/swapfileN), root 0755 as the kernel (hosted 0057) makes it
+        vm = os.path.join(self.data, 'vm')
+        self.assertTrue(os.path.isdir(vm))
+        self.assertEqual(os.stat(vm).st_mode & 0o7777, 0o755)
         self.assertEqual(self.states()['MobileGestalt cache'], 'applied')
         self.assertEqual(self.entry('data', 'containers/Bundle')['uid'], 33)
         self.assertEqual(self.entry('data', 'tmp')['mode'], '1777')
@@ -378,6 +396,24 @@ class Sealed(Case):
             self.assertEqual(f.read(), '*\n')
         self.apply('--metal-plugin', self.top, expect=1)
 
+    def test_the_camera_plugin_goes_to_the_mediacapture_view(self):
+        self.apply()
+        self.assertEqual(self.states()['camera plugin'], 'off')
+        folder = os.path.join(self.top, 'camera')
+        os.mkdir(folder)
+        self.apply('--camera-plugin', folder, expect=1)            # no H9ISP.mediacapture in it
+        data, cdhash = fakeroot.signed_macho('com.oneios.H9ISP')
+        with open(os.path.join(folder, 'H9ISP.mediacapture'), 'wb') as f:
+            f.write(data)
+        self.apply('--camera-plugin', folder)
+        self.assertEqual(self.states()['camera plugin'], 'applied')
+        self.assertEqual(self.entry('data', 'oneios/addons/MediaCapture/H9ISP.mediacapture')['mode'], '0755')
+        contract = self.read('boot-contract.json')
+        mounts = {m['over']: m for m in contract['addon_mounts']}
+        self.assertEqual(mounts['/System/Library/MediaCapture']['source'], '/private/var/oneios/addons/MediaCapture')
+        self.assertEqual(contract['camera']['symbol'], 'H9ISPCaptureDeviceCreate')
+        self.assertIn(cdhash, self.read('owner-trust.json')['cdhashes'])
+
     def test_the_app_cryptex_is_carried_on_the_data_volume(self):
         appos = os.path.join(self.top, 'appos')
         os.makedirs(os.path.join(appos, 'usr/libexec'))
@@ -457,7 +493,7 @@ class Hook(Case):
         os.mkdir(overlay)
         env = {'PATH': os.environ['PATH'], 'ONEIOS_HOOK_API': '1', 'ONEIOS_OS_ROOT': self.root, 'ONEIOS_DATA': self.data,
                'ONEIOS_OVERLAY': overlay, 'ONEIOS_OWNERS': owners, 'ONEIOS_INFO': info, 'ONEIOS_BUILD': fakeroot.BUILD,
-               'ONEIOS_HELPERS': os.path.join(self.top, 'none'), 'ONEIOS_METAL_PLUGIN': os.path.join(self.top, 'none'),
+               'ONEIOS_HELPERS': os.path.join(self.top, 'none'), 'ONEIOS_METAL_PLUGIN': os.path.join(self.top, 'none'), 'ONEIOS_CAMERA_PLUGIN': os.path.join(self.top, 'none'),
                'ONEIOS_ROOTTWEAK_ARGS': '--keep com.apple.momentsd', 'ONEIOS_SCALE': '2'}
         hook = os.path.join(os.path.dirname(HERE), 'image-hook')
         before = digest(self.root)
@@ -518,7 +554,7 @@ class Hook(Case):
 
         env = {'PATH': os.environ['PATH'], 'ONEIOS_HOOK_API': '1', 'ONEIOS_OS_ROOT': self.root, 'ONEIOS_DATA': self.data,
                'ONEIOS_OVERLAY': overlay, 'ONEIOS_INFO': info, 'ONEIOS_BUILD': fakeroot.BUILD,
-               'ONEIOS_HELPERS': os.path.join(self.top, 'none'), 'ONEIOS_METAL_PLUGIN': bundle}
+               'ONEIOS_HELPERS': os.path.join(self.top, 'none'), 'ONEIOS_METAL_PLUGIN': bundle, 'ONEIOS_CAMERA_PLUGIN': os.path.join(self.top, 'none')}
         hook = os.path.join(os.path.dirname(HERE), 'image-hook')
         write(sorted(hashes))
         done = subprocess.run([sys.executable, '-I', hook], env=env, capture_output=True, text=True)

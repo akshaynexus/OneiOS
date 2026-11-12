@@ -83,6 +83,24 @@ static void test_frames(void)
   f[5] ^= 1;
   CHECK(!br_wifi_to_guest(f, 60, mac) && !br_wifi_to_guest(f, 10, mac) && !br_wifi_to_radio(f, 1515, mac));
 
+  // A DHCP OFFER (server to client) and a DISCOVER; a frame that is UDP but not DHCP; one cut inside its options.
+  static uint8_t d[14 + 20 + 8 + 240 + 16];
+  memset(d, 0, sizeof d);
+  memcpy(d, mac, 6); d[12] = 0x08; d[14] = 0x45; d[23] = 17;
+  d[34] = 0; d[35] = 67; d[36] = 0; d[37] = 68;                              // UDP 67 -> 68
+  uint8_t *bootp = d + 42;
+  bootp[0] = 2; memcpy(bootp + 16, "\x0a\x00\x01\x37", 4);                   // yiaddr 10.0.1.55
+  memcpy(bootp + 236, "\x63\x82\x53\x63", 4);
+  memcpy(bootp + 240, "\x35\x01\x02\x36\x04\x0a\x00\x01\x01\xff", 10);       // OFFER, server 10.0.1.1
+  uint8_t dhcp_type = 0, dhcp_address[4], dhcp_server[4];
+  CHECK(br_wifi_dhcp(d, sizeof d, &dhcp_type, dhcp_address, dhcp_server) && dhcp_type == 2 && dhcp_address[3] == 0x37 && dhcp_server[3] == 1);
+  d[35] = 68; d[37] = 67; bootp[242] = 1;
+  CHECK(br_wifi_dhcp(d, sizeof d, &dhcp_type, dhcp_address, dhcp_server) && dhcp_type == 1);
+  d[37] = 53;
+  CHECK(!br_wifi_dhcp(d, sizeof d, &dhcp_type, dhcp_address, dhcp_server));
+  d[37] = 67;
+  CHECK(!br_wifi_dhcp(d, 14 + 20 + 8 + 240 + 2, &dhcp_type, dhcp_address, dhcp_server) && !br_wifi_dhcp(d, 100, &dhcp_type, dhcp_address, dhcp_server));
+
   // A netlink multicast group as the kernel writes it (the id, then the name) and the other way round; another
   // name; a name that only begins with the wanted one; cut short.
   static const uint8_t scan_group[] = { 8, 0, 2, 0, 3, 0, 0, 0, 9, 0, 1, 0, 's', 'c', 'a', 'n', 0, 0, 0, 0 };

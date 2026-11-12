@@ -122,6 +122,11 @@ not start.
   that mount). Everything else stays: AMFI still evaluates launch type, validation category, the parent constraint
   and the trust cache entry, signature checks are unchanged, and no other volume answers differently. It is a
   deliberate relaxation for a personal guest, on the same footing as the software key store: not a security boundary.
+- SystemOS volume (`0047-systemos-authenticated.patch`): programs there that carry a self launch constraint in their own
+  code signature (`c[4]` in the log line; SafariConfigurationSubscriber.xpc: `on-system-volume` or
+  `on-authorized-authapfs-volume`, `validation-category` 1) failed it, because the volume is the upper layer of the root
+  union and not `MNT_ROOTFS`. The mount `native_owner_cache_prepare` has checked (read-only, APFS, the verified device)
+  answers `FSIOC_AUTH_FS` the same way. Run on the phone (2026-11-12 14:12): the line came and SafariConfigurationSubscriber started.
 
 ## State (2026-11-11)
 

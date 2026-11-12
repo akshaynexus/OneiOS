@@ -261,6 +261,61 @@ Built on the Mac (`HOSTED_OUT=perf`, series through 0044, DEVELOPMENT and the RE
   tasks that mapped in it.
 - 0042: no result (the timing fault above; fixed).
 
+## 0045-0046: the TLB lock per task, the shared-region fan-out, fault-around (perf, 2026-11-12)
+
+- **0045, a TLB lock per user pmap.** The one global word (`hosted_tlb_lock`) ordered every task's fills, flushes and
+  copies against every other's, and was held across task orders: on the first combined boot it was waited for up to
+  41-47 s per 30 s. What the lock orders is per address space (a fill of P reads P's entry and maps in P's task; a
+  flush of P unmaps in P's task; a copy reads P's entry and touches the page), so each user pmap now has its own word
+  (`pmap->hosted_tlb_word`), taken the same way. The kernel pmap keeps the global word. A kernel fault inside a user
+  copy no longer meets a held lock (a different word).
+- **0045, the shared-region fan-out.** A flush of a nested pmap (the shared region) sent an unmap order to every task
+  that nests it. Each user pmap now records the 32 MiB blocks of its nested region it filled pages in
+  (`pmap->hosted_nested_seen`, 512 bits; the last means "beyond the 16 GiB covered"); the bit is set under the task's
+  word before the map, and the fan-out reads it under the same word after the entry changed, so a task without the bit
+  has no host mapping in that range and is skipped. A full flush of a task clears its bits. The commpage still goes to
+  every task. pmaps_lock is still held across the remaining orders (it keeps the list; a pmap freed under the loop is the
+  alternative).
+- **madvise (item 3 of the plan): not batched.** arm's pmap strips `PMAP_OPTIONS_NOFLUSH` and makes each page
+  operation complete its own flush (`sync_tlb_flush` before it returns; `pmap_flush` is empty), so unmap orders cannot be
+  joined across pages without changing that contract. 0045's report line says where the unmaps come from instead:
+  `oneios-perf:   user TLB words taken T, W waited (U us waiting); unmaps: A for a task's own flushes, F from N
+  shared-region or commpage flushes, which skipped S tasks that never filled there; fault-around maps M`.
+- **0046, `oneios-fault-around=N`** (pages, a power of two up to 16; off by default). After a fill, the other pages of
+  the N-page aligned window whose entries already allow access (valid, reference bit set, in the RAM window) are mapped
+  too, with what each entry allows, under the same lock and rule as the fill. A TLB may hold any entry the tables allow;
+  a later change is flushed and unmapped as before. On the first phone boot half the faults were fills; each costs a
+  trap and a release (about 40 us), a fault-around map one deferred mmap in the task (about 40 us). Worth it only when
+  most neighbours get used: `filled from the tables` against `fault-around maps` in oneios-perf says.
+- Built on the Mac (`HOSTED_OUT=perf`, series through 0046, DEVELOPMENT and the RELEASE reference). Not run: the hosted
+  kernel cannot run in the Mac's container (no pointer authentication), so these are measured on the phone only.
+- **Phone, round 2** (boot 14:12, kernel.kc 29bef797, `oneios-fault-around=8`): the user words were taken 0.7-1.1 million
+  times per 30 s and waited for 1.7-6.7 s (the global word: 41-47 s before); unmaps: 234,435 for tasks' own flushes and
+  4,400 from 49 shared-region flushes, which skipped 2,432 tasks. But a fill from the tables took about 2.1 ms (26,576
+  fills, 56 s per 30 s) against 77 us for a vm_fault: fault-around made 500,000-930,000 maps per 30 s, three per
+  fault, mostly the same windows again (each vm_fault's refill did its window again), and each fill's maps waited for
+  the task's queue while another thread of the task carried out earlier maps (100-130 us a release). Fixed by 0050 and
+  xnuhost's queue lock (below).
+
+## 0050-0051: fault-around once per window, kernel_task's CPU (perf, 2026-11-12)
+
+- **0050.** A window is faulted around once until the task's next flush of it (16 slots per pmap,
+  `pmap->hosted_around`, cleared by `hosted_task_unmap_locked` for the windows a flush covers). A page of a done window
+  that becomes valid later gets its own fault and fill of that page only. The report adds `windows done already W`.
+- **xnuhost (same commit):** the map queue has its own lock (`task.qlock`); a `task_map` adds to it without waiting for a
+  release whose thread is carrying out earlier maps (the task's order lock), which is what made the fills wait with the
+  task's TLB word held. The order is unchanged: an order or a release takes both locks to take the queue.
+- **0051.** oneios-perf adds `kernel_task: N threads, T us of CPU (P% of a vCPU); most: NAME T ... #ID@0xCONT T ... us`:
+  the kernel's own threads (pager, compressor, IOKit work loops, thread calls, idle threads with the interrupts they
+  take), by name or by their continuation (unslid; name it against the kernel). A stall showed kernel_task at 127 %. The
+  kernel's work for a user trap is charged to the user thread, so it is not in this line.
+- Expected per fill without fault-around: a walk and one queue add (a host call of about 1 us), 3-5 us (round 1's first
+  window, before the global lock got busy: 77 ms for 27,605 fills, 2.8 us each); the page's mmap (about 30 us) is paid
+  at the next release, as before. With `oneios-fault-around=8` and 0050: up to 8 queue adds, about 10 us, and at most
+  7 extra maps per window per flush.
+- Built on the Mac (series through 0051, with the other agents' 0047-0049, DEVELOPMENT and the RELEASE
+  reference); not run.
+
 ## 0039-gpu-client-list-and-texts.patch (gpu, 2026-11-12)
 
 - **One list for both gates of a Metal device.** A process other than backboardd gets a device only when the
@@ -300,7 +355,70 @@ answers `FSIOC_AUTH_FS` with success for that mount (`oneios_app_cryptex_authent
 User space cannot ask this ioctl. Other volumes go to APFS unchanged; AMFI still evaluates every other fact.
 At the first answer the kernel logs
 `OneiOS: AMFI launch constraints: App cryptex volume answered as authenticated (FSIOC_AUTH_FS)`. Full notes:
-`kernel/prelink/README.md`, "AMFI and launch constraints". Compiled; not yet run on the phone.
+`kernel/prelink/README.md`, "AMFI and launch constraints". Run on the phone (boot of 2026-11-11 23:00, saved as
+`c2`): the line came at +108 s; `webinspectord` and `webbookmarksd` started and the log has no crash line for them.
+
+## 0047-systemos-authenticated.patch and 0048-feature-flags-off.patch (crashes, 2026-11-12)
+
+Two loops of the boots of 2026-11-11/12 (`c2`, `diag`, `combo1` logs).
+
+- **0047.** `SafariConfigurationSubscriber.xpc` (SafariFoundation, on the SystemOS volume) was killed at each launch:
+  `AMFI: Launch Constraint Violation (enforcing), error info: c[4]p[1]m[1]e[0], (Constraint not matched)`. Its code
+  signature carries a self launch constraint of its own (`ipsw macho info --sig`: `on-system-volume` or
+  `on-authorized-authapfs-volume`, and `validation-category` 1; parent `is-init-proc`). The SystemOS volume is the upper
+  layer of the root union, not the root mount (`MNT_ROOTFS` stays with os.img), and APFS cannot authorize it without a
+  personalized manifest. `native_owner_cache_prepare` (kern_exec.c) checks that mount (read-only, APFS, on the device
+  the image set names, which xnuhost verifies chunk by chunk) and now names it to `oneios_systemos_verified`;
+  `oneios_app_cryptex_authenticated` answers `FSIOC_AUTH_FS` for it as for the App volume. First answer:
+  `OneiOS: AMFI launch constraints: SystemOS volume answered as authenticated (FSIOC_AUTH_FS)`. Programs of the root
+  volume are not affected (they meet `on-system-volume`), nor any other volume. Run on the phone: see `c3` below.
+- **0048.** locationd crashed 17 times in one session, every time the same way: `pc=0x0`,
+  `lr=_dispatch_lane_serial_drain+0x118` (`dsc.py --slide 0x124d8000`: `_dispatch_lane_invoke`,
+  `_dispatch_root_queue_drain_deferred_wlh`, `_dispatch_workloop_worker_thread`), a serial queue bound to a workloop.
+  At +0x118 libdispatch calls the item's `dx_invoke` (class word + 0x48). The item (`x25`/`x0`) lay at the same depth
+  of another worker thread's stack in every crash, and its class word (`x28`) was that thread's TSD base (a saved
+  `tpidrro_el0`), whose slot 9 (the semaphore cache) was 0, or once the port name `0x2c03` (`pc=0x2c03`). So the queue
+  drained an item from a stack frame that had already returned: the shape of a `dispatch_sync` waiter that left early
+  (inferred; the waiter was not caught). vphone-cli turns `CoreLocation/CLAutoCohort` off for iOS 27 guests
+  (`patch-locationd-cohorting`, "Disable automatic CoreLocation cohort queues"), droidvm saw locationd's crash on a
+  `Cohort:0` queue once a boot, and vphone's notes have 27.0's locationd failing with `EXC_ARM_PAC_FAIL` (the same item
+  with PAC on). The flag is `FeatureComplete` in the root's `/System/Library/FeatureFlags/Domain/CoreLocation.plist`.
+  The patch writes the override `/private/var/preferences/FeatureFlags/Domain/CoreLocation.plist` =
+  `{CLAutoCohort = {Enabled = false}}` before launchd (that is `/Library/Preferences/FeatureFlags`, the override path
+  libsystem_featureflags reads after the root's); the roottweak writes the same file into new seeds (docs/userland.md).
+  `oneios-feature-off=DOMAIN/FLAG[,...]` (default `CoreLocation/CLAutoCohort`, `-` none). A file that names the flag
+  is kept, another flag's file gets the entry, a binary file is left alone. Console:
+  `oneios-features: CoreLocation/CLAutoCohort: off (written)`, later boots `... named there already: kept`. With the
+  flag off CoreLocation logs `#Cohorting Process intended to sign up for auto cohorting but CoreLocation/CLAutoCohort=off`
+  (user-space log, not on the console). What iOS loses: locationd's silos keep their own queues instead of shared
+  cohort queues (an optimization of iOS 27; no feature depends on it as far as read). Run on the phone: see `c3`
+  below.
+- **0053** and the daemon policy's group `loops`: the speech audio units (`SiriAUSP`, `MacinTalkAUSP`, `MauiAUSP`,
+  `KonaSynthesizer`, ExtensionKit extensions on the root volume, extension point `com.apple.AudioUnit-Speech`). In the
+  14:12 session (`c3`, `sheng-exc-name` with their names) every one of 17 dumps is `exception type=0xa
+  code=0x9000000`: EXC_CRASH for SIGKILL, from outside. They were started four at a time (four `xpcproxy` lines) and
+  killed together 3-4 s later, wherever they were: most still in dyld (`mov x16, #0x126; svc` =
+  `shared_region_check_np`, or dyld's fixups), one in libsystem. `oneios-sysfail` showed no failing file call of
+  theirs. Bursts every 8-10 s for about 50 s. They are not refused by launch constraints (no AMFI violation, no
+  constraint in their signatures, root volume). The four corpses at a time fill the kernel's corpse limit, so a crash
+  in that window gets no report. iOS's own log of the sessions (`ios3-log.csv`) names both ends [F]: runningboardd
+  launched all 84 of them for `osservice<com.apple.accessibility.axassetsd>:33` (axassetsd's TextToSpeech voice list:
+  `Sending prepareUsing to managed extension`), and launchd killed each: `Extension is hanging on launch. Killing.`,
+  `exited with exit reason (namespace: 7 code: 0x3) - XPC_EXIT_REASON_EXTENSION_CHECK_IN_TIMEOUT`: launchd's
+  extension watchdog (`ExtensionWatchdog` in its built-in config) fires before a cold start under the hosted dyld has
+  checked in. axassetsd then logs `Unable to acquire process assertion in beginUsing` and tries again. Settings'
+  `Process[169] crashed: Preferences` is not theirs: the owner closed it from the app switcher, it did not exit within
+  5 s, and SpringBoard ended it with `Watchdog Violation (0x8BADF00D)`; the corpse limit only took its report.
+  The policy disables `com.apple.accessibility.axassetsd` (`daemons.toml`
+  group `loops`); 0053 writes the same into a Data store made from an older seed: `oneios-disable-jobs=LABEL[,...]`
+  (default `com.apple.accessibility.axassetsd`, `-` none), `<false/>` becomes `<true/>`, a missing entry is added,
+  a missing file is written. Console: `oneios-jobs: com.apple.accessibility.axassetsd: disabled in disabled.plist
+  (it was not)`, later boots `... disabled there already`. Cost: Accessibility's downloadable assets (more voices,
+  Sound Recognition, Magnifier, Back Tap and image-caption models); the built-in voices stay. Settings' Spoken
+  Content may still start the units when it lists voices. Built (HOSTED_OUT=crashes); the plist logic run on the Mac.
+- Checked in `c3` (kernel.kc 29bef797, with 0047 and 0048): `oneios-features: CoreLocation/CLAutoCohort: off
+  (written)`; locationd ran as pid 59 for the whole session (570 s) with no exception; `SystemOS volume answered as
+  authenticated` and SafariConfigurationSubscriber started.
 
 ## Written and never run
 
@@ -481,6 +599,86 @@ whose start, `oneios_audio_start` (`audio/OneiOSAudio.c`), is the last call of `
 hosted kernel had no audio device. Log lines, boot arguments and what was measured: `docs/hardware.md` section 6.
 On the phone since `kernel.kc` `66faa3e8` (main 924a0d9, agent prelink's sessions of 2026-11-12): `ONEIOS AUDIO: on`,
 both devices published, audiomxd opens them and plays (`docs/hardware.md` section 6, "In a session").
+
+### The Actuator device (media, 2026-11-12)
+
+The archive also stages a third IOAudio2Device into `DroidVMAudio.cpp`: UID `Actuator` (VirtualAudio's
+`VirtualAudioDevice_Actuator`: Core Haptics, UI and keyboard taps), mono S16 at 48 kHz, the speaker's engine, whose
+periods go to `drivers/haptics` (`oneios_haptic_actuator_play`, the host's actuator) instead of virtio-snd. Published
+only when `drivers/haptics` has the host's actuator (`oneios-actuator=0`: never; `oneios-actuator-channels=2`:
+stereo). `drivers/haptics` publishes `/product/haptics closed-loop` only when the device exists. Built
+(`HOSTED_OUT=media`); not run. `docs/hardware.md` section 5 has the design, the log lines and the way back.
+
+## 0052-rt-computation-held.patch (media, 2026-11-12)
+
+`thread_policy_set(THREAD_TIME_CONSTRAINT_POLICY)` (osfmk/kern/thread_policy.c) refuses a computation above
+`max_rt_quantum`, 50 ms in the guest's ticks. The guest's counter is the phone's (19.2 MHz): 50 ms is 960000 ticks.
+iOS's audio server asks 1200000 ticks (50 ms at Apple's 24 MHz) for the HAL's I/O thread when its buffer is about
+60 ms or more (`configure_thread_for_realtime - thread_policy_set failed. Cycle Size: 1536000 Thread Parameters:
+1536000 1200000 1536000 1` in every boot's iOS log); the I/O thread then stopped after 0 frames, and each system
+sound waited out the mixer's 3 s timeout. With the patch a computation above the maximum is held to it when the
+constraint is at least the maximum, as the code below already raises a computation under half the constraint. After
+macOS-DroidVM's xnu-12377 patch 0039 (the same board clock). The guest's scheduler only: xnuhost's vCPUs are normal
+Linux threads, and no host thread changes its policy. Built (`HOSTED_OUT=media`); not run. `docs/hardware.md`
+section 6 ("Very slow" playback).
+
+## 0056-camera-plugin-mount.patch (camera, 2026-11-12)
+
+- **Why.** CMCapture 27 loads the camera's FigCaptureDevice maker itself: when its probe (`fcc_probeCameraDriverService`)
+  finds a service of class `AppleH9CamIn` it `dlopen()`s `/System/Library/MediaCapture/H9ISP.mediacapture` and calls
+  `H9ISPCaptureDeviceCreate` (read in the 24A446 cache; `userland/camera/README.md`). The drivers archive publishes
+  `AppleH9CamIn` (`drivers/camera/OneiOSCameraService.cpp`). The folder is empty on the sealed OS volume, so this
+  patch shows the Data seed's `/private/var/oneios/addons/MediaCapture` over it: a read-only bindfs union made with
+  UniXNU's `native_gpu_addon_mount` (scratch offset 0xa00), called in `native_gpu_addon_prepare` before 0036's call.
+- **Log.** `oneios-camera-addon: /private/var/oneios/addons/MediaCapture over /System/Library/MediaCapture: stage N,
+  status E`. Stage 5 status 0: mounted, `H9ISP.mediacapture` visible. Stage 1 status 2: this Data store has no
+  plug-in (an older seed): nothing is mounted, and CMCapture logs that it could not load the dylib.
+- **Off.** `oneios-camera-plugin=0`: no mount (and no AppleH9CamIn). `sheng-gpu-addon=0` skips it too (that function
+  returns early).
+- **State.** Built on the Mac (`HOSTED_OUT=cam`, on the series through 0051: before 0052 landed); not run.
+
+## 0057-swap-folder.patch (mem, 2026-11-12)
+
+- **Why.** XNU's compressor swaps to `/private/var/vm/swapfileN` (`SWAP_FILE_NAME` in
+  `osfmk/vm/vm_compressor_backing_store_internal.h`, opened `O_CREAT | O_TRUNC | O_NOFOLLOW_ANY` by
+  `vm_swapfile_open`, `bsd/vm/vm_compressor_backing_file.c`). Nothing in the kernel makes the folder: iOS's own Data
+  volume has it, the image set's seeds did not. In the 15:35 session (phone, 2026-11-12) every swap file failed
+  ("Failed to open swap file", errno 2 and 30) while `VM_pageout_scan` took about 95% of a vCPU. The first try is
+  `vm_compaction_swapper_do_init` at the pageout scan's first wake (it opens `swapfile0` once and marks itself done
+  either way); after that the creation thread tries again 15 s after each failure (`vm_swapfile_creation_delay_ns`),
+  so swap starts once the folder is there.
+- **What.** (1) `oneios_swap_folder` in `kern_exec.c`, called last in the pre-launchd list (after 0053): makes
+  `/private/var/vm` root:wheel 0755 with 0004's `oneios_kern_mkdir`, or gives a folder there that owner and mode;
+  anything else there (a file, a link) is left alone and said. `oneios-swap-folder=0`: nothing done. The roottweak's
+  `data_layout` puts the folder in new seeds too. (2) `oneios_swapfile_failed` in `vm_compressor_backing_file.c`,
+  after XNU's own line: for each errno the first time, then every 64th failure, the path, the seconds since boot, and
+  the deepest folder of the path that is there with its volume and whether that is read-only.
+- **Log.** `oneios-swap: /private/var/vm: made, root:wheel 0755 (0), on /private/var (apfs, read-write)` (later boots:
+  `there already`). If a swap file still fails: `oneios-swap: /private/var/vm/swapfile0: errno N at S s (failure K);
+  DIR is there, on MOUNT (TYPE, read-only|read-write)`. Then XNU's `VM Swap Subsystem is ON` stays as before, and swap
+  in use shows as files in `/private/var/vm` and as `vm.swapusage` (`sysctl vm.swapusage` in iOS).
+- **errno 30 (EROFS), not settled.** `vnode_open` with `O_CREAT` gives EROFS when the folder exists on a read-only
+  volume. Two explanations fit and the session's log (on the Mac) has not been read for the order of the two errors:
+  the pageout scan's first try before the Data volume is mounted at `/private/var` (the sealed root's
+  `/private/var/vm`), or a Data volume that became read-only later. The failure line names the volume, so the next
+  boot decides it. [I]
+- **State.** Written on the Linux PC (2026-11-12): every one of the 23 patches of the build's series that touch
+  `kern_exec.c` (arch, OS, device, hosted through 0056) and then this one apply with `git apply` to xnu-12377.121.6's
+  file, and the swap file hunk to its `vm_compressor_backing_file.c`. **Not compiled**: this PC cannot set up the
+  Linux XNU toolchain (no libdispatch, no root); the Mac builds it. Not run.
+
+## 0049-wifi-association-event.patch (radio2, 2026-11-12)
+
+`kev_post_msg` (bsd/kern/kern_event.c) refuses an event that does not fit one mbuf without a cluster (`MLEN`), with
+`EMSGSIZE`. iOS 27's wifid reads a 540-byte record from the association event (ASSOC_DONE: ten 52-byte access point
+records, the join's result at 0x214 and a flag that it is valid at 0x218; an empty event is not safe on 24A446).
+The hosted Wi-Fi driver (`net/`) posts its events as kernel events, because it has no IO80211Family user client,
+the pipe these events take on Apple's hardware. On the phone on 2026-11-12 the supplicant joined an open network in
+3 s, the driver posted SSID_CHANGED, BSSID_CHANGED and LINK_CHANGED (32 bytes) and got `EMSGSIZE` (40) for
+ASSOC_DONE: wifid never learned of the join and Settings stayed at "connecting". With the patch an event of
+`KEV_VENDOR_APPLE` and `KEV_IEEE80211_CLASS` may be as long as an mbuf cluster (`MCLBYTES`) and is then built in one
+(`m_getcl`); every other event keeps the limit. It is UniXNU-sheng's `sheng-wifi-association-event.patch`, under
+`#if XNU_HOSTED`. Built (`HOSTED_OUT=radio`); not yet run.
 
 ## net/: the Wi-Fi, en0 on the phone's radio (radio, radio2, 2026-11-12)
 

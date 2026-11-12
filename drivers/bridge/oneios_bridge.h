@@ -34,6 +34,12 @@ int  oneios_haptic_start(void);
 int  oneios_haptic_vib(uint32_t ms, uint32_t intensity, uint32_t frequency_hz);
 void oneios_haptic_make_node(void);
 int  oneios_haptic_publish_closed_loop(void);
+// The Actuator IOAudio2Device of the audio archive (DroidVMAudio.cpp as staged): ready = may publish it;
+// published = its decision, once; running = its StartIO/StopIO; play = one engine period, returns the frames taken.
+bool oneios_haptic_actuator_ready(void);
+void oneios_haptic_actuator_published(bool yes);
+void oneios_haptic_actuator_running(bool on);
+uint32_t oneios_haptic_actuator_play(const int16_t *frames, uint32_t count, uint32_t channels);
 void oneios_vibrator_start(void);
 void oneios_vibrator_key(int key, int down);      // 0 power, 1 volume up, 2 volume down
 

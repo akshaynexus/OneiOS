@@ -663,6 +663,37 @@ static void guest_restart(void)
   LOGE("restart: exec /proc/self/exe: %s", strerror(errno));
 }
 
+// The guest's RAM as chosen (config.c, ram=auto), once at the start.
+static void ram_choice_log(void)
+{
+  if (!config.ram_auto_total) { LOGI("memory: the guest gets %llu MiB (ram=%s)", (unsigned long long)(config.ram_bytes >> 20), config.ram_given ? "SIZE" : "auto: no MemTotal, 4 GiB"); return; }
+  uint64_t total = config.ram_auto_total, floor = (uint64_t)config.ram_host_floor;
+  LOGI("memory: ram=auto: host MemTotal %llu MiB, MemAvailable %llu MiB; the guest gets %llu MiB: the least of %d%% (%llu MiB) and "
+       "MemTotal less the host's floor of %llu MiB (%llu MiB), in 256 MiB steps", (unsigned long long)(total >> 20),
+       (unsigned long long)(config.ram_auto_available >> 20), (unsigned long long)(config.ram_bytes >> 20), config.ram_percent,
+       (unsigned long long)(total / 100 * (unsigned)config.ram_percent >> 20), (unsigned long long)(floor >> 20),
+       (unsigned long long)((total > floor ? total - floor : 0) >> 20));
+}
+
+// Every host-mem-log seconds: what the host has left and how much of the guest's RAM it holds (the memfd's pages that
+// were touched; the guest's free pages that were never touched, or were given back with ram_discard, are not). The
+// host's low-memory killer may end xnuhost when the host runs out: then the watcher returns to One UI. Read only.
+static void host_memory_tick(bool now)
+{
+  static struct timespec last;
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  if (config.host_mem_log <= 0 && !now) return;
+  if (!now && last.tv_sec && t.tv_sec - last.tv_sec < config.host_mem_log) return;
+  last = t;
+  uint64_t total = 0, available = 0;
+  struct stat st;
+  uint64_t held = g_mem.fd >= 0 && fstat(g_mem.fd, &st) == 0 ? (uint64_t)st.st_blocks * 512 : 0;
+  if (xh_meminfo(config.ram_meminfo, &total, &available)) return;
+  LOGI("memory: host MemAvailable %llu MiB of %llu MiB; the guest's RAM holds %llu of %llu MiB", (unsigned long long)(available >> 20),
+       (unsigned long long)(total >> 20), (unsigned long long)(held >> 20), (unsigned long long)(g_mem.size >> 20));
+}
+
 int main(int argc, char **argv)
 {
   start_argv = argv;
@@ -676,6 +707,7 @@ int main(int argc, char **argv)
   xh_log_open(NULL, config.log_level);
   LOGI("xnuhost: session ABI %d, mode %s, pid %d", config.session_abi, config.mode, getpid());
   host_facts();
+  if (!config.selftest) ram_choice_log();
   if (config.selftest) {
     // What must hold on a phone before anything else is worth trying.
     bool ok = g_info.host_page_size <= 16384 && g_info.user_va_bits >= 39 && (g_info.features & XH_FEATURE_PAC);
@@ -732,6 +764,7 @@ int main(int argc, char **argv)
       xh_stop(XH_HALT_OFF, 0, why);
     }
     xh_perf_tick();                         // "perf:" lines every perf-log seconds
+    host_memory_tick(false);                // "memory: host MemAvailable" every host-mem-log seconds
     // Until the guest's display driver presents, show what its kernel console draws.
     xh_display *d = xh_display_get();
     uint8_t *fb = xh_ram(boot_fb_pa, (uint64_t)fb_width * fb_height * 4);
@@ -742,6 +775,7 @@ int main(int argc, char **argv)
   }
 
   LOGI("stopping: %s (reason %u, code %u)", stop_state.why, stop_state.reason, stop_state.code);
+  host_memory_tick(true);
   for (unsigned i = 0; i < g_ncpu; i++)
     LOGI("cpu%u: %s, %llu interrupts (%llu timer, %llu IPI acknowledged, %llu re-raised), %llu device accesses, %llu emulated instructions, %llu task traps", i,
          g_vcpu[i].started ? "started" : "never started",

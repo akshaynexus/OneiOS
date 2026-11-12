@@ -113,6 +113,15 @@ offset here. Ten fingers by slot and tracking id; a finger that comes down in th
 (the Home swipe); edge contacts carry `kIOHIDDigitizerEventFromEdgeTip` (NativeHidInput's wrapper of the event
 driver's dispatch), without which SpringBoard's edge gestures ignore them.
 
+**Contact identifiers stay below 30 (2026-11-12).** backboardd drops every touch whose HID Contact Identifier is 30
+or more: iOS's own log (the Data store's unified log, read on the Mac with Mandiant's macos-UnifiedLogs) has
+`NN >= MAX_PATH_COUNT` from `TouchEvents` 8,711 times in the 12:30 session, NN 50..120, and the lowest dropped value
+of every session since 2026-11-11 is 30. The transport gave `1 + tracking id % 120`, and Linux's tracking ids grow
+with every contact for as long as the phone runs, so most touches were dropped, and at times every one: the
+sessions where touch "worked only after a power-key wake" were the times the counter sat below 30. The staged
+transport now gives each new finger the next free identifier of 1..28 (rotating, so the next finger of a slot gets
+another one), and 29 to the pointer (`build-oneios-hid.py`, `stage_transport`).
+
 ## Which event driver (lead, 2026-11-11)
 
 The collection would give an `IOHIDInterface` of a Consumer or Digitizer device to the DriverKit event driver

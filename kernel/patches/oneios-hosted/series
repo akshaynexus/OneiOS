@@ -125,6 +125,52 @@
 # perf: jobs the Data store's disabled.plist disables but that must run are enabled again before launchd
 # (oneios-enable-jobs=, default com.apple.analyticsd: without it CoreAnalytics' clients retry in a loop; backboardd 217%).
 0044-enable-jobs.patch
+# perf: a TLB lock per user pmap (the kernel pmap keeps the global one): a fill, flush or copy of one task no longer
+# waits for another's (the global lock was waited for up to 1.5 vCPUs on the phone); a flush of the shared region goes
+# only to the tasks that filled pages in its 32 MiB blocks; oneios-perf says where the unmaps come from.
+0045-tlb-lock-per-pmap.patch
+# perf: oneios-fault-around=N (off by default): a fill also maps the other pages of its N-page window that the tables
+# already allow, as a TLB may.
+0046-fault-around.patch
+# crashes: the SystemOS volume (the OS cryptex) answers FSIOC_AUTH_FS for AMFI as 0032's App volume does, once
+# native_owner_cache_prepare has checked it: SafariConfigurationSubscriber's own self launch constraint
+# (on-system-volume or on-authorized-authapfs-volume) failed with c[4]p[1]m[1]e[0] at each launch.
+0047-systemos-authenticated.patch
+# crashes: feature flags off in the Data store's override files before launchd (oneios-feature-off=DOMAIN/FLAG,...,
+# default CoreLocation/CLAutoCohort): with CoreLocation's automatic cohorts locationd crash-looped (pc 0 in
+# _dispatch_lane_serial_drain, 17 times a session); vphone-cli turns the flag off for iOS 27 guests.
+0048-feature-flags-off.patch
+# radio2: an IEEE 802.11 kernel event of Apple's may fill an mbuf cluster (kev_post_msg's limit is one mbuf, MLEN).
+# iOS 27's ASSOC_DONE event carries a 540-byte record that wifid reads: with the limit the post returned EMSGSIZE,
+# wifid never learned that a join was done and Settings stayed at "connecting" (the phone, 2026-11-12, an open
+# network joined by the supplicant in 3 s). The Wi-Fi driver's events are kernel events because it has no
+# IO80211Family user client. After UniXNU-sheng's sheng-wifi-association-event.patch; every other event keeps MLEN.
+0049-wifi-association-event.patch
+# perf: fault-around once per window until the task's next flush of it (the refill after each vm_fault did its window
+# again: three maps per fault on the phone with oneios-fault-around=8).
+0050-fault-around-once.patch
+# perf: oneios-perf also says where kernel_task's CPU goes: its threads' time and the 8 busiest, by name or continuation
+# (a stall showed kernel_task at 127 %).
+0051-kernel-task-cpu.patch
+# media: a realtime computation past max_rt_quantum is held to it, not refused. The guest's counter is the phone's
+# 19.2 MHz, where 50 ms is 960000 ticks, and iOS's audio server asks 1200000 (50 ms at 24 MHz) for an I/O thread with a
+# buffer of about 60 ms or more: thread_policy_set failed, the HAL's I/O thread stopped after 0 frames, and every system
+# sound timed out after 3 s (iOS's log of the 2026-11-12 sessions). After macOS-DroidVM's xnu-12377 patch 0039.
+0052-rt-computation-held.patch
+# crashes: launchd jobs disabled in the Data store's disabled.plist before launchd (oneios-disable-jobs=LABEL,...,
+# default com.apple.accessibility.axassetsd), 0044's counterpart: axassetsd enumerates the speech audio units, which
+# were killed in dyld in bursts of four (SIGKILL) and filled the corpse limit.
+0053-disable-jobs.patch
+# camera: the capture plug-in reaches cameracaptured. CMCapture 27 dlopen()s /System/Library/MediaCapture/H9ISP.mediacapture
+# when its probe finds AppleH9CamIn (drivers/camera/OneiOSCameraService.cpp); the Data seed's
+# /private/var/oneios/addons/MediaCapture is shown over that empty sealed folder, read-only, as 0031 shows the Metal
+# plug-in (oneios-camera-plugin=0: no mount). Numbered 0056 to stay clear of the 0052-0055 other agents had open.
+0056-camera-plugin-mount.patch
+# mem: the swap files' folder. XNU's compressor swaps to /private/var/vm/swapfileN and never makes the folder; the
+# image set's seeds had none, so every swap file failed ("Failed to open swap file 2" and 30, phone 2026-11-12) and the
+# pageout scan took ~95% of a vCPU. Made root:wheel 0755 before launchd in every Data store (oneios-swap-folder=0: not);
+# each failure to open a swap file says which volume its folder was on and whether that was read-only (errno 30).
+0057-swap-folder.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # net/build-oneios-net.py), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and

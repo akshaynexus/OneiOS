@@ -2,8 +2,9 @@
 #define _GNU_SOURCE
 #include "xhd.h"
 #include <errno.h>
-#include <poll.h>
+#include <stdio.h>
 #include <string.h>
+#include <poll.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -135,9 +136,11 @@ int xhd_drain(int fd, const struct xhd_frame *frame, struct xhd_rect *damage)
     ssize_t n = recv(fd, &m, sizeof m, MSG_DONTWAIT);
     if (n < 0) {
       if (errno == EINTR) continue;
-      return errno == EAGAIN || errno == EWOULDBLOCK ? 0 : -1;
+      if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+      fprintf(stderr, "oneios-display: reading xnuhost's socket failed: %s\n", strerror(errno));
+      return -1;
     }
-    if (n == 0) return -1;
+    if (n == 0) { fprintf(stderr, "oneios-display: xnuhost closed the socket\n"); return -1; }
     if (n != sizeof m || memcmp(m.magic, "XHDF", 4)) continue;      // not a flush: ignored
     struct xhd_rect r = { m.a, m.b, m.c, m.d };
     if (xhd_rect_clip(&r, frame->width, frame->height)) xhd_rect_union(damage, &r);

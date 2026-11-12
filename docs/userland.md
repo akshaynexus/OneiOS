@@ -73,12 +73,13 @@ and vphone-cli 2.14.2's `Research/Guest` notes, which were measured on iOS 27.0/
 | `launchd-crash-policy` | `rw` only: `_PanicOnCrash` renamed, `RecoverOnCrash` removed for backboardd, SpringBoard, configd, runningboardd, so a crash loop does not restart the guest during bring-up | iOSPlus10 `scripts/laurel/ios26-root-spec.py`, `docs/laurel_sprout/ios26-backboardd.md` |
 | `host-services` | Places `/private/var/oneios`: `bin/` (helpers), `services.d/*.conf`, `enabled/`, `identity.expect`. `sealed`: the kernel starts `bin/oneios-init`. `rw`: a launchd job `com.oneios.init` | ownervisor (the manager outside launchd), droidvm `add-ownervisor-data.py`; job keys from iOSPlus10 `scripts/net/root-add-ssh.py` |
 | `metal-plugin` | Places a built plugin bundle with `<Name>.clients` (who gets the device) and `<Name>.publish`. `sealed`: `/private/var/oneios/addons/Extensions`, shown over `/System/Library/Extensions` by a kernel bind mount. `rw`: in `/System/Library/Extensions` | UniXNU `scripts/add-gpu-plugin-data.py`, `patches/xnu-12377/zzy-native-gpu-addon-mount.patch`; droidvm `build-droidvm-data-seed.py` (client list); iOSPlus10 `scripts/laurel/root-add-metal-ios26.sh` |
+| `camera-plugin` | Places the capture plug-in (`userland/camera/build.sh`, `--camera-plugin DIR`) where CMCapture 27 loads it for the kernel's `AppleH9CamIn`. `sealed`: `/private/var/oneios/addons/MediaCapture/H9ISP.mediacapture`, shown over `/System/Library/MediaCapture` by hosted 0056 (`addon_mounts`). `rw`: in `/System/Library/MediaCapture`. Its CDHash goes to the owner trust list; the contract's `camera` says what the kernel must publish | read in CMCapture of the 24A446 cache (`fcc_probeCameraDriverService`, `FigCaptureGetCaptureDeviceCreateFunction`); HakiOS/iOSPlus10 for the device object |
 | `app-cryptex` | `sealed`: nothing copied; the contract asks the kernel to mount the image set's `app.img` at `/private/preboot/Cryptexes/App`. The kernel answers `FSIOC_AUTH_FS` for that mount, so its programs pass AMFI's launch constraints (`0032-app-cryptex-authenticated.patch`). With `--appos DIR` the files are carried on Data as droidvm does | droidvm `scripts/add-app-cryptex-data.py`, UniXNU `zzyb-native-cryptex-os-view.patch` |
 | `staged-apps` | The removable system apps stay in `/private/var/staged_system_apps`; the kernel shows them in `/Applications` (hosted `0035`: on unless `owner-staged-apps=0`; before it nothing did, and the phone's Home Screen was empty). `rw`: moved there | droidvm `ipados27-bringup.patch` (owner-staged-apps); iOSPlus10 `scripts/ios16/root-finish.sh` |
 | `preferences` | Section 3.1 | see there |
-| `data-layout` | `containers/{Bundle,Data/System,Shared/SystemGroup,Temp}`, `keybags` (0700, empty), `mobile/tmp`, `tmp` (1777), `run`; logd's stores `db/{diagnostics,uuidtext,diagnostics/timesync}` with `.migrated`, owner 272. Removes a MobileGestalt cache carried in the seed | UniXNU `scripts/make-data-seed.py`, `prepare-owner-data-fixture.py`; ios-sweet `mkiosroot.sh`, `sweet-root-tweaks.py`; iOSPlus10 notes (stale cache) |
+| `data-layout` | `containers/{Bundle,Data/System,Shared/SystemGroup,Temp}`, `keybags` (0700, empty), `mobile/tmp`, `tmp` (1777), `run`, `vm` (root 0755: XNU's compressor swaps to `/private/var/vm/swapfileN` and never makes the folder; without it every swap file failed, 2026-11-12; an older store gets it from the kernel, hosted 0057); logd's stores `db/{diagnostics,uuidtext,diagnostics/timesync}` with `.migrated`, owner 272. Removes a MobileGestalt cache carried in the seed | UniXNU `scripts/make-data-seed.py`, `prepare-owner-data-fixture.py`; ios-sweet `mkiosroot.sh`, `sweet-root-tweaks.py`; iOSPlus10 notes (stale cache) |
 | `keybag` | Off: `keybags/` stays empty, which is what the kernel's key store expects (`kernel/patches/oneios-hosted/keystore`: UniXNU's AppleKeyStoreState, system keybag handle 0 always loaded, no passcode; launchd's keybag task then ends with `DONE MKB_INIT`). `--plain-keybag` writes ios-sweet's plain `systembag.kb` for a kernel that reads one | UniXNU `scripts/probe-keybag-bypass.py`; ios-sweet `mkiosroot.sh` |
-| `feature-flags` | `rw` only: ExtensionKit `enforce_xpc_cache_code_signing` off, or installd and lsd refuse every app extension once the extension cache's signature no longer holds | iOSPlus10 `scripts/ios16/root-tweaks-extra.py` |
+| `feature-flags` | Both layouts: `CoreLocation/CLAutoCohort` off in the Data volume's override `preferences/FeatureFlags/Domain/CoreLocation.plist` (XML, root 0644; `/Library/Preferences/FeatureFlags` on the guest, read after the root's defaults): with CoreLocation's automatic cohort queues locationd crash-looped, 17 times a session (pc 0 from `_dispatch_lane_serial_drain`; `kernel/patches/oneios-hosted/README.md`, 0048). Cost: locationd's silos keep their own queues. A Data store made from an older seed gets the entry from the kernel (hosted 0048). `rw` only: ExtensionKit `enforce_xpc_cache_code_signing` off, or installd and lsd refuse every app extension once the extension cache's signature no longer holds | vphone-cli `patch-locationd-cohorting` (iOS 27); droidvm `PROGRESS.md` 11-02 (Cohort:0 queue); iOSPlus10 `scripts/ios16/root-tweaks-extra.py` |
 | `identity` | Writes the device tree identity and the display into the contract; checks the root has jetsam properties for the target type | UniXNU `docs/guide/mobilegestalt.md`; droidvm `ipados27/scripts/make-droidvm-adt.py` |
 | `kernel-features` | `sealed`: lists what the kernel must do, by UniXNU's switch names | droidvm `package/DroidVMBootArgs27.c`, `ipados27/board.toml` |
 
@@ -112,9 +113,10 @@ The file holds every label with its reason; `roottweak daemons` prints it. Summa
 | replace | 5 | Disabled; the host does the job: watchdogd (no watchdog device; the switch has its dead-man timer), the four OTA jobs (updates are a new image set) | UniXNU `docs/guide/skip-setup.md`; droidvm |
 | disable: base | 128 | Siri and intelligence, Find My, Wallet/NFC/SE, Watch, Home, Maps background, iCloud and iMessage sync, ads, telemetry, accessory firmware | vphone-cli `base27`: -29 % memory, -26 % idle CPU, -60 % idle writes, no feature lost |
 | disable: extra, signin, hardware | 4 + 2 + 2 | momentsd, coreduetd, modelcatalogd, mstreamd; the sign-in prompts; aned (no Neural Engine), fairplayd.H2 (no FairPlayIOKit kext: its services hang lockdownd and the apps behind it) | vphone-android; droidvm `DroidVMBootArgs27.c`; iOSPlus10 |
+| disable: loops | 1 | axassetsd: it lists the speech synthesis audio units (SiriAUSP, MacinTalkAUSP, MauiAUSP, KonaSynthesizer), which were started four at a time and killed by SIGKILL 3-4 s later, still in dyld, every 8-10 s; their corpses filled the kernel's limit. Cost: Accessibility's downloadable assets. A Data store from an older seed gets it from the kernel (hosted 0053) | this phone, 2026-11-12 (`kernel/patches/oneios-hosted/README.md`, 0053) |
 | off by default | store 2, fewest 8, bringup-26 9 | Each costs a feature or is unverified on 27; `--group NAME` | vphone; iOSPlus10 iOS 26 |
 
-141 labels are disabled by default. analyticsd moved from base to keep on 2026-11-12: without it CoreAnalytics'
+142 labels are disabled by default (axassetsd added on 2026-11-12, group `loops`). analyticsd moved from base to keep on 2026-11-12: without it CoreAnalytics'
 clients retry each synchronous send with a new connection (backboardd at 217% after a brightness change, on the
 phone); a Data store made from an older seed gets it enabled by the kernel (hosted 0044). One open disagreement: droidvm disables **CommCenter** on the (Wi-Fi) iPad,
 vphone keeps it on the iPhone because SpringBoard reconnects to it every second without it. It is kept. If
@@ -272,7 +274,8 @@ scale (3.27 would give 440 points) is not something UIKit has. So 3 stays the de
   launchd's bootstrap port (droidvm `spawn_service_manager`, `droidvm_fix_ownervisor_bootstrap`).
 - `launch_policy.force_enabled`: disabled jobs that will run anyway.
 - `addon_mounts`: read-only bind mounts after Data is mounted (the Metal plugin over `/System/Library/Extensions`:
-  `kernel/patches/oneios-hosted/0031-gpu-addon-mount.patch`, on without a boot argument, `docs/gpu.md` 5.1).
+  `kernel/patches/oneios-hosted/0031-gpu-addon-mount.patch`, on without a boot argument, `docs/gpu.md` 5.1; the
+  capture plug-in's folder over `/System/Library/MediaCapture`: `0056-camera-plugin-mount.patch`).
 - `app_cryptex`, `staged_apps`: the two views of section 3.
 - `kernel_features`: launch policy, service manager, no launch constraints for owner binaries, owner
   trust module, data-protection class in an xattr, the key-store stand-in (no passcode, wrap/unwrap),
@@ -321,6 +324,13 @@ overrides). Also read there: `<Name>.publish` and `<Name>.primelist` are looked 
 is where they are placed; `<Name>.clients` is read by the kernel's GPU driver, not the plug-in; and the
 plug-in's debug switches are fixed paths under `/private/var/ngpu/debug`, not under `/private/var/oneios`.
 GPU tests once it runs: droidvm `package/metalcheck`, `gfxprobe`, `gfxbench`.
+
+**It also carries backboardd's brightness mode** (since 2026-11-12): `build.sh stage` appends
+`drivers/brightness/BacklightMode.inc` to the staged `NativeAdrenoMetalPlugin.mm`. In backboardd only, its constructor
+gives CoreBrightness's `-[BrightnessSystemInternal initBLControl:]` mode 1 (BLControl) where vmm-present selects 3
+(VMBLControl, which never reaches the backlight service). It runs because the plug-in loads on backboardd's main thread
+before that thread instantiates BrightnessSystem; a session without the plug-in keeps VMBLControl. `oneios-bl-mode=0`
+in the kernel's boot arguments turns it off. Why and what to look for: `drivers/brightness/README.md`.
 
 ## 8. What launchd, backboardd and SpringBoard need
 

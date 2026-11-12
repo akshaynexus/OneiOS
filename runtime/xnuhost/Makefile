@@ -161,13 +161,21 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	  timeout 30 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M \
 	     --display none --no-input --width 64 --height 64 2>&1 | tee $(A)/check.log; \
 	  grep -q 'TESTKERNEL: all passed' $(A)/check.log && \
+	  echo "check-arm64: ram=auto on a host of 3 GiB (ram-meminfo): the guest gets 1536 MiB" && \
+	  printf 'MemTotal:        3145728 kB\nMemAvailable:    2097152 kB\n' > $(A)/meminfo-3g && rm -f $(A)/testdata/data.img && \
+	  { timeout 30 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --set ram-meminfo=$(A)/meminfo-3g \
+	     --display none --no-input --width 64 --height 64 > $(A)/ramauto.log 2>&1; \
+	    grep -q 'ram=auto: host MemTotal 3072 MiB, MemAvailable 2048 MiB; the guest gets 1536 MiB' $(A)/ramauto.log && \
+	    grep -q 'TESTKERNEL: all passed' $(A)/ramauto.log || { grep -E 'memory|FAIL|TESTKERNEL' $(A)/ramauto.log | tail -8; echo "check-arm64: ram=auto failed"; false; }; } && \
 	  echo "check-arm64: a guest that keeps restarting: xnuhost starts again in place 8 times, then exit 3" && \
 	  { XNUHOST_RUNNER="$(ARM64_RUN)" timeout 60 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 1 --ram 256M \
 	     --display none --no-input --width 64 --height 64 --boot-args testkernel-restart > $(A)/restart.log 2>&1; code=$$?; \
 	    [ $$code = 3 ] && [ "$$(grep -c 'TESTKERNEL: restart' $(A)/restart.log)" = 9 ] || { tail -5 $(A)/restart.log; echo "check-arm64: restart: exit $$code"; false; }; }; fi
 
 # The trap path's costs (docs/booter.md 2.6a): the test kernel's benchmarks, then xnuhost's "perf:" report at the stop.
-# BENCH_SET="--set spin-host=5 ..." tries other settings. Native arm64 Linux only (qemu-user has no seccomp).
+# BENCH_SET="--set spin-host=5 ..." tries other settings. Native on an arm64 Linux host; on an x86_64 PC under
+# qemu-aarch64, where the times are qemu's (about 10x, no seccomp: `svc #0x80` rewritten by text_fixup): compare
+# runs on the same host only. In the Mac's container: add -o build/android/xnuhost -o build/android/testkernel.elf.
 bench-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	@rm -f $(A)/testdata/data.img
 	timeout 120 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M \

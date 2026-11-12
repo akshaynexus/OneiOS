@@ -402,6 +402,34 @@ def metal_plugin(cx):
            ('' if cx.rw else '; shown over /System/Library/Extensions by the kernel (addon_mounts)'))
 
 
+def camera_plugin(cx):
+    """Places the capture plug-in where CMCapture 27 loads it for the kernel's AppleH9CamIn:
+    /System/Library/MediaCapture/H9ISP.mediacapture (userland/camera/README.md)."""
+    source = cx.options.get('camera_plugin')
+    if not source:
+        cx.say('off', 'camera plugin', 'no --camera-plugin DIR: iOS finds no camera (CMCapture loads no create function)')
+        return
+    name = 'H9ISP.mediacapture'
+    host = os.path.join(source, name) if os.path.isdir(source) else source
+    if os.path.basename(host) != name or not os.path.isfile(host):
+        raise TreeError(f'{source}: no {name} (the output of userland/camera/build.sh)')
+    if cx.rw:
+        tree, base, guest = cx.root, 'System/Library/MediaCapture', '/System/Library/MediaCapture'
+    else:
+        tree, base, guest = cx.data, f'{ONEIOS}/addons/MediaCapture', f'{ONEIOS_GUEST}/addons/MediaCapture'
+    tree.mkdir(base, ROOT, 0o755)
+    _install_binary(cx, tree, host, f'{base}/{name}', 0o755)
+    if not cx.rw:
+        cx.contract['addon_mounts'].append({
+            'source': guest, 'over': '/System/Library/MediaCapture', 'type': 'bindfs', 'union': True, 'readonly': True,
+            'how': 'mounted by the kernel before launchd (hosted 0056; oneios-camera-plugin=0 turns it off)'})
+    cx.contract['camera'] = {'plugin': f'/System/Library/MediaCapture/{name}', 'symbol': 'H9ISPCaptureDeviceCreate',
+                             'kernel': 'an IOService of class AppleH9CamIn (CMCapture probes for it by IOServiceMatching) '
+                                       'and its user client AppleH9CamInUserClient for the frames'}
+    cx.say('applied', 'camera plugin', f'{name} in {guest}' +
+           ('' if cx.rw else '; shown over /System/Library/MediaCapture by the kernel (addon_mounts, hosted 0056)'))
+
+
 # ---- cryptexes and the removable system apps -----------------------------------------------------------------------
 def _copy_tree(cx, tree, source, base):
     """Copies an extracted volume into a tree: files, directories and links, modes from the source."""
@@ -583,11 +611,14 @@ def data_layout(cx):
     need('mobile/tmp', MOBILE, 0o755)
     need('tmp', ROOT, 0o1777)
     need('run', ROOT, 0o755)
+    # the compressor's swap files (/private/var/vm/swapfileN, XNU's SWAP_FILE_NAME): XNU never makes the folder, and
+    # without it every swap file failed (ENOENT, phone 2026-11-12). The kernel makes it in older stores (hosted 0057).
+    need('vm', ROOT, 0o755)
     # logd stores with their markers, or logd fails with "Failed to migrate directory" (ios-sweet mkiosroot.sh)
     for path, mode in (('db/diagnostics', 0o751), ('db/uuidtext', 0o755), ('db/diagnostics/timesync', 0o755)):
         need(path, LOGD, mode)
         cx.data.write(f'{path}/.migrated', b'', LOGD, 0o644)
-    cx.say('applied' if made else 'kept', 'data layout', f'made {", ".join(made)}' if made else 'containers, keybags, tmp, logd stores')
+    cx.say('applied' if made else 'kept', 'data layout', f'made {", ".join(made)}' if made else 'containers, keybags, tmp, vm, logd stores')
 
     # A MobileGestalt cache from another identity keeps its answers (iOSPlus10 notes 5338-5343): none is carried.
     cache = 'containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist'
@@ -613,9 +644,25 @@ def keybag(cx):
     cx.say('applied' if changed else 'kept', 'systembag.kb', 'plain property-list keybag, root 0600')
 
 
+# Feature flags turned off on the Data volume in both layouts: /private/var/preferences/FeatureFlags/Domain/D.plist is
+# /Library/Preferences/FeatureFlags, the override libsystem_featureflags reads after the root's defaults. The kernel
+# writes the same entries into a Data store made from an older seed (hosted 0048, oneios-feature-off).
+DATA_FLAGS_OFF = {
+    # locationd crash-looped (17 times a session, phone 2026-11-12): a serial queue drained an item left on another
+    # thread's stack (pc 0 from _dispatch_lane_serial_drain+0x118). vphone-cli turns this off for iOS 27 guests
+    # (patch-locationd-cohorting); droidvm saw the crash on a Cohort:0 queue. Cost: no automatic cohort queues.
+    'CoreLocation': ('CLAutoCohort',),
+}
+
+
 def feature_flags(cx):
-    """On a root we write, the extension cache's signature no longer matches; without this flag installd and lsd
-    refuse every app extension (iOSPlus10 root-tweaks-extra.py, ios26-root-spec.py). A sealed root keeps Apple's."""
+    """CoreLocation's automatic cohorts off on the Data volume (DATA_FLAGS_OFF), in both layouts. On a root we write,
+    also the extension cache's flag: its signature no longer matches; without the flag installd and lsd refuse every
+    app extension (iOSPlus10 root-tweaks-extra.py, ios26-root-spec.py). A sealed root keeps Apple's."""
+    for domain, flags in DATA_FLAGS_OFF.items():
+        changed = cx.data.merge_plist(f'preferences/FeatureFlags/Domain/{domain}.plist',
+                                      {flag: {'Enabled': False} for flag in flags}, ROOT, 0o644, binary=False)
+        cx.say('applied' if changed else 'kept', f'{domain} flags', ', '.join(f'{flag} off' for flag in flags))
     if not cx.rw:
         cx.say('kept', 'ExtensionKit flag', 'sealed root: the extension cache is Apple\'s and its signature holds')
         return
@@ -653,5 +700,5 @@ def identity(cx):
                'check target_type in the device profile against the IPSW')
 
 
-ALL = (version, launchd_jobs, launchd_crash_policy, host_services, metal_plugin, app_cryptex, staged_apps, preferences,
+ALL = (version, launchd_jobs, launchd_crash_policy, host_services, metal_plugin, camera_plugin, app_cryptex, staged_apps, preferences,
        data_layout, keybag, feature_flags, identity, kernel_features)

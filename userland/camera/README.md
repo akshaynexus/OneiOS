@@ -1,72 +1,113 @@
 # userland/camera: the capture plug-in (iOS side of the camera)
 
-Owner: fable-camera. The host side: `runtime/bridges/camera`. The kernel side: `drivers/camera`. The whole path:
-`docs/hardware.md` section 7.
+Owner: camera (was fable-camera). The host side: `runtime/bridges/camera`. The kernel side: `drivers/camera`. The
+whole path: `docs/hardware.md` section 7.
 
-**State (2026-11-11): the reader is written and host-tested; the plug-in is written and syntax-checked only; the
-capture device object is not written.** Nothing here has been built for iOS (no iPhoneOS SDK on the build machine)
-or run (the guest does not reach launchd yet). iOS shows no camera until the last part exists.
+**State (2026-11-12): built for iOS 27 with Xcode (arm64e, 4 KiB pages, `macho-check.py` PASS against the guest's own
+24A446 stubs) and run on the Mac against macOS 27's CMCapture (35 checks). Not run in iOS.** It is in no image yet:
+the next image build places it (that changes the Data seed: see "Getting it to the phone").
 
-## How iOS 27 finds a camera, and what that asks of us
+## Where the camera broke (iOS's own log, sessions of 2026-11-12)
 
-- Apple's path [F iOSPlus10 `docs/camera-plan.md`, `docs/laurel_sprout/camera.md` section 3; I for iOS 27's names]:
-  the capture servers (`com.apple.coremedia.capturesource`, `capturesession`; in `cameracaptured` since iOS 17, in
-  mediaserverd before) ask `+[BWFigCaptureDeviceVendor sharedCaptureDeviceVendor]` for a FigCaptureDevice. Apple's
-  vendor makes it from the ISP driver's user client (`AppleH16CamIn` on an A19; `AppleH10CamIn` on the iPhone X) and
-  the ISP's firmware protocol. No other camera can serve that protocol, so an IOKit driver that stands in for
-  AppleH16CamIn is not a way: **the camera enters through a plug-in in the capture server**, not through IOKit.
-- The route that has run on other ports (HakiOS; iOSPlus10's negroni and Mi A3, iOS 16.7): replace
-  `sharedCaptureDeviceVendor` so that, where the stock one gives nil, it returns
-  `[[BWFigCaptureDeviceVendor alloc] initWithDeviceCreateFunction:ours]`; our function makes a FigCaptureDevice with
-  one FigCaptureStream per camera, and the stream hands the capture graph CVPixelBuffers. A few more CMCapture
-  methods are replaced for what a camera without Apple's ISP lacks (stabilisation, noise reduction, the portrait
-  filter prewarm).
-- Here the frames are finished NV12 from One UI's camera HAL, so there is **no ISP in the guest**: iOSPlus10's
-  `camera_isp.c` (demosaic, white balance, exposure loop) has no counterpart, and exposure, gain and focus commands
-  are ignored by the kernel node.
-- A reusable iOS-side path exists only as that source: iOSPlus10 `userland/camera/` (`camera_device.c` 2487 lines,
-  `media_hooks.c`; HakiOS, MIT). UniXNU, UniXNU-droidvm and Droid-VM have no camera path (their virtio-media work is
-  video decode). `camera_device.c` is written to iOS 16.5's FigCaptureDevice and FigCaptureStream vtables and
-  property names; it does not carry over to CMCapture 27 unchanged.
+iOS's capture stack never touched our camera. Every start of `cameracaptured` (21 a session) logged, in order:
+
+```
+<<<< FigCaptureCommon >>>> fcc_probeCameraDriverService_block_invoke: Camera driver not started in time
+<<<< FigCaptureCommon >>>> FigCaptureGetCaptureDeviceCreateFunction: Failed to load CaptureDeviceCreate function
+<<<< BWFigCaptureDeviceVendor >>>> -[BWFigCaptureDeviceVendor _createDevice:reason:clientPID:figCaptureDevice:]: Cannot create device without create function!
+<<<< FigCaptureSourceBackingsProvider >>>> csu_createSourceInfoDictionariesFromAVCaptureSessionPlistForCaptureDeviceIDs: Error -12786 while creating FigCaptureDevice.
+<<<< FigCaptureSourceBackingsProvider >>>> cs_getBackingsForBuiltInCameras: 0 total in-memory backings
+```
+
+So every client saw no camera (`callservicesd`: "Supports Back Camera: NO"). The kernel side was up
+(`ONEIOS CAMERA: on: 3 cameras from the host so far`), but nothing in iOS read it: the old plug-in was in no image,
+and nothing would have loaded it.
+
+## How iOS 27 finds a camera [F, read in the 24A446 shared cache]
+
+- `fcc_probeCameraDriverService` (CMCapture) adds an `IOServiceMatching(name)` first-match notification for each row
+  of its table `sCameraDriverInfo` and waits 5 s:
+
+  | Service class | Plug-in that is `dlopen()`ed | Function looked up |
+  |---|---|---|
+  | `AppleCamera` | `/System/Library/MediaCapture/ISP.mediacapture` | `ISPCaptureDeviceCreate` |
+  | `AppleH16CamIn` | `/System/Library/MediaCapture/H16ISP.mediacapture` (in the shared cache) | `H16ISPCaptureDeviceCreate` |
+  | `AppleH13CamIn`, `AppleH10CamIn`, **`AppleH9CamIn`**, `AppleH6CamIn` | `.../H13ISP`, `H10ISP`, **`H9ISP`**, `H6ISP.mediacapture` | **`H9ISPCaptureDeviceCreate`** for H9 |
+
+- `FigCaptureGetCaptureDeviceCreateFunction` loads the matched row's plug-in and symbol, and
+  `BWFigCaptureDeviceVendor` makes every device with it: `create(allocator, options, &device)` (x0, x1, x2 at the
+  call in `_createDevice:reason:clientPID:figCaptureDevice:`).
+- So the camera enters **through Apple's own plug-in loader**: no method of CMCapture is replaced, no
+  `DYLD_INSERT_LIBRARIES`. The kernel publishes `AppleH9CamIn` (no kext of the collection has that class; the name
+  is only in the sandbox profiles), and this plug-in is `/System/Library/MediaCapture/H9ISP.mediacapture`. That
+  folder is empty on the sealed OS volume; hosted patch 0056 shows the Data seed's folder over it. `AppleCamera` is
+  left alone: the ANE driver and `mobilerepaird` look for it.
+- The object layout, read in `H16ISP.mediacapture` (`kH16ISPCaptureDeviceBaseClass`, `kH16ISPCaptureDeviceClass`,
+  `kH16ISPCaptureStreamBaseClass`, `kH16ISPCaptureStreamClass`), is HakiOS's iOS 16.5 layout: base class version 1
+  (size, equal, invalidate, finalize, description, copyProperty, setProperty, ...), device class version 3
+  (ProcessingSessionCreate, RequestStreams, RelinquishStreams, PearlCalibration), stream class version 2 (Start, Stop,
+  AddAttachmentsToSampleBuffer).
+- Frames: `cameracaptured` runs sandboxed. Its profile lists `AppleH9CamInUserClient` among the user clients it may
+  open; `/dev/oneios-camera` is not known to be allowed. So the plug-in reads frames through that user client
+  (`drivers/camera/OneiOSCameraService.cpp`), and uses the node only where the user client is not there.
 
 ## Files
 
-| File | What | State |
-|---|---|---|
-| `oneios_camera_reader.c`, `.h` | the reader of `/dev/oneios-camera`: selects camera and size, reads a frame, checks its header, copies the picture into a pixel buffer's two planes (any bytes per row) | host-tested: 26 checks |
-| `OneiOSCamera.c`, `.h` | the plug-in: constructor (only in `cameracaptured` / `mediaserverd`; `/private/var/oneios/camera/off` turns it off), a report of which of the route's classes and methods the loaded CMCapture has, the frame pump (node -> IOSurface-backed 420f CVPixelBuffers from a pool -> a callback), and the vendor hook, installed only when `oneios_camera_device_create` is linked in | syntax-checked against stand-in headers; not built for iOS |
-| `build.sh` | `out/userland/camera/OneiOSCamera.dylib`, arm64e, ad hoc signed, its CDHash for `owner-trust.json` | not run (no SDK) |
-| `tests/` | `host.sh` (CI), `test_reader.c`, `stub-sdk/` (our own stand-in declarations, not Apple's headers) | |
+| File | What |
+|---|---|
+| `OneiOSCaptureDevice.c` | `H9ISPCaptureDeviceCreate`: a FigCaptureDevice (CMCaptureDevice's class) with a stream for each of the back wide and the front camera that the kernel lists. Each stream's formats are the device's own `CMCapture.framework/V54/AVCaptureSession.plist` stream formats (`FigCaptureStreamFormats` of "Back Camera", read at the first create, every key kept, so that each AVCaptureDevice format of that file resolves). The HakiOS property set. Frames scaled into the pools the graph gives each output (420f, 420v, BGRA) and handed to its `PixelBufferHandler` |
+| `OneiOSCamera.c`, `.h` | the log (`ONEIOS CAMERA: ios: <process>[pid]: ...` to the unified log, `/dev/console` and `/private/var/oneios/log/camera.log`, each where the sandbox lets it), the off switch, a line when it is loaded |
+| `oneios_camera_reader.c`, `.h` | the kernel's frames: AppleH9CamIn's user client (`-DONEIOS_CAMERA_IOKIT`, the iOS build) or `/dev/oneios-camera`; checks each header; copies the NV12 planes |
+| `build.sh` | `out/userland/camera/H9ISP.mediacapture` and `cdhashes.txt` |
+| `tests/host.sh` | CI: the reader against stand-ins (26 checks), then `host-mac.sh` |
+| `tests/host-mac.sh`, `test_device_mac.m` | on a Mac, our create function under macOS 27's own CMCapture: the device is of `FigCaptureDeviceGetClassID`'s class; the stream answers (port, formats from a stand-in plist, pixel size, clock, supported properties); **macOS's `BWFigCaptureDeviceVendor` makes a `BWFigCaptureDevice` over ours with our function**; a frame from a stand-in node reaches the PrimaryScaler's handler, scaled into the test's pool (35 checks) |
 
-**Frames reach iOS as IOSurfaces** in `pump_run`: a `CVPixelBufferPool` with
-`kCVPixelBufferIOSurfacePropertiesKey`, format `420f` (the HAL's pictures are BT.601 full range), one copy per
-frame from the reader's memory into the surface's planes. (The kernel node is read(), not mmap: a character device
-cannot be mapped in this XNU.)
+What the property names are worth: they are HakiOS's (iOS 16). Every property iOS 27 asks for that is not answered,
+and every one it sets that is not used, is logged once by name. That list, from the first session with the
+plug-in, is the next step.
 
-**The hook table for the iPhone18,2 cache**: iOSPlus10's table carries the 20H392 addresses as a guard. This plug-in
-finds every class and method by name at run time, so there is no address to re-find; instead its first load in a
-session writes to `/private/var/oneios/log/camera.log` which of the nine are in CMCapture 27 (`found`, `the class has
-no such method`, `no such class`). That report is the input for the next part.
+## Getting it to the phone
 
-## Not written
+```sh
+userland/camera/build.sh          # -> out/userland/camera/H9ISP.mediacapture, cdhashes.txt
+# then the image build (docs/building.md section 1): the image hook takes out/userland/camera (ONEIOS_CAMERA_PLUGIN=DIR for another)
+```
 
-1. **`oneios_camera_device_create()`**: the FigCaptureDevice and FigCaptureStream objects for CMCapture 27 (the
-   CoreMedia base-object vtables, the property set the session reads, the formats array as in the device's
-   `AVCaptureSession.plist`, the `VideoOutputHandlers` call with a CMSampleBuffer per pixel buffer, a still from
-   the stream). Start from iOSPlus10 `camera_device.c`; drop the ISP; one stream per `ONEIOS_CAMERA_*` sensor
-   (`oneios_camera_pump_start`). It needs the 24A446 shared cache (CMCapture, CMCaptureCore) on the build machine
-   (the SystemOS image is not fetched here) and a guest that runs to SpringBoard to try it.
-2. **Loading the plug-in into `cameracaptured`.** On iOS 16 the bundle sat in `/System/Library/Audio/Plug-Ins/HAL`
-   and mediaserverd loaded it as an audio driver. `cameracaptured` loads no audio drivers [I], and the system volume
-   is sealed. Ways, for userland and the kernel to choose: `DYLD_INSERT_LIBRARIES` for that job (a launchd override
-   from `oneios-init`, plus the kernel's owner policy letting dyld honour it for an owner-trusted library), or the
-   read-only bind mount of `addon_mounts` over a plug-in folder that process does load.
-3. **The device tree nodes** that make SpringBoard show Camera and MobileGestalt answer `still-camera`,
-   `rear-facing-camera`, `front-facing-camera`, `video-camera`: `/arm-io/isp` with `camera-rear` and `camera-front`,
-   and `/product/camera` [F iOSPlus10, from HakiOS]. **Only together with a working device object**: with the nodes
-   and no frame path the Camera app hangs in `-[AVCaptureSession init]` [F iOSPlus10]. Not added to the booter's
-   tree.
-4. The app's camera permission: tccd's sandbox extension for the camera failed on iOSPlus10's kernel until a patch
-   (their 0386 / 2903); whether the hosted kernel needs the same is not known.
-5. `cameracaptured` is in the `idle` class of `userland/config/daemons.toml` ("no camera sensors published"); it
-   stays enabled, which is what this needs.
+- The image hook (`roottweak` tweak `camera-plugin`) writes it to
+  `/private/var/oneios/addons/MediaCapture/H9ISP.mediacapture` in the Data seed and its CDHash to
+  `overlay/userland/owner-trust.json` (library validation in `cameracaptured`). **A new seed starts the phone's Data
+  store over** (settings, joined Wi-Fi networks, everything iOS wrote).
+- The kernel must have AppleH9CamIn and hosted 0056 (one kernel build has both).
+- Off without a rebuild: the boot argument `oneios-camera-plugin=0` (no AppleH9CamIn, no mount), or the file
+  `/private/var/oneios/camera/off` (the plug-in makes no device).
+
+## What the next session's logs must show
+
+Kernel log (`xnuhost.log`):
+
+```
+ONEIOS CAMERA: on: 3 cameras from the host so far, 3 frame buffers of 3110464 bytes, interrupt
+ONEIOS CAMERA: AppleH9CamIn published: CMCapture's probe loads /System/Library/MediaCapture/H9ISP.mediacapture
+oneios-camera-addon: /private/var/oneios/addons/MediaCapture over /System/Library/MediaCapture: stage 5, status 0 (...)
+ONEIOS CAMERA: user client opened by cameracaptured
+```
+
+iOS's log (and `xnuhost.log` too if the sandbox lets `cameracaptured` write the console): `Camera driver AppleH9CamIn
+is active` in place of "not started in time"; `ONEIOS CAMERA: ios: cameracaptured[..]: loaded`; `the device made:
+stream 0 Back Camera (17 formats)`; no "Cannot create device without create function". When the Camera app opens:
+`device: streams asked for`, `the graph starts the stream`, `the first frame`, `PrimaryScaler: the first picture
+given`. Lines that say where it stops: `error '...' trying to load dylib` (the mount or the trust list),
+`stage 1 status 2` (no plug-in in this Data store), `the kernel's camera: Operation not permitted` (the sandbox
+refused the user client), `no answer for X` (a property to add).
+
+## Not done
+
+1. Run in iOS. Whether the 27 capture graph takes this device as it is, what it asks that is missing (the log
+   lists it), and whether it needs more of HakiOS's replaced methods (stabilisation, noise reduction, the portrait
+   prewarm): not known.
+2. The front camera's plist entry: the iPhone 17 Pro's front device is "Front Ultra Wide Camera" with 4896x4896
+   formats; the front stream takes the first "Front..." entry that has formats, and the port `PortTypeFront`. Not checked.
+3. The device tree nodes for MobileGestalt (`/arm-io/isp` `camera-rear`, `camera-front`, `/product/camera`): the
+   Camera icon is there without them on this image; with them and no frames the app hangs (iOSPlus10). Add them
+   only once a preview runs.
+4. Stills above 1920x1080; focus, exposure and zoom from the sensor; the torch; two cameras at once.
