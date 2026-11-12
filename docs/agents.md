@@ -1879,4 +1879,6 @@ persistent: a reboot costs a manual re-root.
   - **Expected in the next log:** `oneios-features: CoreLocation/CLAutoCohort: off (written)` (later boots `named
     there already: kept`), no `sheng-exc: locationd` and no `crashed: locationd`; `OneiOS: AMFI launch constraints:
     SystemOS volume answered as authenticated (FSIOC_AUTH_FS)` and no `Launch Constraint Violation` for
-    SafariConfigurationSubscriber. Needs a new `kernel.kc` (kernel `HOSTED_OUT=crashes`).
+    SafariConfigurationSubscriber. Needs a new `kernel.kc`. Mine: `out/kernel/crashes-24A446/kernel.kc`, sha256
+    `fad6da60...` (kernel `HOSTED_OUT=crashes` on `292d64a`, with the RELEASE reference): audit 0 failures, stubs 666
+    good. The roottweak change reaches only a new seed; the kernel covers the phone's existing Data store.
