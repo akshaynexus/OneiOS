@@ -337,20 +337,51 @@ From DroidVMWifi.inc (UniXNU-droidvm f9121cd, written for iPadOS 27 24A446 and s
 networks on 24A446, so its join details are the ones used) and iOSPlus10's 20H392 trace (`patches/xnu/README-wifi.md`,
 "How wifid uses Apple80211"; iOS 16, so what only it says is [I] until seen):
 
+- **IO80211.framework lists an interface as Wi-Fi by its media** [F, 24A446's `__getIfListCopy`, disassembled from
+  the image's shared cache]: it sends `SIOCGIFMEDIA` and takes the interface when the current medium's type is IEEE
+  802.11 (`(ifm_current & 0xe0) == 0x80`); only when that request fails does it ask `SIOCGIFTYPE` for `IFT_ETHER`
+  with `IFNET_SUBFAMILY_WIFI`. IONetworkingFamily answers `SIOCGIFMEDIA` from the controller's selected and active
+  medium, and `IFM_NONE` when neither is set. The driver set a medium only while joined (as DroidVMWifi.inc, which
+  Droid-VM showed in Settings with a joined made-up network), so on the phone on 2026-11-12 wifid never took en0:
+  no scan request in the whole session, Settings' Wi-Fi page searching for ever. Fixed: the controller selects its
+  IEEE 802.11 medium at the start and keeps it the active medium while the link is down.
 - Found as Wi-Fi only if: the controller's class is `IO80211Controller` (configd), the interface is `IFT_ETHER` with
   `IFNET_SUBFAMILY_WIFI` (IO80211.framework), it has the property `IOInterfaceName` (wifid matches on it), and the
   device tree has `/arm-io/wlan` (wifid's launchd plist has `_LimitLoadToDeviceTree=wlan`; MobileGestalt's `wifi`
   reads it too; booter's tree has the node). A refused `APPLE80211_IOC_FILTER_MONITOR_EVENTS` makes wifid give up
   the device: accept it.
+- The request numbers' names on 24A446 are in IO80211.framework (`_convertApple80211IOCTLToString`'s table of 607
+  entries). Seen from clients that are not wifid's own attach: 96 VIRTUAL_IF_ROLE and 97 VIRTUAL_IF_PARENT (refused:
+  no virtual interfaces), 560 PROTOCOL_CLEANUP_COMPLETE (a set of 4 bytes, accepted), 103 CURRENT_NETWORK asked with
+  a 2280-byte buffer.
+- **The scan record is 2280 bytes on 24A446** [F, IO80211.framework's `__addScanResultToList`]: the 1164-byte
+  record's fields at the same offsets (channel flags 0x0c, RSSI 0x16, capability 0x1a, rate count 0x22, SSID length
+  0x60, SSID 0x61, flags 0x88, element length 0x8a, elements from 0x8c), a longer element area, and a tail the
+  framework also reads (an address at 0x8d0, a flag at 0x8d8, two 32-bit values at 0x8dc and 0x8e0, three bytes at
+  0x8e4 to 0x8e6; their meaning is not known). The driver gives a caller whose buffer is that large the whole
+  record with a zero tail (SCAN_RESULT and CURRENT_NETWORK); a smaller buffer gets the 1164 bytes.
+- **The framework first tries a user client** [F, `Apple80211BindToInterfaceWithService`]: `IOServiceOpen` of type 0
+  on the interface's service, and with it every request goes through `IOConnectCallStructMethod`; when the open is
+  refused it uses the socket requests (`SIOCGA80211`/`SIOCSA80211`) this driver answers. The family's
+  `IONetworkInterface` refuses type 0 [I: IONetworkingFamily-188's source; the driver logs the first eight opens
+  and their results].
 - Requests (type numbers): 1 SSID, 2 AUTH_TYPE, 4 CHANNEL, 5 POWERSAVE, 8 RATE, 9 BSSID, 10 SCAN_REQ, 11 SCAN_RESULT
-  (1164-byte records, EIO after the last), 12 CARD_CAPABILITIES, 13 STATE, 14 PHY_MODE, 15 OP_MODE, 16 RSSI, 17 NOISE,
+  (1164-byte records, 2280 on 24A446; EIO after the last), 12 CARD_CAPABILITIES, 13 STATE, 14 PHY_MODE, 15 OP_MODE, 16 RSSI, 17 NOISE,
   19 POWER, 20 ASSOCIATE (**656 bytes on 24A446**: version 1, mode, 32-bit lower and upper authentication, then the
   network at 0x10: SSID, BSSID, key length, key cipher, key; the older layout is 592 bytes with 16-bit authentication
   fields and the network at 0x0c. The driver takes either by its length and refuses any other. Key cipher 6 is the
   32-byte pairwise master key the daemon derived, 10 the passphrase itself), 21 ASSOCIATE_RESULT (0 while the join
   runs, 1 success, 2 failed, 9 timed out, 21 wrong key; polled every 20 ms for 8 s), 22 DISASSOCIATE, 27/254 SUPPORTED_CHANNELS, 51 COUNTRY_CODE, 86
-  SCAN_REQ_MULTIPLE, 103 CURRENT_NETWORK, 106 RSSI_BOUNDS, 207 CHANNELS_INFO; many sets accepted with no effect
-  (383 SET_PROPERTY, 365 DISPLAY_STATE, 25 HOST_AP_MODE refused).
+  SCAN_REQ_MULTIPLE, 103 CURRENT_NETWORK, 106 RSSI_BOUNDS, 207 CHANNELS_INFO.
+- Sets: a set of settings or notes is accepted with no effect (383 SET_PROPERTY, 365 DISPLAY_STATE, 564
+  FILTER_MONITOR_EVENTS, which Droid-VM saw the daemon give the device up over when refused, 560
+  PROTOCOL_CLEANUP_COMPLETE). A set the driver cannot carry out and that names another way of doing a thing is
+  **refused**, so the daemon falls back to the plain requests instead of waiting for an answer that never comes: 287
+  request numbers of 24A446's table (every WCL_*, AWDL_*, NAN*, P2P_*, VIRTUAL_IF_*, OFFLOAD_*, GAS_*, SOFTAP_* and
+  ranging request, the access point modes, ROAM, REASSOCIATE, PRIVATE_MAC and SET_MAC_ADDRESS, RESET_CHIP and a few
+  more; `kRefusedSets` in `OneiOSWifi.cpp`). UniXNU-sheng's driver refuses every set it does not know and joins with
+  the plain ASSOCIATE (20). [I: which of the two rules wifid needs for each request is not seen yet.]
+- A leave while a join runs ends the join for the daemon too (ASSOC_DONE with a failure), as UniXNU-sheng's.
 - Events (kernel event class 6, subclass 1, the interface name first): 1 POWER_CHANGED, 2 SSID_CHANGED, 3
   BSSID_CHANGED, 4 LINK_CHANGED (32 bytes: down, RSSI, SNR, noise, reason), 9 ASSOC_DONE (**on 24A446 with 540
   bytes**: ten 52-byte access point records, then the result at 0x214 and a flag that it is valid at 0x218; the
@@ -395,6 +426,13 @@ absent: a reason not to run it on the phone as it is.
   the third lookup, the interface added and removed, the callback's descriptor and version asked for inside
   `registerCallback`, a join, a wrong key, a network not found, a rejection, a link that drops, a look without a
   callback, a supplicant that dies). Both ends of that test use `aidl.h`.
+- **First session with it (prelink's session 2, 2026-11-12 10:28, `kernel.kc` 66faa3e8 and runtime 0.1.8-dev from
+  `924a0d9`)**: worked: `ONEIOS WIFI: classes registered ...`, `on: the phone's Wi-Fi, address a6:a4:20:b8:00:0c`,
+  `the host has the phone's radio`; xnuhost: `the vendor's supplicant is the bridge's: joins by its AIDL service`,
+  `the guest's driver is up; it gets the radio` (so the binder client, the callback registration and the station's
+  messages on the virtio-net queues work in a session). Did not work: no scan. 41 requests reached the driver in 20
+  minutes, the first 261 s after the driver's start (en0 is named that late: for the owner of the boot), none of
+  them a scan or wifid's attach sequence. Cause: the media rule above. Not seen yet with the fix.
 - **On the phone, beside One UI (2026-11-12, SELinux Enforcing, no policy change)**: `wifictl status`: the service
   manager's lookup, `getStaInterface("wlan0")`, `getMacAddress` (wlan0's own address), `listNetworks` (0) all
   answered by Android 17's servicemanager and the vendor's supplicant; `wifictl scan`: 53 networks with their
@@ -473,6 +511,28 @@ absent: a reason not to run it on the phone as it is.
 - `hci.c`: packet length checks both ways, the state, the address file. It logs `bluetooth: the controller hears
   devices: N report(s) so far (LE advertising|inquiry result)` for the first report and for each power of two after
   it: a scan of bluetoothd's that finds devices can be read in xnuhost's log (2026-11-12; not yet seen on the phone).
+
+### First session with the HAL bridge on (prelink's session 2, 2026-11-12) and what 24A446's bluetoothd opens
+
+- xnuhost: `bluetooth: on: the phone's controller through its HAL 1.1, address a4:a4:90:4a:53:2f`: the real address
+  (the fix of `81c4e5d` works). Guest: `ONEIOS BT: on: ...`. bluetoothd ran. **Nothing opened the transport**: no
+  `ONEIOS BT: ios: client ... connected` line, so the HAL was never opened either.
+- **Why [F, 24A446's `/usr/sbin/bluetoothd`, disassembled]:** this bluetoothd does not read and write a serial node.
+  Its transports by `transport-encoding`: 0 USB, 1 H4, 2 H4DS, 3 H4BC, 4 H5, 5 BCSP (refused), 6 APPLEBT, 7 PCIE
+  Skywalk, 8 PCIE SRS, 9 APPLE PCIE, 10 virtual (the boot argument `bt-transport-override` replaces it). Its UART
+  transport opens `/dev/btwake`, then the **kernel control `com.apple.uart.sk.bluetooth`** (`CTLIOCGINFO`,
+  `connect`), sets a channel specification and asks for a channel UUID through it (`IOAOSSKYSETCHANNELSPEC`,
+  `IOAOSSKYGETCHANNELUUID`), and moves the bytes over a **Skywalk channel** (`os_channel_create`, `os_channel_sync`;
+  its lines say `BM3UART`). `/dev/cu.bluetooth` and `/dev/uart.bluetooth` are only looked at in `main` (do they
+  exist: "is there Bluetooth on this device"), and that look is skipped in a virtual machine. The driver here offers
+  the transports of iOS 16 (the control `com.apple.uart.bluetooth` and the two serial nodes), which this bluetoothd
+  never opens. UniXNU's port of the same OS build carries H4 to bluetoothd through that Skywalk pipe ("UART.SK",
+  [UniXNU/QcaBluetooth](https://github.com/UniXNU/QcaBluetooth) `qbt_transport`), with `transport-encoding` 1.
+- So Bluetooth needs the Skywalk UART pipe in the guest (not written), with the host bridge under it as it is. Until
+  then iOS has no controller whatever the HAL does.
+- The driver now logs who opens which node and how it went (`ONEIOS BT: dev: NAME[PID] opens /dev/...: error`), the
+  first 40 commands of a client with the ones it answers itself (`bluetoothd: command 0x....`), and the controller's
+  first 40 events (`controller: Command Complete for 0x...., status ..`).
 
 ### Missing, unknown
 

@@ -48,12 +48,29 @@ obt_dev_wakeup(void)
 	lck_mtx_unlock(&dev_lock);
 }
 
+/* Who opens which node, and how it went: the first opens are logged (a refused open says why bluetoothd has no port). */
+static void
+say_open(dev_t dev, int e)
+{
+	static unsigned said;
+	static const char *const names[] = { "uart.bluetooth", "cu.bluetooth", "btwake" };
+	char who[24] = "?";
+
+	if (said >= 16) {
+		return;
+	}
+	said++;
+	proc_selfname(who, sizeof(who));
+	OBT_SAY("dev: %s[%d] opens /dev/%s: %d\n", who, proc_selfpid(), minor(dev) <= MINOR_WAKE ? names[minor(dev)] : "?", e);
+}
+
 static int
 dev_open(dev_t dev, int flags __unused, int devtype __unused, struct proc *p __unused)
 {
 	int e;
 
 	if (minor(dev) == MINOR_WAKE) {
+		say_open(dev, 0);
 		return 0;
 	}
 	if (minor(dev) > MINOR_CU) {
@@ -62,6 +79,7 @@ dev_open(dev_t dev, int flags __unused, int devtype __unused, struct proc *p __u
 	if ((e = obt_ios_claim(2, 0)) == 0) {
 		d.open = true;
 	}
+	say_open(dev, e);
 	return e;
 }
 
@@ -146,8 +164,15 @@ dev_ioctl(dev_t dev, u_long cmd, caddr_t data, int flag __unused, struct proc *p
 	case TIOCNXCL:
 	case TIOCFLUSH:
 		return 0;
-	default:
+	default: {
+		static unsigned said;
+
+		if (said < 16) {
+			said++;
+			OBT_SAY("dev: terminal request 0x%lx is not one this line has\n", cmd);
+		}
 		return ENOTTY;
+	}
 	}
 }
 

@@ -1710,3 +1710,36 @@ persistent: a reboot costs a manual re-root.
   the lock screen; later boots should not. No panic and no stub call. The 10:51:54 phone reboot was a host kernel
   panic in another agent's `grep` of the Wi-Fi driver's sysfs node `runtime_pm` (`/proc/last_kmsg`), not the session.
   Your own kernels: `kernel/prelink/build.sh` fails on any import off the known-good list; tell me, do not edit it.
+
+- 2026-11-12 11:40, radio2 -> parent, prelink, lead: **why wifid never scanned in session 2, fixed; and why
+  bluetoothd never opened the controller, not fixed yet.**
+  - **Wi-Fi cause [F, disassembled from the image's shared cache]:** IO80211.framework's `__getIfListCopy` lists an
+    interface as Wi-Fi by `SIOCGIFMEDIA`: the current medium must be of the IEEE 802.11 type (it asks type and
+    subfamily only when that request fails). IONetworkingFamily answers from the controller's selected and active
+    medium, and our controller set one only while joined. So the list was empty, wifid never took en0, nothing
+    asked for a scan; the 41 requests of the session were other clients' looks (CARD_CAPABILITIES probes, Settings'
+    POWER and CURRENT_NETWORK). Fix: the controller selects its 802.11 medium at the start and keeps it while the
+    link is down.
+  - **Also in the kernel now** (from the same reading and UniXNU-sheng's driver): the 2280-byte scan record of
+    24A446 (zero tail), a table of 287 sets that are refused (WCL_*, AWDL_*, NAN*, P2P_*, virtual interfaces,
+    offloads, private address: so the daemon uses the plain requests), a leave that ends a pending join, and every
+    request logged with the process that made it (`ONEIOS WIFI: wifid[41] sets 10: ...`).
+  - **Needs:** a new `kernel.kc` from `main` at my commit. No runtime change (0.1.8-dev from `924a0d9` or later has
+    the bridge). Mine: `out/kernel/radio-24A446` in my worktree, sha256 `6ee012d7...` (on `1eed3da`): audit 0
+    failures, stubs 666 good.
+  - **Expected in the log:** `ONEIOS WIFI: the interface is enabled (en0 is up)`, `wifid[N] sets 10` (or 86) `-> 0`,
+    xnuhost's scan (no line of its own when it works), `ONEIOS WIFI: scan done: N networks (host error 0)`, then
+    `wifid[N] gets 11` once a network, the last one `-> 5`. A join from Settings: `ONEIOS WIFI: join: layout 656,
+    ... key of N bytes of kind 6|10`, `join: a network name of N bytes, a PSK|a passphrase|open`, xnuhost `wifi: join:
+    network N in the supplicant, WPA2 (...): selected`, `wifi: supplicant: associating ... completed: joined`, `wifi:
+    join done (status 0, code 0)`, `ONEIOS WIFI: join done: joined (status 0, 802.11 code 0)`. DHCP is configd's: no
+    line of ours; Settings shows the address, and xnuhost's `wifi: closed (N frames to the guest, M from it ...)` at
+    the stop counts the frames.
+  - **lead:** en0 was named 261 s after the driver published it (`skip attaching fsw to en0` at 39010.7; the driver
+    was up at 38748.9). Droid-VM's notes name this: the InterfaceNamer waits 4 minutes for IOKit to become quiet.
+    Something in the hosted kernel's registry stays busy. Wi-Fi cannot come up before that.
+  - **Bluetooth [F, bluetoothd disassembled]:** 24A446's bluetoothd does not use `/dev/cu.bluetooth` or the
+    `com.apple.uart.bluetooth` control that `drivers/bluetooth` offers (iOS 16's transports). Its UART transport is
+    a Skywalk channel behind the kernel control `com.apple.uart.sk.bluetooth` (UniXNU calls it UART.SK;
+    `docs/hardware.md` section 4). So in session 2 the address was right (`a4:a4:90:4a:53:2f`, not made up) and the
+    HAL was never opened. The guest needs that pipe; I am looking at UniXNU/QcaBluetooth's `qbt_transport` now.

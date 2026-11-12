@@ -56,12 +56,22 @@ The start (`register_classes`): loads `com.apple.iokit.IONetworkingFamily`, comp
 bound ones (address and instance size; another collection stops here with one line), then runs the archive's static
 initializer inside the kernel's own module load and sets the two superclass links, as `hid/` does.
 
+## The medium: what makes en0 a Wi-Fi interface for IO80211.framework
+
+24A446's IO80211.framework (`__getIfListCopy`) lists the Wi-Fi interfaces by `SIOCGIFMEDIA`: the current medium's
+type must be IEEE 802.11. The family answers that request from the controller's selected and active medium, so the
+controller calls `setSelectedMedium` with its one medium (`kIOMediumIEEE80211Auto`) at its start and gives the same
+medium to every `setLinkStatus`, link up or down. Without it the framework's list is empty, wifid does not take the
+interface, and nothing ever asks for a scan (the first phone session). `docs/hardware.md` section 3 has the evidence.
+
 ## Boot argument and log lines
 
 `oneios-wifi=0` leaves the Wi-Fi out. The lines (`ONEIOS WIFI: ...`), in the order of a good boot: `classes
 registered below the collection's IOEthernetController and IOEthernetInterface; starting /arm-io/net`, `on: the
-phone's Wi-Fi, address ..; asking the host for its radio`, `the host has the phone's radio`, `wifid gets|sets N: len
-.. val .. -> error` (each request for the first 150, then a type's first, and every scan, join and leave), `scan
+phone's Wi-Fi, address ..; asking the host for its radio`, `the host has the phone's radio`, `the interface is enabled (en0 is up)`, `NAME[PID] gets|sets N: len .. val .. ->
+error` (each Apple80211 request with the process that made it, for the first 150, then a type's first, and every
+scan, join and leave), `NAME[PID]: interface request 0x..` (the first 24 other requests on en0), `NAME[PID] asks the
+interface for a user client of type 0x.. -> 0x..` (the first 8), `scan
 done: N networks`, `join: layout 656, authentication lower 0x.. upper 0x.., key of N bytes of kind K` (the request's
 length, 656 on 24A446, picks its layout), `join: a network name of N bytes, a passphrase|a PSK|open`, `join done:
 joined` or `join failed (status S, 802.11 code C)`, `link down (reason R)`. An `off: ...` line names what was missing. For a debugger:

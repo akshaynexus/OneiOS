@@ -33,6 +33,8 @@ extern void thread_deallocate(thread_t);
 #define WAIT_READY_S    60
 #define PUMP_GUARD_MS   20u
 
+#define OBT_SAY_PACKETS 40u
+
 static LCK_GRP_DECLARE(ios_grp, "oneios_bt");
 static LCK_MTX_DECLARE(ios_lock, &ios_grp);     /* state, queue, owner */
 static LCK_MTX_DECLARE(tx_lock, &ios_grp);      /* TX framing and packet order */
@@ -48,6 +50,7 @@ static struct {
 	uint8_t tx[OBT_H4_MAX];                 /* tx_lock */
 	uint32_t txn;
 	uint32_t n_tx, n_rx, n_local, n_drop;
+	uint32_t said_tx, said_rx;              /* commands and events logged for this client (the first OBT_SAY_PACKETS) */
 	uint8_t address[6];
 	int pump_event;
 } t;
@@ -145,6 +148,15 @@ from_host(void *context __unused, uint16_t type, const uint8_t *payload, uint32_
 	}
 	if (type == OB_HCI_EVENT) {
 		(void)obt_fix_event(&t.shim, t.rx, length + 1u);
+		/* the controller's first events: a Command Complete (0x0e) with its command and status */
+		if (t.said_rx < OBT_SAY_PACKETS) {
+			t.said_rx++;
+			if (t.rx[1] == 0x0e && length >= 6) {
+				OBT_SAY("controller: Command Complete for 0x%04x, status 0x%02x\n", (unsigned)(t.rx[4] | t.rx[5] << 8), t.rx[6]);
+			} else {
+				OBT_SAY("controller: event 0x%02x, %u bytes\n", t.rx[1], length);
+			}
+		}
 	}
 	t.n_rx++;
 	deliver(t.rx, length + 1u);
@@ -182,7 +194,14 @@ tx_frame(uint8_t *p, uint32_t n)
 
 	if (p[0] == 1) {
 		(void)obt_fix_command(p, n);
-		if ((len = obt_local_answer(&t.shim, p, n, ev)) != 0) {
+		len = obt_local_answer(&t.shim, p, n, ev);
+		/* bluetoothd's first commands, and which of them this driver answers itself (Broadcom's vendor commands) */
+		if (t.said_tx < OBT_SAY_PACKETS && n >= 4) {
+			t.said_tx++;
+			OBT_SAY("bluetoothd: command 0x%04x, %u parameter bytes%s\n", (unsigned)(p[1] | p[2] << 8), p[3],
+			    len ? ": answered here" : "");
+		}
+		if (len != 0) {
 			t.n_local++;
 			deliver(ev, len);
 			return 0;
@@ -228,6 +247,7 @@ obt_ios_claim(uint32_t owner, uint32_t unit)
 		t.owner = owner;
 		t.unit = unit;
 		t.qh = t.qt = t.qn = 0;
+		t.said_tx = t.said_rx = 0;
 		bzero(&t.shim, sizeof(t.shim));
 	}
 	lck_mtx_unlock(&ios_lock);

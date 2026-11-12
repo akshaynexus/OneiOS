@@ -40,6 +40,7 @@
 #include <pexpert/pexpert.h>
 #include <stdarg.h>
 #include <sys/kern_event.h>
+#include <sys/proc.h>
 #include "oneios_wifi_proto.h"
 
 extern kmod_info_t g_kernel_kmod_info;
@@ -129,6 +130,11 @@ struct link_event {
     uint8_t down, unused0[3]; int32_t rssi; uint16_t snr, noise; uint8_t unused1[4]; uint8_t involuntary, unused2[3]; uint32_t reason, subreason;
     uint8_t unused3[4];
 };
+// 24A446's scan record is 2280 bytes (IO80211.framework's __addScanResultToList reads fields up to 0x8e6 and asks
+// CURRENT_NETWORK with that length): the 1164-byte record's fields at the same places, a longer element area, and a
+// tail (an address at 0x8d0, flags and counts at 0x8d8 to 0x8e6) that is zero here. A caller with a buffer of that
+// size gets the whole record, so the tail is never what its buffer held before.
+enum { kScanRecord27 = 2280 };
 static_assert(sizeof(apple80211req) == 0x28, "request layout");
 static_assert(sizeof(scan_result) == 1164 && __builtin_offsetof(scan_result, ssid_length) == 0x60 &&
               __builtin_offsetof(scan_result, age_ms) == 0x84 && __builtin_offsetof(scan_result, elements) == 0x8c, "scan result layout");
@@ -301,10 +307,13 @@ static int join(const assoc_parameters &a) {
 static void leave() {
     bool notify = false;
     IOLockLock(gLock);
+    const bool pending = gAssocResult == kAssocRunning && gState >= kStaAuth && gState < kStaUp;   // a join that is cut short
     if (gState >= kStaAuth) leave_locked(false, 0, &notify);
     IOLockUnlock(gLock);
+    if (pending) thread_call_cancel(gJoinTimeout);
     send(OW_LEAVE, nullptr, 0);
     if (notify) left(false, 0);
+    if (pending) post_assoc_done();   // the daemon's wait for the join ends now, with a failure (UniXNU-sheng's order)
 }
 
 // ---- the host's messages (the transport's receive worker) ----
@@ -440,6 +449,21 @@ static int map_state(uint32_t s) {
     switch (s) { case kStaScanning: return 1; case kStaAuth: return 2; case kStaAssoc: case kStaKeys: return 3; case kStaUp: return 4; default: return 0; }
 }
 
+// Sets this driver cannot carry out and must not swallow: each names another way of doing a thing (Apple's own
+// connectivity layer WCL_*, AWDL_*, NAN*, P2P_*, virtual interfaces, access point modes, offloads, GAS, ranging) or
+// an action on the chip (a private address, a roam, a reset). Refused, the daemon uses the plain requests or goes
+// without (a private address: the radio sends with wlan0's own). Bit n is request n; the numbers are 24A446's
+// (IO80211.framework's table of request names), 287 of them. Every other set is accepted with no effect: the daemon
+// tells the driver its state and policies that way, and Droid-VM saw it give the device up when
+// FILTER_MONITOR_EVENTS (564) was refused.
+static const uint8_t kRefusedSets[76] = {
+    0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1c, 0x00, 0xf8, 0x3f, 0x08, 0xf3, 0xff, 0xff, 0xff, 0xff,
+    0xc8, 0x9f, 0x1f, 0x5f, 0xb8, 0xe3, 0x3f, 0x39, 0x9a, 0x27, 0xd2, 0xdf, 0x26, 0xc0, 0xf6, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xbf, 0xe5, 0xe8, 0x19, 0xc0, 0x0d, 0x30, 0x22, 0xc8, 0x0b, 0x70, 0x13, 0xff, 0xff, 0x5f, 0x02,
+    0xf1, 0x1b, 0x7c, 0x00, 0xf8, 0xc0, 0x81, 0x00, 0x00, 0x04, 0x00, 0x00, 0x9e, 0x80, 0x22, 0xba, 0x01, 0x2c, 0x60,
+};
+static bool refused_set(int type) { return type >= 0 && static_cast<size_t>(type) < sizeof kRefusedSets * 8 && (kRefusedSets[type / 8] >> (type % 8) & 1); }
+
 static int answer(bool set, apple80211req &rq) {
     const int type = rq.req_type;
     union Out { uint8_t raw[5120]; channels_list chans; scan_result res; assoc_request assoc; assoc_request27 assoc27; };   // not on the stack
@@ -481,11 +505,9 @@ static int answer(bool set, apple80211req &rq) {
             gAssocModern = modern;
             return join(modern ? out.assoc27.network : out.assoc.network); }
         case kDisassociate: case kDeauth: log("leave"); leave(); return 0;
-        // host access point mode: none (wifid sets it to 2 as it starts; accepted, it would offer a personal hotspot)
-        case kHostApMode: return EOPNOTSUPP;
-        // Every other set is accepted and has no effect, as in DroidVMWifi.inc: wifid tells the driver its state and
-        // policies that way, and a refused APPLE80211_IOC_FILTER_MONITOR_EVENTS makes it give the device up.
-        default: return 0;
+        // Every other set: refused when it asks for something only another kind of driver does, else accepted with
+        // no effect (kRefusedSets).
+        default: return refused_set(type) ? EOPNOTSUPP : 0;
         }
     }
     IOLockLock(gLock);
@@ -538,8 +560,8 @@ static int answer(bool set, apple80211req &rq) {
                                           5640, 5660, 5680, 5700, 5720, 5745, 5765, 5785, 5805, 5825 };
         for (uint16_t f : known) { fill_channel(out.chans.list[n], f); out.chans.list[n].flags |= 0x80; n++; }
         out.chans.count = n; return copy_out(rq, &out.chans, sizeof out.chans); }
-    case kScanResult: if (!have) return EIO; return copy_out(rq, &out.res, sizeof out.res);   // EIO after the last record
-    case kCurrentNetwork: if (state < kStaAssoc) return ENOENT; fill_result(out.res, current); out.res.rssi = static_cast<int16_t>(rssi); return copy_out(rq, &out.res, sizeof out.res);
+    case kScanResult: if (!have) return EIO; return copy_out(rq, out.raw, rq.req_len >= kScanRecord27 ? kScanRecord27 : sizeof out.res);   // EIO after the last record
+    case kCurrentNetwork: if (state < kStaAssoc) return ENOENT; fill_result(out.res, current); out.res.rssi = static_cast<int16_t>(rssi); return copy_out(rq, out.raw, rq.req_len >= kScanRecord27 ? kScanRecord27 : sizeof out.res);
     default: return EOPNOTSUPP;
     }
 }
@@ -555,7 +577,8 @@ static int request(bool set, apple80211req &rq) {
     if (type >= 0 && type < 256) gLogged[type / 32] |= 1u << (type % 32);
     if (shown < 150 || first || type == kScanReq || type == kAssociate || type == kDisassociate) {
         ++shown;
-        log("wifid %s %d: len %u val %d -> %d (len %u val %d)", set ? "sets" : "gets", type, length, value, error, rq.req_len, rq.req_val);
+        char who[24] = "?"; proc_selfname(who, sizeof who);   // wifid, or another client of IO80211.framework
+        log("%s[%d] %s %d: len %u val %d -> %d (len %u val %d)", who, proc_selfpid(), set ? "sets" : "gets", type, length, value, error, rq.req_len, rq.req_val);
     }
     return error;
 }
@@ -592,7 +615,25 @@ public:
             if (!argument1) return EINVAL;
             return oneios_wifi::request(command == SIOCSA80211, *static_cast<oneios_wifi::apple80211req *>(argument1));
         }
+        static unsigned said;   // the interface requests that are not Apple80211's, the first of them: what configures en0, and when
+        if (said < 24) {
+            ++said;
+            char who[24] = "?"; proc_selfname(who, sizeof who);
+            oneios_wifi::log("%s[%d]: interface request 0x%lx", who, proc_selfpid(), command);
+        }
         return super::performCommand(controller, command, argument0, argument1);
+    }
+    // IO80211.framework can ask the interface for a user client before it uses the requests above. The family's
+    // answer stands (its own network user client, or a refusal); who asked, and for which type, is logged.
+    IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type, IOUserClient **handler) override {
+        static unsigned said;
+        const IOReturn result = super::newUserClient(owningTask, securityID, type, handler);
+        if (said < 8) {
+            ++said;
+            char who[24] = "?"; proc_selfname(who, sizeof who);
+            oneios_wifi::log("%s[%d] asks the interface for a user client of type 0x%x -> 0x%x", who, proc_selfpid(), type, result);
+        }
+        return result;
     }
 };
 OSDefineMetaClassAndStructors(IO80211Interface, IOEthernetInterface)
@@ -626,9 +667,13 @@ class OneiOSWifiController : public IO80211Controller {
     bool enabled;
 
     static OneiOSWifiController *gSelf;
+    // The medium stays the IEEE 802.11 one while the link is down: IO80211.framework lists an interface as Wi-Fi by
+    // its media (24A446's __getIfListCopy: SIOCGIFMEDIA's current medium must be of the IEEE 802.11 type; it asks the
+    // interface's type and subfamily only when that request fails), and the family answers SIOCGIFMEDIA from the
+    // selected and the active medium. With none of them set wifid never took en0 and never scanned (the phone,
+    // 2026-11-12).
     static void link(bool up) {
-        if (gSelf) gSelf->setLinkStatus(up ? kIONetworkLinkValid | kIONetworkLinkActive : kIONetworkLinkValid, up ? gSelf->medium : nullptr,
-                                        up ? WIFI_SPEED : 0);
+        if (gSelf) gSelf->setLinkStatus(up ? kIONetworkLinkValid | kIONetworkLinkActive : kIONetworkLinkValid, gSelf->medium, up ? WIFI_SPEED : 0);
     }
 
 public:
@@ -657,6 +702,8 @@ public:
         bool published = medium && media && medium->getName() && media->setObject(medium->getName(), medium) && publishMediumDictionary(media);
         OSSafeReleaseNULL(media);
         if (!published) return false;
+        setSelectedMedium(medium);                              // SIOCGIFMEDIA's current medium, from the first request on
+        setLinkStatus(kIONetworkLinkValid, medium, 0);          // its active medium; the link itself is down until a join
         if (!attachInterface(&interface, true)) return false;
         gSelf = this;
         oneios_wifi::gLink = link;
@@ -668,6 +715,7 @@ public:
     IOReturn enable(IONetworkInterface *client) override {
         (void)client;
         enabled = true;
+        oneios_wifi::log("the interface is enabled (en0 is up)");
         oneios_wifi::gIf = interface->getIfnet();
         IOLockLock(oneios_wifi::gLock);
         const bool up = oneios_wifi::gState == oneios_wifi::kStaUp;
@@ -675,7 +723,7 @@ public:
         link(up);
         return kIOReturnSuccess;
     }
-    IOReturn disable(IONetworkInterface *client) override { (void)client; enabled = false; setLinkStatus(kIONetworkLinkValid, nullptr); return kIOReturnSuccess; }
+    IOReturn disable(IONetworkInterface *client) override { (void)client; enabled = false; setLinkStatus(kIONetworkLinkValid, medium, 0); return kIOReturnSuccess; }
     UInt32 outputPacket(mbuf_t packet, void *parameter) override {
         (void)parameter;
         uint8_t frame[WIFI_FRAME];
