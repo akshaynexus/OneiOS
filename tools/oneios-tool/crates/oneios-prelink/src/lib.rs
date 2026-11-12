@@ -6,13 +6,18 @@
 //! (XnuPrelink's fileset_match.py), align, kclasses, structors, vtables, the emitter (emit.py over XnuPrelink's
 //! fileset_emit, fileset_layout, fileset_segmented), audit, record. kernel/prelink/build.sh runs the Python steps.
 
+mod align;
 mod hosted;
+mod kclasses;
 pub mod image;
 mod matcher;
 mod merge_reviewed;
 mod native_input;
 mod pyset;
+mod records;
 mod roots;
+mod structors;
+mod vtables;
 
 /// `oneios-tool prelink`'s steps (clap): each takes the arguments of the Python step it replaces.
 #[derive(clap::Subcommand, Debug)]
@@ -38,6 +43,14 @@ pub enum Command {
     MergeReviewed(merge_reviewed::Args),
     /// XnuPrelink's fileset_match.py: pair the original kernel's functions and data with the hosted kernel's
     Match(matcher::Args),
+    /// align.py: unpaired kext-facing functions by link order against a reference kernel
+    Align(align::Args),
+    /// kclasses.py: the kernel's class objects by the names their static initializers register
+    Kclasses(kclasses::Args),
+    /// structors.py: constructors, destructors, factories and VNOP wrappers
+    Structors(structors::Args),
+    /// vtables.py: the virtual methods of every named vtable, slot by slot
+    Vtables(vtables::Args),
 }
 
 #[derive(clap::Parser)]
@@ -82,6 +95,10 @@ pub fn main(command: Command) -> i32 {
         Command::NativeInput { input, output, report } => ("native-input", native_input::run(&input, &output, &report)),
         Command::MergeReviewed(args) => ("merge-reviewed", merge_reviewed::run(args)),
         Command::Match(args) => ("match", matcher::run(args)),
+        Command::Align(args) => ("align", align::run(args)),
+        Command::Kclasses(args) => ("kclasses", kclasses::run(args)),
+        Command::Structors(args) => ("structors", structors::run(args)),
+        Command::Vtables(args) => ("vtables", vtables::run(args)),
     };
     match result {
         Ok(()) => 0,
