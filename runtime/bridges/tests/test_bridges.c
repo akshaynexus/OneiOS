@@ -368,6 +368,8 @@ static void test_bt(const char *tmp)
   snprintf(path, sizeof path, "%s/bt_addr", tmp);
   FILE *f = fopen(path, "w"); fputs("A4:75:B9:01:02:03\n", f); fclose(f);
   CHECK(br_bt_address(path, address) == 0 && !memcmp(address, "\xa4\x75\xb9\x01\x02\x03", 6));
+  f = fopen(path, "w"); fwrite("A4:75:B9:01:02:03\0", 1, 18, f); fclose(f);        // the S24 Ultra's file: 17 characters and a NUL
+  CHECK(br_bt_address(path, address) == 0 && !memcmp(address, "\xa4\x75\xb9\x01\x02\x03", 6));
   f = fopen(path, "w"); fputs("a475b9010203", f); fclose(f);
   CHECK(br_bt_address(path, address) == 0 && address[5] == 3);
   f = fopen(path, "w"); fwrite("\x10\x20\x30\x40\x50\x60", 1, 6, f); fclose(f);

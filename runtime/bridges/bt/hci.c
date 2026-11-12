@@ -115,11 +115,14 @@ int br_bt_address(const char *path, uint8_t out[6])
   size_t n = fread(raw, 1, sizeof raw - 1, f);
   fclose(f);
   raw[n] = 0;
-  // Text: twelve hex digits with or without separators. Else the first six bytes as they are.
+  // Text: twelve hex digits with or without separators, ended by the file's end or a NUL (the S24 Ultra's
+  // /mnt/vendor/efs/bluetooth/bt_addr is 18 bytes: "XX:XX:XX:XX:XX:XX" and a NUL). Else the first six bytes as they are.
   uint8_t hex[12];
   unsigned digits = 0;
   bool text = true;
-  for (size_t i = 0; i < n && text; i++) {
+  size_t end = n;
+  if (n != 6) for (size_t i = 0; i < n; i++) if (!raw[i]) { end = i; break; }
+  for (size_t i = 0; i < end && text; i++) {
     int c = raw[i];
     if (isxdigit(c)) { if (digits < 12) hex[digits] = (uint8_t)(isdigit(c) ? c - '0' : (tolower(c) - 'a' + 10)); digits++; }
     else if (c != ':' && c != '-' && c != '\n' && c != '\r' && c != ' ') text = false;
