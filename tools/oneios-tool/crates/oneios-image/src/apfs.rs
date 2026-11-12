@@ -10,6 +10,9 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 
+mod files;
+pub use files::{DirEnt, Stat, DT_DIR, DT_LNK, DT_REG};
+
 /// A read outside a block: Python's struct.error, which ends the tool with a traceback.
 fn outside(path: &str) -> Fail {
     crash!("{path}: a field is outside its block (the image is damaged or not what this tool reads)")
@@ -272,6 +275,13 @@ pub struct ApfsTree {
     physical: bool,
     root: u64,
     child_base: u64,
+    /// The newest transaction an object map answer may be of (`open`: no bound).
+    xid: u64,
+    /// The extent tree of a sealed volume (0: the extents are records of the file-system tree).
+    fext_root: u64,
+    /// The volume's name and role, from its superblock.
+    pub name: String,
+    pub role: String,
 }
 
 const OBJ_PHYSICAL: u32 = 0x4000_0000;
@@ -282,7 +292,13 @@ const ROOT_DIR: u64 = 2;
 
 impl ApfsTree {
     pub fn open(path: &str) -> Result<ApfsTree, Fail> {
-        let volume = 0usize;
+        ApfsTree::open_volume(path, 0, false)
+    }
+
+    /// Volume number `volume` of the container. `newest`: the container as its newest valid checkpoint has it
+    /// (a store copied after use: block 0 holds the superblock of the last clean unmount only); otherwise as
+    /// block 0 has it, which is what imagetool.py reads.
+    pub fn open_volume(path: &str, volume: usize, newest: bool) -> Result<ApfsTree, Fail> {
         let info = apfs_info(path)?;
         let map = Map::open(path).map_err(|e| crash!("{e:#}"))?;
         let mut tree = ApfsTree {
@@ -294,9 +310,17 @@ impl ApfsTree {
             physical: false,
             root: 0,
             child_base: 0,
+            xid: u64::MAX,
+            fext_root: 0,
+            name: String::new(),
+            role: String::new(),
         };
         let bad = || outside(path);
-        let head = tree.read(0)?;
+        let mut at = 0;
+        if newest {
+            (at, tree.xid) = tree.newest_superblock()?;
+        }
+        let head = tree.read(at)?;
         let omap = tree.read(u64_at(head, 160).ok_or_else(bad)?)?;
         let mut fs_oids = Vec::new();
         for i in 0..100 {
@@ -322,10 +346,18 @@ impl ApfsTree {
         // relative to the root's virtual object id (seen in 24A446's images: root 1158, children 1158 + 1..122).
         let info_at = tree.block.checked_sub(40).ok_or_else(bad)?;
         let hashed = u32_at(tree.read(root_block)?, info_at).ok_or_else(bad)? & 0x80 != 0;
+        // A sealed volume keeps its extents in a tree of its own (apfs_fext_tree_oid).
+        let fext_root = if u64_at(sb, 56).ok_or_else(bad)? & 0x20 != 0 { u64_at(sb, 1032).ok_or_else(bad)? } else { 0 };
+        let name = sb.get(704..960).ok_or_else(bad)?;
+        let name = String::from_utf8_lossy(&name[..name.iter().position(|b| *b == 0).unwrap_or(name.len())]).into_owned();
+        let role = role_name(u16_at(sb, 964).ok_or_else(bad)?);
         tree.vol_omap = vol_omap;
         tree.physical = physical;
         tree.root = root_block;
         tree.child_base = if hashed && !physical { root } else { 0 };
+        tree.fext_root = fext_root;
+        tree.name = name;
+        tree.role = role;
         Ok(tree)
     }
 
@@ -367,7 +399,7 @@ impl ApfsTree {
                 let key_xid = u64_at(n.data, n.keys + k + 8).ok_or_else(bad)?;
                 let value = n.vals.checked_sub(v).ok_or_else(bad)?;
                 if n.level == 0 {
-                    if key_oid == oid && newest.is_none_or(|(xid, _)| key_xid > xid) {
+                    if key_oid == oid && key_xid <= self.xid && newest.is_none_or(|(xid, _)| key_xid > xid) {
                         newest = Some((key_xid, u64_at(n.data, value + 8).ok_or_else(bad)?));
                     }
                 } else if key_oid <= oid {

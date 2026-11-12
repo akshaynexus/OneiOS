@@ -1,9 +1,10 @@
 //! oneios-tool image: the image tool, a port of scripts/image/imagetool.py (docs/image-format.md; docs/building.md
 //! "Rust tools"). Same subcommands, options, output text, exit status and output files, byte for byte.
 //!
-//! In Rust: `profile`, `apfs-info`, `apfs-owners`, `hashes`, `tree-copy`, `seed-pack`, `manifest`, and `verify` of a
-//! set folder. The others (`check-ipsw`, `fetch`, `record-plain`, `aea-info`, `im4p`, `pack`, and `verify` of a
-//! `.tar.zst`) are run by the Python tool: this one starts `python3 -I scripts/image/imagetool.py ...` for them.
+//! In Rust: `profile`, `apfs-info`, `apfs-owners`, `hashes`, `tree-copy`, `seed-pack`, `manifest`, `im4p` (LZFSE by
+//! the lzfse_rust crate: no `lzfse` program) and `verify` of a set folder. The others (`check-ipsw`, `fetch`,
+//! `record-plain`, `aea-info`, `pack`, and `verify` of a `.tar.zst`) are run by the Python tool: this one starts
+//! `python3 -I scripts/image/imagetool.py ...` for them. Only here: `apfs-ls`, `apfs-copy` (apfs/files.rs).
 //!
 //! What differs from Python, on purpose:
 //! - where Python ends with a traceback (a file that is not there, a damaged image), this prints one line
@@ -14,10 +15,12 @@
 //!   Python carries them as escapes;
 //! - the usage text names `oneios-tool image`.
 
-mod apfs;
+pub mod apfs;
+mod apfs_tools;
 #[cfg(test)]
 mod fixtures;
 mod hashes;
+pub mod im4p;
 mod manifest;
 mod profile;
 mod py;
@@ -36,6 +39,15 @@ pub enum Fail {
     Usage,
     /// Where Python ends with a traceback: `imagetool: MESSAGE` on stderr, exit 1.
     Crash(String),
+}
+
+impl std::fmt::Display for Fail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Fail::Error(m) | Fail::Crash(m) => f.write_str(m),
+            Fail::Usage => f.write_str("wrong arguments"),
+        }
+    }
 }
 
 macro_rules! err {
@@ -59,12 +71,18 @@ The OneiOS image set: profile, inputs, hash lists, Data seed, manifest, archive.
     oneios-tool image seed-pack TREE META OUT --epoch N [--owners FILE]   pack the Data seed (deterministic tar)
     oneios-tool image manifest PROFILE SETDIR [--inputs FILE] [--seed-info FILE] [--tweaks FILE]
     oneios-tool image verify SET [--quick]                       SET: a set folder or its .tar.zst
+    oneios-tool image im4p IN OUT                                the payload of an IM4P (LZFSE decoded here: no `lzfse` program)
+
+Only in this tool (imagetool.py has no such command): read a volume without mounting it
+    oneios-tool image apfs-ls IMAGE [PATH] [--volume N|NAME] [--newest]      a folder's entries: mode, owner, size, name
+    oneios-tool image apfs-copy IMAGE SRC DST [--volume N|NAME] [--newest]   copy a file or a folder out of the image
+                                                                 (--newest: the newest checkpoint, for a store copied
+                                                                 after use; files kept compressed are skipped and counted)
 
 Run by scripts/image/imagetool.py (python3, found beside this tool's repository or through IMAGETOOL_PY):
     oneios-tool image check-ipsw PROFILE [--source URL|FILE]     compare the profile with the IPSW's directory and BuildManifest
     oneios-tool image fetch PROFILE INDIR [-j N] [--only ROLE,..] [--source URL|FILE]
     oneios-tool image aea-info FILE                              the key-service fields of an AEA header
-    oneios-tool image im4p IN OUT                                the payload of an IM4P (LZFSE decoded with `lzfse`)
     oneios-tool image pack SETDIR OUT.tar.zst                    the archive the OneOS fork imports, and OUT.tar.zst.sha256
     oneios-tool image verify SET.tar.zst                         the archive: its .sha256, the tar rules, every file
 
@@ -72,7 +90,7 @@ Formats: docs/image-format.md. The Rust port of scripts/image/imagetool.py: same
 ";
 
 /// The subcommands the Python tool runs.
-const PYTHON_ONLY: [&str; 6] = ["check-ipsw", "fetch", "record-plain", "aea-info", "im4p", "pack"];
+const PYTHON_ONLY: [&str; 5] = ["check-ipsw", "fetch", "record-plain", "aea-info", "pack"];
 
 /// Run `oneios-tool image ARGS...`; `args` are the arguments after the tool's name. Returns the exit status.
 pub fn run(args: &[String]) -> i32 {
@@ -205,6 +223,9 @@ fn main(argv: &[String]) -> Result<(), Fail> {
             say(&manifest::ok_line(&m))
         }
         "verify" => python(argv),
+        "im4p" => say(&im4p::cmd(arg(args, 0)?, arg(args, 1)?)?),
+        "apfs-ls" => apfs_tools::ls(args),
+        "apfs-copy" => apfs_tools::copy(args),
         cmd if PYTHON_ONLY.contains(&cmd) => python(argv),
         _ => Err(Fail::Usage),
     }
