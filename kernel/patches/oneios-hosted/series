@@ -49,7 +49,7 @@
 # /arm-io/virtio-gpu drm-host-pool) may be mapped into a task and at a kernel address, as 0020 allows the boot
 # framebuffer: the virtio-gpu 3D driver maps each context's response buffer from it. No patch links NativeAdreno:
 # Metal's kernel side (the AGXAccelerator under the collection's IOAcceleratorES, AGXDeviceUserClient) is in the GPU
-# archive of 0005 (gpu/build-oneios-gpu.py, gpu/OneiOSAdreno.cpp) and starts from oneios_gpu3d_start.
+# archive of 0005 (oneios-tool kernel gen gpu, gpu/OneiOSAdreno.cpp) and starts from oneios_gpu3d_start.
 0024-gpu-pool.patch
 # fable-user (Q6): the host's text fixups on code pages only, once, with a record of the changed words so that a
 # page validated again is hashed as it was read ("Text page corruption detected" otherwise); a twin that cannot be
