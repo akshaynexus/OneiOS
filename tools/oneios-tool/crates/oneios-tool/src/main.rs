@@ -7,6 +7,7 @@ usage: oneios-tool TOOL ARGS...
   log      read an xnuhost session log: stacks, timeline, diff, gpu, cpu, display, perf
   prelink  the kernel collection's pairing and build (kernel/prelink)
   image    the image tool (scripts/image/imagetool.py)
+  ioslog   iOS's unified log from a copy of the phone's Data store (no mount), a .logarchive or a mounted volume
 `oneios-tool TOOL --help` prints a tool's own usage.";
 
 fn main() {
@@ -21,6 +22,7 @@ fn main() {
         "log" => oneios_log::run(rest),
         "prelink" => oneios_prelink::run(rest),
         "image" => oneios_image::run(rest),
+        "ioslog" => oneios_ioslog::run(rest),
         "-h" | "--help" | "help" => {
             println!("{USAGE}");
             0
