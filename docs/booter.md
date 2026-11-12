@@ -322,6 +322,20 @@ Linux's page cache and a sparse file: the store is a raw image.
 - **`none`.** Frame in memory only.
 - **Input** is read from evdev directly and not grabbed, so the switch's Volume Up + Volume Down watcher
   keeps working beside it. The guest's side is `kernel/patches/oneios-hosted/hid` (`docs/hardware.md` 7b).
+  - **Scan time.** The touch device's events are read on `CLOCK_MONOTONIC` (`EVIOCSCLOCKID`, which is a property of
+    xnuhost's open file only). Before each touch frame's `SYN_REPORT` xnuhost sends `EV_MSC` / `MSC_TIMESTAMP`: the low
+    32 bits of the frame's kernel time, as ticks of `CNTVCT_EL0` (the guest's `mach_absolute_time`). The guest stamps
+    the frame's HID report with it. `--input-script` sends the time each frame is sent.
+  - **`SYN_DROPPED`** (the kernel's buffer for xnuhost overflowed): the events up to the next `SYN_REPORT` are dropped,
+    the device's state is read again (`EVIOCGMTSLOTS`, `EVIOCGKEY`, the current slot), and the difference from what the
+    guest was sent goes to it: first a frame of the lifts, then a frame with the contacts that are down. Before this a
+    lift lost in the drop left a finger down in iOS. Log line: `input: touch: events dropped by the kernel ...`.
+  - **Timing log**, one line when the last finger lifts: `input: touch: N frames in T ms, C contacts, a frame every
+    a..b ms; read x/y/z us after the scan (min/avg/max)`, then `; K frames waited for the guest's buffers` when the guest
+    had posted no buffers at a frame's end, and, for a touch-down after 100 ms without a guest frame, `; the guest's next
+    frame F ms after the touch-down` (the end is `xh_input_frame_shown`, called by `xh_display_flush`).
+  - The filter (`xh_input_feed`) is portable and has its own host test (`test_input_filter`): the events that pass, the
+    scan time, the resync of slots and keys after `SYN_DROPPED`, the still-screen timing.
 - **The touch IC's power state** is the brightness bridge's (`runtime/bridges/brightness/README.md`, "The touch IC
   follows the display"): Samsung's IC is off while the panel is blank and One UI's input HAL, which wakes it, is
   not there in a session. The bridge writes `/sys/class/sec/tsp*/enabled` (`sec_touchscreen` only): `2,0`, `2,1`
@@ -334,7 +348,8 @@ Linux's page cache and a sparse file: the store is a raw image.
   without `ABS_MT_POSITION_X/Y` is not a touch screen to the guest), `ready` waits for the guest's driver
   (`xh_virtio_ready`: DRIVER_OK), then `tap`, `swipe`, `key`, `ev`, `wait`, `repeat`.
   `tools/input-demo.script` is a 1440 x 3120 panel with a tap, a swipe from the bottom edge and the three side
-  keys, repeated. It runs beside the evdev reader, or alone with `--no-input`.
+  keys, repeated. It runs beside the evdev reader, or alone with `--no-input`. Each frame's end gets `EV_MSC` /
+  `MSC_TIMESTAMP` with the time it is sent, so the guest's latency line counts scripted frames too.
 - `session/ready` is created at the guest's first presented frame (or by the `ready` host call). The guest's
   display driver also presents the boot framebuffer (the console, and later a blank or CPU-copied frame drawn
   there): a flush of a resource whose backing starts at `boot_args.Video`'s address is shown but is not that

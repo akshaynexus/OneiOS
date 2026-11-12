@@ -128,3 +128,12 @@ void xh_virtio_input_event(xh_virtio *dev, uint16_t type, uint16_t code, int32_t
   if (type == EV_SYN_) drain(dev, s);
   xh_virtio_unlock(dev);
 }
+
+unsigned xh_virtio_input_backlog(xh_virtio *dev)
+{
+  input_state *s = xh_virtio_opaque(dev);
+  xh_virtio_lock(dev);
+  unsigned count = s->count;
+  xh_virtio_unlock(dev);
+  return count;
+}

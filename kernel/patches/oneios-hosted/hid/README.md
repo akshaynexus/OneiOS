@@ -27,13 +27,14 @@ start is called from `oneios_drivers_start` (`drivers/bridge/OneiOSBridge.c`, a 
 | `build-oneios-hid.py` | Checks the header against the record, stages and compiles the sources, generates the bindings, makes the archive |
 | `OneiOSHidInput.cpp` | `oneios_hid_input_start`: loads IOHIDFamily and IOHIDEventDriver, registers the classes below the live `IOHIDDevice`, starts the transport, publishes the two devices under `IOHIDResource`, starts the light sensor's device; the log lines |
 | `OneiOSSideKeys.inc` | The side keys of the transport: evdev key codes to the buttons device's report bits |
+| `OneiOSTouchTime.inc` | Each touch frame's scan time (xnuhost's `EV_MSC` / `MSC_TIMESTAMP`): kept while the frame is reported, so the touch report goes to the family with `handleReportWithTime(scan time)`; the latency counts of the log line |
 
 Sources taken unchanged and staged with anchored edits by the build (a changed anchor stops the build):
 `external/NativeHidInput/NativeHidInput.cpp` (UniXNU/ShengHidInput **24f1f3f**, its arm64e source; BSD-2-Clause-Patent)
 and `external/UniXNU-droidvm/package/DroidVMVirtioInput.c` (BSD-2-Clause-Patent). The edits: report 2 gets the
 ringer bit and takes Home and the ringer from the button sink; the edge band is 3 mm of the phone's panel (54 of 1320 px across, 54 of 2868 down, as shares of
 the axes), not of the iPad's; the edge wrapper follows a change of event driver; product names; the transport reads the side keys from any device, and takes a device with side
-keys and no touch screen.
+keys and no touch screen; the transport keeps each touch frame's scan time and the touch report carries it (see "Latency").
 
 ## The layout header: evidence
 
@@ -169,6 +170,7 @@ oneios-hid: touch screen: Digitizer/Touch Screen, Built-In, DisplayIntegrated pu
 oneios-hid: touch screen: 1 user client(s) on the event service: IOHIDEventServiceUserClient (pid N, backboardd)
 oneios-hid: touch screen: N HID events queued for the service's client(s), 0 dropped
 oneios-hid: touch screen: N virtio-input events, N frames, N finger sets, N HID reports (last result 0x0), N contacts begun (N at an edge); the last began at x 49.8% y 100.0%, the last lift was at x 51.2% y 41.0%; 212 sets resent for a held finger
+oneios-hid: touch latency: N frames; the transport had each a/b/c us after its scan, its HID report was with the event driver d/e/f us after it (min/avg/max)
 ```
 
 The two positions are what Apple's event driver put in its events (read by the edge wrapper, 0 % at the left and
@@ -180,6 +182,34 @@ it. "HID events queued" is the count each such user client keeps of the events A
 (its `DebugState`), read once a second while reports arrive. With `oneios-hid-driverkit=1`, between the two
 "event driver" lines (`AppleUserHIDEventService`, then `IOHIDEventDriver` 120 s later) the reports are accepted
 and go nowhere, and `contacts begun` stays 0.
+
+## Latency (touch, 2026-11-12)
+
+The path of one touch frame, and where each part is measured:
+
+| Step | Where | Measured by |
+|---|---|---|
+| The touch IC scans; Samsung's driver reports the frame; the kernel stamps it | the phone's kernel | the event time (`CLOCK_MONOTONIC`, xnuhost's file only) |
+| xnuhost's input thread reads it (`poll`, then `read` of up to 64 events) | `runtime/xnuhost/src/input.c` | `input: touch: ... read x/y/z us after the scan` (per gesture, at the last lift) |
+| At the frame's `SYN_REPORT` the events go into the guest's posted buffers and the device's SPI is raised | `virtio_input.c` | `... K frames waited for the guest's buffers` (none posted) |
+| The SPI wakes the transport's worker (`droidvm,intid`: it sleeps on the interrupt, no polling), which takes the frame | staged `DroidVMVirtioInput.c` | `oneios-hid: touch latency: ... the transport had each a/b/c us after its scan` |
+| The finger set is published and NativeHidInput's sink makes the HID report on the caller's thread (`runAction` on its work loop); Apple's IOHIDEventDriver turns it into digitizer events and queues them for backboardd inside that call | staged `NativeHidInput.cpp` | `... its HID report was with the event driver d/e/f us after it` |
+| backboardd reads its queue, SpringBoard or the app draws, the guest presents | iOS | `input: touch: ... the guest's next frame F ms after the touch-down` (touch-downs after 100 ms without a guest frame only) |
+| The display helper shows the frame; surfaceflinger composes it at the next vsync | `runtime/display` | not measured here |
+
+**The report's time.** Apple's driver gives every event the time its report arrived (`handleReport` passes "now").
+A real digitizer stamps its scan. The staged NativeHidInput now calls `handleReportWithTime` with the frame's scan
+time (xnuhost's `MSC_TIMESTAMP`, rebuilt to 64 bits against the counter now): the events backboardd gets carry the
+time the finger was where they say, so a velocity that UIKit computes from them (a fling, a scroll, the Home swipe's
+speed) is not bent by the delay of the path or its jitter. Each touch report's time is later than the one before it.
+The held-finger resends (`touch_still`) and a frame without a usable scan time are stamped "now". A scan time is
+used only when it is less than 1 s old and not in the future: the guest's `mach_absolute_time` is the host's
+`CNTVCT_EL0` plus `cpu_base_timebase`, which XNU changes only at a wake from system sleep (never on this board).
+
+Tested (2026-11-12, Mac): xnuhost's `test_input_filter` passes (the filter's events, the scan time, the resync after
+`SYN_DROPPED`, the still-screen timing; 13241 checks, 0 failed, in the arm64 Linux container); the kernel with the
+staged edits builds and links (`HOSTED_OUT=touch`), and its `kernel.kc` prelinks. Measurements on the phone: below,
+when they are made.
 
 ## Tested, not tested (2026-11-11)
 

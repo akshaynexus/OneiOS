@@ -56,6 +56,9 @@ extern volatile uint32_t droidvm_input_found, droidvm_input_started;
 extern volatile uint64_t droidvm_input_events, droidvm_input_frames, droidvm_input_published;
 // Finger sets the transport sent again for a finger held still (its touch_still: every 8 ms without a frame).
 extern volatile uint64_t droidvm_input_still;
+// The touch frames' latency (OneiOSTouchTime.inc): [0] frames with a scan time, [1] without; microseconds after the
+// scan: [2] [3] [4] sum, least, most when the worker had the frame, [5] [6] [7] when its HID report was handed over.
+extern volatile uint64_t oneios_touch_latency[8];
 extern volatile uint64_t oneios_hid_key_events, oneios_hid_button_reports;
 // NativeHidInput's: the wrapper of the event driver's dispatch ([0] 3 = installed), contacts begun and at an edge.
 extern volatile uint32_t native_touch_edge_install[3], native_touch_edge_stats[4];
@@ -307,6 +310,20 @@ native_hid_live_checkpoint(IOService *device)
 			    droidvm_input_published, reports, native_hid_input_results[6], native_touch_edge_stats[1],
 			    native_touch_edge_stats[2], at[0] / 10, at[0] % 10, at[1] / 10, at[1] % 10, at[2] / 10, at[2] % 10,
 			    at[3] / 10, at[3] % 10, droidvm_input_still);
+			uint64_t l[8];
+			for (unsigned i = 0; i < 8; i++) {
+				l[i] = oneios_touch_latency[i];
+				oneios_touch_latency[i] = 0;
+			}
+			if (l[0]) {
+				IOLog("oneios-hid: touch latency: %llu frames; the transport had each %llu/%llu/%llu us after its scan, its HID "
+				    "report was with the event driver %llu/%llu/%llu us after it (min/avg/max)\n", l[0], l[3], l[2] / l[0], l[4], l[6],
+				    l[5] / l[0], l[7]);
+			}
+			if (l[1]) {
+				IOLog("oneios-hid: touch latency: %llu frames without a usable scan time (an xnuhost that sends none, or a guest "
+				    "clock unlike the host's): their reports carry the time they were made\n", l[1]);
+			}
 		} else {
 			IOLog("oneios-hid: buttons: %llu key events, %llu button states, %llu HID reports (last result 0x%x)\n",
 			    oneios_hid_key_events, oneios_hid_button_reports, reports, native_hid_input_results[4]);

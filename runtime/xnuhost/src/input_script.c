@@ -16,7 +16,8 @@
 //   key CODE [MS]            a key pressed and released MS later (default 100): 116 power, 115 / 114 volume up / down
 //   repeat [N]               the steps after `ready` (or all, without one) again: forever, or N more times
 //
-// Numbers are decimal or 0x hexadecimal. A bad line stops xnuhost's start with its number.
+// Numbers are decimal or 0x hexadecimal. A bad line stops xnuhost's start with its number. Each frame's end (`syn`, and
+// the end of every step of tap, swipe and key) is preceded by EV_MSC / MSC_TIMESTAMP with the time it is sent.
 #include "xnuhost.h"
 #include <ctype.h>
 #include <errno.h>
@@ -155,7 +156,12 @@ static void *script_main(void *arg)
       start = i + 1;
       break;
     case XH_STEP_WAIT: sleep_ms(s->value); break;
-    case XH_STEP_EVENT: xh_virtio_input_event(target, s->type, s->code, s->value); break;
+    case XH_STEP_EVENT:
+      // A frame's end carries its time, as input.c's touch frames do (EV_MSC / MSC_TIMESTAMP, the counter's low bits):
+      // the guest counts its latency from here.
+      if (s->type == EV_SYN_ && s->code == 0) xh_virtio_input_event(target, 4, 5, (int32_t)(uint32_t)xh_counter());
+      xh_virtio_input_event(target, s->type, s->code, s->value);
+      break;
     case XH_STEP_REPEAT:
       if (s->value < 0) { i = start - 1; break; }
       if (!counting) { counting = true; left = s->value; }

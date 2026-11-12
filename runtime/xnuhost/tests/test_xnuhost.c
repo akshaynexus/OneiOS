@@ -836,6 +836,106 @@ static void test_virtio_input(void)
   CHECK(used[1] == 5 && ev[0].type == 0);
 }
 
+// input.c's filter of one device: what reaches the guest, the scan time, SYN_DROPPED.
+typedef struct { uint16_t type, code; int32_t value; } test_ev;
+// The events the device wrote since the last call, in order; each buffer is posted again (8 in the queue).
+static unsigned input_take(driver *d, test_ev *out, unsigned max)
+{
+  uint16_t *used = xh_ram(d->queue_pa[0] + 0x2000, 0x1000);
+  struct vdesc *desc = xh_ram(d->queue_pa[0], 0x1000);
+  unsigned n = 0;
+  for (bool more = true; more;) {
+    more = false;
+    while (d->used_seen[0] != used[1] && n < max) {
+      uint32_t id = ((uint32_t *)(used + 2))[2 * (d->used_seen[0] % 8)];
+      uint64_t addr = desc[id].addr;
+      memcpy(&out[n++], xh_ram(addr, 8), 8);
+      d->used_seen[0]++;
+      driver_send(d, 0, (const uint64_t[][3]){ { addr, 8, 1 } }, 1, false);
+      more = true;
+    }
+    W(d, 0x50, 0);                                                              // the kick hands over what waited
+  }
+  return n;
+}
+
+static xh_input_state fake_state;
+static int fake_read_state(xh_input_source *s, xh_input_state *state) { (void)s; *state = fake_state; return 0; }
+
+static void test_input_filter(void)
+{
+  driver d = { .dev = xh_virtio_input_create(0, 45) };
+  CHECK(d.dev && driver_init(&d, 0, 2, GUEST_PA + 0x10000));
+  for (unsigned i = 0; i < 8; i++) driver_send(&d, 0, (const uint64_t[][3]){ { GUEST_PA + 0x50000 + i * 8, 8, 1 } }, 1, false);
+  W(&d, 0x50, 0);
+  test_ev got[32];
+  const uint64_t hz = 19200000, counter = 1000000000;
+  const int64_t now = 100000000000;
+  xh_input_source s;
+  xh_input_source_init(&s, d.dev, "touch", true);
+  s.read_state = fake_read_state;
+  // A touch-down, read 2 ms after its scan: the frame and then its scan time, 38400 ticks before the counter now.
+  const xh_input_ev down[] = { { now - 2000000, 3, 0x2f, 0 }, { now - 2000000, 3, 0x39, 5 }, { now - 2000000, 3, 0x35, 700 },
+                               { now - 2000000, 3, 0x36, 1500 }, { now - 2000000, 1, 0x14a, 1 }, { now - 2000000, 4, 5, 77 }, { now - 2000000, 0, 0, 0 } };
+  xh_input_feed(&s, down, 7, now, counter, hz);
+  unsigned n = input_take(&d, got, 32);
+  CHECK(n == 7 && got[0].code == 0x2f && got[1].code == 0x39 && got[1].value == 5 && got[2].value == 700 && got[3].value == 1500 &&
+        got[4].type == 1 && got[4].code == 0x14a && got[4].value == 1);                  // the device's own MSC is not passed on
+  CHECK(got[5].type == 4 && got[5].code == 5 && (uint32_t)got[5].value == (uint32_t)(counter - 38400) && got[6].type == 0 && got[6].code == 0);
+  CHECK(s.timing.frames == 1 && s.timing.began == 1 && s.sent_id[0] == 5 && s.timing.read_min_ns == 2000000);
+  // A move 8 ms later: only what changed.
+  const xh_input_ev move[] = { { now + 6000000, 3, 0x35, 710 }, { now + 6000000, 0, 0, 0 } };
+  xh_input_feed(&s, move, 2, now + 6500000, counter, hz);
+  n = input_take(&d, got, 32);
+  CHECK(n == 3 && got[0].value == 710 && got[1].type == 4 && got[2].type == 0 && s.timing.frames == 2 && s.timing.gap_min_ns == 8000000);
+  // Dropped events: the rest of that frame is ignored, the state is read again. Slot 0's finger lifted in the drop, slot 1
+  // holds a new one: a frame of the lift (the gesture ends there), then a frame with the new contact.
+  memset(&fake_state, 0, sizeof fake_state);
+  for (unsigned i = 0; i < XH_INPUT_SLOTS; i++) fake_state.id[i] = -1;
+  fake_state.id[1] = 9; fake_state.x[1] = 100; fake_state.y[1] = 200; fake_state.slot = 1;
+  const xh_input_ev drop[] = { { now, 0, 3, 0 }, { now, 3, 0x35, 720 }, { now, 3, 0x39, -1 }, { now, 0, 0, 0 } };
+  xh_input_feed(&s, drop, 4, now + 20000000, counter, hz);
+  n = input_take(&d, got, 32);
+  CHECK(n == 5 + 8 && got[0].code == 0x2f && got[0].value == 0 && got[1].code == 0x39 && got[1].value == -1 && got[2].code == 0x14a &&
+        got[2].value == 0 && got[3].type == 4 && got[4].type == 0);
+  CHECK(got[5].code == 0x2f && got[5].value == 1 && got[6].code == 0x39 && got[6].value == 9 && got[7].value == 100 && got[8].value == 200 &&
+        got[9].code == 0x2f && got[9].value == 1 && got[10].code == 0x14a && got[10].value == 1 && got[11].type == 4 && got[12].type == 0);
+  CHECK(s.drops == 1 && !s.dropping && s.sent_id[0] == -1 && s.sent_id[1] == 9 && s.timing.frames == 1 && s.timing.began == 1);
+  // The lift: the gesture is logged and the counts start again; a frame with nothing down is no gesture.
+  const xh_input_ev lift[] = { { now + 30000000, 3, 0x39, -1 }, { now + 30000000, 1, 0x14a, 0 }, { now + 30000000, 0, 0, 0 },
+                               { now + 40000000, 1, 0x14a, 0 }, { now + 40000000, 0, 0, 0 } };
+  xh_input_feed(&s, lift, 5, now + 41000000, counter, hz);
+  n = input_take(&d, got, 32);
+  CHECK(n == 4 + 3 && got[0].code == 0x39 && got[0].value == -1 && s.timing.frames == 0 && s.sent_id[1] == -1);
+  // A touch-down on a still screen (no guest frame for 120 ms) is timed to the next frame shown.
+  xh_input_frame_shown();
+  usleep(120000);
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  const int64_t real = (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+  const xh_input_ev tap[] = { { real, 3, 0x39, 11 }, { real, 3, 0x35, 5 }, { real, 0, 0, 0 } };
+  xh_input_feed(&s, tap, 3, real, counter, hz);
+  CHECK(s.timing.still && s.timing.frames == 1);
+  xh_input_frame_shown();
+  const xh_input_ev up[] = { { real + 1, 3, 0x39, -1 }, { real + 1, 0, 0, 0 } };
+  xh_input_feed(&s, up, 2, real + 2, counter, hz);
+  CHECK(!s.timing.frames);
+  input_take(&d, got, 32);
+  // A key device: the side keys pass, other keys and touch codes do not; after a drop the keys are read again.
+  xh_input_source k;
+  xh_input_source_init(&k, d.dev, "keys", false);
+  k.read_state = fake_read_state;
+  const xh_input_ev press[] = { { now, 1, 116, 1 }, { now, 1, 30, 1 }, { now, 3, 0x35, 3 }, { now, 0, 0, 0 } };
+  xh_input_feed(&k, press, 4, now, counter, hz);
+  n = input_take(&d, got, 32);
+  CHECK(n == 2 && got[0].code == 116 && got[0].value == 1 && got[1].type == 0 && k.sent_keys == 4);
+  fake_state.keys = 2;                                                          // power up, volume up down: both changed
+  const xh_input_ev kdrop[] = { { now, 0, 3, 0 }, { now, 1, 116, 0 }, { now, 0, 0, 0 } };
+  xh_input_feed(&k, kdrop, 3, now, counter, hz);
+  n = input_take(&d, got, 32);
+  CHECK(n == 3 && got[0].code == 115 && got[0].value == 1 && got[1].code == 116 && got[1].value == 0 && got[2].type == 0 && k.sent_keys == 2);
+}
+
 // The scripted event source (input_script.c): the file's lines as steps.
 static void test_input_script(void)
 {
@@ -1056,6 +1156,7 @@ int main(void)
   test_virtio_gpu();
   test_virtio_gpu3d();
   test_virtio_input();
+  test_input_filter();
   test_input_script();
   test_filter();
   if (!freopen("/dev/null", "w", stderr)) failures++;   // the refusals below print their reasons

@@ -265,6 +265,7 @@ int xh_display_init(const xh_config *c, unsigned *width, unsigned *height, unsig
 
 void xh_display_flush(unsigned x, unsigned y, unsigned w, unsigned h)
 {
+  xh_input_frame_shown();                        // input.c's touch-to-frame measurement
   if (backend == BACK_DRM) drm_flush(x, y, w, h);
   if (backend != BACK_SHM) return;
   pthread_mutex_lock(&client_lock);

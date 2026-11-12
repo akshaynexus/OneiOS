@@ -209,7 +209,8 @@ def stage_hid(out):
     """NativeHidInput.cpp for the phone. The buttons device's report 2 gets a fifth bit, the ringer switch
     (Telephony / Ring Enable), and takes all five from the transport's button sink (the source keeps the Home bit
     for its own timed press and drops it from the sink's mask); the edge band is 3 mm of the phone's panel, not of
-    the iPad's; the products are named for what they are here; the edge wrapper follows a change of event driver."""
+    the iPad's; the products are named for what they are here; the edge wrapper follows a change of event driver;
+    a touch report carries its frame's scan time (handleReportWithTime, OneiOSTouchTime.inc)."""
     edge_x, edge_y = (f'{EDGE_PIXELS}*65536/{side}' for side in PANEL)
     text = replace_once(HID_SOURCE.read_text(), (
         ('    0x75,0x01,0x95,0x04,0x81,0x02,\n    0x75,0x04,0x95,0x01,0x81,0x03,0xc0\n};',
@@ -232,6 +233,30 @@ def stage_hid(out):
          '        oneios_touch_last[3]=call<int32_t,uint32_t,IOOptionBits>(child,kGetFixed,kDivGetFixed,kY,0);\n'
          '    }\n'
          '    if(!touch && (mask&kMaskTouch))fromEdge[index]=false;'),
+        # The touch report's time: the frame's scan time (OneiOSTouchTime.inc), not the time of the call. Inside
+        # touchSend the device's work-loop gate is held (runAction on the device's own loop), which is all that
+        # handleReport adds to handleReportWithTime besides "now".
+        ('    uint32_t lastSeq=0;\n',
+         '    uint32_t lastSeq=0;\n'
+         '    uint64_t lastTouchTime=0;   // OneiOS: the last touch report\'s time, so that each is later than the one before\n'
+         '    IOReturn submitTouchReport(IOMemoryDescriptor *report) {   // OneiOS\n'
+         '        const uint64_t now=mach_absolute_time();\n'
+         '        uint64_t time=oneios_touch_frame_time;\n'
+         '        if(!time || time>now)time=now;\n'
+         '        if(time<=lastTouchTime)time=lastTouchTime+1;\n'
+         '        lastTouchTime=time;\n'
+         '        return handleReportWithTime(time,report,kIOHIDReportTypeInput,0);\n'
+         '    }\n'),
+        ('        IOReturn result=buffer?self->submitReport(buffer):kIOReturnNoMemory;\n'
+         '        OSSafeReleaseNULL(buffer);\n'
+         '        native_hid_input_observed(6,result);\n',
+         '        IOReturn result=buffer?self->submitTouchReport(buffer):kIOReturnNoMemory;   // OneiOS: at the scan time\n'
+         '        OSSafeReleaseNULL(buffer);\n'
+         '        native_hid_input_observed(6,result);\n'),
+        ('extern "C" void native_touch_set_sink(void (*)(void *), void *) __attribute__((weak_import));\n',
+         'extern "C" void native_touch_set_sink(void (*)(void *), void *) __attribute__((weak_import));\n'
+         '// OneiOS: the scan time of the touch frame being reported (OneiOSTouchTime.inc), 0 = none.\n'
+         'extern "C" {extern volatile uint64_t oneios_touch_frame_time; uint64_t mach_absolute_time(void);}\n'),
         ('return OSString::withCString(touchOnly?"Offline touch digitizer":"Offline HID input probe");',
          'return OSString::withCString(touchOnly?"OneiOS touch screen":"OneiOS buttons");'),
         # The event driver can change under a device: the collection tries the DriverKit driver first
@@ -259,15 +284,24 @@ def stage_hid(out):
 
 def stage_transport(out):
     """DroidVMVirtioInput.c with the phone's side keys (OneiOSSideKeys.inc): xnuhost's one input device carries the
-    touch screen and the keys, and the source reads keys from a keyboard only."""
+    touch screen and the keys, and the source reads keys from a keyboard only. Each touch frame's scan time, which
+    xnuhost sends as EV_MSC / MSC_TIMESTAMP before the frame's SYN_REPORT, is kept while the frame is reported and
+    counted (OneiOSTouchTime.inc)."""
     text = replace_once(TRANSPORT.read_text(), (
         ('struct droidvm_input_desc { uint64_t address;',
-         '// OneiOS (build-oneios-hid.py): a side key\'s event, OneiOSSideKeys.inc at the end of this file.\n'
+         '// OneiOS (build-oneios-hid.py): a side key\'s event, OneiOSSideKeys.inc at the end of this file; a touch\n'
+         '// frame\'s scan time, OneiOSTouchTime.inc after it.\n'
          'static bool oneios_side_key(unsigned code, int32_t value);\n'
+         'static void oneios_touch_scan(int32_t value);\n'
+         'static void oneios_touch_frame_begin(void);\n'
+         'static void oneios_touch_frame_end(void);\n'
          'struct droidvm_input_desc { uint64_t address;'),
         ('    if (e->type == EV_SYN) return e->code == SYN_REPORT;\n',
          '    if (e->type == EV_SYN) return e->code == SYN_REPORT;\n'
-         '    if (e->type == EV_KEY && oneios_side_key(e->code, e->value)) return false;   // OneiOS: any device\'s side keys\n'),
+         '    if (e->type == EV_KEY && oneios_side_key(e->code, e->value)) return false;   // OneiOS: any device\'s side keys\n'
+         '    if (e->type == 4 && e->code == 5) { oneios_touch_scan(e->value); return false; }   // OneiOS: EV_MSC / MSC_TIMESTAMP\n'),
+        ('                else touch_frame();\n',
+         '                else { oneios_touch_frame_begin(); touch_frame(); oneios_touch_frame_end(); }   // OneiOS: the scan time\n'),
         # A device with the side keys and no touch screen (xnuhost found no panel) is still read.
         ('        input_bit(abs, nabs, ABS_Z))\n        return KIND_MOTION;\n    return KIND_NONE;\n',
          '        input_bit(abs, nabs, ABS_Z))\n        return KIND_MOTION;\n'
@@ -277,7 +311,7 @@ def stage_transport(out):
          'static bool input_bit(const uint8_t *bits, unsigned size, unsigned bit) {\n'),
     ), 'DroidVMVirtioInput.c')
     staged = out / 'DroidVMVirtioInput.c'
-    staged.write_text(text + '\n' + (HERE / 'OneiOSSideKeys.inc').read_text())
+    staged.write_text(text + '\n' + (HERE / 'OneiOSSideKeys.inc').read_text() + '\n' + (HERE / 'OneiOSTouchTime.inc').read_text())
     return staged
 
 
@@ -326,7 +360,7 @@ def bindings(layout, slot_of, table, imports):
 
 def main():
     needed = (REPO / 'drivers/build.py', HID_SOURCE, TRANSPORT, ALS, LAYOUT, HEADER, HERE / 'OneiOSHidInput.cpp',
-              HERE / 'OneiOSSideKeys.inc', RECORDS / 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json')
+              HERE / 'OneiOSSideKeys.inc', HERE / 'OneiOSTouchTime.inc', RECORDS / 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json')
     for path in needed:
         if not path.is_file():
             fail(f'{path} missing (scripts/setup/get-references.sh NativeHidInput; kernel/fetch.sh)')

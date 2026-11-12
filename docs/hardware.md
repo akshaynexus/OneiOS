@@ -649,7 +649,9 @@ Details, the layout header's evidence and the log lines: `kernel/patches/oneios-
 1. xnuhost (`runtime/xnuhost/src/input.c`) opens every event device that has multitouch positions or one of the
    three side keys, **read only and without `EVIOCGRAB`**, and puts the events, unchanged, on one virtio-input
    device (`/arm-io/input-0`) with the panel's own axis ranges in its configuration. The switch's Volume Up +
-   Volume Down watcher reads the same key devices beside it.
+   Volume Down watcher reads the same key devices beside it. Each touch frame also carries its scan time (`EV_MSC` /
+   `MSC_TIMESTAMP`, in counter ticks), and after `SYN_DROPPED` the device's state is read again so that no lift is
+   lost (`docs/booter.md` 2.8).
 2. In the kernel, UniXNU-droidvm's `DroidVMVirtioInput.c` (staged with `OneiOSSideKeys.inc`) reads the queue: the
    finger set goes to the digitizer, a side key's state to the buttons.
 3. Two HID devices of UniXNU's `NativeHidInput`, subclasses of the collection's original `IOHIDDevice`
@@ -657,7 +659,11 @@ Details, the layout header's evidence and the log lines: `kernel/patches/oneios-
    Built-In, DisplayIntegrated) and "OneiOS buttons" (Consumer Menu, Power, Volume Increment and Decrement,
    Telephony Ring Enable, a boot keyboard).
 4. Apple's IOHIDFamily and IOHIDEventDriver, unchanged in `kernel.kc`, parse the reports and make the HID events
-   backboardd reads.
+   backboardd reads. The touch reports are handed over with the frame's scan time (`handleReportWithTime`), so the
+   events carry the time of the scan, not of their arrival.
+
+Where the time of one touch goes and the log lines that measure each step: `kernel/patches/oneios-hosted/hid/README.md`,
+"Latency".
 
 Coordinates: each axis of the panel's range is scaled to the digitizer's full range, which iOS maps to the whole
 display, so the panel's range covers the guest's mode (the panel's own 1440 x 3120 by default) when the guest's

@@ -321,9 +321,37 @@ void  xh_display_close(void);
 // Input (input.c): /dev/input/event* into the virtio-input device.
 int   xh_input_start(xh_virtio *dev, unsigned width, unsigned height);
 void  xh_input_stop(void);
+// The display showed a guest frame (display.c): the end of input.c's touch-to-frame measurement.
+void  xh_input_frame_shown(void);
+// One reader's filter, the part of input.c the host tests run. An event as read, its time on CLOCK_MONOTONIC.
+#define XH_INPUT_SLOTS 16
+typedef struct { int64_t time_ns; uint16_t type, code; int32_t value; } xh_input_ev;
+// A device's state as its ioctls give it: per slot the tracking id (-1 none) and position; the current slot; the side
+// keys held (bit 0 volume down, 1 volume up, 2 power).
+typedef struct { int32_t id[XH_INPUT_SLOTS], x[XH_INPUT_SLOTS], y[XH_INPUT_SLOTS]; unsigned slot, keys; } xh_input_state;
+// What one gesture (first finger down to last finger up) looked like: logged when it ends.
+typedef struct {
+  unsigned frames, began, held;                   // touch frames; contacts begun; frames the guest had no buffers for
+  bool     still;                                 // the guest showed no frame for 100 ms before the touch-down
+  int64_t  first_scan_ns, last_scan_ns, gap_min_ns, gap_max_ns, read_sum_ns, read_min_ns, read_max_ns;
+} xh_input_timing;
+typedef struct xh_input_source {
+  xh_virtio *dev;
+  char       name[24];
+  bool       touch, dropping;                     // dropping: after SYN_DROPPED, until the next SYN_REPORT
+  int        fd;
+  int      (*read_state)(struct xh_input_source *s, xh_input_state *state);   // 0 when read
+  unsigned   slot, sent_keys, began, frame_began, drops;
+  int32_t    sent_id[XH_INPUT_SLOTS];             // the tracking id the guest was last sent per slot
+  xh_input_timing timing;
+} xh_input_source;
+void  xh_input_source_init(xh_input_source *s, xh_virtio *dev, const char *name, bool touch);
+// Events read at now_ns (CLOCK_MONOTONIC) = now_counter (CNTVCT, hz ticks a second), to the guest.
+void  xh_input_feed(xh_input_source *s, const xh_input_ev *ev, unsigned n, int64_t now_ns, uint64_t now_counter, uint64_t hz);
 // virtio-input side
 void  xh_virtio_input_event(xh_virtio *dev, uint16_t type, uint16_t code, int32_t value);
 void  xh_virtio_input_set_abs(xh_virtio *dev, unsigned axis, int32_t min, int32_t max, int32_t res);
+unsigned xh_virtio_input_backlog(xh_virtio *dev);   // events still waiting for the guest's buffers
 // Input script (input_script.c): touches and key presses from a text file (input-script=FILE), for a host with no
 // touchscreen and for repeatable checks. The file's format is at the top of input_script.c.
 typedef enum { XH_STEP_ABS, XH_STEP_READY, XH_STEP_WAIT, XH_STEP_EVENT, XH_STEP_REPEAT } xh_input_step_kind;
