@@ -164,6 +164,11 @@ struct Cycle<'a> {
     marker_times: Vec<(f64, String)>,
     lines_seen: u64,
     switched: Option<Instant>,
+    /// The phone's clock just before this cycle's switch. With it, `look` reads session/xnuhost.log only once the
+    /// file was changed at or after that second: until the switch replaces it (about 40 s in, after One UI stops)
+    /// the file is the last session's, and its first-frame line made the watch say "ready after 0 s" (phone,
+    /// 2026-11-12 23:04).
+    switch_epoch: Option<u64>,
     runtime_dir: Option<PathBuf>,
     image_dir: Option<PathBuf>,
     way_back: String,
@@ -284,8 +289,10 @@ impl Cycle<'_> {
             self.say(&format!("image parts: the given folder {dir}"));
             self.image_dir = Some(PathBuf::from(dir));
         } else {
-            let set = root.join(format!("out/image/{BUILD}"));
-            let parts = [(kc.clone(), "kernel.kc"), (kc.with_file_name("kernel.kc.hashes"), "kernel.kc.hashes"), (set.join("manifest.json"), "manifest.json"), (set.join("overlay/userland/xnuhost.conf"), "overlay/userland/xnuhost.conf")];
+            // only the kernel's files: manifest.json is made from the phone's at the stage step (out/image/<build>'s
+            // is the Mac's own set, not the phone's: staged on 2026-11-12 it made xnuhost refuse the set), and
+            // xnuhost.conf belongs to the image set on the phone (--image DIR stages one on purpose)
+            let parts = [(kc.clone(), "kernel.kc"), (kc.with_file_name("kernel.kc.hashes"), "kernel.kc.hashes")];
             let dir = root.join("out/cycle/image");
             let have: Vec<&(PathBuf, &str)> = parts.iter().filter(|(src, _)| src.is_file()).collect();
             self.say(&format!("image parts: {} into {}", if have.is_empty() { "none built here".to_string() } else { have.iter().map(|p| p.1).collect::<Vec<_>>().join(", ") }, dir.display()));
@@ -402,9 +409,17 @@ impl Cycle<'_> {
                     fs::copy(&src, &dst)?;
                 }
             }
+            if !image.iter().any(|rel| rel == "manifest.json") {
+                // the files staged need their own entries in the set's manifest, or xnuhost refuses the set
+                let (text, changed) = phone::manifest_for(adb, &part.display().to_string())?;
+                fs::write(part.join("manifest.json"), text)?;
+                println!("  manifest.json: the phone's, {}", if changed.is_empty() { "no entry changed".to_string() } else { format!("new entries: {}", changed.join(", ")) });
+            }
             phone::stage(adb, "image", &part.display().to_string())?;
             let _ = fs::remove_dir_all(&part);
         }
+        let n = phone::image_check(adb)?;
+        println!("  image: manifest.json and the {n} files it lists agree");
         if runtime {
             phone::stage(adb, "runtime", &self.runtime_dir.as_ref().expect("a runtime").display().to_string())?;
         }
@@ -450,7 +465,16 @@ impl Cycle<'_> {
     /// The log's new lines since the last look; the markers among them are printed. A failed look is not an error
     /// (adb drops while the framework stops).
     fn look(&mut self, adb: &Adb) {
-        let Ok(r) = adb.root(&format!("tail -n +{} {STAGE}/session/xnuhost.log 2>/dev/null\n", self.lines_seen + 1)) else { return };
+        let log = format!("{STAGE}/session/xnuhost.log");
+        let script = match self.switch_epoch {
+            // a log older than this cycle's switch is the last session's: nothing of it counts
+            Some(since) => format!(
+                "[ -f {log} ] || exit 0\n[ \"$(stat -c %Z {log} 2>/dev/null || echo 0)\" -ge {since} ] || exit 0\ntail -n +{} {log} 2>/dev/null\n",
+                self.lines_seen + 1
+            ),
+            None => format!("tail -n +{} {log} 2>/dev/null\n", self.lines_seen + 1),
+        };
+        let Ok(r) = adb.root(&script) else { return };
         if !r.ok() {
             return;
         }
@@ -666,7 +690,10 @@ impl Cycle<'_> {
         if on("switch") {
             println!("== switch");
             let start = Instant::now();
-            let r = self.way_back_ready(adb).and_then(|()| phone::switch(adb, None).map(|_| ()));
+            let r = self.way_back_ready(adb).and_then(|()| {
+                self.switch_epoch = Some(phone::phone_epoch(adb)?);
+                phone::switch(adb, None).map(|_| ())
+            });
             self.timed("switch", start, &r);
             r?;
             self.switched = Some(start);
@@ -742,7 +769,7 @@ pub fn main(a: Args) -> i32 {
         let out = root.join("out/session-logs").join(date).join(&name);
         catch_stop();
         println!("cycle {name}: {}{}", steps.join(", "), if a.dry_run { " (dry run: nothing is built, the phone is not touched)" } else { "" });
-        let mut c = Cycle { a: &a, root, name, out, dry: a.dry_run, times: Vec::new(), notes: Vec::new(), markers: Markers::default(), marker_times: Vec::new(), lines_seen: 0, switched: None, runtime_dir: None, image_dir: None, way_back: String::new() };
+        let mut c = Cycle { a: &a, root, name, out, dry: a.dry_run, times: Vec::new(), notes: Vec::new(), markers: Markers::default(), marker_times: Vec::new(), lines_seen: 0, switched: None, switch_epoch: None, runtime_dir: None, image_dir: None, way_back: String::new() };
         let result = c.run(&steps);
         if stopped() && result.is_ok() {
             println!("cycle: ended by Ctrl-C");

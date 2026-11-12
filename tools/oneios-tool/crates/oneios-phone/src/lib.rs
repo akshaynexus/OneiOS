@@ -57,6 +57,20 @@ pub enum Command {
     },
     /// The sha256 of the staged kernel.kc, its hash list, manifest.json, data.seed's line, xnuhost.conf and the runtime
     Sums,
+    /// Check that the staged manifest.json lists the staged files (image.sha256), as xnuhost will; `switch` runs it first (read only)
+    ImageCheck,
+    /// The phone's manifest.json with the entries of DIR's files (kernel.kc, kernel.kc.hashes, ... at their paths in the
+    /// set) set to theirs; every other entry must list the staged file. Printed, written to --out, or staged with --stage
+    Manifest {
+        /// Files of the image set at their paths (DIR's own manifest.json is ignored)
+        dir: String,
+        /// Write the manifest to FILE
+        #[arg(long)]
+        out: Option<String>,
+        /// Stage DIR's files and the manifest together (phone stage image), then check the set
+        #[arg(long)]
+        stage: bool,
+    },
     /// Copy the Data store (data.img) from the phone, zero runs as holes; no session may be open
     PullData {
         out: String,
@@ -163,6 +177,11 @@ pub fn main(cli: Cli) -> i32 {
         Command::Return { timeout, note } => Adb::connect(serial).and_then(|adb| phone::do_return(&adb, &note, timeout)),
         Command::Stage { kind, dir } => Adb::connect(serial).and_then(|adb| phone::stage(&adb, &kind, &dir)),
         Command::Sums => Adb::connect(serial).and_then(|adb| phone::sums_text(&adb).map(|text| print!("{text}"))),
+        Command::ImageCheck => Adb::connect(serial).and_then(|adb| {
+            adb.need_root()?;
+            phone::image_check(&adb).map(|n| println!("image: manifest.json and the {n} files it lists agree"))
+        }),
+        Command::Manifest { dir, out, stage } => Adb::connect(serial).and_then(|adb| phone::manifest_cmd(&adb, &dir, out.as_deref(), stage)),
         Command::PullData { out, ioslog } => Adb::connect(serial).and_then(|adb| phone::pull_data(&adb, &out, ioslog)),
     };
     match result {
