@@ -144,6 +144,14 @@ and every Metal client is a KGSL fd and a dma-heap fd. The renderer's start rais
 hard limit (no privilege needed; `gpu: open files: soft limit N -> M` in the log when it changed). Droid-VM's crosvm
 ran out of fds under GFXBench before it did the same.
 
+**The host's share of a frame.** The guest's GPU report times a render-server frame from submission to the fence it
+sees (9-11 ms on the phone on 2026-11-12, with KGSL 7 % busy). `gpu3d_kgsl.c` times the host's part, one line per 10 s
+while fences retire: `gpu: 10 s host: backboardd fences N, submit->retired mean X us max Y us; submit calls mean X us max
+Y us; other fences N, mean X us`. "submit->retired" runs from the fence reaching the renderer to drm2kgsl's retire
+callback (the GPU's work and KGSL's wake-up); "submit calls" is the time spent in drm2kgsl's submit. What the guest
+sees beyond that is the virtio round trip and the guest's own wake-ups. The render server's contexts are those named
+`xnu:backboardd`. Not yet run on the phone.
+
 **Session rules** (`docs/booter.md` 2.9): nothing new outside the process. KGSL contexts, the VBO and the dma-bufs
 are descriptors of xnuhost and go with it at SIGKILL; drm2kgsl's fence threads are ordinary threads.
 

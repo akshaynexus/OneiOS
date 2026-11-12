@@ -97,8 +97,76 @@ static size_t capset(xh_gpu3d *b, uint32_t id, uint32_t version, void *out, size
 
 static xh_gpu3d *the;      // virglrenderer's tables are the process's, and so is drm2kgsl's VBO
 
+// ---- the host's share of a frame ------------------------------------------------------------------------------------
+// The guest's GPU report times a render-server frame from its submission to the fence it sees signalled (9-11 ms on the
+// phone with KGSL 7 % busy, 2026-11-12). This times the host's part of the same path, per 10 s, one log line:
+//   gpu: 10 s host: backboardd fences 98, submit->retired mean 2100 us max 9000 us; submit calls mean 150 us max 900 us;
+//        other fences 30, mean 1800 us
+// "submit->retired" is from the fence's command reaching the renderer to drm2kgsl's retire callback (the GPU's work and
+// KGSL's wake-up); "submit calls" is the time in drm2kgsl's submit (the KGSL ioctl and the command's checks). The rest of
+// the guest's figure is the virtio round trip and the guest's own wake-ups.
+#include <pthread.h>
+#include <time.h>
+enum { STAT_RINGS = 4, STAT_PENDING = 64, STAT_CTX = 128 };
+typedef struct { uint64_t fence, at; } stat_pending;
+typedef struct {
+  uint32_t id;
+  bool render;
+  unsigned head[STAT_RINGS], count[STAT_RINGS];
+  stat_pending pending[STAT_RINGS][STAT_PENDING];
+} stat_ctx;
+static struct {
+  pthread_mutex_t lock;
+  stat_ctx ctx[STAT_CTX];
+  uint64_t since, render_n, render_sum, render_max, other_n, other_sum, submit_n, submit_sum, submit_max;
+} st = { .lock = PTHREAD_MUTEX_INITIALIZER };
+
+static uint64_t now_us(void)
+{
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return (uint64_t)t.tv_sec * 1000000u + (uint64_t)t.tv_nsec / 1000u;
+}
+
+static stat_ctx *stat_find(uint32_t id)      // with st.lock held
+{
+  for (unsigned i = 0; i < STAT_CTX; i++) if (st.ctx[i].id == id) return &st.ctx[i];
+  return NULL;
+}
+
+static void stat_report(uint64_t now)         // with st.lock held
+{
+  if (!st.since) { st.since = now; return; }
+  if (now - st.since < 10000000u) return;
+  if (st.render_n || st.other_n)
+    say(1, "gpu: %llu s host: backboardd fences %llu, submit->retired mean %llu us max %llu us; submit calls mean %llu us max %llu us; "
+        "other fences %llu, mean %llu us", (unsigned long long)((now - st.since) / 1000000u), (unsigned long long)st.render_n,
+        (unsigned long long)(st.render_n ? st.render_sum / st.render_n : 0), (unsigned long long)st.render_max,
+        (unsigned long long)(st.submit_n ? st.submit_sum / st.submit_n : 0), (unsigned long long)st.submit_max,
+        (unsigned long long)st.other_n, (unsigned long long)(st.other_n ? st.other_sum / st.other_n : 0));
+  st.since = now;
+  st.render_n = st.render_sum = st.render_max = st.other_n = st.other_sum = st.submit_n = st.submit_sum = st.submit_max = 0;
+}
+
 static void fence_retired(struct virgl_context *ctx, uint32_t ring, uint64_t fence)
 {
+  uint64_t now = now_us();
+  pthread_mutex_lock(&st.lock);
+  stat_ctx *c = stat_find(ctx->ctx_id);
+  if (c && ring < STAT_RINGS) {
+    // Mergeable fences: this one and every earlier one of the ring are done.
+    while (c->count[ring]) {
+      stat_pending *p = &c->pending[ring][c->head[ring]];
+      if (p->fence > fence) break;
+      uint64_t took = now - p->at;
+      if (c->render) { st.render_n++; st.render_sum += took; if (took > st.render_max) st.render_max = took; }
+      else { st.other_n++; st.other_sum += took; }
+      c->head[ring] = (c->head[ring] + 1) % STAT_PENDING;
+      c->count[ring]--;
+    }
+  }
+  stat_report(now);
+  pthread_mutex_unlock(&st.lock);
   if (the && the->retire) the->retire(the->dev, ctx->ctx_id, ring, fence);
 }
 
@@ -116,10 +184,26 @@ static int ctx_create(xh_gpu3d *b, uint32_t id, uint32_t capset_id, const char *
   ctx->fence_retire = fence_retired;
   int r = virgl_context_add(ctx);
   if (r) { ctx->destroy(ctx); return -ENOMEM; }
+  pthread_mutex_lock(&st.lock);
+  stat_ctx *c = stat_find(0);
+  if (c) {
+    memset(c, 0, sizeof *c);
+    c->id = id;
+    c->render = name && name_length == 14 && !memcmp(name, "xnu:backboardd", 14);
+  }
+  pthread_mutex_unlock(&st.lock);
   return 0;
 }
 
-static void ctx_destroy(xh_gpu3d *b, uint32_t id) { (void)b; virgl_context_remove(id); }
+static void ctx_destroy(xh_gpu3d *b, uint32_t id)
+{
+  (void)b;
+  virgl_context_remove(id);
+  pthread_mutex_lock(&st.lock);
+  stat_ctx *c = stat_find(id);
+  if (c && id) memset(c, 0, sizeof *c);
+  pthread_mutex_unlock(&st.lock);
+}
 
 static int submit(xh_gpu3d *b, uint32_t id, const void *commands, size_t size)
 {
@@ -127,7 +211,13 @@ static int submit(xh_gpu3d *b, uint32_t id, const void *commands, size_t size)
   struct virgl_context *ctx = virgl_context_lookup(id);
   if (!ctx || (size & 3)) return -EINVAL;
   // drm_context reads the stream as 32-bit words in place: the device's copy is malloc'ed, so aligned.
-  return ctx->submit_cmd(ctx, commands, size) ? -EINVAL : 0;
+  uint64_t start = now_us();
+  int r = ctx->submit_cmd(ctx, commands, size) ? -EINVAL : 0;
+  uint64_t took = now_us() - start;
+  pthread_mutex_lock(&st.lock);
+  st.submit_n++; st.submit_sum += took; if (took > st.submit_max) st.submit_max = took;
+  pthread_mutex_unlock(&st.lock);
+  return r;
 }
 
 static int submit_fence(xh_gpu3d *b, uint32_t id, uint32_t ring, uint64_t fence)
@@ -135,6 +225,13 @@ static int submit_fence(xh_gpu3d *b, uint32_t id, uint32_t ring, uint64_t fence)
   (void)b;
   struct virgl_context *ctx = virgl_context_lookup(id);
   if (!ctx) return -EINVAL;
+  pthread_mutex_lock(&st.lock);
+  stat_ctx *c = stat_find(id);
+  if (c && ring < STAT_RINGS && c->count[ring] < STAT_PENDING) {
+    c->pending[ring][(c->head[ring] + c->count[ring]) % STAT_PENDING] = (stat_pending){ .fence = fence, .at = now_us() };
+    c->count[ring]++;
+  }
+  pthread_mutex_unlock(&st.lock);
   // Mergeable, as crosvm asks: a ring may retire only its latest fence, and the device returns every earlier one.
   return ctx->submit_fence(ctx, 1 /* VIRGL_RENDERER_FENCE_FLAG_MERGEABLE */, ring, fence);
 }
