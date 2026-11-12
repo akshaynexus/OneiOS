@@ -271,7 +271,18 @@ void xh_display_flush(unsigned x, unsigned y, unsigned w, unsigned h)
   pthread_mutex_lock(&client_lock);
   if (client_fd >= 0) {
     struct shm_message m = { { 'X', 'H', 'D', 'F' }, x, y, w, h };
-    if (send(client_fd, &m, sizeof m, MSG_NOSIGNAL | MSG_DONTWAIT) < 0 && errno != EAGAIN) { close(client_fd); client_fd = -1; }
+    // Only a helper that is gone loses its socket. A full queue (EAGAIN) or a passing shortage (ENOBUFS, ENOMEM)
+    // drops this flush only: the next one names the damage again. On 2026-11-12 (15:35 session) the helper's socket
+    // was closed after 7 frames with no line saying why, and the panel stayed dark while iOS drew.
+    if (send(client_fd, &m, sizeof m, MSG_NOSIGNAL | MSG_DONTWAIT) < 0 && errno != EAGAIN && errno != EINTR) {
+      if (errno == EPIPE || errno == ECONNRESET || errno == ENOTCONN) {
+        LOGI("display: the helper's socket is gone (%s): closed", strerror(errno));
+        close(client_fd); client_fd = -1;
+      } else {
+        static unsigned dropped;
+        if (dropped++ % 1000 == 0) LOGI("display: a flush to the helper failed (%s): dropped, the socket kept (%u so far)", strerror(errno), dropped);
+      }
+    }
   }
   pthread_mutex_unlock(&client_lock);
 }

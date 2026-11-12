@@ -162,3 +162,18 @@ If the helper hangs, `displayctl` ends it 3 s after the test; if `displayctl` it
 - The guest can write the frame while a row is copied: tearing is possible, as there is no frame handshake in
   the protocol.
 - Rotation: the picture is the guest's portrait frame; the panel is not rotated.
+
+## When the panel goes dark while iOS draws (2026-11-12)
+
+In the 15:35 session the helper printed `the socket closed after 7 frames` and `layer removed` about a minute into
+the boot, while xnuhost went on flushing frames: the panel stayed dark until the helper was started again by hand
+(the switch script's own command). Neither side said why. Now:
+- xnuhost closes the helper's socket only when the helper is gone (`EPIPE`, `ECONNRESET`, `ENOTCONN`) and logs
+  `display: the helper's socket is gone (...): closed`. Any other send error (a full queue, `ENOBUFS`, `ENOMEM`)
+  drops that one flush and keeps the socket: `display: a flush to the helper failed (...): dropped, the socket
+  kept (N so far)`, once per 1000.
+- The helper logs why its read ended: `oneios-display: xnuhost closed the socket` or `oneios-display: reading
+  xnuhost's socket failed: <error>`.
+To get the picture back by hand during a session (as root on the phone, the switch script's own command):
+`busybox setsid /data/local/tmp/oneios/runtime/bin/oneios-display --session /data/local/tmp/oneios/session --takeover --wait 60 >> /data/local/tmp/oneios/control/display.log 2>&1 &`
+Not run on the phone yet.
