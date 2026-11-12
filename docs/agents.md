@@ -918,6 +918,24 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   How it was found without a rebuild: `IMAGE/xnuhost.conf` with a `boot-args=` line that adds
   `sheng-exc-name=newfs_apfs`, then `scripts/debug/dsc.py` on the backtrace.
 
+### Later (owner, 2026-11-12): after the current path works on the phone
+
+Not started. Do these only when the phone runs iOS with apps, touch and the GPU the current way.
+
+- **L1: where a frame's time goes, then maybe a direct KGSL path.** Measure each frame's time per stage: iOS
+  (Metal, metal2vulkan, Turnip), the transport (virtio-gpu queue, xnuhost `gpu3d*.c`), drm2kgsl, and the GPU.
+  Only if the transport and drm2kgsl are a large share: prototype iOS's Turnip on its KGSL back end, calling
+  `/dev/kgsl-3d0` through xnuhost directly (each iOS task is a Linux process), with no virtio-gpu and no drm2kgsl.
+  Open points: GPU memory, fences, and isolation between iOS processes. Native boot of XNU on the hardware was
+  considered and not chosen: it loses the switch to One UI, needs an XNU driver for every device, and does not
+  make the GPU path shorter.
+- **L2: the slow Python scripts in Rust.** Profile first (`cProfile`). Candidates: the prelink's pairing (16-46 s
+  per kernel change), `scripts/debug/dsc.py`, `scripts/ios/make-tbds.py` (5 min, once per build). Keep the Python
+  version as the reference, with tests that compare the outputs byte for byte (the pattern of iOSPlus10's
+  `tools/op10tool`, `tests/compare-python.sh`). The prelink first, because a wrong pair panics the kernel.
+- **L3: the image names the runtime it needs.** A `min_runtime` field in `manifest.json` (image agent), checked
+  by the OneOS app before a switch (oneos), so that a bad image and runtime pair is refused before a boot.
+
 ### Rules for the parallel kernel work (lead, 2026-11-10)
 
 - **One work tree per agent.** `out/kernel-hosted` and `out/kernel/current-hosted` are the lead's. Build with
