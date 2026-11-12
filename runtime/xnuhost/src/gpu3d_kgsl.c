@@ -118,7 +118,7 @@ typedef struct {
 static struct {
   pthread_mutex_t lock;
   stat_ctx ctx[STAT_CTX];
-  uint64_t since, render_n, render_sum, render_max, other_n, other_sum, submit_n, submit_sum, submit_max;
+  uint64_t since, render_n, render_sum, render_max, other_n, other_sum, submit_n, submit_sum, submit_max, blob_n, blob_sum, blob_max;
 } st = { .lock = PTHREAD_MUTEX_INITIALIZER };
 
 static uint64_t now_us(void)
@@ -138,14 +138,16 @@ static void stat_report(uint64_t now)         // with st.lock held
 {
   if (!st.since) { st.since = now; return; }
   if (now - st.since < 10000000u) return;
-  if (st.render_n || st.other_n)
+  if (st.render_n || st.other_n || st.blob_n)
     say(1, "gpu: %llu s host: backboardd fences %llu, submit->retired mean %llu us max %llu us; submit calls mean %llu us max %llu us; "
-        "other fences %llu, mean %llu us", (unsigned long long)((now - st.since) / 1000000u), (unsigned long long)st.render_n,
-        (unsigned long long)(st.render_n ? st.render_sum / st.render_n : 0), (unsigned long long)st.render_max,
+        "other fences %llu, mean %llu us; blobs made %llu, mean %llu us max %llu us", (unsigned long long)((now - st.since) / 1000000u),
+        (unsigned long long)st.render_n, (unsigned long long)(st.render_n ? st.render_sum / st.render_n : 0), (unsigned long long)st.render_max,
         (unsigned long long)(st.submit_n ? st.submit_sum / st.submit_n : 0), (unsigned long long)st.submit_max,
-        (unsigned long long)st.other_n, (unsigned long long)(st.other_n ? st.other_sum / st.other_n : 0));
+        (unsigned long long)st.other_n, (unsigned long long)(st.other_n ? st.other_sum / st.other_n : 0),
+        (unsigned long long)st.blob_n, (unsigned long long)(st.blob_n ? st.blob_sum / st.blob_n : 0), (unsigned long long)st.blob_max);
   st.since = now;
   st.render_n = st.render_sum = st.render_max = st.other_n = st.other_sum = st.submit_n = st.submit_sum = st.submit_max = 0;
+  st.blob_n = st.blob_sum = st.blob_max = 0;
 }
 
 static void fence_retired(struct virgl_context *ctx, uint32_t ring, uint64_t fence)
@@ -270,8 +272,8 @@ static void chunked_remove(uint32_t res)
   *c = chunked_list[--chunked_count];
 }
 
-static int create_blob(xh_gpu3d *b, uint32_t id, uint32_t res, uint32_t blob_mem, uint32_t flags, uint64_t blob_id,
-                       uint64_t size, const xh_gpu_entry *entries, unsigned nentries)
+static int create_blob_now(xh_gpu3d *b, uint32_t id, uint32_t res, uint32_t blob_mem, uint32_t flags, uint64_t blob_id,
+                           uint64_t size, const xh_gpu_entry *entries, unsigned nentries)
 {
   kgsl *k = b->opaque;
   struct virgl_context_blob blob = { 0 };
@@ -331,6 +333,21 @@ static int create_blob(xh_gpu3d *b, uint32_t id, uint32_t res, uint32_t blob_mem
   made->map_ptr = blob.map_ptr;
   made->fd_offset = blob.fd_offset;
   return 0;
+}
+
+// The cost of a blob on the host (udmabufs of its pages, drm2kgsl's import and bind): one per guest BO, and a process
+// drawing icons made 1335 under 1 MiB (phone, 2026-11-12). Counted in the 10 s host line.
+static int create_blob(xh_gpu3d *b, uint32_t id, uint32_t res, uint32_t blob_mem, uint32_t flags, uint64_t blob_id,
+                       uint64_t size, const xh_gpu_entry *entries, unsigned nentries)
+{
+  uint64_t start = now_us();
+  int r = create_blob_now(b, id, res, blob_mem, flags, blob_id, size, entries, nentries);
+  uint64_t took = now_us() - start;
+  pthread_mutex_lock(&st.lock);
+  st.blob_n++; st.blob_sum += took; if (took > st.blob_max) st.blob_max = took;
+  stat_report(start + took);
+  pthread_mutex_unlock(&st.lock);
+  return r;
 }
 
 static int map_blob(xh_gpu3d *b, uint32_t res, uint64_t *pool_offset, uint32_t *map_info)
