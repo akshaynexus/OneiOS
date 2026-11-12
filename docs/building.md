@@ -309,6 +309,70 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
 
 ## 6. On the phone
 
+### Test cycle on the phone
+
+What the area agents follow to try a build in a real session (bringup, 2026-11-12; every command was run). The
+phone is the S24 Ultra on adb, KernelSU root, the OneOS fork 0.4.86 (versionCode 115) with its stage at
+`/data/local/tmp/oneios`. One agent at a time: hold the phone lock first (the coordinator's `phone-lock.sh`), and
+restore the baseline (`phone-baseline.txt` next to that script) before you release it.
+
+1. **Stage** (One UI up, no session open; `scripts/phone/stage.sh` refuses during a session):
+
+   ```sh
+   scripts/phone/stage.sh runtime DIR        # DIR: an unpacked runtime package; through oneios_root.sh begin/receive/finish
+   scripts/phone/stage.sh image DIR          # DIR: kernel.kc, kernel.kc.hashes, manifest.json, overlay/... at their paths
+   scripts/phone/stage.sh sums               # the staged files' sha256
+   ```
+
+   Unpack a package with `mkdir -p D && zstd -dc out/release/oneios-runtime-V-arm64.tar.zst | tar -xf - -C D`.
+   `image` replaces only the files given and writes their lines in `image.sha256` and `image.ids` again (the
+   preflight checks both); give it a `manifest.json` whose `kernel.kc` entry has the new size and SHA-256 (xnuhost
+   does not check the kernel against the manifest, but keep them equal). Never stage `data.seed` from the Mac's
+   `out/image/24A446`: it differs from the phone's, and a new seed makes the Data store start over.
+   `runtime-asis DIR` puts back a backed-up stage whose files were replaced by hand.
+2. **Start** (the app's own path, the same preflight and the tick):
+
+   ```sh
+   adb shell "su -c 'sh /data/local/tmp/oneios/bin/oneios_root.sh status'"       # @@RESULT ready 1: a switch would start
+   adb shell "su -c 'sh /data/local/tmp/oneios/bin/oneios_root.sh switch 115 1'" # @@OK switch; 115 = the app's versionCode
+   ```
+
+   The switch takes about 60 s (the framework stops in about 40 s). Then `xnuhost I guest ready: first frame` comes
+   about 80 s after `cpu0: entering the kernel` (Linux `kernel.kc` 9476a867 + runtime 0.1.7-dev, 2026-11-12).
+3. **Watch** (each line once a stage is reached; the log of the last session stays in `session/` until the next
+   switch moves it to `logs/`, so match the new `epoch` in `switch.log` first):
+
+   ```sh
+   adb shell "su -c 'grep epoch /data/local/tmp/oneios/switch.log | tail -1; tail -3 /data/local/tmp/oneios/switch.log'"
+   adb shell "su -c 'grep -m1 -e \"guest ready\" -e \"panic(\" -e \"stopping:\" /data/local/tmp/oneios/session/xnuhost.log'"
+   adb shell "su -c 'grep oneios-gpu-report /data/local/tmp/oneios/session/xnuhost.log | tail -3'"   # frames per 10 s
+   adb exec-out "su -c 'cat /data/local/tmp/oneios/session/xnuhost.log'" > out/phone-baseline/DATE/sessionN-xnuhost.log
+   ```
+
+   A panic: the kernel's frames are unslid collection addresses; `python3 kernel/prelink/stubs-check.py KC` and
+   `kernel/prelink/unmapped.py` name what the collection got wrong. `adb logcat` on this phone is bind-mounted over by
+   the owner's ksud: read logcat from a private mount namespace
+   (`/data/adb/ksu/bin/busybox unshare -m --propagation private sh -c 'umount /system/bin/logcat; logcat -d'`).
+4. **Measure** beside the session, read only: `scripts/phone/survey.sh session > out/phone-baseline/DATE/X.txt`
+   (thermal zones, cpufreq, KGSL, battery, load, `bridgectl cpu`, `gpuctl nodes`, xnuhost's threads, OOM score,
+   cgroup and the devices it holds; without `session`, the first five only, for One UI). What the numbers were on
+   2026-11-12: `docs/hardware.md`, "Baseline on the phone". Do not run `bridgectl bt`, `net`, `haptic` or `audio` during a session: xnuhost's own bridges
+   hold the Bluetooth HAL, the tap, the vibrator and the audio helper.
+5. **Return**: end every session yourself. The Volume Up + Volume Down chord did not return in the sessions of
+   2026-11-12 (agent touch is on it):
+
+   ```sh
+   adb shell "su -c 'echo AGENT: done > /data/local/tmp/oneios/session/return.request'"
+   adb shell "su -c 'tail -1 /data/local/tmp/oneios/return.log; cat /data/local/tmp/oneios/return.outcome; pidof system_server'"
+   ```
+
+   The watcher sees the file within a second; the return takes about 45 s and ends with `One UI restored in place
+   (Enforcing).` and `return.outcome` `inplace <epoch> <boot id>`. Five returns on 2026-11-12 (two after a panic,
+   three asked) all came back in place: Gates A, B and C passed, user 0 unlocked 13-15 s after zygote.
+6. **Restore the baseline** (`phone-baseline.txt`) and check it with `scripts/phone/stage.sh sums`.
+
+### Hardware checks
+
 **The checks (One UI running, nothing switched):** in the OneOS fork app (0.4.75 or newer), Choose a system →
 iOS 27 (OneiOS) → Open → **Hardware checks**. The screen uses the tools of the staged runtime (0.1.0 or newer has
 them all); with none staged it offers *Download from OneiOS's releases* first. Then:

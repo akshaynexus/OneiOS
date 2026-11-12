@@ -43,6 +43,57 @@ Common pieces:
 - **On the phone**: `runtime/bridges/build/android/bridgectl` (static) tries each bridge without xnuhost:
   `bridgectl cpu|haptic|haptic-pattern|bt|net|audio`. It is the first thing to run when the phone is attached.
 
+### 0.1 Baseline on the phone (2026-11-12, bringup)
+
+Measured beside real sessions on the S24 Ultra (SM-S928B, One UI's kernel, KernelSU), with
+`scripts/phone/survey.sh [session]` and the session's `xnuhost.log`. Raw output: `out/phone-baseline/2026-11-12/`
+(git-ignored: `oneui-idle-before.txt`, `oneui-after-session3.txt`, `session4-survey.txt`, `session5-survey.txt`,
+`session1..5-xnuhost.log`). Read only: nothing was changed that is not put back. The phone was on USB, battery
+100 % (full). Kernel for sessions 3-5: the Linux-built `kernel.kc` 9476a867 of 2026-11-11 (no 0035-0037); the Mac
+`kernel.kc` panics in the first 2 s (`kernel/prelink/README.md`, "On the phone").
+
+| | One UI idle, before | Session 4: runtime 0.1.7-dev, lock screen, about 6 min after ready | Session 5: runtime 0.1.6, owner unlocked to the Home Screen | One UI, 1 min after session 3 |
+|---|---|---|---|---|
+| cpuss-0 / gpuss-0 / ddr / xo-therm | 29.3 / 26.8 / 27.7 / - C | 60.6 / 50.6 / 53.2 / 43.5 C | 51.7 / 45.5 / 47.7 / 41.0 C | 64.5 / 54.5 / 56.7 / 44.8 C |
+| battery (thermal zone `battery`, `power_supply/battery/temp`) | 23.6 C | 36.8 C | 35.7 C | 34.9 C |
+| CPU clocks (cur, kHz, cpu0-1 / 2-4 / 5-6 / 7) | 1804800 / 614400-3148800 / 1190400 / 672000 (walt) | every core at its top: 2265600 / 3148800 / 2956800 / 3340800; load 6.6 | **capped**: scaling_max 1689600 / 2035200 / 1920000 / 2035200, every core at it; load 8.0 (27.5 over 5 min) | |
+| GPU (`kgsl-3d0` gpuclk, devfreq) | 231 MHz, msm-adreno-tz, 0 % busy | **1000 MHz, 0 % busy** (drm2kgsl `context 5: power constraint at the highest level`) | 231 MHz (`max_gpuclk` 500 MHz per the coordinator's read) | 231 MHz |
+| render server frames per 10 s (`oneios-gpu-report`) | | 0-9, mean 8-24 ms | 0-20, mean 22-69 ms | |
+| swaps (`oneios-display-report`, gap between swaps) | | 124 swaps, median 0.76 s, max 60 s | 174 swaps, median 0.17 s, max 77 s | |
+
+On 2026-11-11 (runtime 0.1.6 with the 12:49 xnuhost, the same `kernel.kc`, Data store and seed) the same report
+showed 224-544 frames per 10 s once the lock screen was up. So on 2026-11-12 the GPU path drew a frame only every few
+seconds in both runtimes; the cause is not known (passed to agents gpu and thermal). Session 5's caps on the CPU
+were in place after four sessions in 40 minutes: the phone was hot (cpuss-0 64.5 C one minute after session 3).
+
+Per area, in the sessions (lines of `xnuhost.log`):
+
+- **CPU**: `bridgectl cpu`: 8 CPUs, 2 E (cpu0-1, capacity 369, 364800..2265600 kHz) and 6 P (cpu2-4 capacity 897 to
+  3148800 kHz, cpu5-6 capacity 842 to 2956800 kHz, cpu7 capacity 1024 to 3398400 kHz); plan 2 E then 6 P vCPUs; its
+  thread placed and `uclamp.min 1024` set (both done). xnuhost: `cpu: 2 E + 6 P vCPUs on the host's 2 E + 6 P cores`;
+  every xnuhost thread `SCHED_OTHER` (policy 0), nice 0, `oom_score_adj` 500, its own cgroup.
+  No `oneios-cpu` heat lines: that helper is in no seed yet.
+- **GPU**: `gpuctl nodes`: `/dev/kgsl-3d0`, `/dev/udmabuf`, `/dev/dma_heap/system` open; udmabuf `list_limit`
+  1024, `size_limit_mb` 64. Metal plug-in on (`oneios-gpu-plugin`, five GPU clients). Frame numbers above.
+- **Touch**: delivered, none dropped: session 4 `6165 virtio-input events, 1387 frames, 1463 HID reports, 39
+  contacts`, session 5 `2751 events, 757 HID reports, 7 contacts`, `0 dropped` in both. Runtime 0.1.7-dev wakes the
+  touch IC (`brightness: touch: 1 IC under /sys/class/sec (/sys/class/sec/tsp/enabled) woken`); 0.1.6 does not
+  (the coordinator wrote `2,0` and `2,1` by hand in session 5). The buttons reached iOS (`buttons: 6 key events`),
+  but the Volume Up + Volume Down return chord did not return in sessions 3-5; xnuhost holds `/dev/input/event0`
+  and `event2` (the two volume-key devices) open (agent touch).
+- **Audio**: `audio: on: helper /data/runtime/bin/oneios-audio`; no sound was played or checked.
+- **Haptics**: `haptics: on: /dev/input/event5 (sine effects, period 4..10 ms, level 40..255)`; iOS's `ONEIOS HAPTIC
+  UI: off: no Actuator HAL plug-in in the root` (ringtones and alerts only).
+- **Bluetooth**: 0.1.7-dev: `bluetooth: on: the phone's controller through its HAL 1.1, address 02:d7:be:af:18:ea
+  (made up: /mnt/vendor/efs/bluetooth/bt_addr not read)`; no line shows bluetoothd opening it. 0.1.6: `ONEIOS BT: off:
+  the host serves no Bluetooth controller`.
+- **Wi-Fi / network**: every session: `xnuhost E network: oneios-net.sh up ended with status 256: the guest has no
+  route out` (Wi-Fi was on in One UI before the switch).
+- **Battery**: `ONEIOS BATTERY: 100%, on power, full (284/10 C, 4311 mV, 12 mA)`.
+
+Not run, and why: `bridgectl bt`, `net`, `haptic` and `audio` (during a session xnuhost holds the Bluetooth HAL, the
+tap, the vibrator and the audio helper; beside One UI, `bt` needs Bluetooth off, which the owner had on).
+
 ## 1. CPU
 
 ### The phone [F]
