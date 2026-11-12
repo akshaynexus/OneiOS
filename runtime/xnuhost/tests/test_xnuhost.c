@@ -1033,6 +1033,8 @@ static void test_config(const char *dir)
   CHECK(c.disk[2].data_store && c.disk[2].writable && strstr(c.disk[2].path, "/data.img") && strstr(c.disk[2].seed, "data.seed"));
   CHECK(c.ncpu >= 1 && c.ncpu <= XH_MAX_CPUS && !strcmp(c.display, "shm") && c.input && c.tasks);
   CHECK(c.bridges == 1 && !strcmp(c.bluetooth, "auto") && !strcmp(c.wifi, "auto"));                       // on in a session; the phone's HAL when it is there
+  CHECK(c.touch_sleep && xh_config_set(&c, "touch-sleep", "0") == 0 && !c.touch_sleep && xh_config_set(&c, "touch-sleep", "maybe") != 0);
+  c.touch_sleep = true;
   // the image set's own settings, and what the command line overrides
   snprintf(path, sizeof path, "%s/xnuhost.conf", image);
   FILE *f = fopen(path, "w");

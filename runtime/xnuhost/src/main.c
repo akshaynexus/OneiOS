@@ -384,6 +384,7 @@ static int boot(void)
     int hal = 0;
     if (!strcmp(config.bluetooth, "auto")) { hal = br_hci_hidl_probe(); hidl = hal > 0; }
     haptic = br_haptic_open(NULL);
+    if (!config.touch_sleep) setenv("ONEIOS_TSP_OFF", "0", 1);   // touch-sleep=0: the bridge reads this
     brightness = br_bright_open(NULL);
     battery = br_battery_open(NULL);
     thermal = br_thermal_open(NULL);

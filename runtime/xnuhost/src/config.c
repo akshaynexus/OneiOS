@@ -21,6 +21,7 @@ void xh_config_defaults(xh_config *c)
   strcpy(c->display, "shm");
   strcpy(c->gpu, "auto");
   c->input = true;
+  c->touch_sleep = true;
   c->tasks = true;
   c->task_uid = -1;
   c->log_level = XH_LOG_INFO;
@@ -94,6 +95,7 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
   else if (!strcmp(key, "input-script")) return copy(c->input_script, sizeof c->input_script, value);
   else if (!strcmp(key, "tasks")) return flag(value, &c->tasks);
   else if (!strcmp(key, "task-uid")) c->task_uid = atoi(value);
+  else if (!strcmp(key, "touch-sleep")) return flag(value, &c->touch_sleep);
   else if (!strcmp(key, "bridges")) { bool on; if (flag(value, &on)) return -1; c->bridges = on; }
   else if (!strcmp(key, "clusters")) { ok = strlen(value) <= XH_MAX_CPUS && strspn(value, "EP") == strlen(value); if (ok) strcpy(c->clusters, value); }
   else if (!strcmp(key, "wifi")) { ok = !strcmp(value, "auto") || !strcmp(value, "off") || !strcmp(value, "tap") || !strcmp(value, "sim"); if (ok) strcpy(c->wifi, value); }

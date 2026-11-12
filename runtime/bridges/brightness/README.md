@@ -78,7 +78,7 @@ The bridge is the one place that sees iOS's level cross 0, so it writes them, fr
   It is woken by One UI's side: the return restarts the framework, and its input HAL writes `2,0`, `2,1` when
   the display comes on [I: that is the sequence this copies; not checked after a killed session]. The fork's
   return scripts do not write the node themselves.
-- `ONEIOS_TSP_OFF=0`: the IC is never put to sleep (only the wakes are written). The first thing to try if touch
+- `ONEIOS_TSP_OFF=0` (or `touch-sleep=0` in the image's `xnuhost.conf`, which sets it): the IC is never put to sleep (only the wakes are written). The first thing to try if touch
   dies with the display on: iOS's `brightness` 0 is taken as "display asleep", and whether the slider's bottom
   can also send 0 is not known.
 - `brightctl` does not touch the IC.
