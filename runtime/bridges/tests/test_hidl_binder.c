@@ -348,7 +348,16 @@ static void fake_hal(int mode, int ready)
 {
   smode = mode;
   sfd = open(device, O_RDWR | O_CLOEXEC);
-  if (sfd < 0 || mmap(NULL, 1 << 20, PROT_READ, MAP_PRIVATE, sfd, 0) == MAP_FAILED || ioctl(sfd, BINDER_SET_CONTEXT_MGR, 0) < 0) { perror("fake hal"); _exit(91); }
+  // The previous scenario's HAL was killed: the driver frees its context manager in deferred work after the
+  // process is gone, so a new one can see EBUSY for a moment (seen on Linux 6.18 in a VM). Retry for up to 2 s.
+  int rc = -1;
+  if (sfd >= 0 && mmap(NULL, 1 << 20, PROT_READ, MAP_PRIVATE, sfd, 0) != MAP_FAILED)
+    for (int tries = 0; tries < 200; tries++) {
+      rc = ioctl(sfd, BINDER_SET_CONTEXT_MGR, 0);
+      if (rc == 0 || errno != EBUSY) break;
+      usleep(10000);
+    }
+  if (rc < 0) { perror("fake hal"); _exit(91); }
   pthread_t t;
   pthread_create(&t, NULL, reader, NULL);
   uint32_t enter = BC_ENTER_LOOPER;

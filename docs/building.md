@@ -17,7 +17,7 @@ and `out/`.
 | clang (stock, recent) | the kernel | the kernel build uses stock clang plus xnu-linux-toolchain's ld64 (set up by the kernel scripts, no root) |
 | Android NDK 28.2 | xnuhost, the helpers, the phone tools | `$HOME/Android/Sdk/ndk/28.2.13676358` (Linux), `$HOME/Library/Android/sdk/ndk/28.2.13676358` (macOS), or `$NDK` / `$ANDROID_NDK_HOME` |
 | Android SDK build-tools (`d8`) and a JDK (`javac`) | the display helper's dex | the newest `build-tools/*/d8` beside the NDK's SDK; on a Mac the Homebrew JDK 17 (`brew install openjdk@17`), elsewhere `javac` from `PATH` |
-| docker, colima (Mac only) | the runtime's host tests from a Mac | `runtime/host-tests.sh`, section 4 |
+| Apple's `container` 1.7.1 (Mac only) | the runtime's host tests from a Mac | `brew install container`, then `container system start`; `runtime/host-tests.sh`, section 4 |
 | apfs-fuse (Linux only) | reading the volumes for the Data seed and the hook | github.com/sgan81/apfs-fuse; read-only, no root. On macOS `hdiutil` does it, no root (section 1) |
 | qemu-user (`qemu-aarch64`) | booting xnuhost and the kernel on the PC | |
 | `ipsw` CLI | AEA decryption | `scripts/fetch/get-ipsw-cli.sh` installs the pinned version to `out/bin/ipsw` |
@@ -156,34 +156,55 @@ start on macOS and names `runtime/host-tests.sh`. On a Mac that script:
 1. builds the Android parts with the Mac's NDK (`make -C runtime/loader android`, `runtime/xnuhost all
    build/android/testkernel.elf`, `runtime/bridges all`, `runtime/bridges/camera all`, `runtime/display all`), so
    the container needs no NDK;
-2. runs `runtime/host-tests.sh --suite` in an arm64 Ubuntu 24.04 container (image `oneios-hosttests:1`, built from the
-   Dockerfile inside the script the first time: gcc 13, clang 18, OpenJDK 17, zstd, patch). The checkout is mounted
-   at its own path; nothing else of the Mac is. The container is **privileged**: `test-binder` mounts a binderfs in a
-   user namespace, and LeakSanitizer stops threads with ptrace. On arm64 the Android xnuhost runs as it is (static,
-   bionic), so `check-arm64` boots the test kernel without qemu;
+2. runs `runtime/host-tests.sh --suite` in an arm64 Ubuntu 24.04 container of Apple's `container` tool (each container
+   is its own small VM on Virtualization.framework). The image `oneios-hosttests:2` is built with `container build`
+   from the Containerfile inside the script the first time (gcc 13, clang 18, OpenJDK 17, zstd, patch, and the kernel
+   build's bc, bison, flex, libelf-dev, libssl-dev). The checkout is mounted at its own path (`-v ROOT:ROOT`); nothing
+   else of the Mac is. On arm64 the Android xnuhost runs as it is (static, bionic), so `check-arm64` boots the test
+   kernel without qemu;
 3. runs `runtime/package/test.sh` on the Mac.
 
-Once per Mac (colima's VM keeps its disk across restarts):
+**The container's kernel.** The default kernel of `container` (6.18.56) has no binderfs, no udmabuf and no modules
+(`# CONFIG_ANDROID_BINDER_IPC is not set`, `# CONFIG_UDMABUF is not set`, `# CONFIG_MODULES is not set`), so
+`test-binder`, drm2kgsl, the leak test and test_xnuhost's udmabuf checks could not run with it. The first run of
+`runtime/host-tests.sh` (or `runtime/host-tests.sh --kernel`, to make it again) builds one, in a container, about 15
+minutes on an M4 with 10 CPUs:
+
+- the source: Linux 6.18.56 from cdn.kernel.org, SHA-256 checked (`4633bbda...efbf89`), kept in `out/host-tests/`;
+- the configuration: the default kernel's own (`/proc/config.gz`, saved as `out/host-tests/config.default`) plus
+  `ANDROID_BINDER_IPC=y`, `ANDROID_BINDERFS=y`, `ANDROID_BINDER_DEVICES=""` and `UDMABUF=y`
+  (`out/host-tests/config.oneios`);
+- the result: `out/host-tests/vmlinux-6.18.56-oneios` (arm64 `Image`, 25 MB). Only the suite's container boots it
+  (`container run --kernel`); `container system kernel set` is not used, and the default kernel of other containers
+  does not change. `KERNEL=FILE` names another kernel.
+
+On this path a skipped `test-binder` or a missing `/dev/udmabuf` is a FAIL, not a skip.
+
+**Capabilities.** `--cap-drop ALL --cap-add SETFCAP`, nothing else, no privileged mode (`container` has none).
+`test-binder`'s `unshare -Urm` maps uid 0 in the new user namespace, and Linux allows that only with `CAP_SETFCAP`
+(with all capabilities dropped: `unshare: write failed /proc/self/uid_map: Operation not permitted`). The binderfs mount
+in that namespace and LeakSanitizer's ptrace of its own threads need nothing more; the container has no seccomp filter.
+
+Once per Mac:
 
 ```sh
-colima start --arch aarch64 --vm-type vz --mount-type virtiofs --cpu 6 --memory 8 --disk 60
-# binderfs for test-binder: colima's Ubuntu kernel has it as a module (binder_linux) in linux-modules-extra
-colima ssh -- sudo sh -c 'apt-get update -qq && apt-get install -y -qq linux-modules-extra-$(uname -r) && modprobe binder_linux'
+brew install container
+container system start --enable-kernel-install      # the services and the default kernel
+runtime/host-tests.sh                                # first run: the image (a few minutes) and the kernel (about 15)
 ```
 
-After a restart of the VM `runtime/host-tests.sh` loads `binder_linux` again itself (`colima ssh -- sudo modprobe
-binder_linux`). Without the module `bridges` says `test-binder: skipped (no binderfs in this kernel)`. colima mounts
-the home folder only: the checkout must be under `$HOME`. `IMAGE=`, `DOCKER=` and `JOBS=` override the image, the
-docker command and the parallel jobs.
+`IMAGE=`, `KERNEL=`, `JOBS=` (make jobs and the container's CPUs; default: the Mac's) and `MEMORY=` (default 8G)
+override the image, the kernel, the CPUs and the memory. The project uses neither docker nor colima any more.
 
-Checked on 2026-11-12, Mac (Apple Silicon, macOS 27, Xcode 27.2, NDK 28.2.13676358, Homebrew JDK 17, colima 6 CPUs
-with the VM's kernel 6.8.0-117, 4 KiB pages):
+Checked on 2026-11-12, Mac (M4, 10 CPUs, macOS 27, Xcode 27.2, NDK 28.2.13676358, Homebrew JDK 17, `container` 1.7.1
+with the kernel above, 10 CPUs and 8 GiB, 4 KiB pages). The counts are the same as the first run on colima's VM
+(Ubuntu kernel 6.8.0-117 with binder_linux):
 
 | Part | Result |
 |---|---|
 | `runtime/build.sh STAGE` (clean tree) | 13 files: the 12 `bin/` files, all arm64 ELF, and `lib/oneios-display.dex`; xnuhost 1,371,200 bytes, with drm2kgsl |
 | loader | 160 checks, 0 failed |
-| xnuhost | 13248 checks, 0 failed; display mode 5 scenarios, 0 failed; drm2kgsl 3 + 23 checks, 0 failed; leak scenarios 956 checks, 0 failed, LeakSanitizer no leaks; image set 37 checks, 0 failed; `check-arm64` `TESTKERNEL: all passed` and the restart test (8 restarts, then exit 3) |
+| xnuhost | 13248 checks, 0 failed (udmabuf checked, blobs past its limits split); display mode 5 scenarios, 0 failed; drm2kgsl 3 + 23 checks, 0 failed; leak scenarios 956 checks, 0 failed, LeakSanitizer no leaks; image set 37 checks, 0 failed; `check-arm64` `TESTKERNEL: all passed` and the restart test (8 restarts, then exit 3) |
 | display | 72 checks, 0 failed; mode choice 5 checks, 0 failed |
 | bridges | 200 checks, 0 failed; `test-binder` 38 checks, 0 failed; brightness 74 checks, 0 failures; battery 57 checks, 0 failures |
 | camera | 131 checks, 0 failed |
@@ -197,8 +218,12 @@ after):
   x86_64 (the real vCPU and task code needs the Android binary's assembly). `imageset.c`'s SHA-256 instructions are
   tested on the host: GCC needs `target("+sha2")`, clang (the NDK's) takes `target("sha2")`.
 - Ubuntu's GCC turns on `_FORTIFY_SOURCE`: `tests/test_xnuhost.c` checks the result of `freopen`.
-- Ubuntu's kernel (and so colima's) builds binderfs with no default devices: `test_hidl_binder` asks
+- Ubuntu's kernel and the container's kernel above build binderfs with no default devices: `test_hidl_binder` asks
   `binder-control` for `hwbinder`.
+- `test_hidl_binder` started each scenario's fake HAL right after killing the last one. Linux frees a dead process's
+  context manager in deferred work, so on 6.18 in the container the next HAL's `BINDER_SET_CONTEXT_MGR` failed with
+  `EBUSY` ("fake hal: Device or resource busy", then `FAIL tests/test_hidl_binder.c:497`). A race in the test, not in
+  the HAL client: the fake HAL now retries `EBUSY` for up to 2 s. Five runs in a row passed.
 - `check-arm64` runs the Android binary without qemu on an arm64 Linux host.
 - macOS's `tar` is bsdtar (no `--mtime`): `runtime/package.sh` writes the archive with `pack.py archive` where `tar`
   is not GNU tar. For the same files it is byte-identical to GNU tar 1.35's `--format=ustar` archive (checked).

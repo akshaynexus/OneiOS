@@ -85,7 +85,7 @@ on the Mac (19 tests). The phone binaries built on the Mac had the same SHA-256 
 changes; they were not compared with a Linux build of the same commit.
 
 ```sh
-runtime/host-tests.sh                                  # every runtime host test (in a Linux container on a Mac)
+runtime/host-tests.sh                                  # every runtime host test (in Apple's container on a Mac)
 runtime/package.sh 0.1.7-dev                           # -> out/release/oneios-runtime-0.1.7-dev-arm64.tar.zst
 ```
 
@@ -139,7 +139,7 @@ Checked after the workflow ran: the asset's SHA-256 against its `.sha256`, `runt
 ```sh
 git pull --rebase origin main
 runtime/package/test.sh && kernel/tests/host.sh        # the tests CI runs
-runtime/host-tests.sh                                  # the runtime's other host tests (a Linux container on a Mac)
+runtime/host-tests.sh                                  # the runtime's other host tests (Apple's container on a Mac)
 runtime/package.sh 0.1.0                               # optional: look at out/release/*.runtime.json
 git tag -a v0.1.0 -m "OneiOS runtime 0.1.0" && git push origin v0.1.0
 ```

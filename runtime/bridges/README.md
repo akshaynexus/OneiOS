@@ -6,7 +6,7 @@ Owner: the bridges agent. What each device is, on the phone and for iOS: `docs/h
 ```sh
 make test          # host unit tests (ASan, UBSan); no phone, no Apple files
 make               # build/android/libonebridges.a, oneios-audio, bridgectl   (NDK r28c)
-tests/host.sh      # both; CI runs it (Linux only: on a Mac, runtime/host-tests.sh runs it in a Linux container)
+tests/host.sh      # both; CI runs it (Linux only: on a Mac, runtime/host-tests.sh runs it in Apple's container)
 ```
 
 | Folder | What |
@@ -23,7 +23,7 @@ tests/host.sh      # both; CI runs it (Linux only: on a Mac, runtime/host-tests.
 | `camera/` | the camera (fable-camera): the helper process `oneios-camera`, the frame ring, xnuhost's end (`libonecamera.a`) and `camctl`; its own `Makefile` and `README.md` |
 | `devices/` | `bridge_dev.c` (`oneios,bridge`), `virtio_net.c` (`droidvm,net`), `virtio_snd.c` (`droidvm,virtio-snd`) |
 | `tools/bridgectl.c` | tries each bridge on the phone without xnuhost (root) |
-| `tests/` | `test_bridges.c`, `host.sh`; `test_hidl_binder.c` (`make test-binder`, part of `make test`): the HAL client against a fake hwservicemanager and IBluetoothHci on a real binder driver, a binderfs mounted in a user namespace (the PC kernel's `CONFIG_ANDROID_BINDERFS`; no root; skipped without it). A kernel whose `CONFIG_ANDROID_BINDER_DEVICES` is empty (Ubuntu's, colima's VM) mounts a binderfs with only `binder-control`: the test asks it for `hwbinder` (`BINDER_CTL_ADD`). On a Mac: `runtime/host-tests.sh` ([building.md](../../docs/building.md) section 4) |
+| `tests/` | `test_bridges.c`, `host.sh`; `test_hidl_binder.c` (`make test-binder`, part of `make test`): the HAL client against a fake hwservicemanager and IBluetoothHci on a real binder driver, a binderfs mounted in a user namespace (the PC kernel's `CONFIG_ANDROID_BINDERFS`; no root; skipped without it). A kernel whose `CONFIG_ANDROID_BINDER_DEVICES` is empty (Ubuntu's; the Mac's container kernel) mounts a binderfs with only `binder-control`: the test asks it for `hwbinder` (`BINDER_CTL_ADD`). The fake HAL retries `BINDER_SET_CONTEXT_MGR` while the last scenario's killed HAL still holds it (`EBUSY`, up to 2 s). On a Mac: `runtime/host-tests.sh`, in Apple's `container` with a kernel built with binderfs ([building.md](../../docs/building.md) section 4) |
 
 ## Into xnuhost (bridges -> booter)
 
