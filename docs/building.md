@@ -677,7 +677,7 @@ it: our reader reads the sealed volumes and their compressed files, so the dyld 
 the image with `oneios-tool image apfs-copy out/image/24A446/systemos.img System/Library/Caches/com.apple.dyld DIR`
 (no mount, Linux and macOS).
 
-Rust 1.88 or newer (built with 1.98.0); the first build downloads the crates and one git dependency
+Rust 1.95 or newer (apk-info-zip 1.1.1 needs 1.95; built with 1.98.0 and 1.99.1); the first build downloads the crates and one git dependency
 (macos-unifiedlogs, pinned by commit in `Cargo.lock`). Linux x86_64 and macOS arm64. `oneios-tool --help` and
 `oneios-tool TOOL --help` list every command and option (one clap layout for all tools).
 
