@@ -421,9 +421,14 @@ publish(IOService *device, IOService *resource, const char *what)
 static void
 oneios_hid_personalities(void)
 {
-	static const struct { const char *transport; uint32_t page; } devices[] = {
-		{"SPI", 0x0d},          // the touch screen (NativeHidInput::newTransportString)
-		{"Virtual", 0x0c},      // the buttons
+	// The usage pairs are the devices' application collections. The buttons' report 2 (Consumer: Menu, Power, Volume
+	// Increment and Decrement; Telephony: Ring Enable) lies inside NativeHidInput's boot keyboard collection, so that
+	// device's one pair is Generic Desktop / Keyboard (1, 6), never page 12. A page-12 personality did not match it; the
+	// candidates were Apple's deferred "HID Keyboard Driver", then the DriverKit driver, and the side keys reached
+	// backboardd only after the DriverKit driver's 120 s (phone, 2026-11-12: +256 s into the boot).
+	static const struct { const char *transport; uint32_t page, usage; } devices[] = {
+		{"SPI", 0x0d, 0},       // the touch screen (NativeHidInput::newTransportString): Digitizer, any usage
+		{"Virtual", 0x01, 0x06}, // the buttons: Generic Desktop / Keyboard
 	};
 	uint32_t driverkit = 0;
 	PE_parse_boot_argn("oneios-hid-driverkit", &driverkit, sizeof(driverkit));
@@ -439,8 +444,12 @@ oneios_hid_personalities(void)
 		OSString *bundle = OSString::withCString("com.apple.iokit.IOHIDEventDriver"), *driver = OSString::withCString("IOHIDEventDriver");
 		OSString *provider = OSString::withCString("IOHIDInterface"), *transport = OSString::withCString(device.transport);
 		OSNumber *page = OSNumber::withNumber(device.page, 32), *score = OSNumber::withNumber(100000, 32);
-		if (personality && pair && pairs && bundle && driver && provider && transport && page && score) {
+		OSNumber *usage = device.usage ? OSNumber::withNumber(device.usage, 32) : nullptr;
+		if (personality && pair && pairs && bundle && driver && provider && transport && page && score && (usage || !device.usage)) {
 			pair->setObject("DeviceUsagePage", page);
+			if (usage) {
+				pair->setObject("DeviceUsage", usage);
+			}
 			pairs->setObject(pair);
 			personality->setObject("CFBundleIdentifier", bundle);
 			personality->setObject("IOClass", driver);
@@ -460,6 +469,7 @@ oneios_hid_personalities(void)
 		OSSafeReleaseNULL(provider);
 		OSSafeReleaseNULL(transport);
 		OSSafeReleaseNULL(page);
+		OSSafeReleaseNULL(usage);
 		OSSafeReleaseNULL(score);
 	}
 	// No nub matching: no HID device of ours exists yet.

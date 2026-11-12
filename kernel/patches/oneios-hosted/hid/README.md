@@ -133,9 +133,18 @@ defers its own kernel personalities (`IOMatchDefer`) until the IOKit daemon has 
 So touch and buttons were dead for the first 233 s of that boot, and a test in that time shows nothing.
 `oneios_hid_personalities` (in `OneiOSHidInput.cpp`, called when the classes are registered) adds two personalities
 to the catalogue: `IOHIDEventDriver` on `IOHIDInterface`, `IOProbeScore` 100000, no `IOMatchDefer`, one with
-`Transport` `SPI` and usage page 13 (the touch screen), one with `Transport` `Virtual` and usage page 12 (the
-buttons). They match as the DriverKit personality does (`IOHIDDevice::matchPropertyTable`), start first, and take
+`Transport` `SPI` and usage page 13 (the touch screen), one with `Transport` `Virtual` and the usage pair Generic
+Desktop / Keyboard (1, 6) (the buttons). They match as the DriverKit personality does (`IOHIDDevice::matchPropertyTable`), start first, and take
 the match category, so neither the DriverKit personality nor Apple's deferred ones start for these two devices.
+
+**The buttons' pair (touch, 2026-11-12).** Until then the buttons' personality asked for usage page 12. The buttons
+device has one application collection, NativeHidInput's boot keyboard (`05 01 09 06 A1 01`); report 2's Consumer
+usages lie inside it, so the device's only usage pair is (1, 6) and the page-12 personality never matched. In the
+phone's session of 2026-11-12 the buttons went to `AppleUserHIDEventService` at +136 s (after Apple's deferred "HID
+Keyboard Driver" had deferred the match) and to the kernel's `IOHIDEventDriver` at +256 s, against +1 s for the touch
+screen: the side keys did nothing in iOS for the first four minutes. With the (1, 6) pair the buttons' line
+`event driver IOHIDEventDriver attached` comes with the touch screen's. Built; the boot that shows it is in
+"Tested" below when it is made.
 The light sensor (`Virtual`, Sensor page) is not matched by them. An iPhone's own touch screen and buttons are
 kernel event services too (the multitouch and button kexts), not DriverKit ones. `oneios-hid-driverkit=1` adds
 nothing (the old order). Why the DriverKit driver's process needs more than 120 s is not looked at; nothing here

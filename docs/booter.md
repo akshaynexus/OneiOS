@@ -362,8 +362,10 @@ Linux's page cache and a sparse file: the store is a raw image.
   without `ABS_MT_POSITION_X/Y` is not a touch screen to the guest), `ready` waits for the guest's driver
   (`xh_virtio_ready`: DRIVER_OK), then `tap`, `swipe`, `key`, `ev`, `wait`, `repeat`.
   `tools/input-demo.script` is a 1440 x 3120 panel with a tap, a swipe from the bottom edge and the three side
-  keys, repeated. It runs beside the evdev reader, or alone with `--no-input`. Each frame's end gets `EV_MSC` /
-  `MSC_TIMESTAMP` with the time it is sent, so the guest's latency line counts scripted frames too.
+  keys, repeated. It runs beside the evdev reader, or alone with `--no-input`. Its events go through the panel's filter
+  (`xh_input_feed`): each frame's end gets `EV_MSC` / `MSC_TIMESTAMP` with the time it is sent, and each scripted
+  gesture gets the `input: touch:` line with its touch-to-frame time, so the latency can be measured without a finger.
+  The filter passes the three side keys, and Home (`KEY_HOMEPAGE`) and the ringer (`KEY_MUTE`) for a host that has them.
 - `session/ready` is created at the guest's first presented frame (or by the `ready` host call). The guest's
   display driver also presents the boot framebuffer (the console, and later a blank or CPU-copied frame drawn
   there): a flush of a resource whose backing starts at `boot_args.Video`'s address is shown but is not that

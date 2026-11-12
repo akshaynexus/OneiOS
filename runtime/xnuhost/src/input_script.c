@@ -16,8 +16,9 @@
 //   key CODE [MS]            a key pressed and released MS later (default 100): 116 power, 115 / 114 volume up / down
 //   repeat [N]               the steps after `ready` (or all, without one) again: forever, or N more times
 //
-// Numbers are decimal or 0x hexadecimal. A bad line stops xnuhost's start with its number. Each frame's end (`syn`, and
-// the end of every step of tap, swipe and key) is preceded by EV_MSC / MSC_TIMESTAMP with the time it is sent.
+// Numbers are decimal or 0x hexadecimal. A bad line stops xnuhost's start with its number. The events go through
+// input.c's filter (xh_input_feed) as a touch screen's do: only the codes the panel's would pass, each frame's end
+// preceded by EV_MSC / MSC_TIMESTAMP with the time it is sent, and one `input: touch:` line per gesture.
 #include "xnuhost.h"
 #include <ctype.h>
 #include <errno.h>
@@ -33,6 +34,7 @@ enum { EV_SYN_ = 0, EV_KEY_ = 1, EV_ABS_ = 3, BTN_TOUCH_ = 0x14a,
 static xh_input_step *steps;
 static unsigned nsteps;
 static xh_virtio *target;
+static xh_input_source source;                 // input.c's filter: the script is one touch screen with the side keys
 static pthread_t thread;
 static volatile bool running;
 
@@ -156,12 +158,16 @@ static void *script_main(void *arg)
       start = i + 1;
       break;
     case XH_STEP_WAIT: sleep_ms(s->value); break;
-    case XH_STEP_EVENT:
-      // A frame's end carries its time, as input.c's touch frames do (EV_MSC / MSC_TIMESTAMP, the counter's low bits):
-      // the guest counts its latency from here.
-      if (s->type == EV_SYN_ && s->code == 0) xh_virtio_input_event(target, 4, 5, (int32_t)(uint32_t)xh_counter());
-      xh_virtio_input_event(target, s->type, s->code, s->value);
+    case XH_STEP_EVENT: {
+      // Through input.c's filter, as the panel's events go: a frame's end gets its time (EV_MSC / MSC_TIMESTAMP, the
+      // time it is sent), and the gesture is counted and logged (input: touch: ...) with its touch-to-frame time.
+      struct timespec now;
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      const int64_t now_ns = (int64_t)now.tv_sec * 1000000000 + now.tv_nsec;
+      const xh_input_ev ev = { now_ns, s->type, s->code, s->value };
+      xh_input_feed(&source, &ev, 1, now_ns, xh_counter(), g_info.timebase_hz);
       break;
+    }
     case XH_STEP_REPEAT:
       if (s->value < 0) { i = start - 1; break; }
       if (!counting) { counting = true; left = s->value; }
@@ -195,6 +201,7 @@ int xh_input_script_start(xh_virtio *dev, const char *path)
     else if (steps[i].kind == XH_STEP_EVENT) events++;
   }
   target = dev;
+  xh_input_source_init(&source, dev, "script", true);
   running = true;
   if (pthread_create(&thread, NULL, script_main, NULL)) { running = false; return -1; }
   LOGI("input script: %s, %u steps (%u events)", path, nsteps, events);

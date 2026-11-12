@@ -33,7 +33,7 @@
 // ---- the filter of one device's events (portable: tests/test_xnuhost.c) ----------------------------
 // Linux's event codes (linux/input-event-codes.h), spelled out so that this part builds on any host.
 enum { EV_SYN_ = 0, EV_KEY_ = 1, EV_ABS_ = 3, EV_MSC_ = 4, SYN_REPORT_ = 0, SYN_DROPPED_ = 3, MSC_TIMESTAMP_ = 5,
-       KEY_VOLUMEDOWN_ = 114, KEY_VOLUMEUP_ = 115, KEY_POWER_ = 116, BTN_TOUCH_ = 0x14a,
+       KEY_MUTE_ = 113, KEY_VOLUMEDOWN_ = 114, KEY_VOLUMEUP_ = 115, KEY_POWER_ = 116, KEY_HOMEPAGE_ = 172, BTN_TOUCH_ = 0x14a,
        ABS_MT_SLOT_ = 0x2f, ABS_MT_TOUCH_MAJOR_ = 0x30, ABS_MT_POSITION_X_ = 0x35, ABS_MT_POSITION_Y_ = 0x36,
        ABS_MT_TRACKING_ID_ = 0x39, ABS_MT_PRESSURE_ = 0x3a };
 static const uint16_t side_keys[3] = { KEY_VOLUMEDOWN_, KEY_VOLUMEUP_, KEY_POWER_ };
@@ -189,7 +189,8 @@ void xh_input_feed(xh_input_source *s, const xh_input_ev *ev, unsigned n, int64_
       send_event(s, EV_SYN_, SYN_REPORT_, 0);
       if (s->touch) count_frame(s, v->time_ns, now_ns);
     } else if (v->type == EV_KEY_) {
-      bool side = v->code == KEY_VOLUMEDOWN_ || v->code == KEY_VOLUMEUP_ || v->code == KEY_POWER_;
+      // The side keys, and the two the guest also takes from a host that has them (OneiOSSideKeys.inc): Home, the ringer.
+      bool side = v->code == KEY_VOLUMEDOWN_ || v->code == KEY_VOLUMEUP_ || v->code == KEY_POWER_ || v->code == KEY_MUTE_ || v->code == KEY_HOMEPAGE_;
       if (side || (s->touch && v->code == BTN_TOUCH_)) send_event(s, EV_KEY_, v->code, v->value);
     } else if (v->type == EV_ABS_ && s->touch) {
       if (v->code == ABS_MT_SLOT_ || v->code == ABS_MT_TRACKING_ID_ || v->code == ABS_MT_POSITION_X_ || v->code == ABS_MT_POSITION_Y_ ||

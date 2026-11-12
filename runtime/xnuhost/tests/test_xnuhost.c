@@ -925,10 +925,10 @@ static void test_input_filter(void)
   xh_input_source k;
   xh_input_source_init(&k, d.dev, "keys", false);
   k.read_state = fake_read_state;
-  const xh_input_ev press[] = { { now, 1, 116, 1 }, { now, 1, 30, 1 }, { now, 3, 0x35, 3 }, { now, 0, 0, 0 } };
-  xh_input_feed(&k, press, 4, now, counter, hz);
+  const xh_input_ev press[] = { { now, 1, 116, 1 }, { now, 1, 30, 1 }, { now, 3, 0x35, 3 }, { now, 1, 172, 1 }, { now, 0, 0, 0 } };
+  xh_input_feed(&k, press, 5, now, counter, hz);
   n = input_take(&d, got, 32);
-  CHECK(n == 2 && got[0].code == 116 && got[0].value == 1 && got[1].type == 0 && k.sent_keys == 4);
+  CHECK(n == 3 && got[0].code == 116 && got[0].value == 1 && got[1].code == 172 && got[2].type == 0 && k.sent_keys == 4);
   fake_state.keys = 2;                                                          // power up, volume up down: both changed
   const xh_input_ev kdrop[] = { { now, 0, 3, 0 }, { now, 1, 116, 0 }, { now, 0, 0, 0 } };
   xh_input_feed(&k, kdrop, 3, now, counter, hz);
