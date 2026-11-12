@@ -42,6 +42,7 @@ SOURCES = [
     ('iokit', 'bluetooth/OneiOSBluetooth.cpp'),
     ('iokit', 'brightness/OneiOSBacklight.cpp'),
     ('iokit', 'battery/OneiOSBattery.cpp'),
+    ('iokit', 'thermal/OneiOSThermal.cpp'),
     ('mach', 'camera/oneios_camera.c'),
     ('bsd', 'camera/oneios_camera_dev.c'),
 ]

@@ -199,11 +199,31 @@ static br_haptic *haptic;
 static br_camera *camera;          // the camera helper process (runtime/bridges/camera, bin/oneios-camera)
 static br_bright *brightness;     // the panel's backlight and the light sensor (runtime/bridges/brightness)
 static br_battery *battery;       // the phone's battery for iOS (runtime/bridges/battery)
+static br_thermal *thermal;       // the phone's temperatures: iOS's pressure level and xnuhost's CPU step (runtime/bridges/thermal)
+static br_cpu_topology cpu_host;  // the host's CPUs, and the plan as made: the thermal steps narrow it
+static br_cpu_plan cpu_plan_base;
+static bool cpu_planned;
+extern unsigned xh_cpu_place_epoch;   // task.c: an iOS thread is placed again when it runs after this changes
+void xh_sysreg_stats_log(void);       // sysreg.c: the most frequent trapped instructions
 static bool net_up;
 
 static void bridge_log(int level, const char *line) { xh_log(level == 0 ? XH_LOG_ERROR : level == 1 ? XH_LOG_INFO : XH_LOG_DEBUG, "%s", line); }
 static void place(int tid, unsigned vcpu) { br_cpu_place(tid, &cpu_plan, vcpu); }
 static int vcpu_tid(unsigned vcpu) { return vcpu < g_ncpu ? g_vcpu[vcpu].tid : 0; }
+// The thermal bridge's step (br_thermal_cap_for): the vCPUs and the iOS threads they run keep to fewer, slower cores
+// while the phone is hot. Affinities of xnuhost's own threads and its tasks' only: they end with the session, nothing
+// outside the process is written, so a SIGKILL leaves nothing to restore.
+static void thermal_step(void *ctx, const br_thermal_state *state)
+{
+  (void)ctx;
+  if (!cpu_planned) return;
+  br_cpu_plan_cap(&cpu_plan, &cpu_plan_base, &cpu_host, state->cap);
+  __atomic_fetch_add(&xh_cpu_place_epoch, 1, __ATOMIC_ACQ_REL);
+  for (unsigned i = 0; i < cpu_plan.nvcpu; i++) { int tid = vcpu_tid(i); if (tid > 0) br_cpu_place(tid, &cpu_plan, i); }
+  uint64_t p = cpu_plan.nvcpu ? __atomic_load_n(&cpu_plan.v[cpu_plan.nvcpu - 1].affinity, __ATOMIC_ACQUIRE) : 0;
+  LOGI("thermal: step %u (%s): P vCPUs on host CPUs 0x%llx%s", state->cap, br_thermal_level_name(state->level), (unsigned long long)p,
+       state->cap ? "" : " (all of their kind)");
+}
 static uint64_t cpufreq_read(void *opaque, uint64_t offset, unsigned size) { return br_cpufreq_read(opaque, offset, size); }
 static void cpufreq_write(void *opaque, uint64_t offset, unsigned size, uint64_t value) { br_cpufreq_write(opaque, offset, size, value); }
 
@@ -343,6 +363,9 @@ static int boot(void)
     br_log_sink = bridge_log;
     br_cpu_topology host;
     if (br_cpu_read("/sys", &host) == 0 && br_cpu_plan_make(&host, config.ncpu, false, &cpu_plan) == 0) {
+      cpu_host = host;
+      cpu_plan_base = cpu_plan;
+      cpu_planned = true;
       for (unsigned i = 0; i < config.ncpu; i++) machine.cpu_cluster[i] = cpu_plan.v[i].type;      // E vCPUs first, then P
       xh_cpu_place = place;
       br_cpufreq *cpufreq = br_cpufreq_create(&cpu_plan, vcpu_tid);
@@ -362,7 +385,10 @@ static int boot(void)
     haptic = br_haptic_open(NULL);
     brightness = br_bright_open(NULL);
     battery = br_battery_open(NULL);
-    br_bridge_config bridge = { .haptic = haptic, .hci_factory = hidl ? br_hci_open_hidl : NULL, .brightness = brightness, .battery = battery };
+    thermal = br_thermal_open(NULL);
+    if (thermal) br_thermal_on_cap(thermal, thermal_step, NULL);
+    br_bridge_config bridge = { .haptic = haptic, .hci_factory = hidl ? br_hci_open_hidl : NULL, .brightness = brightness, .battery = battery,
+                                .thermal = thermal };
     bool have_bridge = br_bridge_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &bridge) != NULL;
     if (have_bridge) kinds[ndev++] = XL_DEV_BRIDGE;
     if (hidl && have_bridge) {
@@ -633,7 +659,7 @@ int main(int argc, char **argv)
   while (!xh_stopping()) {
     struct timespec tick = { 0, 100 * 1000 * 1000 };
     int signo = sigtimedwait(&waited, NULL, &tick);
-    if (signo == SIGQUIT) { xh_cpu_dump_all(); xh_tasks_dump(); continue; }      // debugging: where each vCPU is
+    if (signo == SIGQUIT) { xh_cpu_dump_all(); xh_tasks_dump(); xh_sysreg_stats_log(); continue; }      // debugging: where each vCPU is
     if (signo > 0) {
       char why[48];
       snprintf(why, sizeof why, "signal %d", signo);
@@ -655,6 +681,7 @@ int main(int argc, char **argv)
          (unsigned long long)g_vcpu[i].stat_irqs, (unsigned long long)g_vcpu[i].stat_timer, (unsigned long long)g_vcpu[i].stat_sgi,
          (unsigned long long)g_vcpu[i].stat_reraised, (unsigned long long)g_vcpu[i].stat_mmio, (unsigned long long)g_vcpu[i].stat_sysreg,
          (unsigned long long)g_vcpu[i].stat_traps);
+  xh_sysreg_stats_log();                    // which trapped instructions kept the vCPUs busy
   // Debugging aid: XNUHOST_DUMP=FILE writes the first 64 MiB of the kernel's window at the stop (XNUHOST_DUMP_MB=N
   // for more: a kernel collection's data is past 64 MiB).
   if (getenv("XNUHOST_DUMP")) {
@@ -667,6 +694,7 @@ int main(int argc, char **argv)
   if (camera) br_camera_close(camera);      // the helper closes the camera and exits
   if (brightness) br_bright_close(brightness);      // One UI's backlight level again, the light sensor as it was
   if (battery) br_battery_close(battery);           // read only: the worker stops
+  if (thermal) br_thermal_close(thermal);           // read only; the step was affinities of our own threads
   if (net_up) net_script("down");
   xh_input_script_stop();
   xh_input_stop();

@@ -1507,3 +1507,18 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   at 127 of 255`. After a SIGKILL of xnuhost nothing of ours runs: the IC is left to One UI's input HAL at the
   return (not checked after a killed session). Open risk: if iOS's slider can send `brightness` 0 with the display
   on, touch sleeps under the finger; `ONEIOS_TSP_OFF=0` in xnuhost's environment keeps the IC awake at level 0.
+- 2026-11-12, thermal -> lead, gpu, booter, userland, bringup: **the phone's temperatures and pressure for iOS, and
+  xnuhost's own thermal step** (`runtime/bridges/thermal`, `drivers/thermal`, `userland/helpers/oneios-thermal.c`;
+  `docs/hardware.md` 7d). Built and host-tested; `thermalctl` run on the phone (read only); the rest not yet run.
+  - **Finding (bringup's sessions, read from outside):** a still lock screen keeps xnuhost at 240-420% CPU, and that is
+    the eight vCPU threads (the guest kernel), not iOS's processes (80%). Case (`lrp`) 43 C and rising after 4 min,
+    board thermistor 55 C. Session 3's stop line: cpu2 emulated 260,000 trapped instructions a second. **booter:**
+    `sysreg.c` now counts them (`emulated: insn 0x... N times`, at the stop and on SIGQUIT); a small hunk of mine.
+  - **booter / lead:** `main.c` opens the thermal bridge (`thermal_step`: vCPU and iOS-thread affinities only, on
+    heavy+), `task.c` re-places a thread when `xh_cpu_place_epoch` changes. `ONEIOS_THERMAL_CAP=0` turns it off.
+  - **gpu:** at heavy pressure drm2kgsl could stop its power constraint (burst and rate rules). I did not touch
+    drm2kgsl; if you add a run-time switch, xnuhost's `thermal_step` is where to call it.
+  - **userland:** `oneios-thermal` is a new helper and `oneios-init` service `thermal` (tweaks.py); thermalmonitord stays
+    (it has no sensors here and keeps nominal; the helper sets the level again when it is overwritten).
+  - **bringup:** during your sessions 1-4 I ran only reads on the phone (`/data/local/tmp/thermal-agent-thermalctl watch`
+    and `top`, /proc and /sys); I did not write `session/return.request`.

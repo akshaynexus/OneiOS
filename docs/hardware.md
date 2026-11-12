@@ -27,6 +27,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 | Camera | `drivers/camera`: the `oneios,camera` transport, `/dev/oneios-camera`; `userland/camera`: the capture plug-in (its device object not written) | `runtime/bridges/camera`: helper `oneios-camera` (provider HAL in a session, Camera2 NDK with One UI), ring, device, `camctl` | host and kernel sides built and host-tested; iOS shows no camera yet; one phone run (2026-11-11): cameraserver lists 4 cameras and opens one for a root client, no frame arrived (no binder threads in the process: fixed, the fix not yet run on the phone); the HAL back end never run (section 7) |
 | Backlight and light sensor | `drivers/brightness`: the backlight service (port of iOSPlus10's `AppleARMBacklight`), the light readings; the HID light sensor device, built into the hosted kernel's HID archive | `runtime/bridges/brightness`: the backlight sysfs node, `als_rear` by evdev, `brightctl` | both built; host tested; in a PC boot the HID device starts and Apple's `AppleUSBALSService` attaches to it; never run on the phone or in a session (section 7a) |
 | Battery | `drivers/battery`: an `IOPMPowerSource` powerd reads | `runtime/bridges/battery`: Android's `power_supply` nodes, polled, changes sent over the bridge channel; `batteryctl` | both built; host tested with a fake sysfs; never run on the phone or in a session (section 7c) |
+| Thermal | `drivers/thermal`: `OneiOSThermal` (the readings and the level in the registry); `userland/helpers/oneios-thermal` sets iOS's `com.apple.system.thermalpressurelevel` from it | `runtime/bridges/thermal`: the thermal zones, Samsung's thermistors, the battery's sensors; a level on iOS's scale; xnuhost's CPU step when hot; `thermalctl` | host built and tested; `thermalctl` run on the phone (read only); the step, the driver and the helper not yet run (section 7d) |
 | Touch screen and buttons | `kernel/patches/oneios-hosted/hid`: UniXNU's NativeHidInput (digitizer, buttons) under the collection's `IOHIDDevice`, UniXNU-droidvm's virtio-input transport with the side keys | xnuhost's `input.c` (evdev, no grab) and `virtio_input.c`; `input_script.c` for a host with no panel | built; in a PC boot backboardd opens both services and scripted touches and keys are queued for it as HID events; never run on the phone (section 7b) |
 
 Common pieces:
@@ -803,6 +804,65 @@ Details and the phone test: `runtime/bridges/battery/README.md`, `drivers/batter
 - [U] that SpringBoard's status bar and BatteryCenter follow `powerd` here, which is the point of the first session.
 - [U] that `/sys/class/power_supply` is visible in xnuhost's session namespace (it is read from there).
 - Battery health: `powerd`'s `AppleSmartBatteryPack` paths (health, per-cell data) find nothing and stay off.
+
+## 7d. Thermal (thermal, 2026-11-12)
+
+Details: `runtime/bridges/thermal/README.md` (sensors, levels, the step, `thermalctl`), `drivers/thermal/README.md`.
+
+### The phone in a session [F, the phone, 2026-11-12]
+
+- Kept running: the kernel's 81 thermal zones (`step_wise`), LMh, `thermal-engine-v2` (empty
+  `/vendor/etc/thermal-engine.conf`), `vendor.samsung.hardware.thermal-service`, the charger's own temperature limits.
+  Gone with system_server: Samsung's case-temperature policy (SSRM) and the power HAL's boosts.
+- The kernel's trips are junction trips: X4 90 C (`cpufreq-cpu7`), GPU 95 C (KGSL devfreq), DDR 90 C, the cores pause
+  at 108-110 C, `xo-therm` 78/80 C, the BCL levels. They cap every Linux thread, xnuhost's too; nothing caps on the
+  case temperature any more. xnuhost's thermal step does (inside the process only: thread affinities; no cpufreq,
+  devfreq or `/sys/power` node is written, so a SIGKILL leaves nothing to restore).
+- Sensors: `cpu-*`, `cpuss-*`, `gpuss-0..7`, `ddr`, `xo-therm` zones; `/sys/class/sec/sec-{ap,cf,lp,pa,wf}-thermistor`;
+  `power_supply/battery/temp` and `lrp`. No `skin` zone. `lrp` is the case sensor Samsung's charger limits current by
+  (device tree: 37-39 C with the screen on, 46 C `mix_v2_lrp_cond`).
+- One UI's limits move: `policy7/scaling_max_freq` read 3187200, 3302400 and 3340800 kHz within a minute (hardware top
+  3398400); the power HAL raised `scaling_min_freq` of all four policies to near their top in bursts.
+
+### iOS's side [F 24A446]
+
+thermalmonitord is product-tuned: `/System/Library/ThermalMonitor/V54AP-Info.plist` asks for an SMC
+(`usesSMCSensorExchange`, group `zETM`), HID temperature sensors by name (`Tarc`, `NAND CH0 temp`, the camera dies) and
+a die-temperature PID (`DieTempHS`, target 90); its battery sensor `TG0B-IOPMPowerSource` reads an `IOPMPowerSource`'s
+`Temperature` (ours publishes it, section 7c). None of the SMC and PMU sensors exist here, so it reports nominal. The
+pressure level iOS's frameworks read is the notify state `com.apple.system.thermalpressurelevel` (0, 10, 20, 30, 40,
+50: `OSThermalNotification.h`); `oneios-thermal` sets it from the host's level. Not proven in a guest.
+
+### Measured (thermalctl watch, every 10 s; the phone on USB, so "battery mA" is the net current, not the draw)
+
+Bringup's sessions of 2026-11-12, read only from outside (runtime 0.1.7-dev without the thermal bridge; kernel.kc
+9476a867):
+
+| | One UI, screen on, between sessions | session 3, boot to lock screen (08:43-08:48) | session 4, lock screen after boot (08:52-08:56) |
+|---|---|---|---|
+| CPU zones (hottest) | 33-46 C | 55-82 C | 60-77 C (boot: 94.6 C) |
+| GPU zones | 30-35 C | 46-56 C | 50-60 C |
+| board (`sec-ap-thermistor`) | 29-35 C | 44-50 C | 48-55 C |
+| case (`lrp`) | 29-33 C | 37-39 C | 40.7-43.2 C, still rising at 4 min |
+| battery | 26-30 C | 33 C | 36-37 C |
+| GPU clock | 231 MHz | 231-1000 MHz (1000 most of the time) | 231-1000 MHz |
+| CPU in use (800 = all cores) | 30-240 | 360-530 | 300-500 |
+| xnuhost / the whole session | - | 235-410 / 300-480 | 240-420 / 300-500 |
+
+Where a still lock screen's CPU goes (`thermalctl top`, session 4, 10 s after the first frame): xnuhost 281%, all of it
+the eight vCPU threads (`xnu-cpu0` 55% ... `xnu-cpu7` 6%), the iOS processes 80% (two at 26% and 23%). The vCPU
+threads run the guest kernel, so the kernel, not iOS's user space, keeps the phone hot. Session 3's stop line: cpu2
+emulated 104 million trapped instructions in 400 s (260,000 a second; cpu3 62 M, cpu4 37 M, the E vCPUs about 1 M),
+each a signal round trip on its thread. xnuhost now logs which instructions (`emulated: insn ...`, `docs/booter.md`
+2.5) to find it.
+
+### Missing, unknown
+
+- Not run: the thermal step, the driver, the helper (the helpers are in no image yet: `docs/userland.md` 7).
+- [U] Whether the "heavy" and "critical" levels change what iOS does (frame rate, the cool-down screen).
+- [U] The case thresholds are a guess on Samsung's scale, not Samsung's policy.
+- The GPU: drm2kgsl's burst rule (`docs/gpu.md` 2.2) and its constraint are the gpu agent's; at heavy pressure they
+  could stop constraining (a note on the board). The KGSL constraint stays under the thermal devfreq limit [inference].
 
 ## 8. Sources
 

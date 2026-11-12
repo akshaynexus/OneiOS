@@ -24,7 +24,7 @@ struct ob_header {
   uint32_t length;                       // payload bytes after the header
 };
 
-enum { OB_CH_CONTROL = 0, OB_CH_HAPTIC = 1, OB_CH_HCI = 2, OB_CH_CAMERA = 3, OB_CH_BRIGHTNESS = 4, OB_CH_BATTERY = 5, OB_CH_COUNT = 6 };
+enum { OB_CH_CONTROL = 0, OB_CH_HAPTIC = 1, OB_CH_HCI = 2, OB_CH_CAMERA = 3, OB_CH_BRIGHTNESS = 4, OB_CH_BATTERY = 5, OB_CH_THERMAL = 6, OB_CH_COUNT = 7 };
 
 // ---- control ----------------------------------------------------------------------------------
 // guest -> host OB_CTL_HELLO { u32 version }; host -> guest OB_CTL_HELLO { u32 version, u32 channels }
@@ -97,4 +97,19 @@ struct ob_battery_state {
   int32_t  minutes;                      // to empty, or to full while charging; -1 = unknown
 };
 
+// ---- thermal (drivers/thermal, runtime/bridges/thermal) ---------------------------------------
+enum {
+  OB_THERMAL_QUERY = 1,                  // guest -> host: no payload; the host answers OB_THERMAL_STATE, then reports changes
+  OB_THERMAL_STATE = 2,                  // host -> guest: struct ob_thermal_state, at once for a new level, else every 30 s
+};
+#define OB_THERMAL_UNKNOWN INT32_MIN     // a reading the phone does not have
+enum { OB_THERMAL_BY_CASE = 1u, OB_THERMAL_BY_SOC = 2u, OB_THERMAL_BY_BATTERY = 4u };      // ob_thermal_state.reason
+struct ob_thermal_state {
+  uint32_t level;                        // iOS's thermal pressure level (OSThermalNotification.h): 0 nominal, 10 light,
+                                         // 20 moderate, 30 heavy, 40 trapping, 50 sleeping
+  uint32_t reason;                       // OB_THERMAL_BY_* of the readings that set it
+  uint32_t host_step;                    // what xnuhost does about it: 0 nothing, 1 vCPUs off the fastest cores,
+                                         // 2 on the slowest P cores and the E cores, 3 on the E cores only
+  int32_t  case_temp, soc, cpu, gpu, ddr, xo, board, battery;   // tenths of a degree C, or OB_THERMAL_UNKNOWN
+};
 #endif

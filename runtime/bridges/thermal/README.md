@@ -1,0 +1,101 @@
+# Thermal bridge
+
+The phone's temperatures for iOS, a thermal pressure level on iOS's scale, and the step by which xnuhost holds itself
+back when the phone is hot. Host end: `thermal.c` (in xnuhost, linked from `libonebridges.a`). Guest end:
+`drivers/thermal/OneiOSThermal.cpp` (the registry) and `userland/helpers/oneios-thermal.c` (the notify state).
+Channel `OB_CH_THERMAL` (6) of `drivers/bridge/oneios_bridge_proto.h`. `docs/hardware.md` section 7d has the phone's
+numbers.
+
+## Why
+
+In a session One UI's system_server is gone, and with it Samsung's case-temperature policy (SSRM). What keeps running
+[F, the phone, 2026-11-12]:
+
+- the kernel's thermal zones (`step_wise`) with their trips: the X4 at 90 C (`cpu-1-2-1` -> `cpufreq-cpu7`), the GPU at
+  95 C (`gpuss-*` -> the KGSL devfreq), DDR at 90 C, the cores pause at 108-110 C, `xo-therm` at 78/80 C, the PMIC's
+  BCL levels;
+- LMh in hardware, the vendor daemons `thermal-engine-v2` (its `/vendor/etc/thermal-engine.conf` is empty) and
+  `vendor.samsung.hardware.thermal-service`;
+- the charger's own limits by the case sensor `lrp` (below).
+
+These caps apply to every Linux thread, so xnuhost's vCPUs, iOS's task threads and the GPU follow them (a KGSL power
+constraint asks for the top level the thermal limit allows [inference: KGSL's `_adjust_pwrlevel` clamps a constraint to
+`thermal_pwrlevel`; not read in Samsung's source]). Nothing acts on the case temperature any more: the junction trips
+are 50-60 C above it. This bridge does, inside xnuhost only.
+
+## Sensors (read only)
+
+| Reading | Node | Note |
+|---|---|---|
+| cpu | the hottest `cpu-*` / `cpuss-*` zone of `/sys/class/thermal` | millidegrees; a zone that reads -273 C is skipped |
+| gpu | the hottest `gpuss-*` zone | |
+| ddr, xo | `ddr`, `xo-therm` | |
+| soc | the hottest of cpu, gpu, ddr, with the zone's name | |
+| ap (board) | `/sys/class/sec/sec-ap-thermistor/temperature` | tenths; Samsung's board thermistor by the SoC |
+| battery | `/sys/class/power_supply/battery/temp` | tenths |
+| lrp (case) | `/sys/class/power_supply/battery/lrp` | tenths. Samsung's charger limits current by it from 37-39 C with the screen on and acts again at 46 C (the phone's device tree: `battery,temp_table_LRP_NORMAL` 390/380/380/370, `battery,mix_v2_lrp_cond` 460). Taken as the case temperature [inference]; `ap` when there is no `lrp` |
+
+Read every 5 s from xnuhost's start (about 40 files), whether or not iOS listens.
+
+## Levels
+
+iOS's levels (`kOSThermalPressureLevel*` of the iPhoneOS SDK's `OSThermalNotification.h`): 0 nominal, 10 light,
+20 moderate, 30 heavy, 40 trapping, 50 sleeping. The level is the highest of three rules; each rule keeps its level
+until its reading falls a hysteresis below the threshold.
+
+| Rule | light | moderate | heavy | trapping | sleeping | hysteresis | Override (degrees C) |
+|---|---|---|---|---|---|---|---|
+| case (lrp) | 39 | 42 | 44 | 46 | 50 | 2 | `ONEIOS_THERMAL_SKIN=39,42,44,46,50` |
+| SoC | | | 95 | 105 | | 5 | `ONEIOS_THERMAL_SOC=95,105` |
+| battery | | | 45 | 50 | | 2 | `ONEIOS_THERMAL_BATTERY=45,50` |
+
+The case thresholds are a guess on Samsung's scale above, not Samsung's own policy (that lived in system_server and is
+not readable). Apple's meaning of the names [F, `ProcessInfo.ThermalState` documentation]: serious (heavy here) is
+"the system reduces performance", critical (trapping and above) is "the device needs to cool down".
+
+## xnuhost's step
+
+| Level | Step | P vCPUs on (this phone) | E vCPUs on |
+|---|---|---|---|
+| below heavy | 0 | cpu2-7 | cpu0-1 |
+| heavy | 1 | cpu2-6 (without the frequency domain of the highest top clock: the X4) | cpu0-1 |
+| trapping | 2 | cpu0-1, 5-6 (the P domain of the lowest top clock, 2.96 GHz, and the E cores) | cpu0-1 |
+| sleeping | 3 | cpu0-1 | cpu0-1 |
+
+`br_cpu_thermal_mask` (`cpu/topology.c`) works from the topology, not from these numbers. xnuhost's `thermal_step`
+(`main.c`) narrows the vCPU threads' affinity and bumps an epoch, and `xh_thread_run` (`task.c`) places each iOS thread
+again at its next run. Only xnuhost's own threads and its tasks' are changed: they end with the session, nothing outside
+the process is written, so a SIGKILL leaves nothing to restore. No cpufreq or devfreq node, nothing under `/sys/power`.
+`ONEIOS_THERMAL_CAP=0` in xnuhost's environment: the level is still sent to iOS, the step stays 0.
+
+Log lines (xnuhost's log): `thermal: on: 29 zones; case 31.9 C (lrp), SoC 37.4 C (cpu-2-1-1), battery 29.2 C; nominal;
+read every 5000 ms`, then `thermal: heavy (was moderate; by case): ...` at each new level and `thermal: step 1 (heavy): P
+vCPUs on host CPUs 0x7c` at each new step.
+
+## Messages
+
+`OB_THERMAL_QUERY` (guest, no payload) -> `OB_THERMAL_STATE` (`struct ob_thermal_state`: level, reason bits, the step,
+eight readings in tenths of a degree), then a new one at once for a new level or step and every 30 s otherwise. A guest
+reset stops the reports; the reads go on.
+
+## Tests
+
+`make -C runtime/bridges/thermal test` (Linux; on a Mac in the container: `runtime/host-tests.sh`, part `bridges`): the
+limits parser, each rule and its hysteresis, the steps' CPUs on the S24 Ultra's topology and on a one-kind host, the
+sysfs reader on a fake tree (an off zone, no `lrp`), the worker's two listeners. 56 checks.
+
+## On the phone
+
+`bin/thermalctl` (static, read only; as root, One UI up or in a session):
+
+```
+thermalctl                  # the zones found, one reading, the level, and each step's CPUs
+thermalctl watch -i 10 -n 90
+#   a line every 10 s for 15 minutes:
+# time cpu gpu ddr xo ap battery lrp (C) level step | MHz cpu0 cpu2 cpu5 cpu7 (cpu7 max) gpu gpu% | battery mA mV | CPU% phone xnuhost session
+thermalctl top -i 10        # in a session: xnuhost's busiest threads and the busiest processes of its namespace
+```
+
+"CPU% phone" is all eight cores (800 = all busy), "xnuhost" its own threads, "session" every process in xnuhost's mount
+namespace (iOS's processes). "battery mA" is `current_now` as the phone gives it: on USB power it is the battery's net
+current, not the phone's draw.

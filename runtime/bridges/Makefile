@@ -11,17 +11,19 @@ XNUHOST := ../xnuhost
 WARN := -Wall -Wextra -Werror
 INC := -Iinclude -I../../drivers/bridge -I$(XNUHOST)/src -I$(XNUHOST)/include
 CFLAGS ?= -O2 -g
-CORE := cpu/topology haptics/haptic net/net bt/hci bt/hidl_parcel bt/hci_hidl audio/backend brightness/brightness battery/battery
+CORE := cpu/topology haptics/haptic net/net bt/hci bt/hidl_parcel bt/hci_hidl audio/backend brightness/brightness battery/battery thermal/thermal
 DEVICES := devices/bridge_dev devices/virtio_net devices/virtio_snd
-HDR := $(wildcard include/bridges/*.h bt/*.h audio/*.h brightness/*.h battery/*.h ../../drivers/bridge/*.h $(XNUHOST)/src/xnuhost.h)
+HDR := $(wildcard include/bridges/*.h bt/*.h audio/*.h brightness/*.h battery/*.h thermal/*.h ../../drivers/bridge/*.h $(XNUHOST)/src/xnuhost.h)
 A := build/android
 H := build/host
 
-all: $(A)/libonebridges.a $(A)/oneios-audio $(A)/bridgectl brightctl batteryctl
+all: $(A)/libonebridges.a $(A)/oneios-audio $(A)/bridgectl brightctl batteryctl thermalctl
 brightctl:
 	$(MAKE) -C brightness NDK="$(NDK)"
 batteryctl:
 	$(MAKE) -C battery NDK="$(NDK)"
+thermalctl:
+	$(MAKE) -C thermal NDK="$(NDK)"
 
 $(A)/%.o: %.c $(HDR)
 	@mkdir -p $(dir $@)
@@ -59,8 +61,9 @@ test: $(H)/test_bridges $(H)/test_audio_helper test-binder
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_bridges   # the devices live as long as xnuhost: the transport has no destroy
 	$(MAKE) -C brightness test
 	$(MAKE) -C battery test
+	$(MAKE) -C thermal test
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_audio_helper   # the fake streams are kept for the checks
 
 clean:
 	rm -rf build
-.PHONY: all test test-binder clean brightctl batteryctl
+.PHONY: all test test-binder clean brightctl batteryctl thermalctl

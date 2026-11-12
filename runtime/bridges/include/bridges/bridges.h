@@ -68,6 +68,14 @@ int br_cpu_request(int tid, const br_cpu_plan *plan, unsigned index, uint32_t kh
 // The uclamp.min value br_cpu_request uses (0..1024).
 unsigned br_cpu_util_for(const br_cpu_plan *plan, unsigned index, uint32_t khz);
 
+// Thermal steps (runtime/bridges/thermal): the host CPUs a vCPU of `type` may use at step `cap`. 0: all of its kind;
+// 1: P without the frequency domain of the highest top clock (the X4 here); 2: P limited to the domain of the lowest
+// top clock, and the E cores; 3: the E cores only. A step that would leave no CPU keeps the one before it.
+uint64_t br_cpu_thermal_mask(const br_cpu_topology *t, char type, unsigned cap);
+// plan's affinities from base's (br_cpu_plan_make), each limited to its step's CPUs (base's mask when they do not meet).
+// Each word is stored atomically: placement may read plan meanwhile.
+void br_cpu_plan_cap(br_cpu_plan *plan, const br_cpu_plan *base, const br_cpu_topology *t, unsigned cap);
+
 // The virtual cpufreq device DroidVMCpufreq.c drives (Linux's virtual-cpufreq register layout): one
 // 4 KiB window per vCPU. xnuhost registers [base, base + nvcpu * 0x1000) and forwards accesses here.
 #define BR_CPUFREQ_WINDOW 0x1000u

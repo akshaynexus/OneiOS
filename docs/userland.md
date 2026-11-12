@@ -283,12 +283,13 @@ scale (3.27 would give 440 points) is not something UIKit has. So 3 stays the de
 | `oneios-init` | Our service manager outside launchd. Reads `services.d/NAME.conf` (`arg=`, `env=`, `uid=`, `keepalive=`, `throttle=`, `bootstrap=`), starts what `enabled/` names, restarts with a throttle, logs to `log/`, writes `state/status`. Ignores a service file that others can write |
 | `oneios-bootstat` | `ONEIOS-GUEST stage=backboardd-up|springboard-process|springboard-up ...` on the console and in `state/boot` |
 | `oneios-mg` | Asks MobileGestalt and compares with `identity.expect` (ProductType iPhone18,2, DeviceClass iPhone, main-screen 1440x3120 at the image's scale, subtype 2868) |
+| `oneios-thermal` | Service `thermal`: copies the kernel's `OneiOSThermal` `ThermalPressureLevel` (the phone's thermal pressure, `drivers/thermal`) into the notify state `com.apple.system.thermalpressurelevel` every 5 s, and sets it again when thermalmonitord (which has no sensors here) changed it. `ONEIOS-GUEST thermal level=N name=... step=... case=... soc=...` on the console |
 | `oneios-seed` | First start: unpacks `data.seed` (pax tar) into the new Data volume as root, with owners, modes, links and extended attributes; marks it with the seed's SHA-256; refuses `..`, absolute paths, links out of the volume, devices and hard links |
 
 Built by `helpers/build.sh` for `arm64e-apple-ios27.0` with the toolchain of `scripts/ios` (`docs/building.md`
 section 9: Xcode's on macOS, the cross toolchain on Linux), linked against the guest's iOS 27 stubs and signed by
 `scripts/ios/ios-sign.py` with 4 KiB pages and the `no-container` entitlement (XML and DER). Built on the Mac on
-2026-11-12 (Xcode 27.2): all four pass `macho-check.py`. `oneios-bootstat` declares libproc's two calls itself (the
+2026-11-12 (Xcode 27.2): all four pass `macho-check.py` (`oneios-thermal`, added the same day, builds and signs; not checked with `macho-check.py`, not run in a guest). `oneios-bootstat` declares libproc's two calls itself (the
 iPhoneOS SDK has no `libproc.h`; 24A446's libSystem exports both). **Not in any image yet:** with helpers in the seed
 the kernel starts `oneios-init`, which changes every boot, so the Mac build went to `out/userland/helpers-mac`, which
 the hook does not read (it reads `out/userland/helpers`, or `ONEIOS_HELPERS`). arm64e because iOS 27

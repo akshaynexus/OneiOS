@@ -19,7 +19,7 @@ ONEIOS = 'oneios'                       # in the Data tree: /private/var/oneios
 ONEIOS_GUEST = '/private/var/oneios'
 INIT_LABEL = 'com.oneios.init'
 INIT_ROOT_PATH = 'usr/libexec/oneios-init'  # rw layout: the manager on the OS volume
-HELPERS = ('oneios-init', 'oneios-bootstat', 'oneios-mg')  # oneios-seed runs before Data exists: it is not installed here
+HELPERS = ('oneios-init', 'oneios-bootstat', 'oneios-mg', 'oneios-thermal')  # oneios-seed runs before Data exists: it is not installed here
 LOGD = (272, 272)
 RECOVER_LABELS = ('com.apple.backboardd', 'com.apple.SpringBoard', 'com.apple.configd', 'com.apple.runningboardd')
 
@@ -273,6 +273,8 @@ def host_services(cx):
                            keepalive=0, bootstrap=1, env=env), 'oneios-mg'),
         'dropbear': (_conf([f'{ONEIOS_GUEST}/bin/dropbear', '-F', '-E', '-R', '-p', '2222'], keepalive=1, throttle=5,
                            bootstrap=1, env=env), 'dropbear'),
+        # the phone's thermal pressure (drivers/thermal) into notify's com.apple.system.thermalpressurelevel; needs notifyd
+        'thermal': (_conf([f'{ONEIOS_GUEST}/bin/oneios-thermal'], keepalive=1, throttle=10, bootstrap=1, env=env), 'oneios-thermal'),
     }
     enabled = []
     for name, (conf, binary) in services.items():

@@ -4,7 +4,7 @@
 #   userland/helpers/build.sh [OUT_DIR]        default out/userland/helpers (git-ignored)
 #   userland/helpers/build.sh --host [OUT_DIR] host build with cc, for the tests (all but oneios-mg)
 #
-# Output: OUT_DIR/{oneios-init,oneios-bootstat,oneios-seed,oneios-mg} and OUT_DIR/cdhashes.txt. Give OUT_DIR to
+# Output: OUT_DIR/{oneios-init,oneios-bootstat,oneios-seed,oneios-mg,oneios-thermal} and OUT_DIR/cdhashes.txt. Give OUT_DIR to
 # `roottweak apply --helpers`. Any other signed Mach-O put into OUT_DIR is installed too (a dropbear named
 # "dropbear" is started as the ssh service on port 2222): see README.md.
 #
@@ -24,7 +24,7 @@ OUT=${1:-$REPO/out/userland/helpers}
 mkdir -p "$OUT"
 
 if [ "$host" = 1 ]; then
-  for name in oneios-init oneios-bootstat oneios-seed; do
+  for name in oneios-init oneios-bootstat oneios-seed oneios-thermal; do
     cc -std=c99 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L -DONEIOS_HOST_TEST $([ "$(uname -s)" != Darwin ] || echo -D_DARWIN_C_SOURCE) \
       "${WARN[@]}" "$HERE/$name.c" -o "$OUT/$name"
   done
@@ -49,10 +49,11 @@ compile "$HERE/oneios-init.c" -o "$OUT/oneios-init"
 compile "$HERE/oneios-bootstat.c" -o "$OUT/oneios-bootstat"
 compile "$HERE/oneios-seed.c" -o "$OUT/oneios-seed"
 compile "$HERE/oneios-mg.c" -framework CoreFoundation -o "$OUT/oneios-mg"
-for name in oneios-init oneios-bootstat oneios-seed oneios-mg; do sign "$OUT/$name"; done
+compile "$HERE/oneios-thermal.c" -framework IOKit -framework CoreFoundation -o "$OUT/oneios-thermal"
+for name in oneios-init oneios-bootstat oneios-seed oneios-mg oneios-thermal; do sign "$OUT/$name"; done
 rm -f "$ENT"
 # The same reader the image build uses: fails on a file that is not signed, says the architecture and page size.
-python3 -I "$HERE/../tweak" cdhash "$OUT/oneios-init" "$OUT/oneios-bootstat" "$OUT/oneios-seed" "$OUT/oneios-mg" | tee "$OUT/cdhashes.txt"
+python3 -I "$HERE/../tweak" cdhash "$OUT/oneios-init" "$OUT/oneios-bootstat" "$OUT/oneios-seed" "$OUT/oneios-mg" "$OUT/oneios-thermal" | tee "$OUT/cdhashes.txt"
 if grep -v -q 'arm64e pages=4096' "$OUT/cdhashes.txt"; then
   echo "build.sh: a helper is not arm64e with 4 KiB signature pages (lines above)" >&2; exit 1
 fi

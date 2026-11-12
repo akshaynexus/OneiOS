@@ -131,7 +131,7 @@ tool: sizes with `wc -c`, CPUs with `getconf _NPROCESSORS_ONLN`, checksums with 
 
 ```sh
 runtime/build.sh STAGE            # -> STAGE/bin/xnuhost (static), the bridges' helpers, the display helper,
-                                  #    and the phone checks (gpuctl, bridgectl, brightctl, batteryctl, displayctl, camctl)
+                                  #    and the phone checks (gpuctl, bridgectl, brightctl, batteryctl, thermalctl, displayctl, camctl)
 runtime/package.sh 0.1.0-dev      # -> out/release/oneios-runtime-0.1.0-dev-arm64.tar.zst + .sha256 + runtime.json
 runtime/host-tests.sh             # every host test of the runtime, one summary line per part (below)
 runtime/build.sh --test           # Linux: the loader, xnuhost and display tests (xnuhost's with the Android binary on
@@ -323,7 +323,8 @@ One UI's. How the screen runs them and what it tests: the fork's `docs/oneios.md
 
 Or by hand, from `STAGE/bin` pushed to `/data/local/tmp`, as root: `gpuctl` (or one step of it:
 `gpuctl nodes|routes|probe|submit|large`, [gpu.md](gpu.md) section 4), `displayctl test`,
-`bridgectl cpu|haptic|haptic-pattern|bt|audio`, `brightctl info|levels|als`, `batteryctl [watch S]`, `camctl --backend ndk list|capture`.
+`bridgectl cpu|haptic|haptic-pattern|bt|audio`, `brightctl info|levels|als`, `batteryctl [watch S]`, `thermalctl [watch -i S -n N | top -i S]`
+(read only; `watch` logs temperatures, clocks, battery current and the session's CPU, `top` xnuhost's busiest threads), `camctl --backend ndk list|capture`.
 Each tool's README has its exact commands and what a pass looks like. **None of this has run on the phone yet.**
 
 **Getting the image set onto the phone:** it is about 11 GB and never published. Serve it from the PC privately

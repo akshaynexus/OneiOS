@@ -3,7 +3,7 @@
 #   runtime/build.sh STAGE        build and stage bin/xnuhost (static; the task stub is inside it) and the
 #                                 bridges' helpers bin/oneios-audio and bin/oneios-net.sh, and the display helper
 #                                 (runtime/display): bin/oneios-display, bin/liboneios-display.so, lib/oneios-display.dex,
-#                                 and the phone checks: bin/gpuctl, bin/bridgectl, bin/brightctl, bin/batteryctl, bin/displayctl, bin/camctl
+#                                 and the phone checks: bin/gpuctl, bin/bridgectl, bin/brightctl, bin/batteryctl, bin/thermalctl, bin/displayctl, bin/camctl
 #   runtime/build.sh --test       host unit tests of the loader and of xnuhost, then the Android binary
 #                                 booting the test kernel under qemu-aarch64 when that is installed (on a Mac: the
 #                                 whole host suite in an arm64 Linux container, runtime/host-tests.sh)
@@ -48,17 +48,19 @@ make -s -C "$ROOT/runtime/xnuhost" NDK="$NDK" build/android/gpuctl
 "$STRIP" -o "$STAGE/bin/gpuctl" "$ROOT/runtime/xnuhost/build/android/gpuctl"
 chmod 0755 "$STAGE/bin/gpuctl"
 # The other phone checks, which the OneOS fork's Hardware checks screen runs with One UI up (as root):
-# bridgectl (cpu, haptic, haptic-pattern, bt, audio), brightctl (info, levels, als), batteryctl (reads the battery) and displayctl (test; it
+# bridgectl (cpu, haptic, haptic-pattern, bt, audio), brightctl (info, levels, als), batteryctl (reads the battery), thermalctl (the temperatures; `watch` logs them) and displayctl (test; it
 # starts bin/oneios-display beside itself). Each folder's README has the commands and what a good run prints.
 make -s -C "$ROOT/runtime/bridges" NDK="$NDK" build/android/bridgectl
 make -s -C "$ROOT/runtime/bridges/brightness" NDK="$NDK" build/android/brightctl
 make -s -C "$ROOT/runtime/bridges/battery" NDK="$NDK" build/android/batteryctl
+make -s -C "$ROOT/runtime/bridges/thermal" NDK="$NDK" build/android/thermalctl
 make -s -C "$ROOT/runtime/display" NDK="$NDK" build/android/displayctl
 "$STRIP" -o "$STAGE/bin/bridgectl" "$ROOT/runtime/bridges/build/android/bridgectl"
 "$STRIP" -o "$STAGE/bin/brightctl" "$ROOT/runtime/bridges/brightness/build/android/brightctl"
 "$STRIP" -o "$STAGE/bin/batteryctl" "$ROOT/runtime/bridges/battery/build/android/batteryctl"
+"$STRIP" -o "$STAGE/bin/thermalctl" "$ROOT/runtime/bridges/thermal/build/android/thermalctl"
 "$STRIP" -o "$STAGE/bin/displayctl" "$ROOT/runtime/display/build/android/displayctl"
-chmod 0755 "$STAGE/bin/bridgectl" "$STAGE/bin/brightctl" "$STAGE/bin/batteryctl" "$STAGE/bin/displayctl"
+chmod 0755 "$STAGE/bin/bridgectl" "$STAGE/bin/brightctl" "$STAGE/bin/batteryctl" "$STAGE/bin/thermalctl" "$STAGE/bin/displayctl"
 # The display helper: a launcher, the library app_process loads, and the dex with the layer (needs javac and d8).
 D=$ROOT/runtime/display/build/android
 make -s -C "$ROOT/runtime/display" NDK="$NDK" build/android/oneios-display build/android/liboneios-display.so build/android/oneios-display.dex

@@ -182,9 +182,23 @@ So that unchanged code keeps working while the kernel's hot paths move to host c
 | `tlbi`, `at`, EL1 `dc`/`ic` | nothing |
 | any other EL1/EL2 register (and `TPIDRRO_EL0` writes) | a per-CPU shadow: reads return what was written |
 
+Each emulated instruction is a signal round trip on the vCPU's thread. xnuhost counts them by instruction word and
+logs the twelve most frequent at the stop and on SIGQUIT (`emulated: insn 0x... N times (first at pc 0x...)`, `sysreg.c`
+`xh_sysreg_stats_log`): the first thing to read when an idle guest keeps its vCPUs busy (`docs/hardware.md` 7d).
+
 The shadow does **not** give a write its hardware meaning: page tables, vectors and PAC key registers
 have no effect. Loads and stores on the I/O aperture are decoded (`insn.c`: register, immediate, pre/post
 index, pairs, sign extension) and run against the device models.
+
+### 2.5a The thermal step
+
+`runtime/bridges/thermal` reads the phone's temperatures every 5 s from the start. At heavy pressure and above it
+gives a step (1-3), and `main.c`'s `thermal_step` narrows the vCPU threads' affinity (`br_cpu_plan_cap`: first the X4
+is left out, then only the slowest P domain and the E cores, then the E cores only) and bumps `xh_cpu_place_epoch`, so
+`xh_thread_run` places each iOS thread again at its next run (`task.c`). Only xnuhost's own threads and its tasks' are
+changed, nothing outside the process: a SIGKILL leaves nothing to restore. `ONEIOS_THERMAL_CAP=0` turns the step off.
+The same reading goes to the guest on the bridge's channel 6 (`drivers/thermal`). Detail:
+`runtime/bridges/thermal/README.md`.
 
 ### 2.6 Tasks: the trap and service layer
 

@@ -183,12 +183,52 @@ int br_cpu_plan_make(const br_cpu_topology *t, unsigned nvcpu, bool pin, br_cpu_
   return 0;
 }
 
+// The CPUs of the frequency domain with the highest (top = true) or lowest top clock among `mask`.
+static uint64_t domain_by_clock(const br_cpu_topology *t, uint64_t mask, bool top)
+{
+  uint32_t best = 0;
+  unsigned policy = ~0u;
+  for (unsigned i = 0; i < t->ncpu; i++) {
+    if (!(mask >> i & 1)) continue;
+    uint32_t khz = t->cpu[i].max_khz;
+    if (policy == ~0u || (top ? khz > best : khz < best)) { best = khz; policy = t->cpu[i].policy; }
+  }
+  uint64_t out = 0;
+  for (unsigned i = 0; i < t->ncpu; i++) if (mask >> i & 1 && t->cpu[i].policy == policy) out |= 1ull << i;
+  return out;
+}
+
+uint64_t br_cpu_thermal_mask(const br_cpu_topology *t, char type, unsigned cap)
+{
+  uint64_t e = 0, p = 0;
+  for (unsigned i = 0; i < t->ncpu; i++) {
+    if (!t->cpu[i].present) continue;
+    if (t->cpu[i].type == 'E') e |= 1ull << i; else p |= 1ull << i;
+  }
+  if (type == 'E' && e) return e;                       // the E cores are the floor of every step
+  uint64_t m = p;
+  if (cap >= 1 && (p & ~domain_by_clock(t, p, true))) m = p & ~domain_by_clock(t, p, true);
+  if (cap >= 2) m = domain_by_clock(t, m, false) | e;
+  if (cap >= 3 && e) m = e;
+  return m;
+}
+
+void br_cpu_plan_cap(br_cpu_plan *plan, const br_cpu_plan *base, const br_cpu_topology *t, unsigned cap)
+{
+  for (unsigned i = 0; i < base->nvcpu && i < BR_MAX_VCPUS; i++) {
+    uint64_t want = base->v[i].affinity, allowed = br_cpu_thermal_mask(t, base->v[i].type, cap);
+    uint64_t mask = want & allowed ? want & allowed : allowed ? allowed : want;
+    __atomic_store_n(&plan->v[i].affinity, mask, __ATOMIC_RELEASE);
+  }
+}
+
 int br_cpu_place(int tid, const br_cpu_plan *plan, unsigned index)
 {
   if (index >= plan->nvcpu) return -EINVAL;
   cpu_set_t set;
   CPU_ZERO(&set);
-  for (unsigned i = 0; i < 64 && i < CPU_SETSIZE; i++) if (plan->v[index].affinity >> i & 1) CPU_SET(i, &set);
+  const uint64_t mask = __atomic_load_n(&plan->v[index].affinity, __ATOMIC_ACQUIRE);   // br_cpu_plan_cap may change it
+  for (unsigned i = 0; i < 64 && i < CPU_SETSIZE; i++) if (mask >> i & 1) CPU_SET(i, &set);
   return sched_setaffinity(tid, sizeof set, &set) ? -errno : 0;
 }
 
