@@ -65,7 +65,7 @@ scripts/bg.sh kernel-hosted env HOSTED_OUT=me kernel/build-hosted.sh
 - **Linux** (x86_64 or arm64): stock clang plus xnu-linux-toolchain's ld64, mig and iig, set up by the script into
   `out/toolchain` (no root; bubblewrap for the `/usr/bin` shims). Packages: [kernel/README.md](../kernel/README.md).
 - **macOS 27**: Xcode's clang and iphoneos SDK at `/Applications/Xcode.app` (`XCODE_APP=` for another place) and
-  Homebrew's `cmake ninja unifdef llvm lld` (installed when missing). The pin is Xcode 27.1; `ALLOW_XCODE=1` builds
+  Homebrew's `cmake ninja unifdef llvm lld` (installed when missing). The pin is Xcode 27.2 (the Mac build host since 2026-11-12); `ALLOW_XCODE=1` builds
   with another. No container, no Linux toolchain.
 - One machine, one builder (the Mac of 2026-11-12): the default tree is then yours too. The command used there:
   `scripts/bg.sh kernel-hosted env HOSTED_OUT=lead ALLOW_XCODE=1 XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`

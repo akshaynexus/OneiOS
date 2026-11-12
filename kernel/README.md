@@ -20,7 +20,7 @@ scripts/bg.sh kernel-hosted env HOSTED_OUT=lead ALLOW_XCODE=1 XNU_FILESET_REFERE
 # -> out/kernel/current-hosted/xnu.macho, and with XNU_FILESET_REFERENCE=1 reference.macho (the prelink's reference)
 ```
 
-`ALLOW_XCODE=1` is for a Mac whose Xcode is not the pin's (27.1); Linux ignores it. Without
+`ALLOW_XCODE=1` is for a Mac whose Xcode is not the pin's (27.2); Linux ignores it. Without
 `XNU_FILESET_REFERENCE=1` the build skips the RELEASE reference. Mac run of 2026-11-12 (Apple M4, 10 cores,
 Xcode 27.2 27B52, macOS 27.2.1): see "macOS" below.
 
@@ -89,7 +89,7 @@ The Mac build is the reference for all five. Nobody has compared the two kernels
 
 ### macOS (`build-macos.sh` and `build-hosted.sh`)
 
-Needs macOS 27 with **Xcode 27.1** at `/Applications/Xcode.app` (`XCODE_APP=`; another version only with
+Needs macOS 27 with **Xcode 27.2** at `/Applications/Xcode.app` (`XCODE_APP=`; another version only with
 `ALLOW_XCODE=1`), its iphoneos SDK, and Homebrew's `cmake ninja unifdef llvm lld` (installed when missing;
 `kernel/lib/host.sh` `xcode_setup`, shared by both scripts). No xnu-linux-toolchain, no bubblewrap: Xcode has `xcrun`,
 `plutil`, `codesign`, `ld64` and `mig`, and macOS has `/bin/csh`. UniXNU's driver takes its macOS path

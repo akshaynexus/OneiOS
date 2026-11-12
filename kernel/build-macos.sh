@@ -7,7 +7,7 @@
 #   KDK_HEADERS=1 ...      add a headers-only KDKROOT (kernel/kdk-headers.py, about 200 headers read over HTTP from the
 #                          KDK of pins.sh; no 1.2 GB download). UniXNU's series replaces those headers with public
 #                          ones, so the default build needs no KDK; this is for comparing against Apple's.
-# Needs: macOS 27 with the Xcode of pins.sh (27.1) at /Applications/Xcode.app (XCODE_APP=...), the iphoneos SDK it ships, and
+# Needs: macOS 27 with the Xcode of pins.sh (27.2) at /Applications/Xcode.app (XCODE_APP=...), the iphoneos SDK it ships, and
 # Homebrew's cmake, ninja, unifdef and llvm (lld). Missing brew packages are installed.
 # Env: XCODE_APP, JOBS, KERNEL_DEFCONFIG, KERNEL_OUT, KDKROOT, ALLOW_XCODE=1 (accept another Xcode version).
 # Output: out/kernel/builds/<build id>/ and out/kernel/current, as on Linux. The build stops before the prelink:
