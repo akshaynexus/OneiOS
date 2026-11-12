@@ -310,6 +310,49 @@ static void test_session(const char *root)
   br_battery_close(b);
 }
 
+// The boot of 2026-11-12 23:45: the phone on its charger, Full at 100 %. The guest's query gets the real state (plugged
+// and full) before its service registers; nothing follows while it stays so; an unplug and a plug are each reported.
+static void test_session_on_charger(const char *root)
+{
+  fake_phone(root);
+  write_node(root, "battery", "capacity", "100\n");
+  write_node(root, "battery", "status", "Full\n");
+  write_node(root, "battery", "current_now", "74\n");
+  write_node(root, "usb", "online", "1\n");
+  br_battery_options o = { .dir = root, .poll_ms = 10 };
+  br_battery *b = br_battery_open(&o);
+  CHECK(b != NULL);
+  if (!b) return;
+  br_battery_sample s;
+  CHECK(br_battery_query(b, &s) == 0 && s.percent == 100 && s.present && s.plugged && s.full && !s.charging);
+  pthread_mutex_lock(&heard.lock);
+  heard.count = 0;
+  pthread_mutex_unlock(&heard.lock);
+  br_battery_listen(b, listener, NULL);
+  usleep(80000);                                         // eight polls of the same state
+  CHECK(heard_count() == 0);
+
+  write_node(root, "usb", "online", "0\n");
+  write_node(root, "battery", "status", "Discharging\n");
+  CHECK(wait_heard(1));
+  pthread_mutex_lock(&heard.lock);
+  CHECK(!heard.last.plugged && !heard.last.full && !heard.last.charging);
+  pthread_mutex_unlock(&heard.lock);
+
+  int n = heard_count();
+  write_node(root, "usb", "online", "1\n");
+  write_node(root, "battery", "status", "Charging\n");
+  CHECK(wait_heard(n + 1));
+  pthread_mutex_lock(&heard.lock);
+  CHECK(heard.last.plugged && heard.last.charging);
+  pthread_mutex_unlock(&heard.lock);
+  n = heard_count();
+  usleep(60000);
+  CHECK(heard_count() == n);                             // one report per change
+  br_battery_listen(b, NULL, NULL);
+  br_battery_close(b);
+}
+
 int main(void)
 {
   char root[200];
@@ -323,6 +366,7 @@ int main(void)
   br_battery_options none = { .dir = "/nonexistent/power_supply" };
   CHECK(br_battery_open(&none) == NULL);
   test_session(root);
+  test_session_on_charger(root);
   char cmd[260];
   snprintf(cmd, sizeof cmd, "rm -rf %s", root);
   if (system(cmd)) printf("could not remove %s\n", root);
