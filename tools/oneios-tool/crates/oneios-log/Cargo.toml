@@ -11,3 +11,4 @@ memmap2.workspace = true
 rayon.workspace = true
 oneios-common.workspace = true
 oneios-sym.workspace = true
+oneios-ksym.workspace = true

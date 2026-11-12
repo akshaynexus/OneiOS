@@ -714,3 +714,21 @@ oneios-tool ioslog save data.img out/session.logarchive             # the .logar
 
 Tested on stand-in images and on Mandiant's test archives (CSV byte for byte what `unifiedlog_iterator` writes);
 **not yet run on a Data store from the phone** (README "ioslog": what was compared and what was not).
+
+A kernel panic of a session (`panic(cpu N caller 0x...)`, the fault's pc and lr, the `frame 0x...` lines), named in
+the `kernel.kc` that ran and the `xnu.macho` it was prelinked from: member and segment, function + offset,
+file:line and inlined frames. The first call for a pair of files builds an index under `out/ksym-index/` (2 to 9 s);
+later calls take milliseconds:
+
+```sh
+oneios-tool sym kernel xnuhost.log                                  # or: oneios-tool log panic xnuhost.log
+oneios-tool sym kernel --kc out/kernel/24A446/kernel.kc --kernel out/kernel/current-hosted/xnu.macho xnuhost.log
+oneios-tool sym kernel --slide 0x2ff9000000 0x200454c094            # an address of the running kernel, by hand
+```
+
+Without `--kc` and `--kernel` (or `ONEIOS_KC`, `ONEIOS_KERNEL`) it takes the newest `out/kernel/*/kernel.kc` and
+the `xnu.macho` its prelink record names, says which and their SHA-256, and warns when the two do not belong
+together. File:line needs the kernel's DWARF: the object files of the build tree that `xnu.macho`'s debug map names
+(as `kernel/build-hosted.sh` left them when `xnu.macho` was linked), or a dSYM (`--dsym`). Compared with
+`llvm-symbolizer` on three Linux-built kernels; **not yet run on a panic log from the phone** (README "sym
+kernel": the address rules, the comparison, what was not run).

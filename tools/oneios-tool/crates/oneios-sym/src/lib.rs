@@ -35,7 +35,9 @@ ONEIOS_DSC_DIR the index built last is used.
   --slide HEX   the slide, not searched for
   --stdin, -    read the addresses from standard input (any number per line), after those of the command line
   --no-index    read the cache for every answer, as dsc.py does (slow)
-  index         build the index now (--force: again, when it is there)";
+  index         build the index now (--force: again, when it is there)
+
+Kernel addresses (a panic's caller, pc, lr and frame lines) are `oneios-tool sym kernel`'s: its own --help.";
 
 /// Where the cache and the indexes are.
 #[derive(Clone, Debug, Default)]
