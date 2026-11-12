@@ -985,7 +985,11 @@ The phone did a full reboot at 10:51:54 on 2026-11-12 (boot reason `reboot`, upt
 iOS session. Nothing wrote to the phone; the last command was a root `find` + `grep` that read every small file
 under `/sys/kernel`, `/sys/module`, `/sys/devices/platform`, cpufreq, devfreq and `/proc/sys/walt`. Some kernel
 and Samsung vendor nodes act when they are read (debug, watchdog and reset nodes), so that read is the likely
-cause (not proven). The owner's root is not persistent: a reboot costs a manual re-root.
+cause. **Confirmed** from `/proc/last_kmsg` (copy: `out/phone-baseline/2026-11-12/prelink/last_kmsg.txt`): the `grep`
+read the Wi-Fi driver's `runtime_pm` attribute; `hdd_sysfs_runtime_pm_show` -> `hif_rtpm_log_debug_stats`
+(`qca_cld3_kiwi_v2`) hit a BRK, the kernel panicked ("BRK handler: Fatal exception"), and Samsung's panic path reset
+the phone, which the bootloader records as `reboot`. The iOS session was idle and fine. The owner's root is not
+persistent: a reboot costs a manual re-root.
 - On the phone, read **named nodes only** (`cat` of a path you know). Never `find`, `grep -r`, `ls -R`, `du`, or a
   loop over a whole sysfs, debugfs, configfs or `/proc` tree as root. To find a node, search the kernel source or
   the device tree on the Mac first, then read that one path.
