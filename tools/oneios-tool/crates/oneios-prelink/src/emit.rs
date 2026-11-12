@@ -3,6 +3,30 @@
 //! (`emit_images`, `rebase_collection`, the chain reader), fileset_segmented.py (`SegmentedEmit`) and
 //! fileset_layout.py (layout.rs). The same kernel.kc and kernel.kc.prelink.json byte for byte, the same stdout.
 //! emit.py's header and kernel/prelink/README.md have the why of each rule.
+//!
+//! The step as its Python original described it (kernel/prelink/emit.py, retired 2026-11-12 after the
+//! comparison in tools/oneios-tool/README.md "prelink"; the usage line is that script's):
+//!
+//! ```text
+//! Emit kernel.kc: XnuPrelink's fileset emitter with OneiOS's roots and reviewed pins.
+//!
+//! usage: emit.py --xnuprelink DIR --kernelcache KC --original-kernelcache KC0 --native NATIVE --map MAP
+//!                --roots select.json --reviewed reviewed.json --output kernel.kc --report kernel.kc.prelink.json
+//!
+//! XnuPrelink (external/XnuPrelink at the pin of kernel/device/board.toml) pairs the original kernel's functions and
+//! data with the native kernel's (MAP, fileset_match.py) and rebinds the kexts onto the native kernel. Its reviewed
+//! fixtures are pinned to the iPad kernelcache; this driver adds OneiOS's for the iPhone one (reviewed-*.json) without
+//! changing that checkout:
+//!   functions, data   written into the pairing ('how': 'reviewed'), the native side by symbol;
+//!   (--aligned)       align.py's pairs, inferred from link order ('how': 'aligned'); a reviewed record wins;
+//!   (--pairs)         the known-good pairs (pairs-*.json, 'how': 'known-good'), over all of the above;
+//!   (--stubs)         the stub list (stubs-*.json): these originals are left unpaired (the stub, or unpaired data);
+//!   sites             one original pointer site bound to a named native object (fileset_emit.reviewed_sites);
+//!   early_security_init  the original routine OSKext::start calls after the component starts.
+//! KC is the kernelcache the emitter reads (hosted.py's output, or the original when nothing was rewritten); KC0 is the
+//! original, which the reviewed records are pinned to and checked against. A reference whose target stays unpaired is
+//! bound to the kernel's stub _unixnu_fileset_unmapped (a panic that names the caller) and listed in the report.
+//! ```
 
 use crate::image::{cstr_at, hex, put32, put64, scan, signed, u16_at, u32_at, u64_at, unhex, Fix, Image, RefKind, LC_DYLD_CHAINED_FIXUPS, LC_FILESET_ENTRY, LC_SEGMENT_64, LC_SYMTAB, LC_UNIXTHREAD};
 use crate::layout::{align, encode_uleb, relocate_native, relocate_original_stubs, Layout, PAGE};

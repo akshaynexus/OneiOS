@@ -65,6 +65,8 @@ pub enum Command {
     Record(record::Args),
     /// Print the kernelcache SHA-256 a kernel profile pins ([kernel.prelink] kernelcache_sha256)
     Pin { profile: String },
+    /// Print the matcher signature of an XnuPrelink checkout (what match writes into the map and emit checks)
+    Signature { xnuprelink: String },
 }
 
 #[derive(clap::Parser)]
@@ -119,6 +121,7 @@ pub fn main(command: Command) -> i32 {
         },
         Command::Record(args) => ("record", record::run(args)),
         Command::Pin { profile } => ("pin", pin(&profile)),
+        Command::Signature { xnuprelink } => ("signature", matcher::matcher_signature(std::path::Path::new(&xnuprelink)).map(|s| println!("{s}"))),
     };
     match result {
         Ok(()) => 0,

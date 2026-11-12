@@ -1,6 +1,28 @@
 //! `prelink structors`: constructors and destructors by the vtable they store, factories by their init slot, VNOP
 //! wrappers by their descriptor. A port of kernel/prelink/structors.py (its header has the method): the same
 //! structors.json byte for byte.
+//!
+//! The step as its Python original described it (kernel/prelink/structors.py, retired 2026-11-12 after the
+//! comparison in tools/oneios-tool/README.md "prelink"; the usage line is that script's):
+//!
+//! ```text
+//! Pair the constructors and base destructors of kernel classes that kexts subclass, by the vtable they store.
+//!
+//! usage: structors.py --xnuprelink DIR --kernelcache KC --native NATIVE --map MAP --reviewed reviewed.json --out structors.json
+//!
+//! OSDefineMetaClassAndStructors emits, for a class X, X::X(const OSMetaClass *), (with default structors) X::X(), and
+//! X::~X(), in that order, after the file's static initializer. In the original kernel each constructor is
+//!     mov w8, #1; str w8, [x0, #8]; adrp/add x16, <X's vtable>; add x16, x16, #16; ...; pacda; str x16, [x0]
+//! (the inlined OSObject constructor, then the vtable) possibly followed by member initializers, and a trivial base
+//! destructor is `mov x8, #-1; str x8, [x0]; ret`. Kext subclasses call them directly, so each is a kext-facing
+//! function, and none has a string or a named callee for the matcher to go by.
+//!
+//! For every vtable the pairing or the reviewed file names (__ZTV<X>), the unpaired original functions whose first
+//! instructions store that vtable + 16 into [x0] after the retain count are, in address order, C2EPK11OSMetaClass and
+//! C2Ev; the unpaired function that directly follows them and is the trivial destructor is D2Ev. A name is used only
+//! when the native kernel defines it once. Factories (X::withFoo) are paired by the class they allocate and the init
+//! slot they call; see the code. Output: pairs in align.py's format ('by': 'vtable').
+//! ```
 
 use crate::image::{hex, scan, u32_at, Image, RefKind};
 use crate::kclasses::name_counts;

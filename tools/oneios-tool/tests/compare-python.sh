@@ -10,7 +10,8 @@
 #   sym       tests/sym/compare-python.sh         ONEIOS_DSC_DIR, ONEIOS_LOG_DIR (tests/sym/make-log.py makes a log)
 #   log       tests/log/run.sh                    ONEIOS_LOG_DIR or ONEIOS_LOGS
 #   ioslog    tests/ioslog/compare.sh             REF_ITER=<unifiedlog_iterator>, IOSLOG_ARCHIVES="A.logarchive ..."
-#   prelink   tests/prelink/compare-python.sh     KERNELCACHE (default out/kernel-inputs/24A446/kernelcache.macho)
+#   prelink   tests/prelink/compare-golden.sh     KERNELCACHE (default out/kernel-inputs/24A446/kernelcache.macho);
+#                                                 KERNEL and REFERENCE for the whole chain (a golden exists for two kernels)
 #   phone     tests/phone/run.sh                  none (a stand-in phone; scripts/phone/stage.sh is the reference)
 #   app       tests/app/run.sh                    none (a stand-in OneOS checkout, gradlew, gh and phone)
 #   cycle     tests/cycle/run.sh                  the OneOS fork's checkout (its root script); tmux, zstd
@@ -64,7 +65,7 @@ for part in $parts; do
       run ioslog test $ok = 0
     fi ;;
   prelink)
-    if [ -f "${KERNELCACHE:-$root/out/kernel-inputs/24A446/kernelcache.macho}" ]; then run prelink "$here/prelink/compare-python.sh"
+    if [ -f "${KERNELCACHE:-$root/out/kernel-inputs/24A446/kernelcache.macho}" ]; then run prelink "$here/prelink/compare-golden.sh"
     else skip prelink "no kernelcache: scripts/image/kernel-inputs.sh, or KERNELCACHE=FILE"; fi ;;
   *) echo "compare-python: no part $part" >&2; exit 2 ;;
   esac

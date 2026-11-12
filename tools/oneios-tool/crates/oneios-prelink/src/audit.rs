@@ -1,6 +1,39 @@
 //! `prelink audit`: what every kext import of kernel.kc is bound to, checked against the known-good pairs and the
 //! stub list. A port of kernel/prelink/audit.py (its header has the rules): the same report, draft and stdout,
 //! and the same exit status (1 when a check fails).
+//!
+//! The step as its Python original described it (kernel/prelink/audit.py, retired 2026-11-12 after the
+//! comparison in tools/oneios-tool/README.md "prelink"; the usage line is that script's):
+//!
+//! ```text
+//! audit.py: what every kext import of kernel.kc is bound to, checked against the known-good pairs and the stub list.
+//!
+//! usage: audit.py --xnuprelink DIR --kernelcache ORIGINAL_KC --collection kernel.kc
+//!                 [--pairs pairs-24A446.json] [--stubs stubs-24A446.json] [--reviewed reviewed.json]
+//!                 [--against OTHER.kc] [--report kernel.kc.binds.json] [--draft FILE]
+//!
+//! An import is a chained-fixup site in a kext of the collection whose target in Apple's kernelcache is inside Apple's
+//! kernel (a __auth_got slot, a vtable entry, a pointer in a table). The collection rebinds it to our kernel: to a
+//! function or object (named here by the kernel's own symbol table inside kernel.kc), to the panic stub
+//! _unixnu_fileset_unmapped, or, for data with no pair, to its own collection address ("unpaired": some other object of
+//! our kernel, a wrong read).
+//!
+//! Checks (each failure is printed; the exit status is 1 when there is one):
+//!   - an original on the stub, or unpaired data, that has no entry in --stubs (its reason) fails; its callers are
+//!     counted (kext code that branches to the import's stub or loads its slot);
+//!   - an entry of --stubs that is bound now fails too (a new pair must be reviewed into --pairs first);
+//!   - a bound original whose name is not the one --pairs records for it fails (alias names at the same address agree);
+//!     the name is our kernel's external definition (a local function of the same name is another function); an entry
+//!     with "leaf" agrees with any native function whose instructions are the original's: a body that only
+//!     computes registers and returns, so its identity does not matter);
+//!   - an entry with "absent" (its reason) names a function a kernel of the other toolchain does not have: when this
+//!     kernel does not define the name, the original on the stub is right (counted as "absent"), and bound it fails;
+//!   - a bound original that --pairs does not list fails ("new pair").
+//! --reviewed: its "sites" are checked one by one (an original pointer site bound to a named object) and left out of the
+//! per-target check. --against: the a/b/c comparison with another collection (paired there, stubbed here; stubbed there,
+//! paired here; paired to different functions), for a toolchain or matcher change. --draft writes the pairs of this
+//! collection in the format of --pairs (with "why": "draft"), for review; it never replaces the committed list.
+//! ```
 
 use crate::image::{hex, scan, signed, u32_at, unhex, Image, Symbols};
 use crate::pyset::PySet;

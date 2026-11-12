@@ -2,6 +2,13 @@
 //! left out and why. A port of kernel/prelink/record.py: the same file byte for byte and the same line on stdout.
 //! `--repo` names the checkout (record.py takes its own place in it): the reviewed file's path is written
 //! relative to it, and its HEAD is the record's "oneios".
+//!
+//! The step as its Python original described it (kernel/prelink/record.py, retired 2026-11-12 after the
+//! comparison in tools/oneios-tool/README.md "prelink"; the usage line is that script's):
+//!
+//! ```text
+//! The build record of kernel.kc (kernel.kc.build.json): inputs, tools, what went in, what was left out and why.
+//! ```
 
 use crate::image::{cstr_at, hex, u32_at, u64_at};
 use crate::records::truthy;

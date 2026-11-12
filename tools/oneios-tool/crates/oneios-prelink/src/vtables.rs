@@ -1,5 +1,27 @@
 //! `prelink vtables`: the virtual methods of every vtable paired by name, slot by slot. A port of
 //! kernel/prelink/vtables.py (its header has the method): the same vtables.json byte for byte.
+//!
+//! The step as its Python original described it (kernel/prelink/vtables.py, retired 2026-11-12 after the
+//! comparison in tools/oneios-tool/README.md "prelink"; the usage line is that script's):
+//!
+//! ```text
+//! Pair the virtual methods of kernel classes slot by slot, for every vtable that is paired by name.
+//!
+//! usage: vtables.py --xnuprelink DIR --kernelcache KC --native NATIVE --map MAP --reviewed reviewed.json
+//!                   [--also pairs.json ...] --out vtables.json
+//!
+//! A kext's subclass inherits the kernel class's methods through its own vtable, and the kernel calls them there
+//! (IORegistryEntry::init calls getProperty through the object's vtable). The public classes' vtable layouts are ABI:
+//! slot n of the original __ZTV<X> and slot n of ours are the same method. For each vtable paired by name (the pairing's
+//! data and the reviewed file) the slots are walked while both sides have a pointer; a slot whose original function is
+//! unpaired takes the name of our function in that slot.
+//!
+//! A vtable is used only when the slots that are already paired agree: at least five agreeing slots, and at most one
+//! in ten disagreeing (a disagreement is either a wrong earlier pair or a layout that differs: both are listed in the
+//! output under "conflicts", for review; an order-inferred pair (--weak) gives way to the slot, any other stands:
+//! the original folds identical functions, so a trivial method often carries another function's name with the same code). Pure-virtual and deleted slots (our ___cxa_pure_virtual) are skipped.
+//! Output: pairs in align.py's format ('by': 'slot').
+//! ```
 
 use crate::image::{hex, Image};
 use crate::records;

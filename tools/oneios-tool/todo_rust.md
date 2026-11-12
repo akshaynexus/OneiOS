@@ -17,7 +17,7 @@ and the third Linux round, the owner's queue of eight items:
 | 5 | APFS: decmpfs, the apfs-fuse backend | done (`687f0a7`): all 2,910 compressed files as apfs-fuse gives them |
 | 6 | `ioslog` in parallel | **not done**: the library's per-file entry point cannot be used from outside (section 5, "Parallel decoding"). The `sym --slide` question is settled (README "sym") |
 | 7 | `prelink`: the ten remaining steps | **done (fourth Linux round)**: all twelve steps byte for byte Python's on the pc and pc2 kernels (`kernel.kc` `ffbe95f7`, `cdd98e7e`; audit 2,711 paired, 93 on the stub, 0 failures; 666 good stubs); `PRELINK_IMPL=python\|rust` in `kernel/prelink/build.sh`, default `python` (README "prelink") |
-| 8 | Retire the replaced Python and shell code | **not started**: nothing was retired, no caller was switched, Python is still the default everywhere |
+| 8 | Retire the replaced Python and shell code | **in work (fourth Linux round)**: the prelink's eleven Python steps are deleted (goldens in `tests/prelink/golden/`, `kernel/prelink/build.sh` is Rust only); section 7 has the state of the others |
 
 **Rule until further notice: Python stays the default and the only path the builds use.** The switches that
 exist (`IMAGETOOL_IMPL` in `scripts/image/build.sh` and `verify.sh`, default `python`; `kernel-inputs.sh` takes

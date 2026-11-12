@@ -592,11 +592,13 @@ them), `adb install` on Android, `gh` against GitHub.
 
 ## prelink
 
-`oneios-tool prelink STEP ARGS...`: the steps of `kernel/prelink/build.sh`, each with the Python step's own
-arguments and output files. All twelve are ported; `PRELINK_IMPL=rust kernel/prelink/build.sh` runs them (default
-`python` until the Python steps are retired).
+`oneios-tool prelink STEP ARGS...`: the steps of `kernel/prelink/build.sh`. They replaced the Python steps
+(`kernel/prelink/STEP.py` and XnuPrelink's matcher and emitter), which were **retired on 2026-11-12** after the
+comparison below; each step takes the arguments its Python original took and writes the same files, and each
+module's header keeps that script's description. `build.sh` runs nothing else (no `PRELINK_IMPL` any more) and
+builds the binary when it is missing or stale (`scripts/lib/oneios-tool.sh`).
 
-| Step | Python | Module |
+| Step | Was (Python, retired) | Module |
 |---|---|---|
 | `roots KERNELCACHE OUT.json [PROFILE.toml]` | `roots.py` | `roots.rs` |
 | `hosted KERNELCACHE OUT REPORT.json [--closure FILE] [--x18]` | `hosted.py` | `hosted.rs` (`--x18` starts `llvm-mc`, as Python does; not compared) |
@@ -624,11 +626,24 @@ iterating a set; no library has them; the generator is the `rand_mt` crate), and
 `plist` crate). Libraries: `indexmap` (Python's dict order), `md-5`, `sha2`, `hmac` (the FIPS seals), `rand_mt`,
 `plist`, `toml`, `base64`, `memchr`, `rayon` (the per-function scan, the audit's per-kext scan).
 
+The comparison today is with the frozen output of the Python chain (`tests/prelink/golden/`: per kernel, the name,
+size and SHA-256 of every file a step writes and the SHA-256 of every step's stdout; no Apple bytes):
+
 ```sh
 scripts/image/kernel-inputs.sh 'profiles/ios-27.0.1-iPhone18,2.toml'      # out/kernel-inputs/24A446/kernelcache.macho
-KERNEL=out/kernel/current-hosted-NAME/xnu.macho REFERENCE=out/kernel/current-hosted-NAME/reference.macho \
-  tools/oneios-tool/tests/prelink/compare-python.sh
+KERNEL=out/kernel/current-hosted-pc/xnu.macho REFERENCE=out/kernel/current-hosted-pc/reference.macho \
+  tools/oneios-tool/tests/prelink/compare-golden.sh     # 40 hashes; without KERNEL: roots and hosted only, 10 hashes
 ```
+
+A golden exists for the kernelcache alone and for the two kernels the Python chain was run on (`13ed0b70...` and
+`399f50fa...`, both Linux-built, in the main checkout's `out/kernel/current-hosted-pc` and `-pc2`); for any other
+kernel the script says there is none and exits 3 (`UPDATE=1` records that run instead). In the JSON records and
+the stdout the work folder, the commit of `kernel.kc.build.json` and the folders of absolute input paths are
+taken out before hashing. Result, 2026-11-12, after the Python steps were deleted: 40 of 40 the same for each
+kernel, 10 of 10 for the kernelcache alone.
+
+**The comparison that froze them** (`tests/prelink/compare-python.sh` at commit `306b0a4`, the last with both
+implementations):
 
 Both chains run side by side, each step with the same arguments into the side's own folder, each side reading its
 own earlier outputs; stdout, the exit status and every file written are compared with `cmp` (in the three records
@@ -659,6 +674,6 @@ and `kernel.kc.build.json` differs in the commit it records (`tools.oneios`) and
 Not compared: `hosted --x18` (minutes in Python), `align --explain` (a debugging print), an audit with failures
 (none exists: both lists agree with both kernels), a Mac-built kernel (the Mac's `eae11352`: not on this box).
 
-`roots.rs` holds a copy of `roots.py`'s rule and lists (the hardware provider classes, the kexts left out by
-hand), and every other step is a copy of its Python step's rules: **until the Python steps are retired, a change
-to one must be made to the other**, and the comparison shows when they drift.
+The rules now live in the Rust modules only (`roots.rs`: the hardware provider classes and the kexts left out by
+hand; `matcher.rs`, `emit.rs`, `layout.rs`: XnuPrelink's at pin `9b950f2`). A change of a rule changes the outputs
+and so the goldens: regenerate them with `UPDATE=1` in the same commit and say why.
