@@ -27,6 +27,7 @@ oneios-sym = { path = "crates/oneios-sym" }
 oneios-log = { path = "crates/oneios-log" }
 oneios-image = { path = "crates/oneios-image" }
 oneios-prelink = { path = "crates/oneios-prelink" }
+oneios-kernel = { path = "crates/oneios-kernel" }
 oneios-ioslog = { path = "crates/oneios-ioslog" }
 oneios-phone = { path = "crates/oneios-phone" }
 

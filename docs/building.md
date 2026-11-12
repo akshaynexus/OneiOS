@@ -665,7 +665,8 @@ what was changed for the iPhone's shared cache and what is verified: [gpu.md](gp
 `tools/oneios-tool` is one binary with the project's host tools in Rust: `sym` (the backtrace symbolizer; it replaced
 `scripts/debug/dsc.py`, deleted 2026-11-12), `log` (reads an xnuhost session log), `image` (`scripts/image/imagetool.py`), `ioslog` (iOS's
 own unified log out of a copy of the phone's Data store, without a mount) and `prelink` (all twelve steps of
-`kernel/prelink/build.sh`, behind `PRELINK_IMPL=rust`). Since the third Linux round also `phone` (the adb
+`kernel/prelink/build.sh`, behind `PRELINK_IMPL=rust`), and `kernel` (the kernel build's own steps: the
+board archive generators `kernel gen NAME`, the build record, the records made from the kernelcache). Since the third Linux round also `phone` (the adb
 workflow of section 6: status, stage, sums, switch, return, log, the Data store's copy), `app` (the fork's app of
 section 7: version, doctor, build, install, stage-scripts) and `cycle` (one test cycle: build, tests, stage, switch, watch, hold, return, collect).
 **None of the three has run on the real phone yet**: sections 6 and 7 show the CLI first and, as the fallback, the
@@ -695,6 +696,7 @@ Rust 1.95 or newer (apk-info-zip 1.1.1 needs 1.95; built with 1.98.0 and 1.99.1)
 |---|---|---|
 | `scripts/image/build.sh`, `scripts/image/verify.sh` | `IMAGETOOL_IMPL=rust` (default `python`), `ONEIOS_TOOL=PATH` | `oneios-tool image` runs profile, apfs-info, apfs-owners, hashes, tree-copy, seed-pack, manifest and the set folder's verify; pack and the archive's verify stay with the Python tool. Same files, byte for byte (README "image") |
 | `scripts/image/kernel-inputs.sh` | none needed; `IM4P_TOOL=PATH` forces it | without the `lzfse` program the kernelcache is decoded by `oneios-tool image im4p`; the result is checked against the pinned SHA-256 either way (section 1) |
+| `kernel/build-hosted.sh` | `KERNELGEN_IMPL=rust` (default `python`), `ONEIOS_TOOL=PATH` | the board archives (`storage`, `board`, `aes`, `keystore`, `net`, `hid`, `audio`, `gpu`, `display`) are built by `oneios-tool kernel gen NAME` instead of the Python generators: the same files, and the same kernel but for the build time it carries (README "kernel") |
 | `kernel/prelink/build.sh` | none: Rust only since 2026-11-12 (`ONEIOS_TOOL=PATH` for another binary) | `oneios-tool prelink` runs all twelve steps; the Python steps were deleted after every step's output was compared byte for byte, and their outputs are frozen as hashes (`tests/prelink/compare-golden.sh`). 14 s instead of two minutes |
 
 `oneios-tool image seed-pack` writes `data.seed`'s members in parallel, each at its own offset (the same bytes as

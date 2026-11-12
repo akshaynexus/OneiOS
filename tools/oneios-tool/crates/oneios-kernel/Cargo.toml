@@ -1,0 +1,26 @@
+[package]
+name = "oneios-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+# Python's json.dumps layout and dict order (objects.json, the reports, the build record): pyjson.
+oneios-common.workspace = true
+# The kernelcache reader (XnuPrelink's kc_image.py) for the layout tools.
+oneios-prelink.workspace = true
+sha2.workspace = true
+# Python's dict order where a generator iterates one (the bindings, the owned slots).
+indexmap = "2"
+# Mach-O: the compiled objects' symbols, sections and relocations (the vtable checks), the kernel's load commands
+# (the build record). "unaligned": the tables of an object file sit at any offset.
+object = { version = "0.37", default-features = false, features = ["read_core", "macho", "std", "unaligned"] }
+# The comment table of OriginalHidDeviceABI.h, the owner of a mangled name.
+regex = "1"
+# shutil.which (llvm-ar, llvm-nm, llvm-objcopy, llvm-objdump, xcrun) and subprocess's timeout.
+which = "8"
+wait-timeout = "0.2"
+# clang's ptrauth_string_discriminator: SipHash-2-4 with its fixed key.
+siphasher = "1"

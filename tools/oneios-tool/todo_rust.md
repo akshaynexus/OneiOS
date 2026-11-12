@@ -490,6 +490,39 @@ steps are 1:1. `scripts/phone/stage.sh` stays until `oneios-tool phone` has run 
 ported and stays: `userland/tweak`, `scripts/fetch`, `scripts/ios`, the display capture, `kernel/prelink/*.py`,
 `runtime/package/pack.py`, the tests' helpers under `tools/oneios-tool/tests/`.
 
+## 8. `kernel`: the board archive generators, the build record, the kernelcache records (group 1 of the Python retirement, 2026-11-13)
+
+Branch `rs-kernelgen`. Crate `crates/oneios-kernel`; commands, modules, the comparison, the goldens and what was
+checked only on Linux: [README.md](README.md) "kernel".
+
+| Script | Command | State |
+|---|---|---|
+| `kernel/device/scripts/build-oneios-board.py` | `kernel gen board` | ported and compared; the script still runs |
+| `kernel/patches/oneios-hosted/{storage,aes,keystore,net,hid,audio,gpu,display}/build-oneios-*.py` | `kernel gen NAME` | ported and compared; the script still runs |
+| `kernel/build-record.py` | `kernel build-record` | ported and compared; the script still runs |
+| `hid/layout.py`, `net/layout.py`, `display/port-legacy-display.py` | `kernel layout hid\|net`, `kernel port-legacy-display` | ported and compared; the script still runs |
+| `display/display-capture.py` | none | kept: a viewer for a PC boot, Linux only (README "kernel") |
+
+Open:
+1. **The Mac.** Nothing of this was built or run on a Mac: the crate, `kernel/build-hosted.sh` with the commands
+   (Xcode 27.2), `kernel/build-macos.sh` with `kernel build-record`. The Mac's kernel (`eae11352...` then) should
+   come out the same as before; `compare-golden.sh WORK` after the Mac's build says whether the generated files are
+   the frozen ones (the staged sources and the bindings do not depend on the host).
+2. **`drivers/build.py` stays Python** and `kernel gen board` runs it. `drivers_build.rs` is a second copy of its
+   `record` and `command`; `compare-python.sh ... compile-command` (while the script exists it always can run) and
+   a unit test compare them. Porting the script would end the copy: `drivers/build.py --check` is what the other
+   agents run after a driver change, so do it with them.
+3. `kernel/prelink/classes.py` stays Python (`kernel layout` runs it); `kernel/hosted-fixup.py`, the inline
+   `python3` of `kernel/build-hosted.sh` (the board.toml and defconfig edits) and UniXNU's driver are Python too:
+   the kernel build needs python3 either way.
+4. The comments in `kernel/patches/oneios-hosted/*/*.cpp`, `*.h`, `*.inc`, in three patches (0005, 0008, 0022) and
+   in the records' "about" lines still say `build-oneios-NAME.py`, `layout.py` and `port-legacy-display.py`: not
+   changed, because a changed source or patch changes the build's inputs (the SHA-256 lists, the build id). Change
+   them with the next real change of each file.
+5. `oneios-prelink` does not build alone (`cargo build -p oneios-prelink`: `toml::Table` needs toml's `serde`
+   feature, which only another crate of the workspace turns on), so neither does `-p oneios-kernel`, which uses its
+   kernelcache reader: build the workspace, or `-p oneios-kernel -p oneios-tool`.
+
 ## Notes for the next agent
 
 - The source was not run through rustfmt (no `rustfmt.toml`); some lines are long. Clippy was clean for

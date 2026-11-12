@@ -1,0 +1,22 @@
+// A made-up source for the edit list "gpu": every anchor once, between lines of its own.
+// (before anchor 0)
+#include "NativeAdrenoMemory.h"
+extern "C" bool oneios_adreno_wanted(void);
+extern "C" bool oneios_adreno_parent_bound(void);
+extern "C" void oneios_adreno_parent_slide(void);
+extern "C" void oneios_gpu_client_list(char *, size_t);
+// (before anchor 1)
+    if (!oneios_adreno_wanted()) return;
+// (before anchor 2)
+    if (!parent || parent->getClassSize() != 136) {droidvm_metal_publish[2] = uint32_t(kIOReturnNotFound); return;}
+    if (!oneios_adreno_parent_bound()) {droidvm_metal_publish[2] = uint32_t(kIOReturnNotPermitted); return;}
+// (before anchor 3)
+    publishThread(nullptr, THREAD_AWAKENED);
+// (before anchor 4)
+    native_adreno_accelerator_static_init();
+    oneios_adreno_parent_slide();
+    status = OSMetaClass::postModLoad(handle);
+// (before anchor 5)
+    oneios_gpu_client_list(clients, sizeof clients);
+    {
+// (the end)

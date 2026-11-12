@@ -1,0 +1,14 @@
+// A made-up source for the edit list "display": every anchor once, between lines of its own.
+// (before anchor 0)
+#include "DroidVMVirtioGpu.h"
+// (before anchor 1)
+    native_legacy_stage=1;void *handle=OSMetaClass::preModLoad(g_kernel_kmod_info.name);
+// (before anchor 2)
+native_legacy_display_static_init();native_gop_presenter_static_init();native_legacy_meta_status=OSMetaClass::postModLoad(handle);
+// (before anchor 3)
+    native_legacy_client_status=status;native_legacy_client_object=(uintptr_t)client;
+// (before anchor 4)
+    if(kind<2)droidvm_virtio_gpu_boot_dirty();
+// (before anchor 5)
+    if(accepted)native_legacy_swap_stage(0);
+// (the end)
