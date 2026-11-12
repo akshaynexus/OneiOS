@@ -3,11 +3,11 @@
 # (kernel/patches/oneios-hosted), which runs as a Linux process under xnuhost instead of at EL1.
 #   scripts/bg.sh kernel-hosted env HOSTED_OUT=<name> kernel/build-hosted.sh
 #   XNU_FILESET_REFERENCE=1 ...  also the RELEASE reference of the prelink -> out/kernel/current-hosted*/reference.macho
-#   KERNELGEN_IMPL=rust ...      the board archives by `oneios-tool kernel gen` (default python: the Python generators
-#                                where the checkout still has them); the same kernel either way
 # Linux (x86_64 or arm64): the host's clang and xnu-linux-toolchain (kernel/linux/), as kernel/build-linux.sh.
 # macOS: Xcode's clang and iphoneos SDK, as kernel/build-macos.sh (Xcode of pins.sh; ALLOW_XCODE=1 accepts another,
 # XCODE_APP=... another place). Same series, archives and output on both.
+# Both need Rust (cargo) for tools/oneios-tool, which builds the board's archives (`oneios-tool kernel gen NAME`); it is
+# built when missing or stale (ONEIOS_TOOL=PATH: that binary instead).
 # Output: out/kernel-hosted/unixnu/oneios/<os profile>/oneios_hosted/kernel/kernel.macho, linked as
 # out/kernel/current-hosted/xnu.macho. The VM kernel's build (build-linux.sh, out/kernel/current) is not touched:
 # this one has its own output root and its own copy of the device repository (out/hosted-device: kernel/device as committed, with
@@ -87,35 +87,21 @@ PY
 #             build/native-legacy-display/libNativeLegacyDisplay.late.a and compile bsd_init's two calls into it.
 #             After the GPU's archive (the last): the scanout client uses that archive's transport.
 #
-# UniXNU's driver runs an archive entry that is not a script as a command, in the build tree: `oneios-tool` must be on
-# PATH under that name (ONEIOS_TOOL may be any binary: a link in the output root).
-. "$ROOT/scripts/lib/oneios-tool.sh"
-oneios_tool "$ROOT" || exit 1
-mkdir -p "$KERNEL_OUT/bin"
-ln -sf "$ONEIOS_TOOL" "$KERNEL_OUT/bin/oneios-tool"
-export PATH=$KERNEL_OUT/bin:$PATH
-# KERNELGEN_IMPL=python|rust (default python, until the Python generators are retired): python runs a generator's
-# Python script where the checkout still has it (copied into the build's device repository); rust, or no script,
-# runs the command. Both write the same files (tools/oneios-tool/README.md "kernel").
-archive_entry() {   # NAME SCRIPT -> the entry
-  if [ "${KERNELGEN_IMPL:-python}" = python ] && [ -f "$2" ]; then
-    cp "$2" "$DEVICE/scripts/"
-    basename "$2"
-  else
-    echo "oneios-tool kernel gen $1"
-  fi
-}
-HOSTED=$ROOT/kernel/patches/oneios-hosted
-ENTRIES=("$(archive_entry storage "$HOSTED/storage/build-oneios-hosted-storage.py")" "$(archive_entry board "$ROOT/kernel/device/scripts/build-oneios-board.py")")
-for name in aes keystore net hid audio gpu display; do
-  ENTRIES+=("$(archive_entry $name "$HOSTED/$name/build-oneios-$name.py")")
+# UniXNU's driver runs an archive entry that is not a script as a command, in the build tree: stage_tool
+# (kernel/lib/stage.sh) builds or finds oneios-tool and puts it on PATH under that name. The generators were Python
+# scripts until 2026-11-13 (build-oneios-NAME.py, copied into the device repository); their output is frozen in
+# tools/oneios-tool/tests/kernelgen/golden.
+stage_tool
+ENTRIES=()
+for name in storage board aes keystore net hid audio gpu display; do
+  ENTRIES+=("oneios-tool kernel gen $name")
 done
 python3 -I - "$DEVICE/board.toml" "$DEVICE/configs/oneios_hosted_defconfig" "${ENTRIES[@]}" <<'PY'
 import re, sys
 board, config, *entries = sys.argv[1:]
 # The archives: the committed list ends with the board's own entry; the hosted list takes its place.
 text = open(board).read()
-new, n = re.subn(r'^(\s*)"(?:build-oneios-board\.py|oneios-tool kernel gen board)",?\s*\n(\s*\])',
+new, n = re.subn(r'^(\s*)"oneios-tool kernel gen board",?\s*\n(\s*\])',
                  lambda m: ''.join(f'{m.group(1)}"{entry}",\n' for entry in entries) + m.group(2), text, count=1, flags=re.M)
 if n != 1:
     raise SystemExit('build-hosted: board.toml archives do not end with the board\'s own entry')

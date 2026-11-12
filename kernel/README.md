@@ -51,7 +51,7 @@ patched tree with one commit per patch, for writing patches), `kernel/tests/host
    does not leave undefined).
 5. Driver archives linked in: ArmDTPlatform, ArmCpu, libpthread's kernel part, libfirehose, and UniXNU's source
    corecrypto (see "Releases").
-6. The board's own archives, built between the two kernel passes by `device/scripts/build-oneios-board.py` and
+6. The board's own archives, built between the two kernel passes by `oneios-tool kernel gen board` and
    force-loaded through `CONFIG_XNU_EXTRA_LD_ARCHIVES`: `liboneiosdrivers.a` (`drivers/build.py`: the bridge
    transport, haptics, Bluetooth; 9 sources) and `liboneiosboard.a` (Droid-VM's `DroidVMCpufreq.c`, unchanged).
    `oneios_board_late_start()` (`oneios-board-start.patch`), called from `bsd_init` after the storage hook, runs
@@ -132,7 +132,7 @@ The GNU-only commands of the kernel scripts (`sed -i`, `stat -c`, `nproc`, `sha2
 | Boot arguments to start from | Droid-VM's `ipados27/board.toml` `kernel_args`, with its `sheng-`/`droidvm-` display values replaced as in `kernel/profiles/iphone18-2-ios27.md` section 4. For the GPU: `vgpu-3d=1 droidvm-gpu-metal=1` |
 | CPU topology | `__ARM_AMP__` (`droidvm-amp.patch`): **every `/cpus` node must carry `cluster-type`** (`"E"` or `"P"`), or the kernel panics in `cluster_type_to_pset_type()`. `/arm-io/cpufreq` is DroidVMCpufreq's window (`drivers/cpu/README.md`) |
 | Board drivers | ArmDTPlatform, ArmCpu, the bridge transport, haptics, Bluetooth and cpufreq. **No storage, display, input or GPU driver yet.** See "Not done" |
-| Linking a board archive | build it in `device/scripts/build-oneios-board.py` into `{tree}/build/oneios-NAME/` with an `objects.json` (path and SHA-256 of each source), add it to `CONFIG_XNU_EXTRA_LD_ARCHIVES` in the defconfig, and start it from `oneios_board_late_start()`; storage starts from `native_source_storage_start()` (weak), just before |
+| Linking a board archive | build it in `oneios-tool kernel gen board` (`tools/oneios-tool/crates/oneios-kernel/src/build_oneios_board.rs`) into `{tree}/build/oneios-NAME/` with an `objects.json` (path and SHA-256 of each source), add it to `CONFIG_XNU_EXTRA_LD_ARCHIVES` in the defconfig, and start it from `oneios_board_late_start()`; storage starts from `native_source_storage_start()` (weak), just before |
 
 Privileged instructions, for the trap layer (`llvm-objdump -d` of the first build, `b41b5b1d4a8e`, before the board
 archives and AMP): 875 `mrs`/`msr`

@@ -33,6 +33,7 @@ echo $$ > "$LOCK/pid"
 trap 'rm -rf "${LOCK:?}"' EXIT
 
 stage_sources
+stage_tool
 [ "${CLEAN:-0}" = 1 ] && rm -rf "${UNIXNU_OUT_DIR:?}/oneios"
 
 # The macOS release this XNU ships in (pins.sh). darwin-xnu-build reads MACOS_VERSION to choose its patch set

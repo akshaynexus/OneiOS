@@ -39,6 +39,21 @@ stage_sources() {
   done
 }
 
+# stage_tool: oneios-tool (tools/oneios-tool) on PATH under that name. The board's archives are its commands
+# (`oneios-tool kernel gen NAME` in board.toml's [kernel] archives: UniXNU's driver runs an entry that is no script as
+# a command, in the build tree), and so is the build record (`oneios-tool kernel build-record`). The binary is built
+# first when it is missing or older than its sources (scripts/lib/oneios-tool.sh: cargo, Rust 1.95 or newer);
+# ONEIOS_TOOL=PATH names another one. PATH gets a link to it in the output root, so any binary's name will do.
+stage_tool() {
+  . "$ROOT/scripts/lib/oneios-tool.sh"
+  oneios_tool "$ROOT" || return 1
+  case "$ONEIOS_TOOL" in /*) ;; *) ONEIOS_TOOL=$PWD/$ONEIOS_TOOL ;; esac
+  local bin=${KERNEL_OUT:-$ROOT/out/kernel}/bin
+  mkdir -p "$bin"
+  ln -sf "$ONEIOS_TOOL" "$bin/oneios-tool"
+  export ONEIOS_TOOL PATH="$bin:$PATH"
+}
+
 # unixnu ARGS...: UniXNU's driver for the OneiOS device repository and output root.
 unixnu() {
   # UNIXNU_DEVICE: the board's archive scripts find this repository through it (the fork's driver does not pass it on).

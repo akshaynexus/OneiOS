@@ -26,6 +26,7 @@ T0=$(date +%s)
 [ -x "$TOOLCHAIN/unixnu/CommandLineTools/usr/bin/xnu-host-cc" ] && [ "$TOOLCHAIN/unixnu" -nt "$ROOT/kernel/linux/unixnu-layout.sh" ] \
   && [ "$TOOLCHAIN/unixnu" -nt "$ROOT/kernel/linux/clang-wrapper" ] || "$ROOT/kernel/linux/unixnu-layout.sh"
 stage_sources
+stage_tool
 [ "${CLEAN:-0}" = 1 ] && rm -rf "${UNIXNU_OUT_DIR:?}/oneios"
 
 # xnu's makefiles call /usr/bin/xcrun, /usr/bin/plutil and /usr/bin/codesign by their full paths, and UniXNU's driver
