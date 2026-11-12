@@ -442,7 +442,9 @@ Open, in order:
 
 Written; **nothing of it ran on the real phone, and the app was not built or installed with it**. Crate
 `crates/oneios-phone` (`adb.rs`: the one phone and the rules; `phone.rs`; `sparse.rs`; `app.rs`). README "phone" and
-"app" have the commands and what the stand-in tests show (`tests/phone/run.sh` 64 checks, `tests/app/run.sh` 65).
+"app" have the commands and what the stand-in tests show (`tests/phone/run.sh` 76 checks, `tests/app/run.sh` 65,
+`tests/cycle/run.sh` 95; `tests/phone/modes.sh` runs them with the host's `/proc` and with the stand-in's own, macOS's
+only mode).
 
 Open, in order:
 1. **The first run on the phone** (the Mac has it): `phone status`, then `phone sums` against
@@ -503,7 +505,9 @@ ported and stays: `userland/tweak`, `scripts/fetch`, `scripts/ios`, the display 
   cache copied out of the image with `apfs-copy`, 7.3 GB), `rustport-apfs-systemos/` (7 GB), `rustport-fuse-src.img`
   (a Data-store stand-in), the previous binary `rustport-seed/oneios-tool.8cc763e`.
 - The stand-in phone (`tests/phone/fake-adb.sh`, `lib.sh`) is what `tests/phone`, `tests/app` and `tests/cycle`
-  share; a new phone command gets a check there, and a line in the "nothing sent to the phone walks a tree" test.
+  share; a new phone command gets a check there, and a line in the "nothing sent to the phone walks a tree" test
+  (which also reads the root scripts the tool sent, `FAKE_ROOT_LOG`). A command that reads `/proc` needs the
+  stand-in's `/proc` to hold the entry (`FAKE_PROC=stand-in`, `fake-rewrite.sh`): run `modes.sh`, not only `run.sh`.
 - zsh is the shell of the agent's Bash tool here: `$EPOCHREALTIME` and arrays behave differently; put anything
   that times or loops into a bash script file.
 - The scratch outputs of the comparisons are in the worktree's `out/` (`rustport-sym/`, `rustport-log/`,

@@ -391,6 +391,7 @@ $T phone image-check               # the staged manifest.json lists the staged f
 $T phone manifest DIR --stage      # DIR's files (a new kernel.kc, kernel.kc.hashes) with the phone's manifest, their entries new
 $T phone switch                    # oneios_root.sh switch <the installed app's versionCode> 1
 $T phone log --follow --markers    # kernel, launchd, backboardd, SpringBoard, the first frame, a panic, as they come
+                                   #   (right after a switch it waits for this session's log: the switch replaces it ~40 s in)
 $T phone log --gpu --tail 200      # named filters: --panic --markers --display --gpu --wifi --hid --mem; --grep REGEX; --since SECONDS
 $T phone log --follow --save-auto  # also into out/session-logs/DATE/live-HHMMSS.log; --analyze: timeline and stacks at the end
 $T phone log --list                # the logs by name: xnuhost, switch, return, outcome, display, watchdog, logs/xnuhost-<epoch>.log

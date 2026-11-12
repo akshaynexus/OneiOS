@@ -7,13 +7,23 @@
 #   $P/.fake/panic    the boot ends in a panic instead of the first frame
 #   $P/.fake/hang     the boot stops before the first frame and waits
 #   $P/.fake/no-return  a return.request is not answered (a return that hangs)
+#   $P/.fake/log-delay  seconds before the last session's xnuhost.log is moved to logs/ and this one's begun (the
+#                     phone's switch does it about 40 s in; default 0)
+# While it runs it keeps $P/.fake/proc/PID/cmdline (its argv, NUL-separated, as /proc/PID/cmdline holds it): the
+# stand-in's /proc, read instead of the host's with FAKE_PROC=stand-in (fake-rewrite.sh). The entry is removed
+# when the session ends, also by SIGTERM, SIGINT or SIGHUP (fake-adb.sh drops one left by SIGKILL).
 P=$1
 S=$P/data/local/tmp/oneios
 step=$(cat "$P/.fake/step" 2>/dev/null || echo 0.2)
 mkdir -p "$S/session" "$S/logs"
-[ ! -f "$S/session/xnuhost.log" ] || mv "$S/session/xnuhost.log" "$S/logs/xnuhost-$(date +%s).log"
 rm -f "$S/session/ready" "$S/session/return.request"
+trap 'rm -rf "$P/.fake/proc/$$"' EXIT
+trap 'exit 143' TERM; trap 'exit 130' INT; trap 'exit 129' HUP
+mkdir -p "$P/.fake/proc/$$"
+printf 'fake-xnuhost\0%s\0%s\0' "$0" "$P" > "$P/.fake/proc/$$/cmdline"
 echo $$ > "$S/session/xnuhost.pid"
+d=$(cat "$P/.fake/log-delay" 2>/dev/null || echo 0); [ "$d" = 0 ] || sleep "$d"
+[ ! -f "$S/session/xnuhost.log" ] || mv "$S/session/xnuhost.log" "$S/logs/xnuhost-$(date +%s).log"
 t0=$(date +%s.%N)
 line() { printf '[%9.3f] %s\n' "$(echo "$(date +%s.%N) $t0" | awk '{print $1-$2}')" "$*" >> "$S/session/xnuhost.log"; }
 asked() { [ -e "$S/session/return.request" ]; }

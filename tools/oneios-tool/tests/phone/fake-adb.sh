@@ -5,12 +5,23 @@
 #   FAKE_PHONE=DIR     the phone's root (DIR/data/local/tmp/oneios is the stage). tests/phone/run.sh makes one.
 #   FAKE_DEVICES=TEXT  the lines `adb devices` lists (default: "FAKE0001<tab>device")
 #   FAKE_NO_ROOT=1     su refuses, as on a phone whose root is gone after a restart
-#   FAKE_DROP=FILE     a `tail -F` (phone log --follow) is cut off after one second, once, while FILE exists
-#                      (the fake removes it): adb dropping
+#   FAKE_DROP=FILE     a `tail -f` or `tail -F` (phone log --follow) is cut off after one second, once, while FILE
+#                      exists (the fake removes it): adb dropping
+#   FAKE_DROP_NEW=1    and while adb is away the session's log is replaced (moved to logs/xnuhost-dropped.log, a
+#                      new file begun with the same first line, which the session goes on writing): a new file
+#   FAKE_CUT=FILE      a `tail -f` or `tail -F` that is running is cut off when FILE appears (the fake removes it):
+#                      adb dropping at the moment a test chooses
 #   FAKE_ADB_LOG=FILE  every call is appended to FILE
+#   FAKE_ROOT_LOG=FILE every script for root's shell (`su -c 'sh -s'`, on stdin) is appended to FILE, as the tool
+#                      sent it
+#   FAKE_PROC=host|stand-in  what /proc the phone's commands read. host: this machine's (Linux; the default where
+#                      /proc/self/cmdline can be read). stand-in: the stand-in's own, $FAKE_PHONE/.fake/proc, where
+#                      each stand-in session keeps PID/cmdline while it runs (the default on macOS, which has no
+#                      /proc; FAKE_PROC=stand-in runs that path on Linux too). The tool's commands are the same.
 #
 # Commands: devices; [-s SERIAL] shell CMD; exec-out CMD; push LOCAL REMOTE; install [-r] [-d] APK.
-# In CMD every /data/... path becomes $FAKE_PHONE/data/...; `su -c X` runs X (`su -c 'sh -s'`: stdin); the
+# In CMD every /data/... path becomes $FAKE_PHONE/data/... (and /proc/... the stand-in's /proc with
+# FAKE_PROC=stand-in: fake-rewrite.sh); `su -c X` runs X (`su -c 'sh -s'`: stdin); the
 # stage's bin/oneios_root.sh is tests/phone/fake-root.sh, which hands everything but switch and return to the
 # OneOS fork's own root script under its test root. dumpsys, getprop, pm and chown are stand-ins in $FAKE_PHONE/.fake/bin.
 set -u
@@ -24,8 +35,21 @@ while [ $# -gt 0 ]; do
   esac
 done
 devices=${FAKE_DEVICES-$'FAKE0001\tdevice'}
-rewrite() { sed -e "s#\(^\|[ '\"=<>(;]\)/data/#\1$P/data/#g"; }
-export FAKE_PHONE=$P PATH="$P/.fake/bin:$PATH" ONEIOS_TEST_ROOT=$P
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)   # $0 may be a link (run.sh's bin/adb, for stage.sh)
+if [ -z "${FAKE_PROC:-}" ]; then
+  if [ -r /proc/self/cmdline ]; then FAKE_PROC=host; else FAKE_PROC=stand-in; fi
+fi
+case "$FAKE_PROC" in host|stand-in) ;; *) echo "fake-adb: FAKE_PROC=$FAKE_PROC is neither host nor stand-in" >&2; exit 2 ;; esac
+export FAKE_PHONE=$P PATH="$P/.fake/bin:$PATH" ONEIOS_TEST_ROOT=$P FAKE_PROC FAKE_REWRITE=$HERE/fake-rewrite.sh
+rewrite() { "$FAKE_REWRITE"; }
+# the stand-in's /proc holds only live processes: the entry of a session that is gone (killed with SIGKILL, so
+# its own trap did not run) is dropped, as the kernel drops it
+if [ "$FAKE_PROC" = stand-in ] && [ -d "$P/.fake/proc" ]; then
+  for d in "$P/.fake/proc"/*; do
+    [ -e "$d" ] || continue
+    kill -0 "${d##*/}" 2>/dev/null || rm -rf "$d"
+  done
+fi
 case "${1:-}" in
 devices)
   echo "List of devices attached"
@@ -34,11 +58,24 @@ devices)
 shell|exec-out)
   [ -n "$serial" ] || [ "$(printf '%s\n' "$devices" | grep -c .)" = 1 ] || { echo "adb: more than one device/emulator" >&2; exit 1; }
   cmd=$(printf '%s' "$2" | rewrite)
-  if [ -n "${FAKE_DROP:-}" ] && [ -e "$FAKE_DROP" ] && case "$cmd" in *"tail -n +"*" -F "*) true ;; *) false ;; esac; then
+  if [ -n "${FAKE_DROP:-}" ] && [ -e "$FAKE_DROP" ] && case "$cmd" in *"tail -n +"*" -f "*|*"tail -n +"*" -F "*) true ;; *) false ;; esac; then
     rm -f "$FAKE_DROP"
     timeout 1 bash -c "$cmd"
+    if [ -n "${FAKE_DROP_NEW:-}" ]; then
+      L=$P/data/local/tmp/oneios/session/xnuhost.log
+      first=$(head -n 1 "$L"); mv "$L" "$P/data/local/tmp/oneios/logs/xnuhost-dropped.log"; printf '%s\n' "$first" > "$L"
+    fi
     echo "adb: device offline" >&2
     exit 1
+  fi
+  if [ -n "${FAKE_CUT:-}" ] && case "$cmd" in *"tail -n +"*" -f "*|*"tail -n +"*" -F "*) true ;; *) false ;; esac; then
+    bash -c "$cmd" & t=$!
+    trap 'kill $t 2>/dev/null; exit 143' TERM INT
+    while kill -0 $t 2>/dev/null; do
+      if [ -e "$FAKE_CUT" ]; then rm -f "$FAKE_CUT"; kill $t 2>/dev/null; wait $t; echo "adb: device offline" >&2; exit 1; fi
+      sleep 0.1
+    done
+    wait $t; exit $?
   fi
   exec bash -c "$cmd" ;;
 push)

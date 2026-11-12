@@ -161,10 +161,7 @@ impl Adb {
     /// Is a session open: session/xnuhost.pid names a live process that is still an xnuhost (a pid is used again
     /// after the session ends). One named file and one /proc entry are read.
     pub fn session_open(&self) -> Result<bool> {
-        let script = format!(
-            "p=$(cat {STAGE}/session/xnuhost.pid 2>/dev/null); [ -n \"$p\" ] && cat /proc/$p/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q xnuhost && echo open || echo closed\n"
-        );
-        match self.root_ok(&script, "the session check")?.trim() {
+        match self.root_ok(&session_check_script(), "the session check")?.trim() {
             "open" => Ok(true),
             "closed" => Ok(false),
             other => bail!("the session check gave \"{other}\""),
@@ -178,6 +175,14 @@ impl Adb {
         }
         Ok(())
     }
+}
+
+/// The session check's script for root's shell (`Adb::session_open`). The stand-in phone answers it with its own
+/// /proc on a host without one (tests/phone/fake-rewrite.sh): the script is the phone's on every host.
+pub fn session_check_script() -> String {
+    format!(
+        "p=$(cat {STAGE}/session/xnuhost.pid 2>/dev/null); [ -n \"$p\" ] && cat /proc/$p/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q xnuhost && echo open || echo closed\n"
+    )
 }
 
 fn names(phones: &[(String, String)]) -> String {
@@ -200,4 +205,19 @@ pub fn plain(word: &str, what: &str) -> Result<()> {
         bail!("{what} \"{word}\" has characters this tool does not put into a root shell (letters, digits and ._+-/ only)");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What the phone runs for the session check, byte for byte: the stand-in phone maps /proc on a host without
+    /// one (macOS); the tool must not send anything else to make the stand-in pass.
+    #[test]
+    fn session_check_is_the_phones_command() {
+        assert_eq!(
+            session_check_script(),
+            r#"p=$(cat /data/local/tmp/oneios/session/xnuhost.pid 2>/dev/null); [ -n "$p" ] && cat /proc/$p/cmdline 2>/dev/null | tr '\0' ' ' | grep -q xnuhost && echo open || echo closed"#.to_string() + "\n"
+        );
+    }
 }
