@@ -118,6 +118,11 @@ animation (whose submissions keep the constraint alive) ran the same frames in a
   timestamps) that carries the same constraint, so KGSL renews it and the next frame starts at the top level; then
   KGSL drops it and the governor decides as before;
 - KGSL's thermal limit (`thermal_pwrlevel`) still caps the level the constraint asks for.
+- `0006-hold-follows-every-client.patch`: within `DRM2KGSL_PWR_FOLLOW_MS` (1000; 0 turns it off) of the render
+  server's last submission, any other context's submission extends the hold too. On the phone (14:12 boot,
+  2026-11-12) the hold made the render server's frames 2.9-4.0 ms, but opening Settings its frames took 25 ms with the
+  hold started 3 times in 10 s: the app's own GPU work, which the render server waits for, ran at 231 MHz. A client
+  that keeps submitting with the screen still does not hold the clock past that second.
 
 Log: once `drm2kgsl: clock hold: the top level from the render server's submissions to 150 ms after them` (or
 `clock hold: off (reason)`), and in the 10 s host line `clock held +N times, keep-alives +M` (a hold is a run from
@@ -153,13 +158,23 @@ goes back to the guest only when the ring passes the fence (drm2kgsl's timeline 
 device's own ring is returned at once. A context that is destroyed returns its held commands. A device reset
 destroys the contexts and blobs on the device's thread and drops what was held.
 
+**Two lanes** (2026-11-12). The queue's thread serves the render server's contexts (named `xnu:backboardd` at
+`CTX_CREATE`), context creation and every command of no context (the display's flush, the 2D commands) at once; every
+other context's commands go, in their order, to a second thread, the slow lane. A mutex makes the two take turns at the
+device's tables and the renderer, so the render server's frame waits for at most one of an app's blobs (1-30 ms each on
+the phone, 64-102 per 10 s while Settings opened), not for all of them. A fast-lane command that names a resource the
+slow lane has not made yet (an app's surface the render server attaches, the unref of an app's blob) waits for the slow
+lane's commands that came before it and runs again. A device reset drops the slow lane's chains of the old queue. Test:
+`test_virtio_gpu3d` (all its contexts are the slow lane's now, and one case holds an app's blob while the render
+server's submission is answered). Not yet run on the phone.
+
 **Display.** `SET_SCANOUT_BLOB` makes a guest blob the scanout; `RESOURCE_FLUSH` copies its rows from the guest's
 pages to the display (a CPU copy per frame: crosvm's zero-copy import to the compositor is not done here).
 Since 2026-11-12 the copy goes straight from the guest's pages into the display's buffer, walking the blob's segments
 once per flush; before, each of the 3120 rows went through a row buffer and searched the segment list from its start
 (about 1100 segments of 16 KiB pages for a 1440x3120 frame). On an M4, for that frame: 4.2-10.6 ms before, 2.0-3.3 ms
 after (a stand-alone copy of both loops; not measured on the phone). xnuhost logs the copy every 10 s while frames
-come: `display: 10 s: flushes N, copy mean X us max Y us (Z MiB)`. The device's one thread does the copy, so a frame's
+come: `display: 10 s: flushes N, copy mean X us max Y us (Z MiB)`. The fast lane's thread does the copy, so the render server's
 next commands wait behind it. The guest's `oneios-display-report` `done=` of a swap (128-211 ms on the phone,
 2026-11-12) runs from the swap's validation to its transfer: the frame's GPU work, then this flush, each behind
 whatever the device thread is doing (blob creations: 0.8 ms each, up to 45 ms in a storm).
