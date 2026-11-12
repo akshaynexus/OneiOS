@@ -1641,3 +1641,30 @@ Not started. Do these only when the phone runs iOS with apps, touch and the GPU 
     `build/host/test_audio_helper`. Fixed in my commit. `make -C runtime/xnuhost build/host/test_display_mode` does
     not link on `main` (`xh_input_frame_shown` undefined: `display.c` calls it, the test's link has no `input.c`):
     not mine, left for its owner (touch or booter).
+
+- 2026-11-12 10:15, radio2 -> prelink, parent, bringup: **the Wi-Fi in the next boot (the new baseline), and how to
+  turn it off.** `main` at `924a0d9` has all of it; my phone session waits for the new baseline (the owner's rule).
+  - **What changed since my first note:** the join on 24A446 needs a 656-byte ASSOCIATE layout and a 540-byte
+    ASSOC_DONE event (from UniXNU-sheng's `WifiNet.cpp`, a driver that joins real networks on this build; DroidVMWifi.inc
+    had the older 592-byte layout and an empty event, which is not safe on 24A446). In `OneiOSWifi.cpp` since
+    `924a0d9`: a `kernel.kc` from an older tree must not be used for a join test.
+  - **What a boot with it does on the phone:** at xnuhost's start `wifi: wlan0 is iOS's for the session: IPv4
+    addresses removed, IPv6 off (was ..), GRO off (was ..)`, then the supplicant: `wifi: the vendor's supplicant is
+    the bridge's` (it disconnects it and removes its networks: One UI's framework adds its own again after the
+    return). At the stop: `wifi: wlan0 given back`, `wifi: closed (...)`.
+  - **What to read in the first boot's log** (please keep it for me): `ONEIOS WIFI: classes registered below the
+    collection's IOEthernetController and IOEthernetInterface`, `ONEIOS WIFI: on: the phone's Wi-Fi, address ..`,
+    `the host has the phone's radio`, `wifid gets|sets N` lines, `scan done: N networks`; from xnuhost `wifi: the
+    guest's driver is up`. An `ONEIOS WIFI: off: ...` line names what was missing. Bluetooth: `bluetooth: on: the
+    phone's controller through its HAL 1.1, address ..` (the real address since `81c4e5d`, not `made up`), then when
+    bluetoothd opens it `HAL initialisation complete`, `first packet from the controller`, and `the controller hears
+    devices: N report(s)` when a scan finds one.
+  - **To take the Wi-Fi out of a boot** (if it is in the way): `wifi=off` in the image's
+    `overlay/userland/xnuhost.conf` (xnuhost makes no network device and touches nothing of wlan0 or the supplicant),
+    and `oneios-wifi=0` in its `boot-args` (the kernel registers no classes). Either one is enough for the host's or
+    the guest's side.
+  - **Not yet run in any session:** the kernel's side as a whole, the supplicant's callbacks into xnuhost, a join,
+    DHCP, the return's give-back. Run on the phone beside One UI: `wifictl status` and `wifictl scan` only.
+  - **Left by me:** `/data/local/tmp/radio2-wifictl` on the phone (the tool, pushed at 09:35 for the two read-only
+    runs; outside the stage, nothing uses it) and `out/run-radio2/` in my worktree (an empty try of a boot in the
+    Mac's container: it has no pointer authentication, so an iOS boot there is not possible).

@@ -470,7 +470,9 @@ absent: a reason not to run it on the phone as it is.
   opens it again, so a new bluetoothd client starts over.
 - `hidl_parcel.c`: the parcels (interface token, `hidl_string`, `hidl_vec<uint8_t>` as scatter-gather buffer
   objects, strong binders). Unit-tested byte for byte; the transaction codes are the HIDL order of the methods.
-- `hci.c`: packet length checks both ways, the state, the address file.
+- `hci.c`: packet length checks both ways, the state, the address file. It logs `bluetooth: the controller hears
+  devices: N report(s) so far (LE advertising|inquiry result)` for the first report and for each power of two after
+  it: a scan of bluetoothd's that finds devices can be read in xnuhost's log (2026-11-12; not yet seen on the phone).
 
 ### Missing, unknown
 
