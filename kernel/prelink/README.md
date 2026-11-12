@@ -19,8 +19,8 @@ scripts/bg.sh prelink env REFERENCE=out/kernel/current-hosted/reference.macho ke
 | `kernel.kc.build.json` | the record: inputs and hashes, roots, each kext left out with its reason, the fileset entries, the rewrites, the AMFI pins, counts |
 | `kernel.kc.prelink.json` | the emitter's report: per kext, the original kernel functions bound to the panic stub (`stubbed`) and the data left unpaired (`missing`) |
 
-A build takes about 80 s on the Linux PC, 45 s on the Mac (45 s of it the pairing on Linux, reused while the kernel, the kernelcache and the reference are
-the same). A new kernel needs a new `kernel.kc`: every native address in it is that kernel's.
+A build takes about 80 s on the Linux PC; on the Mac 45 s cold (mac-kernel's figure, before the audit step) and 19 s warm (the pairing is reused while the
+kernel, the kernelcache, the reference and XnuPrelink's matcher are the same). A new kernel needs a new `kernel.kc`: every native address in it is that kernel's.
 
 ## Steps (`build.sh`)
 
@@ -185,7 +185,7 @@ before `vfs_context_iopolicy_unassigned_0x8000` (the settled record), `random_cp
 `ml_set_interrupts_enabled`, `OSUnserializeXML` (reference order) before `OSUnserialize` (aligned), and
 `SecureDTFindEntry` twice (reference symbol and reviewed). XnuPrelink's own tests (`python3 -m unittest`, 59) pass.
 
-### On the phone (2026-11-12, bringup): two panics, not fixed
+### On the phone (2026-11-12, bringup): two panics (both resolved: 1 by XnuPrelink `9b950f2`, 2 by the known-good pairs below)
 
 Both Mac collections were booted on the S24 Ultra with the Mac runtime 0.1.7-dev (logs in
 `out/phone-baseline/2026-11-12/session1-xnuhost.log` and `session2-xnuhost.log`, git-ignored).
@@ -213,7 +213,99 @@ Both Mac collections were booted on the S24 Ultra with the Mac runtime 0.1.7-dev
    the audit of every import of the Mac collection against the Linux one to the agent `prelink`.
 
 The phone's baseline stays the Linux-built `kernel.kc` of 2026-11-11 until that audit is done
-(`docs/building.md`, "Test cycle on the phone").
+(`docs/building.md`, "Test cycle on the phone"). The audit is the next section.
+
+## Known-good pairs and the import audit (2026-11-12, prelink)
+
+The pairing of a kernelcache's imports must not move when the toolchain that builds our kernel changes. Before this,
+it did: `fileset_match.py` pairs by code shape, and the Xcode 27.2 kernel and reference have other shapes than the
+Linux PC's. So the result of the pairing is now a committed list, and every build is checked against it.
+
+- `pairs-24A446.json`: 2,710 known-good pairs (2,463 functions, 247 data): every kext import of the collection that
+  is bound, original -> our symbol, each with its `why`. `"leaf": true` marks an original that only computes registers
+  and returns (`mov w0, #45; ret`): any of our functions with the same instructions is right for it.
+- `stubs-24A446.json`: the 94 originals left on the panic stub and the 9 data targets left unpaired, each with its
+  reason, the kexts that import it and the count of call sites in their code.
+- `emit.py --pairs --stubs` applies the list over the matcher, the inferred pairs and the reviewed records, and leaves
+  the stub list unpaired. Names resolve to our kernel's **external** symbol: Xcode's kernel has local functions with
+  the names of external ones (two `_kalloc_type_impl`, `_kalloc_type_var_impl`, `_kfree_type_var_impl`), and the old
+  `setdefault` over all symbols could take the local one (it did for those three in a first build of this list; the
+  audit caught it).
+- `audit.py` (step 6b of `build.sh`, 3.5 s) reads every chained-fixup site of the kexts whose target is in Apple's
+  kernel, the target it has in the built `kernel.kc`, and our kernel's symbol there. **The build fails** when an
+  import is on the stub or unpaired without an entry in the stub list, when a stub-list entry is bound, when a bound
+  import's symbol is not the list's (aliases at the same address agree; a leaf agrees by its instructions), and
+  when a bound import is not in the list. `out/kernel/24A446/kernel.kc.binds.json` lists every import's binding.
+  `--against OTHER.kc` prints the a/b/c comparison below for any two collections; `--draft FILE` writes a
+  collection's pairs in the list's format for review (never over the committed list).
+- A new pair (another kernelcache, a kext added to the roots, a kernel function renamed) fails the build until it
+  is reviewed into the list with its `why`. A kernel without a listed symbol fails `emit.py` by name.
+
+### The audit of 2026-11-12: Linux `9476a867` (booted to the Home Screen) against Mac `eae11352`
+
+Per original import target of the 150-kext closure (functions and data):
+
+| | count |
+|---|---|
+| (a) paired on Linux, stub or unpaired on Mac | 5: `proc_self`, `get_bsdtask_info`, `clock_delay_until`, `ml_get_topology_info`, data `gIOParentMatchKey` |
+| (b) stub or unpaired on Linux, paired on Mac | 130 (121 functions, 9 data) |
+| (c) paired to different functions | 79: 66 pure leaves with the same instructions on both sides (`err_*`/`nop_*` vnops, `return 0` slots), 13 others |
+| the same pair on both | 2,495 |
+| stub or unpaired on both | 103 |
+
+- **Panic 2** (`from 0x20038daa8c`): the call at `0xfffffe000a8daa88` in Sandbox goes through the slot
+  `0xfffffe0008424138` to the original `0xfffffe000b0f2f10`, `proc_self` (220 bytes). It is in (a): the Linux
+  collection bound it to `_proc_self`, the Mac one to the stub.
+- **Panic 1** (`pc=0x20068c3c50`, frame `0xfffffff00d8c3c50`) is in none of the three: it is not an import of a kext
+  but a branch of ours into one (the `IOAcceleratorES` constructor's `<stub>.original`), which XnuPrelink `b74ed7c` did
+  not relocate (above). `stubs-check.py` covers it.
+- **Why the Mac pairing lost (a)**: Apple's kernel inlines what the Xcode-built reference calls. `proc_self` and
+  `get_bsdtask_info` carry Apple's inlined `zone_id_require` (the zone-index check), `clock_delay_until` the inlined
+  `mach_absolute_time`, and the reference calls both; so their lengths differ from the reference's by more than the
+  10 % that `anchor_reference_order` allows, and no other rule pairs them. The same cause made a wrong pair in (c):
+  Apple inlined `random_cpu_init` (and its string) into `ml_processor_register`, and the string anchor gave
+  `0xfffffe000ad59054` (872 bytes, AppleARMPlatform's CPU registration) the Xcode kernel's 116-byte `random_cpu_init`.
+  Why the Linux pairing had them is not known any more (its pairing files were on the PC); a guess: the Linux
+  toolchain's reference inlined the same callees.
+- (c), decided in the list (each `why` has the evidence): Linux's pair for `ml_processor_register`; the Mac's for
+  `nop_pagein` (the original returns 22), `SHA1Final` (two arguments), `ifaddr_get_ia6_flags` (two arguments),
+  `OSAction::CreateWithTypeName`, `ifnet_input_extended`, `sbappendrecord` (reference symbols, score 1.0),
+  `gIOKitDebugKey` (in IOSerialFamily's import order; Linux's `gIOCommandPoolSizeKey` was not). Five originals that
+  are `ret`, `return 0` or `return kIOReturnUnsupported` had Mac pairs with real bodies (`IOCPU::detach`,
+  `IOPlatformExpert::getGMTTimeOfDay`, `IOBSDMountChange`, `IOBSDLowSpaceUnlinkKernelCore`, `OSObject::_Dispatch`), as
+  had `OSObject::Dispatch` (a leaf in the Linux kernel, a real dispatch in Xcode's): each is bound to a function with
+  the original's instructions, as on Linux. `0xfffffe000b271b70` (the lead's `dictEntry::compare`) is on the stub:
+  the original is 100 bytes with a call and a string, the comparator 28; it sorts after `OSDictionary` C1 (its
+  constructor, now paired); its only importer, AppleEmbeddedAudio, never starts.
+- (b): 108 of 121 functions are as close to the reference's function of that name as the pairs both agree on
+  (instruction similarity 0.8 or more); the 13 below were read one by one (notes in their `why`).
+- The new collection `3476435a` (the same kernel, `pairs`/`stubs` applied): 2,710 paired, 94 on the stub, 9 data
+  unpaired, 0 audit failures, 507 `.original` stubs good. Against Linux: (a) 1 (`0xfffffe000b271b70`, above), (c) the
+  7 decided for the Mac, the rest equal or leaf-equal.
+
+### What is still on the stub (`stubs-24A446.json`)
+
+Every one of the 94 functions and 9 data has callers in kext code; none was called in the Linux boot to the Home
+Screen, where all of them were on the stub or unpaired too. That is the evidence, not a proof for every later path:
+- 56 are Tightbeam, the exclaves IPC (`tb_*` names): this kernel has no `tb_*` function and no exclaves. Importers:
+  AppleALSColorSensor, AppleFirmwareKit, AppleH16ANEInterface, ExclavesAudioKext, on their exclave paths.
+- 8 are imported only by kexts that never start (personalities dropped: RTBuddy, AppleSEPManager, ApplePTD,
+  AppleEmbeddedAudio, AppleHIDTransport, IOSerialFamily, AppleSMC).
+- 38 are not chosen yet: the names between their neighbours in the import tables are several (`imports.py` prints
+  them) and the code has not told them apart. A stub panic from one of these names it (`unmapped.py`); its pair goes
+  into the list.
+
+### Hot spots and timings (for the later Rust port)
+
+On the M4: one `match_images` (the original against the reference) takes 20 s, the matcher with a reference runs two
+(the native kernel's and the reference's; about 40 s by that, not timed on its own; reused while its inputs are the
+same). In it: function digests and string tables of
+22,000 + 27,000 functions, and the length LCS of `anchor_reference_order` (a table of up to 40,000 cells per gap,
+four rounds). `kc_image.Image.fixups()` decodes 592,421 chained fixups of the kernelcache in about 1 s (pure Python
+`struct` per pointer); `audit.py` decodes three such tables and scans the stubbed slots' kexts for callers: 3.5 s.
+A warm build (pairing reused) took 19 s on 2026-11-12: the inputs and `hosted.py` 2 s, the two `align.py` runs 4 s,
+`kclasses.py`, `structors.py` and `vtables.py` 2 s, `emit.py` 8 s (XnuPrelink's emitter: layout, the fixup chains,
+the HMACs), `audit.py` 3 s, the record and the chunk hashes 1 s.
 
 ## Records of several agents, and the import-order check
 
@@ -279,4 +371,4 @@ The phone's baseline stays the Linux-built `kernel.kc` of 2026-11-11 until that 
   (`X18=1 build.sh`, slow).
 - `record.py` fails when `OUT` resolves outside the repository it runs from (a worktree with `out` as a symbolic
   link): `work/kernel.kc` is complete by then.
-- No run on the phone.
+- The Mac collection with the known-good pairs: see "Known-good pairs" for its phone run.

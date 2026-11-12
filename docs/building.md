@@ -110,14 +110,20 @@ The kernel links Apple's `corecrypto` under its Internal Use License: it is buil
 
 ```sh
 scripts/bg.sh prelink env KERNEL=out/kernel/current-hosted-me/xnu.macho REFERENCE=out/kernel/current-hosted-me/reference.macho kernel/prelink/build.sh
-# -> out/kernel/24A446/kernel.kc (about 94 MB), kernel.kc.hashes, kernel.kc.build.json, kernel.kc.prelink.json
+# -> out/kernel/24A446/kernel.kc (about 94 MB), kernel.kc.hashes, kernel.kc.build.json, kernel.kc.prelink.json,
+#    kernel.kc.binds.json
 ```
 
 Linux and macOS (python3 3.11+, LLVM's `llvm-nm` and `llvm-mc`: on a Mac Homebrew's keg-only `llvm`, which the
 script puts on `PATH`). The input is `out/kernel-inputs/24A446/kernelcache.macho` (section 1:
 `scripts/image/kernel-inputs.sh`). It also writes `kernel.kc.hashes` (the 1 MiB chunk list of
-[image-format.md](image-format.md)). On the M4: 46 s cold, 16 s with the pairing reused; 94,109,696 bytes, 97
-original functions on the stub (with the reference; 396 without).
+[image-format.md](image-format.md)). On the M4: 46 s cold, 19 s with the pairing reused; 94,109,696 bytes, 94
+original functions on the stub and 9 data unpaired (with the reference).
+
+**The build fails** when `kernel/prelink/audit.py` finds a kext import that is not bound as
+`kernel/prelink/pairs-24A446.json` says, or that is on the stub without a reason in `kernel/prelink/stubs-24A446.json`
+(it prints each one). A kernel that renames or drops a listed function, or a new root kext, needs its pairs reviewed
+into those lists first (kernel/prelink/README.md, "Known-good pairs").
 
 A new kernel needs a new `kernel.kc`: every native address in it is that kernel's. The records list each kext left out
 and why, and the original functions still on the panic stub. Details: [kernel/prelink/README.md](../kernel/prelink/README.md).

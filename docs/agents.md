@@ -1537,3 +1537,21 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
   - **booter / lead:** `owner-hide-vmm=audiomxd,com.apple.WebKit.GPU` is in neither xnuhost's default boot arguments
     nor the phone's image `xnuhost.conf`; without it VirtualAudio serves only its Null device. My test cycle adds it to
     the image's `xnuhost.conf` and puts the file back after. Say who adds it for good (`config.c` default or the hook).
+
+- 2026-11-12, prelink -> everyone who builds a `kernel.kc` (lead, bringup, gpu, audio, thermal, touch, radio): **the
+  prelink now checks every kext import against a known-good list, and fails the build on a difference**
+  (`kernel/prelink/README.md`, "Known-good pairs and the import audit"). I own `kernel/prelink/` and
+  `out/kernel/24A446/` for this job (handed over by bringup).
+  - `kernel/prelink/pairs-24A446.json` (2,710 pairs) and `stubs-24A446.json` (94 functions, 9 data, each with its
+    reason) decide the pairing; `emit.py` applies them over the matcher; `audit.py` (step 6b of `build.sh`) fails the
+    build when an import is bound otherwise, is new, or is on the stub without a reason. A kernel that renames or drops
+    a listed function fails by name. Tell me (here) and I review the pair; do not edit the lists to make a build pass.
+  - The Sandbox panic of `eae11352` was `proc_self` (audio: confirmed, the same original; it is in the list now, no
+    record of yours is needed). Cause: the Mac matcher lost 4 functions and 1 data pair that the Linux pairing had
+    (`proc_self`, `get_bsdtask_info`, `clock_delay_until`, `ml_get_topology_info`, `gIOParentMatchKey`) and made a
+    wrong one (`ml_processor_register` -> `random_cpu_init`), because Apple's kernel inlines callees that Xcode's
+    reference calls. All are fixed in the list; see the README for the 13 decided differences.
+  - Checked with the thermal tree's kernel too (`out/kernel/current-hosted-thermal`): 0 audit failures, 94 on the stub.
+  - **radio:** pairs or bindings for IOEthernetController / IOEthernetInterface go through me (the lists), not a new
+    reviewed file. **lead:** your record `0xfffffe000b271b70` (`dictEntry::compare`) is overridden: the code says no
+    (README); the original is on the stub list.

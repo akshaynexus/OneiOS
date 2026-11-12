@@ -5,8 +5,10 @@
 #         out/kernel-inputs/24A446/kernelcache.macho (scripts/image/kernel-inputs.sh),
 #         optionally REFERENCE=FILE, the RELEASE kernel of the same source with symbols
 #         (XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh leaves it in the tree's build/xnu/fileset-reference/).
-# Output  out/kernel/24A446/kernel.kc, kernel.kc.hashes (1 MiB chunk hashes), kernel.kc.build.json (the record) and
-#         kernel.kc.prelink.json (the emitter's report). Made from Apple's kexts: never committed, never released. Steps and files: README.md here.
+# Output  out/kernel/24A446/kernel.kc, kernel.kc.hashes (1 MiB chunk hashes), kernel.kc.build.json (the record),
+#         kernel.kc.prelink.json (the emitter's report) and kernel.kc.binds.json (audit.py: every kext import's binding).
+#         The build fails when audit.py finds an import off the known-good pairs (pairs-24A446.json) or on the stub
+#         without a reason in stubs-24A446.json. Made from Apple's kexts: never committed, never released. Steps and files: README.md here.
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 HERE=$ROOT/kernel/prelink
@@ -15,6 +17,9 @@ KERNEL=${KERNEL:-$ROOT/out/kernel/current-hosted/xnu.macho}
 CACHE=${KERNELCACHE:-$ROOT/out/kernel-inputs/$BUILD/kernelcache.macho}
 PROFILE=$ROOT/kernel/unixnu/profiles/os/ios-27.0.1-$BUILD/profile.toml
 REVIEWED=$HERE/reviewed-$BUILD-v54.json
+# The known-good pairs and the stub list (audit.py checks the collection against both; README "Known-good pairs").
+PAIRS=$HERE/pairs-$BUILD.json
+STUBS=$HERE/stubs-$BUILD.json
 # XnuPrelink: external/XnuPrelink when there is one, else the kernel base's submodule at the board's pin
 # (external/Droid-VM-UniXNU/kits/XnuPrelink, checked out by kernel/build-hosted.sh).
 XNUPRELINK=${XNUPRELINK:-$ROOT/external/XnuPrelink}
@@ -95,12 +100,17 @@ ALIGNED=(--aligned "$WORK/kclasses.json" --aligned "$WORK/vtables.json" --aligne
 # 6. The collection.
 python3 "$HERE/emit.py" --xnuprelink "$XNUPRELINK" --kernelcache "$INPUT" --original-kernelcache "$CACHE" \
   --native "$WORK/native.macho" --map "$WORK/match.map.json" --roots "$WORK/select.json" --reviewed "$REVIEWED" \
-  "${ALIGNED[@]}" --output "$WORK/kernel.kc" --report "$WORK/kernel.kc.prelink.json"
+  "${ALIGNED[@]}" --pairs "$PAIRS" --stubs "$STUBS" --output "$WORK/kernel.kc" --report "$WORK/kernel.kc.prelink.json"
+# 6b. Every kext import of the collection: bound as the known-good list says, or on the stub list with its reason.
+#     A failure stops the build before kernel.kc is put in place (work/kernel.kc.binds.json lists every import).
+python3 "$HERE/audit.py" --xnuprelink "$XNUPRELINK" --kernelcache "$CACHE" --collection "$WORK/kernel.kc" \
+  --pairs "$PAIRS" --stubs "$STUBS" --reviewed "$REVIEWED" --report "$WORK/kernel.kc.binds.json"
 # 7. The record, then the outputs in place.
 python3 "$HERE/record.py" --work "$WORK" --kernel "$KERNEL" --kernelcache "$CACHE" --reviewed "$REVIEWED" \
   --xnuprelink "$XNUPRELINK" ${REFERENCE:+--reference "$REFERENCE"} --output "$WORK/kernel.kc.build.json"
 cp "$WORK/kernel.kc.prelink.json" "$OUT/kernel.kc.prelink.json"
 cp "$WORK/kernel.kc.build.json" "$OUT/kernel.kc.build.json"
+cp "$WORK/kernel.kc.binds.json" "$OUT/kernel.kc.binds.json"
 cp "$WORK/kernel.kc" "$OUT/kernel.kc.partial" && mv "$OUT/kernel.kc.partial" "$OUT/kernel.kc"
 # 8. Its chunk hash list (docs/image-format.md: SHA-256 of each 1 MiB chunk), as the image set carries it.
 python3 -I "$ROOT/scripts/image/imagetool.py" hashes "$OUT/kernel.kc" "$OUT/kernel.kc.hashes" >/dev/null

@@ -10,6 +10,8 @@ fixtures are pinned to the iPad kernelcache; this driver adds OneiOS's for the i
 changing that checkout:
   functions, data   written into the pairing ('how': 'reviewed'), the native side by symbol;
   (--aligned)       align.py's pairs, inferred from link order ('how': 'aligned'); a reviewed record wins;
+  (--pairs)         the known-good pairs (pairs-*.json, 'how': 'known-good'), over all of the above;
+  (--stubs)         the stub list (stubs-*.json): these originals are left unpaired (the stub, or unpaired data);
   sites             one original pointer site bound to a named native object (fileset_emit.reviewed_sites);
   early_security_init  the original routine OSKext::start calls after the component starts.
 KC is the kernelcache the emitter reads (hosted.py's output, or the original when nothing was rewritten); KC0 is the
@@ -29,6 +31,8 @@ def main():
     for name in ('xnuprelink', 'kernelcache', 'original-kernelcache', 'native', 'map', 'roots', 'reviewed', 'output', 'report'):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--aligned', action='append', default=[], help='align.py output: pairs inferred from link order')
+    parser.add_argument('--pairs', help='known-good pairs (pairs-*.json): over the matcher, the inferred pairs and the reviewed records')
+    parser.add_argument('--stubs', help='the stub list (stubs-*.json): these originals stay unpaired')
     args = parser.parse_args()
     sys.path.insert(0, args.xnuprelink)
     import fileset_emit
@@ -53,10 +57,23 @@ def main():
             if found != pin['sha256']:
                 raise SystemExit(f'emit: the original bytes at {pin["address"]} are not the reviewed ones')
 
-    names = {}
-    for address, symbols in Image(native_data).symbols().items():
-        for name in symbols:
-            names.setdefault(name, address)
+    # A name -> its external definition; a local one only when it is the one definition of that name (a static
+    # function may share its name with the external one: Xcode's kernel has two _kalloc_type_impl, 2026-11-12).
+    names, local = {}, {}
+    native_image = Image(native_data)
+    symoff, count, stroff, _ = struct.unpack_from('<4I', native_data, native_image.command(0x2)[0] + 8)
+    for index in range(count):
+        strx, kind, _, _, value = struct.unpack_from('<IBBHQ', native_data, symoff + 16 * index)
+        if kind & 0xe0 or kind & 0x0e != 0x0e:
+            continue
+        name = native_data[stroff + strx:native_data.index(b'\0', stroff + strx)].decode()
+        if kind & 1:
+            names.setdefault(name, value)
+        else:
+            local.setdefault(name, set()).add(value)
+    for name, values in local.items():
+        if name not in names and len(values) == 1:
+            names[name] = next(iter(values))
     applied = {'functions': [], 'functions_absent': [], 'data': [], 'data_inferred': [], 'sites': [], 'aligned': []}
     for path in args.aligned:
         for pair in json.loads(Path(path).read_text()).get('data', []):      # kclasses.py: class objects by name
@@ -91,6 +108,40 @@ def main():
         payload['data'][record['original']] = {'native': hex(names[record['native_symbol']]), 'name': record['native_symbol'],
                                                 'how': 'reviewed', 'sections': record.get('sections', ['?', '?'])}
         applied['data'].append({'original': record['original'], 'native_symbol': record['native_symbol']})
+
+    # The known-good pairs (pairs-*.json) over everything above, and the stub list (stubs-*.json) unpaired: the pairing
+    # of a kernelcache's imports must not move with the toolchain that built our kernel (README, "Known-good pairs").
+    # A reviewed record that names another function for the same original is printed; audit.py then fails the build.
+    applied.update(known_good=[], known_good_replaced=[], stub_list=[])
+    reviewed_names = {r['original']: r['native_symbol'] for kind in ('functions', 'data') for r in reviewed.get(kind, [])}
+    if args.pairs:
+        known = json.loads(Path(args.pairs).read_text())
+        if known.get('kernelcache_sha256') != reviewed['kernelcache_sha256']:
+            raise SystemExit('emit: the known-good pairs are for another kernelcache')
+        for kind in ('functions', 'data'):
+            for entry in known.get(kind, []):
+                name, _, offset = entry['native'].partition('+')
+                if name not in names:
+                    raise SystemExit(f'emit: {name} (known-good pair of {entry["original"]}) is not in this kernel')
+                address = names[name] + (int(offset, 16) if offset else 0)
+                previous = payload[kind].get(entry['original'])
+                if entry['original'] in reviewed_names and names.get(reviewed_names[entry['original']]) != names[name]:
+                    print(f'emit: {entry["original"]}: reviewed {reviewed_names[entry["original"]]}, known-good {entry["native"]}')
+                if previous and int(previous['native'], 16) == address:
+                    continue
+                if kind == 'functions':
+                    payload[kind][entry['original']] = {'native': hex(address), 'name': name, 'addend': 0, 'how': 'known-good'}
+                else:
+                    payload[kind][entry['original']] = {'native': hex(address), 'name': entry['native'], 'how': 'known-good',
+                                                        'sections': (previous or {}).get('sections', ['?', '?'])}
+                (applied['known_good_replaced'] if previous else applied['known_good']).append(
+                    {'original': entry['original'], 'native': entry['native'], 'was': previous.get('name') if previous else None})
+    if args.stubs:
+        for kind in ('functions', 'data'):
+            for entry in json.loads(Path(args.stubs).read_text()).get(kind, []):
+                previous = payload[kind].pop(entry['original'], None)
+                if previous:
+                    applied['stub_list'].append({'original': entry['original'], 'was': previous.get('name')})
 
     # XnuPrelink puts the kernel's __DATA where Apple's kernel had its own, in front of the first kept kext's data.
     # Ours can be larger than that room (the virtio-gpu driver alone has 9 MB of static buffers) and more kexts are
