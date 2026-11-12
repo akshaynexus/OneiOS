@@ -148,6 +148,11 @@ labels = ["com.apple.aned", "com.apple.fairplayd.H2"]
 # deadlock the same way. Costs: App Store apps do not start. The other three of UniXNU's iPad list are covered:
 # watchdogd (replace), identityservicesd and accessoryupdaterd (base). Its fourth, CommCenter, is kept here: see [idle].
 
+[group.loops]
+default = true
+source = "crash loops measured on this phone (2026-11-12, sheng-exc). axassetsd lists the speech synthesis audio units (TextToSpeech fetchExtensions for com.apple.AudioUnit-Speech) at load and again on com.apple.coreaudio.components.changed and LaunchServices.ApplicationsChanged: runningboardd launched SiriAUSP, MacinTalkAUSP, MauiAUSP and KonaSynthesizer for it (84 of 84 launches in iOS's log) and launchd killed each still in dyld ('Extension is hanging on launch', XPC_EXIT_REASON_EXTENSION_CHECK_IN_TIMEOUT; EXC_CRASH SIGKILL, code 0x9000000), in bursts every 8-10 s for about 50 s; the 4 corpses at a time used the kernel's corpse limit, so a later crash had no report. Costs: Accessibility's downloadable assets (extra voices, Sound Recognition, Magnifier, Back Tap and image-caption models); the built-in voices stay. A Data store from an older seed gets it from the kernel (hosted 0053)"
+labels = ["com.apple.accessibility.axassetsd"]
+
 [group.store]
 default = false
 source = "vphone-cli app_store: off with the store apps. Off by default here: App Store installs are a goal (plan M6)"

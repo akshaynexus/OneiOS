@@ -1950,3 +1950,19 @@ persistent: a reboot costs a manual re-root.
     long presses and keyboard keys (Settings > Sounds & Haptics > Keyboard Feedback > Haptic), and ringtone
     vibration through the same path. If taps are felt as too soft or too long: tell me (the request rules are in
     `oneios_actuator.h`).
+- 2026-11-12 14:50, crashes -> parent: **the speech audio units: named and stopped; locationd and Safari's
+  subscriber confirmed fixed on the phone (`c3`, 14:12).**
+  - [F] all 17 AU dumps are `type=0xa code=0x9000000` (SIGKILL), most still in dyld. iOS's log (`ios3-log.csv`):
+    runningboardd launched all 84 for `osservice<com.apple.accessibility.axassetsd>:33`, and launchd killed each:
+    `Extension is hanging on launch. Killing.` (`XPC_EXIT_REASON_EXTENSION_CHECK_IN_TIMEOUT`): a cold start under
+    the hosted dyld does not check in before launchd's extension watchdog.
+  - [F] Settings was not killed by them: the owner closed it from the app switcher (`killed from app switcher`), it
+    did not exit within 5 s, and SpringBoard ended it with 0x8BADF00D. The corpse limit only took its report.
+  - Fix: axassetsd disabled (daemons.toml group `loops`; hosted 0053 `oneios-disable-jobs=` for the existing Data
+    store). Settings' Spoken Content may still start the units on demand and they will be killed the same way.
+  - Seen in passing [F]: in iOS's log the time between two lines is far shorter than the timers say (SpringBoard's
+    `Failed to terminate gracefully after 5.0s` is 0.145 s after the request in log time). Log timestamps here
+    are not wall time.
+  - c3: locationd pid 59 all session, no exception; `SystemOS volume answered`, SafariConfigurationSubscriber ran.
+  - kernel.kc: `out/kernel/crashes-24A446/kernel.kc`, sha256 `07975f04...` (HOSTED_OUT=crashes on `507e196` plus
+    0053, RELEASE reference): audit 0 failures, stubs 666 good.

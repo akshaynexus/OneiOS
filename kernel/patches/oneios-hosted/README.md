@@ -371,7 +371,7 @@ Two loops of the boots of 2026-11-11/12 (`c2`, `diag`, `combo1` logs).
   the image set names, which xnuhost verifies chunk by chunk) and now names it to `oneios_systemos_verified`;
   `oneios_app_cryptex_authenticated` answers `FSIOC_AUTH_FS` for it as for the App volume. First answer:
   `OneiOS: AMFI launch constraints: SystemOS volume answered as authenticated (FSIOC_AUTH_FS)`. Programs of the root
-  volume are not affected (they meet `on-system-volume`), nor any other volume.
+  volume are not affected (they meet `on-system-volume`), nor any other volume. Run on the phone: see `c3` below.
 - **0048.** locationd crashed 17 times in one session, every time the same way: `pc=0x0`,
   `lr=_dispatch_lane_serial_drain+0x118` (`dsc.py --slide 0x124d8000`: `_dispatch_lane_invoke`,
   `_dispatch_root_queue_drain_deferred_wlh`, `_dispatch_workloop_worker_thread`), a serial queue bound to a workloop.
@@ -391,16 +391,34 @@ Two loops of the boots of 2026-11-11/12 (`c2`, `diag`, `combo1` logs).
   `oneios-features: CoreLocation/CLAutoCohort: off (written)`, later boots `... named there already: kept`. With the
   flag off CoreLocation logs `#Cohorting Process intended to sign up for auto cohorting but CoreLocation/CLAutoCohort=off`
   (user-space log, not on the console). What iOS loses: locationd's silos keep their own queues instead of shared
-  cohort queues (an optimization of iOS 27; no feature depends on it as far as read). Built (HOSTED_OUT=crashes); not
-  run on the phone.
-- The speech audio units (`SiriAUSP`, `MacinTalkAUSP`, `MauiAUSP`, `KonaSynthesizer`, ExtensionKit extensions on the
-  root volume) are **not** fixed here. They are not refused by launch constraints: AMFI logs no violation for them,
-  their signatures carry no launch constraint, and the root volume meets `on-system-volume`. They die 0.4-5 s after
-  their start with no trap (xnuhost logs every fault, undefined instruction and `brk` of a task), so they abort or are
-  killed with a crash report; the console has only `Process[N] crashed: NAME. Too many corpses being created.` The
-  `_process_matches_constraint` lines do not line up with them. Next boot, to name the cause:
-  `sheng-exc-name=locationd,SiriAUSP,MacinTalkAUSP,MauiAUSP,KonaSynthesizer` (the EXC_CRASH line with its code and the
-  user backtrace, as locationd's second dump shows) and `oneios-sysfail=SiriAUSP,MacinTalkAUSP,MauiAUSP,KonaSynthesizer`.
+  cohort queues (an optimization of iOS 27; no feature depends on it as far as read). Run on the phone: see `c3`
+  below.
+- **0053** and the daemon policy's group `loops`: the speech audio units (`SiriAUSP`, `MacinTalkAUSP`, `MauiAUSP`,
+  `KonaSynthesizer`, ExtensionKit extensions on the root volume, extension point `com.apple.AudioUnit-Speech`). In the
+  14:12 session (`c3`, `sheng-exc-name` with their names) every one of 17 dumps is `exception type=0xa
+  code=0x9000000`: EXC_CRASH for SIGKILL, from outside. They were started four at a time (four `xpcproxy` lines) and
+  killed together 3-4 s later, wherever they were: most still in dyld (`mov x16, #0x126; svc` =
+  `shared_region_check_np`, or dyld's fixups), one in libsystem. `oneios-sysfail` showed no failing file call of
+  theirs. Bursts every 8-10 s for about 50 s. They are not refused by launch constraints (no AMFI violation, no
+  constraint in their signatures, root volume). The four corpses at a time fill the kernel's corpse limit, so a crash
+  in that window gets no report. iOS's own log of the sessions (`ios3-log.csv`) names both ends [F]: runningboardd
+  launched all 84 of them for `osservice<com.apple.accessibility.axassetsd>:33` (axassetsd's TextToSpeech voice list:
+  `Sending prepareUsing to managed extension`), and launchd killed each: `Extension is hanging on launch. Killing.`,
+  `exited with exit reason (namespace: 7 code: 0x3) - XPC_EXIT_REASON_EXTENSION_CHECK_IN_TIMEOUT`: launchd's
+  extension watchdog (`ExtensionWatchdog` in its built-in config) fires before a cold start under the hosted dyld has
+  checked in. axassetsd then logs `Unable to acquire process assertion in beginUsing` and tries again. Settings'
+  `Process[169] crashed: Preferences` is not theirs: the owner closed it from the app switcher, it did not exit within
+  5 s, and SpringBoard ended it with `Watchdog Violation (0x8BADF00D)`; the corpse limit only took its report.
+  The policy disables `com.apple.accessibility.axassetsd` (`daemons.toml`
+  group `loops`); 0053 writes the same into a Data store made from an older seed: `oneios-disable-jobs=LABEL[,...]`
+  (default `com.apple.accessibility.axassetsd`, `-` none), `<false/>` becomes `<true/>`, a missing entry is added,
+  a missing file is written. Console: `oneios-jobs: com.apple.accessibility.axassetsd: disabled in disabled.plist
+  (it was not)`, later boots `... disabled there already`. Cost: Accessibility's downloadable assets (more voices,
+  Sound Recognition, Magnifier, Back Tap and image-caption models); the built-in voices stay. Settings' Spoken
+  Content may still start the units when it lists voices. Built (HOSTED_OUT=crashes); the plist logic run on the Mac.
+- Checked in `c3` (kernel.kc 29bef797, with 0047 and 0048): `oneios-features: CoreLocation/CLAutoCohort: off
+  (written)`; locationd ran as pid 59 for the whole session (570 s) with no exception; `SystemOS volume answered as
+  authenticated` and SafariConfigurationSubscriber started.
 
 ## Written and never run
 

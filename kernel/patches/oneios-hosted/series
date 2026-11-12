@@ -157,6 +157,10 @@
 # buffer of about 60 ms or more: thread_policy_set failed, the HAL's I/O thread stopped after 0 frames, and every system
 # sound timed out after 3 s (iOS's log of the 2026-11-12 sessions). After macOS-DroidVM's xnu-12377 patch 0039.
 0052-rt-computation-held.patch
+# crashes: launchd jobs disabled in the Data store's disabled.plist before launchd (oneios-disable-jobs=LABEL,...,
+# default com.apple.accessibility.axassetsd), 0044's counterpart: axassetsd enumerates the speech audio units, which
+# were killed in dyld in bursts of four (SIGKILL) and filled the corpse limit.
+0053-disable-jobs.patch
 # camera: the capture plug-in reaches cameracaptured. CMCapture 27 dlopen()s /System/Library/MediaCapture/H9ISP.mediacapture
 # when its probe finds AppleH9CamIn (drivers/camera/OneiOSCameraService.cpp); the Data seed's
 # /private/var/oneios/addons/MediaCapture is shown over that empty sealed folder, read-only, as 0031 shows the Metal

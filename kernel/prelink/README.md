@@ -126,7 +126,7 @@ not start.
   code signature (`c[4]` in the log line; SafariConfigurationSubscriber.xpc: `on-system-volume` or
   `on-authorized-authapfs-volume`, `validation-category` 1) failed it, because the volume is the upper layer of the root
   union and not `MNT_ROOTFS`. The mount `native_owner_cache_prepare` has checked (read-only, APFS, the verified device)
-  answers `FSIOC_AUTH_FS` the same way. Built; not run on the phone.
+  answers `FSIOC_AUTH_FS` the same way. Run on the phone (2026-11-12 14:12): the line came and SafariConfigurationSubscriber started.
 
 ## State (2026-11-11)
 

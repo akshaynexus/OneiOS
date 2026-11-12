@@ -113,9 +113,10 @@ The file holds every label with its reason; `roottweak daemons` prints it. Summa
 | replace | 5 | Disabled; the host does the job: watchdogd (no watchdog device; the switch has its dead-man timer), the four OTA jobs (updates are a new image set) | UniXNU `docs/guide/skip-setup.md`; droidvm |
 | disable: base | 128 | Siri and intelligence, Find My, Wallet/NFC/SE, Watch, Home, Maps background, iCloud and iMessage sync, ads, telemetry, accessory firmware | vphone-cli `base27`: -29 % memory, -26 % idle CPU, -60 % idle writes, no feature lost |
 | disable: extra, signin, hardware | 4 + 2 + 2 | momentsd, coreduetd, modelcatalogd, mstreamd; the sign-in prompts; aned (no Neural Engine), fairplayd.H2 (no FairPlayIOKit kext: its services hang lockdownd and the apps behind it) | vphone-android; droidvm `DroidVMBootArgs27.c`; iOSPlus10 |
+| disable: loops | 1 | axassetsd: it lists the speech synthesis audio units (SiriAUSP, MacinTalkAUSP, MauiAUSP, KonaSynthesizer), which were started four at a time and killed by SIGKILL 3-4 s later, still in dyld, every 8-10 s; their corpses filled the kernel's limit. Cost: Accessibility's downloadable assets. A Data store from an older seed gets it from the kernel (hosted 0053) | this phone, 2026-11-12 (`kernel/patches/oneios-hosted/README.md`, 0053) |
 | off by default | store 2, fewest 8, bringup-26 9 | Each costs a feature or is unverified on 27; `--group NAME` | vphone; iOSPlus10 iOS 26 |
 
-141 labels are disabled by default. analyticsd moved from base to keep on 2026-11-12: without it CoreAnalytics'
+142 labels are disabled by default (axassetsd added on 2026-11-12, group `loops`). analyticsd moved from base to keep on 2026-11-12: without it CoreAnalytics'
 clients retry each synchronous send with a new connection (backboardd at 217% after a brightness change, on the
 phone); a Data store made from an older seed gets it enabled by the kernel (hosted 0044). One open disagreement: droidvm disables **CommCenter** on the (Wi-Fi) iPad,
 vphone keeps it on the iPhone because SpringBoard reconnects to it every second without it. It is kept. If
