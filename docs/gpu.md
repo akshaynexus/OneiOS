@@ -155,6 +155,14 @@ destroys the contexts and blobs on the device's thread and drops what was held.
 
 **Display.** `SET_SCANOUT_BLOB` makes a guest blob the scanout; `RESOURCE_FLUSH` copies its rows from the guest's
 pages to the display (a CPU copy per frame: crosvm's zero-copy import to the compositor is not done here).
+Since 2026-11-12 the copy goes straight from the guest's pages into the display's buffer, walking the blob's segments
+once per flush; before, each of the 3120 rows went through a row buffer and searched the segment list from its start
+(about 1100 segments of 16 KiB pages for a 1440x3120 frame). On an M4, for that frame: 4.2-10.6 ms before, 2.0-3.3 ms
+after (a stand-alone copy of both loops; not measured on the phone). xnuhost logs the copy every 10 s while frames
+come: `display: 10 s: flushes N, copy mean X us max Y us (Z MiB)`. The device's one thread does the copy, so a frame's
+next commands wait behind it. The guest's `oneios-display-report` `done=` of a swap (128-211 ms on the phone,
+2026-11-12) runs from the swap's validation to its transfer: the frame's GPU work, then this flush, each behind
+whatever the device thread is doing (blob creations: 0.8 ms each, up to 45 ms in a storm).
 The guest side is `kernel/patches/oneios-hosted/display/` (its README): iOS's framebuffer hands each of
 `backboardd`'s surfaces to this device, as a guest blob with a renderer and as a 2D resource over the surface's
 pages without one (the PC). What the 3D path still needs from the display is listed there.
@@ -171,7 +179,7 @@ ran out of fds under GFXBench before it did the same.
 **The host's share of a frame.** The guest's GPU report times a render-server frame from submission to the fence it
 sees (9-11 ms on the phone on 2026-11-12, with KGSL 7 % busy). `gpu3d_kgsl.c` times the host's part, one line per 10 s
 while fences retire: `gpu: 10 s host: backboardd fences N, submit->retired mean X us max Y us; submit calls mean X us max
-Y us; other fences N, mean X us; blobs made N, mean X us max Y us`. "blobs made" is the host's part of each guest BO
+Y us; other fences N, mean X us; blobs made N, mean X us max Y us (udmabufs X us of it); clock held +N times, keep-alives +M`. "blobs made" is the host's part of each guest BO
 (udmabufs of its pages, drm2kgsl's import and bind): every Turnip BO is one (a process drawing icons held 1335 under 1 MiB). "submit->retired" runs from the fence reaching the renderer to drm2kgsl's retire
 callback (the GPU's work and KGSL's wake-up); "submit calls" is the time spent in drm2kgsl's submit. What the guest
 sees beyond that is the virtio round trip and the guest's own wake-ups. The render server's contexts are those named

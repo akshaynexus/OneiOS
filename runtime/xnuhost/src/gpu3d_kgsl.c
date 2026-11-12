@@ -118,7 +118,7 @@ typedef struct {
 static struct {
   pthread_mutex_t lock;
   stat_ctx ctx[STAT_CTX];
-  uint64_t since, render_n, render_sum, render_max, other_n, other_sum, submit_n, submit_sum, submit_max, blob_n, blob_sum, blob_max, holds, keepalives;
+  uint64_t since, render_n, render_sum, render_max, other_n, other_sum, submit_n, submit_sum, submit_max, blob_n, blob_sum, blob_max, holds, keepalives, udma_sum;
 } st = { .lock = PTHREAD_MUTEX_INITIALIZER };
 
 static uint64_t now_us(void)
@@ -142,18 +142,18 @@ static void stat_report(uint64_t now)         // with st.lock held
   drm2kgsl_renderer_hold_stats(&holds, &keepalives);
   if (st.render_n || st.other_n || st.blob_n)
     say(1, "gpu: %llu s host: backboardd fences %llu, submit->retired mean %llu us max %llu us; submit calls mean %llu us max %llu us; "
-        "other fences %llu, mean %llu us; blobs made %llu, mean %llu us max %llu us; clock held +%llu times, keep-alives +%llu",
+        "other fences %llu, mean %llu us; blobs made %llu, mean %llu us max %llu us (udmabufs %llu us of it); clock held +%llu times, keep-alives +%llu",
         (unsigned long long)((now - st.since) / 1000000u),
         (unsigned long long)st.render_n, (unsigned long long)(st.render_n ? st.render_sum / st.render_n : 0), (unsigned long long)st.render_max,
         (unsigned long long)(st.submit_n ? st.submit_sum / st.submit_n : 0), (unsigned long long)st.submit_max,
         (unsigned long long)st.other_n, (unsigned long long)(st.other_n ? st.other_sum / st.other_n : 0),
         (unsigned long long)st.blob_n, (unsigned long long)(st.blob_n ? st.blob_sum / st.blob_n : 0), (unsigned long long)st.blob_max,
-        (unsigned long long)(holds - st.holds), (unsigned long long)(keepalives - st.keepalives));
+        (unsigned long long)(st.blob_n ? st.udma_sum / st.blob_n : 0), (unsigned long long)(holds - st.holds), (unsigned long long)(keepalives - st.keepalives));
   st.holds = holds;
   st.keepalives = keepalives;
   st.since = now;
   st.render_n = st.render_sum = st.render_max = st.other_n = st.other_sum = st.submit_n = st.submit_sum = st.submit_max = 0;
-  st.blob_n = st.blob_sum = st.blob_max = 0;
+  st.blob_n = st.blob_sum = st.blob_max = st.udma_sum = 0;
 }
 
 static void fence_retired(struct virgl_context *ctx, uint32_t ring, uint64_t fence)
@@ -287,7 +287,12 @@ static int create_blob_now(xh_gpu3d *b, uint32_t id, uint32_t res, uint32_t blob
   xh_gpu_chunk *chunks = NULL;         // the guest's pages; with more than one chunk the list stays ours (chunked_add)
   int nchunks = 0;
   if (nentries) {
+    uint64_t u0 = now_us();
     nchunks = xh_gpu3d_udmabufs(k->ram_fd, k->ram_phys, k->ram_size, entries, nentries, &chunks);
+    uint64_t u1 = now_us();
+    pthread_mutex_lock(&st.lock);
+    st.udma_sum += u1 - u0;
+    pthread_mutex_unlock(&st.lock);
     if (nchunks < 0) {
       int error = errno;
       say(0, "gpu: udmabuf over %u segments of a %llu byte blob: %s", nentries, (unsigned long long)size, strerror(error));

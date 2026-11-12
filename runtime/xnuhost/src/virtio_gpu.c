@@ -12,6 +12,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/eventfd.h>
 
@@ -190,19 +191,28 @@ static uint32_t *ctx_find(gpu_state *g, uint32_t id)
   return NULL;
 }
 
-// Copies `length` bytes at linear `offset` of a guest blob into `out`.
-static bool blob_read(const blob *b, uint64_t offset, uint8_t *out, uint64_t length)
+
+// The copy of each scanout flush, one log line per 10 s while frames come: `display: 10 s: flushes N, copy mean X us
+// max Y us (Z MiB)`. The device's one thread does it, so the guest's next commands (a frame's submissions, its blobs)
+// wait behind it.
+static uint64_t flush_now_us(void)
 {
-  for (unsigned i = 0; i < b->nentries && length; i++) {
-    uint64_t size = b->entries[i].length;
-    if (offset >= size) { offset -= size; continue; }
-    uint64_t n = size - offset < length ? size - offset : length;
-    const uint8_t *p = xh_virtio_translate(b->entries[i].addr + offset, n);
-    if (!p) return false;
-    memcpy(out, p, n);
-    out += n; length -= n; offset = 0;
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return (uint64_t)t.tv_sec * 1000000u + (uint64_t)t.tv_nsec / 1000u;
+}
+
+static void flush_note(uint64_t took, uint64_t bytes)
+{
+  static uint64_t since, n, sum, max, total;
+  uint64_t now = flush_now_us();
+  if (!since) since = now;
+  n++; sum += took; total += bytes; if (took > max) max = took;
+  if (now - since >= 10000000u) {
+    LOGI("display: %llu s: flushes %llu, copy mean %llu us max %llu us (%llu MiB)", (unsigned long long)((now - since) / 1000000u),
+         (unsigned long long)n, (unsigned long long)(sum / n), (unsigned long long)max, (unsigned long long)(total >> 20));
+    since = now; n = sum = max = total = 0;
   }
-  return length == 0;
 }
 
 // RESOURCE_FLUSH of a blob: when it is the scanout (SET_SCANOUT_BLOB), its rows go from the guest's pages to the display.
@@ -213,14 +223,28 @@ static uint32_t flush_blob(gpu_state *g, const blob *b, const gpu_rect *rect)
   if (!rect_ok(rect, g->scan.width, g->scan.height)) return RESP_ERR_INVALID_PARAMETER;
   uint32_t w = rect->x < d->width ? (rect->w < d->width - rect->x ? rect->w : d->width - rect->x) : 0;
   uint32_t hgt = rect->y < d->height ? (rect->h < d->height - rect->y ? rect->h : d->height - rect->y) : 0;
-  uint8_t *row = malloc((size_t)w * 4 + 4);
-  if (!row) return RESP_ERR_OUT_OF_MEMORY;
+  // Rows straight from the guest's pages into the display's buffer, the blob's segments walked once for the whole
+  // rectangle: rows lie at rising offsets. (Each row used to be read into a buffer of its own, the segment list searched
+  // from its start for every row: 3120 rows of a 1440x3120 frame over about 1100 segments of 16 KiB pages.)
   uint32_t status = RESP_OK_NODATA;
-  for (uint32_t y = 0; y < hgt && w; y++) {
-    if (!blob_read(b, g->scan.offset + (uint64_t)(rect->y + y) * g->scan.stride + (uint64_t)rect->x * 4, row, (uint64_t)w * 4)) { status = RESP_ERR_INVALID_PARAMETER; break; }
-    convert(d->pixels + (size_t)(rect->y + y) * d->stride + (size_t)rect->x * 4, row, g->scan.format, w);
+  uint64_t t0 = flush_now_us();
+  unsigned seg = 0;
+  uint64_t seg_start = 0;                            // the blob offset at which entries[seg] begins
+  for (uint32_t y = 0; y < hgt && w && status == RESP_OK_NODATA; y++) {
+    uint64_t at = g->scan.offset + (uint64_t)(rect->y + y) * g->scan.stride + (uint64_t)rect->x * 4, left = (uint64_t)w * 4;
+    uint8_t *to = d->pixels + (size_t)(rect->y + y) * d->stride + (size_t)rect->x * 4;
+    if (at < seg_start) { seg = 0; seg_start = 0; }  // not expected: rows only rise
+    while (left) {
+      while (seg < b->nentries && at >= seg_start + b->entries[seg].length) seg_start += b->entries[seg++].length;
+      if (seg >= b->nentries) { status = RESP_ERR_INVALID_PARAMETER; break; }
+      uint64_t in = at - seg_start, n = b->entries[seg].length - in < left ? b->entries[seg].length - in : left;
+      const uint8_t *from = xh_virtio_translate(b->entries[seg].addr + in, n);
+      if (!from || (n & 3)) { status = RESP_ERR_INVALID_PARAMETER; break; }
+      convert(to, from, g->scan.format, (size_t)(n / 4));
+      to += n; at += n; left -= n;
+    }
   }
-  free(row);
+  flush_note(flush_now_us() - t0, (uint64_t)w * hgt * 4);
   if (status == RESP_OK_NODATA && w && hgt) {
     xh_display_flush(rect->x, rect->y, w, hgt);
     frame_shown(g, b->entries, b->nentries);
