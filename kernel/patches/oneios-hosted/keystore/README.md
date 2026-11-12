@@ -26,7 +26,7 @@ in the prelink.
 |---|---|---|
 | `AppleKeyStore` (IOService on IOResources) and `AppleKeyStoreUserClient` | UniXNU's **AppleKeyStoreState**, `NativeKeyStoreEvents.cpp`, BSD-2-Clause-Patent, at the kernel base's submodule commit (`external/Droid-VM-UniXNU/drivers/AppleKeyStoreState`, 42ff83e), compiled with two lines added | The matching class MobileKeyBag's event registration looks for, and the answers to libaks's state queries |
 | `OneiOSKeyStore.cpp` | here, after Droid-VM's `package/KeyStoreProbe.cpp` and `KeyStoreWrap.inc` | the start, the class keys, wrap and unwrap, the hooks the component calls, the log lines |
-| `build-oneios-keystore.py` | here, after `aes/build-oneios-aes.py` | `build/oneios-keystore/liboneioskeystore.a` in the kernel build tree |
+| `build-oneios-keystore.py` | here, after `oneios-tool kernel gen aes` | `build/oneios-keystore/liboneioskeystore.a` in the kernel build tree |
 | `0022-keystore.patch` | here | `oneios_keystore_start()` called from `oneios_board_late_start` (`osfmk/arm64/oneios_host.c`); `owner-dataprotect` on by default (`bsd/vfs/kpi_vfs.c`) |
 
 Unlike the software AES, the two classes subclass `IOService` and `IOUserClient` of the kernel itself: no binding to
