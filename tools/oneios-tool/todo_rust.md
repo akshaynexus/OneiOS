@@ -77,6 +77,26 @@ Keep (no library, or ours is measured faster):
 - `oneios-sym/src/index.rs` (605): the project's own on-disk index; the reason `sym` answers in milliseconds.
 - `oneios-log`: xnuhost's own log format (cut and joined records); add `regex` only for `--grep`.
 
+APFS decision (owner, 2026-11-12): **keep our own APFS reader** (`oneios-image/src/apfs.rs`); no library replaces it.
+Checked on 2026-11-12 (source read, not built):
+- `apfs` 0.4.1 (MIT, github.com/Dil4rd/dpp, one author, ~8.9k downloads, ~3.3k lines, no `unsafe`): reads uid,
+  gid, mode, xattrs and decmpfs over `Read + Seek`, but **no sealed volumes** (its B-tree knows only the fixed-KV
+  flag, not the hashed index nodes of iOS's OS/SystemOS images) and **the first volume only**. Usable for an
+  unsealed one-volume image (the Data store) on a host without a native APFS mount; test it first.
+- `apfs-core` 0.3.0 (SecurityRonin/apfs-forensic): its README says "design skeleton ... parser bodies are stubs".
+  Do not use.
+- Every other crate named apfs is smaller (`exhume_apfs`, `newtua-apfs` a fork of apfs-core); `apfsds-*` is an
+  unrelated network protocol. No mature Rust APFS crate exists.
+- `apfs-fuse` (github.com/sgan81/apfs-fuse, C++, GPL-2.0): the standard tool on Linux (read-only, `-o ro,vol=N`;
+  the old Linux docs and iOSPlus10's `root-linux.sh` used it); FreeBSD with fusefs; macOS only through macFUSE (a
+  system extension; on Apple Silicon it needs lowered startup security: not worth it); no official Windows build.
+  It does not check sealed-volume hashes (xnuhost verifies them). GPL: run it as a program, do not link it.
+- iOSPlus10 used no APFS library: macOS's own APFS (`hdiutil attach` + mount, `sudo`, root-macos.sh) and apfs-fuse
+  on Linux, plus blacktop's `ipsw` for caches and firmware.
+So: the image build keeps our reader (sealed volumes, real owners without root, any host). `ioslog` reads the Data
+store through macOS's own read-only mount (`hdiutil attach -readonly -nomount`, `mount -t apfs -o
+rdonly,nobrowse,noowners`), which needs no owners; on a Linux host apfs-fuse, or `apfs` 0.4.1 after a test.
+
 Layout for the next round: fold the workspace into one crate with one module per subcommand where that keeps it
 simple (op10tool's layout), unless a crate boundary pays (e.g. a shared `apfs` module used by two tools).
 
