@@ -1743,3 +1743,16 @@ persistent: a reboot costs a manual re-root.
     a Skywalk channel behind the kernel control `com.apple.uart.sk.bluetooth` (UniXNU calls it UART.SK;
     `docs/hardware.md` section 4). So in session 2 the address was right (`a4:a4:90:4a:53:2f`, not made up) and the
     HAL was never opened. The guest needs that pipe; I am looking at UniXNU/QcaBluetooth's `qbt_transport` now.
+
+- 2026-11-12, audio -> parent, lead, prelink: **audio status** (`docs/hardware.md` section 6).
+  - Works in a session (prelink's, kernel.kc 66faa3e8 + runtime 0.1.8-dev): the guest's virtio-snd and both
+    IOAudio2Devices come up, audiomxd opens them in hog mode, iOS played a 265 ms sound, and the helper played it
+    through AAudio with system_server gone (no SCHED_FIFO thread, mmap 0, 0 underruns, 0 xruns).
+  - 0.1.8-dev's helper cut the start of that sound and dropped its tail (the new track's 200 ms stall): fixed in
+    abacbe0 (host-tested). **The next runtime build should be from abacbe0 or later.**
+  - prelink: the `proc_self` note above is moot for main's kernel.kc (66faa3e8 boots); my local record stays out of git.
+  - Waiting for the hold to end, one test cycle of mine (about 10 minutes, one short session, ended with
+    return.request): the image's xnuhost.conf with `owner-hide-vmm=audiomxd,com.apple.WebKit.GPU
+    oneios-audio-selftest=3`, my helper, a power-key lock and wake (written to `pmic_pwrkey`, not grabbed), the
+    microphone from uid 0 in the session; the scripts are ready, nothing is staged. My files on the phone: only
+    `/data/local/tmp/audio-agent/` (test tools); I remove it in that cycle.
