@@ -4,8 +4,7 @@
 #   make test       unit tests on the build host (no phone, no Apple files), with ASan and UBSan
 #   make test-binder the Bluetooth HAL client against a fake HAL on a real binder driver (a binderfs
 #                   mounted in a user namespace: CONFIG_ANDROID_BINDERFS, no root); skipped without it
-NDK ?= $(HOME)/Android/Sdk/ndk/28.2.13676358
-TOOLS := $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin
+include $(dir $(lastword $(MAKEFILE_LIST)))../host.mk
 ANDROID_CC ?= $(TOOLS)/aarch64-linux-android30-clang
 ANDROID_AR ?= $(TOOLS)/llvm-ar
 XNUHOST := ../xnuhost

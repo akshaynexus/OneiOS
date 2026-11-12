@@ -1,8 +1,8 @@
 # The brightness bridge (README.md).
 #   make test       host unit tests (ASan, UBSan): the curve, the fade, the light sensor's events, a fake sysfs
 #   make            build/android/brightctl (static; the phone test)
-NDK ?= $(HOME)/Android/Sdk/ndk/28.2.13676358
-ANDROID_CC ?= $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang
+include $(dir $(lastword $(MAKEFILE_LIST)))../../host.mk
+ANDROID_CC ?= $(TOOLS)/aarch64-linux-android30-clang
 WARN := -Wall -Wextra -Werror
 INC := -I. -I../include
 SRC := brightness.c ../cpu/topology.c

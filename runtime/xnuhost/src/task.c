@@ -73,7 +73,8 @@ unsigned xh_task_filter(struct xs_filter_insn *f, uint64_t text_lo, uint64_t tex
   return n;
 }
 
-#if defined(__aarch64__) && defined(__linux__)
+// XH_HOST_TEST: the host unit tests (tests/test_xnuhost.c) take the filter alone, also on an arm64 Linux host.
+#if defined(__aarch64__) && defined(__linux__) && !defined(XH_HOST_TEST)
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>

@@ -73,6 +73,22 @@ placeholder), `kernel` (null without one). `files` lists every file except `runt
 - The kernel has its own identity, the **build id** `xnu-<xnu version>-<profile>-<first 12 hex of the series hash>`
   (`kernel/build-record.py`). The same sources, patches and configuration give the same id on any machine.
 
+## Building a package on a Mac
+
+`runtime/package.sh` runs on a Linux x86_64 PC (as CI does) and on a Mac. On a Mac it takes the NDK from
+`$HOME/Library/Android/sdk/ndk/28.2.13676358` (the revision is checked as on Linux) and builds with its
+`darwin-x86_64` tools (`runtime/host.mk`). macOS's `tar` is bsdtar, so the archive is written by
+`runtime/package/pack.py archive`: the same ustar layout, owner 0:0, time `SOURCE_DATE_EPOCH`; for the same files its
+bytes equal GNU tar 1.35's (checked 2026-11-12). The `.sha256` is `sha256sum`'s, or `shasum -a 256`'s where there is
+no `sha256sum`: the same line. The Apple-file checks are the same `pack.py check`; `runtime/package/test.sh` passes
+on the Mac (19 tests). The phone binaries built on the Mac had the same SHA-256 before and after the port's source
+changes; they were not compared with a Linux build of the same commit.
+
+```sh
+runtime/host-tests.sh                                  # every runtime host test (in a Linux container on a Mac)
+runtime/package.sh 0.1.7-dev                           # -> out/release/oneios-runtime-0.1.7-dev-arm64.tar.zst
+```
+
 ## How the OneOS fork consumes it
 
 1. Takes the latest release of `akshaynexus/OneiOS` (or a pinned tag), downloads the `.tar.zst` and the `.sha256`.
@@ -123,6 +139,7 @@ Checked after the workflow ran: the asset's SHA-256 against its `.sha256`, `runt
 ```sh
 git pull --rebase origin main
 runtime/package/test.sh && kernel/tests/host.sh        # the tests CI runs
+runtime/host-tests.sh                                  # the runtime's other host tests (a Linux container on a Mac)
 runtime/package.sh 0.1.0                               # optional: look at out/release/*.runtime.json
 git tag -a v0.1.0 -m "OneiOS runtime 0.1.0" && git push origin v0.1.0
 ```

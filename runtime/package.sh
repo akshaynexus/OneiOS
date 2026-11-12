@@ -12,7 +12,9 @@
 #   NOTICE, LICENSE        licences; the APSL notice when a kernel is inside
 # Nothing of Apple's goes in: package/pack.py refuses firmware names and containers, and any Mach-O that is
 # not our own source-built XNU (docs/releases.md).
-# Env: ANDROID_NDK_ROOT (default $HOME/Android/Sdk/ndk/28.2.13676358; the revision is checked), ANDROID_API (35),
+# Build hosts: Linux x86_64 and macOS (runtime/host.mk).
+# Env: ANDROID_NDK_ROOT (default $HOME/Android/Sdk/ndk/28.2.13676358, on macOS $HOME/Library/Android/sdk/ndk/...;
+#      the revision is checked; runtime/build.sh gets it as NDK unless NDK is set), ANDROID_API (35),
 #      KERNEL_DIR, OUT_DIR (out/release), SOURCE_DATE_EPOCH (default: the commit time),
 #      PACKAGE_EXTRA_DIR (a folder copied into the package as it is; used by the tests).
 set -euo pipefail
@@ -22,9 +24,13 @@ VERSION=${1:-}
 if ! [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.]*)?$ ]]; then
   echo "usage: runtime/package.sh VERSION   (N.N.N or N.N.N-suffix; got '${VERSION}')" >&2; exit 2
 fi
-for tool in python3 zstd tar sha256sum git; do
+for tool in python3 zstd tar git; do
   command -v "$tool" >/dev/null || { echo "package: missing host tool $tool" >&2; exit 1; }
 done
+# Linux and macOS: sha256sum where there is one (macOS 15 and newer have it), else shasum -a 256; GNU tar, else
+# pack.py archive (the same ustar layout; macOS's tar is bsdtar, which has no --mtime).
+if command -v sha256sum >/dev/null; then SHA256=(sha256sum); else SHA256=(shasum -a 256); fi
+tar --version 2>/dev/null | grep -q 'GNU tar' && GNU_TAR=1 || GNU_TAR=0
 OUT=${OUT_DIR:-$ROOT/out/release}
 NAME=oneios-runtime-$VERSION-arm64
 WORK=$OUT/.work-$VERSION
@@ -33,7 +39,8 @@ rm -rf "$WORK"; mkdir -p "$STAGE/bin"
 trap 'rm -rf "$WORK"' EXIT
 
 # The NDK, pinned: the same revision here and in .github/workflows.
-export ANDROID_NDK_ROOT=${ANDROID_NDK_ROOT:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}/ndk/$NDK_REVISION}
+if [ "$(uname -s)" = Darwin ]; then SDK_DEFAULT=$HOME/Library/Android/sdk; else SDK_DEFAULT=$HOME/Android/Sdk; fi
+export ANDROID_NDK_ROOT=${ANDROID_NDK_ROOT:-${ANDROID_SDK_ROOT:-$SDK_DEFAULT}/ndk/$NDK_REVISION}
 have=$(sed -n 's/^Pkg.Revision *= *//p' "$ANDROID_NDK_ROOT/source.properties" 2>/dev/null || true)
 [ "$have" = "$NDK_REVISION" ] || { echo "package: NDK $NDK_REVISION needed at $ANDROID_NDK_ROOT (found '${have:-none}')" >&2; exit 1; }
 export ANDROID_API=${ANDROID_API:-35}
@@ -51,7 +58,7 @@ export SOURCE_DATE_EPOCH
 PLACEHOLDER=0
 if [ -x "$ROOT/runtime/build.sh" ]; then
   echo "package: runtime/build.sh"
-  "$ROOT/runtime/build.sh" "$STAGE"
+  NDK=${NDK:-$ANDROID_NDK_ROOT} "$ROOT/runtime/build.sh" "$STAGE"
   [ -f "$STAGE/bin/xnuhost" ] || { echo "package: runtime/build.sh left no bin/xnuhost" >&2; exit 1; }
 else
   echo "package: no runtime/build.sh yet: placeholder xnuhost"
@@ -120,11 +127,15 @@ python3 -I "$ROOT/runtime/package/pack.py" manifest "$STAGE" "$VERSION" "$COMMIT
 # 6. The archive: runtime.json first, then the rest sorted; fixed owner and time, so the same inputs give the same bytes.
 mkdir -p "$OUT"
 ( cd "$STAGE" && { echo runtime.json; find . -mindepth 1 -type f ! -name runtime.json -path './*' | sed 's|^\./||' | LC_ALL=C sort; } > "$WORK/members" )
-tar -C "$STAGE" --format=ustar --no-recursion --owner=0 --group=0 --numeric-owner --mtime="@$SOURCE_DATE_EPOCH" \
-  -T "$WORK/members" -cf "$WORK/$NAME.tar"
+if [ "$GNU_TAR" = 1 ]; then
+  tar -C "$STAGE" --format=ustar --no-recursion --owner=0 --group=0 --numeric-owner --mtime="@$SOURCE_DATE_EPOCH" \
+    -T "$WORK/members" -cf "$WORK/$NAME.tar"
+else
+  python3 -I "$ROOT/runtime/package/pack.py" archive "$STAGE" "$WORK/members" "$SOURCE_DATE_EPOCH" "$WORK/$NAME.tar"
+fi
 zstd -q -19 -f -o "$OUT/$NAME.tar.zst" "$WORK/$NAME.tar"
-( cd "$OUT" && sha256sum "$NAME.tar.zst" > "$NAME.tar.zst.sha256" )
+( cd "$OUT" && "${SHA256[@]}" "$NAME.tar.zst" > "$NAME.tar.zst.sha256" )
 cp "$STAGE/runtime.json" "$OUT/$NAME.runtime.json"
 rm -rf "$WORK"
-echo "package: $OUT/$NAME.tar.zst ($(stat -c %s "$OUT/$NAME.tar.zst") bytes)"
+echo "package: $OUT/$NAME.tar.zst ($(wc -c < "$OUT/$NAME.tar.zst" | tr -d ' ') bytes)"
 cat "$OUT/$NAME.tar.zst.sha256"

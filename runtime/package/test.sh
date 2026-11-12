@@ -9,13 +9,14 @@ export OUT_DIR=$T/out KERNEL_DIR=$T/no-kernel
 V=0.0.0-test
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass=0
+if command -v sha256sum >/dev/null; then SHA256=(sha256sum); else SHA256=(shasum -a 256); fi
 ok() { pass=$((pass + 1)); echo "ok $pass: $*"; }
 
 # 1. A plain package: verifies, runtime.json first, manifest equals the content.
 "$ROOT/runtime/package.sh" $V > "$T/log" 2>&1 || { cat "$T/log"; fail "package.sh"; }
 P=$OUT_DIR/oneios-runtime-$V-arm64.tar.zst
-( cd "$OUT_DIR" && sha256sum -c --quiet "$(basename "$P").sha256" ) || fail "sha256 file"
-[ "$(wc -l < "$P.sha256")" = 1 ] || fail ".sha256 is not one line"
+( cd "$OUT_DIR" && "${SHA256[@]}" -c "$(basename "$P").sha256" > /dev/null ) || fail "sha256 file"
+[ "$(wc -l < "$P.sha256" | tr -d ' ')" = 1 ] || fail ".sha256 is not one line"
 [ "$(zstd -dc "$P" | tar -t | head -1)" = runtime.json ] || fail "runtime.json is not the first member"
 mkdir "$T/x" && zstd -dc "$P" | tar -x -C "$T/x"
 python3 -I - "$T/x" $V <<'PY' || fail "manifest does not match the content"

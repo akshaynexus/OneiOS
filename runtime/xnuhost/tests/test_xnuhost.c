@@ -1058,7 +1058,7 @@ int main(void)
   test_virtio_input();
   test_input_script();
   test_filter();
-  freopen("/dev/null", "w", stderr);          // the refusals below print their reasons
+  if (!freopen("/dev/null", "w", stderr)) failures++;   // the refusals below print their reasons
   test_config(dir);
   char command[300];
   snprintf(command, sizeof command, "rm -rf %s", dir);

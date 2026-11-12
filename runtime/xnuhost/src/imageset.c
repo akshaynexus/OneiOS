@@ -34,7 +34,12 @@ static const uint32_t K[64] = {
 #ifndef HWCAP_SHA2
 #define HWCAP_SHA2 (1 << 6)
 #endif
+// GCC (an arm64 Linux build host's cc) spells the feature "+sha2"; clang, the NDK's included, takes "sha2".
+#ifdef __clang__
 __attribute__((target("sha2")))
+#else
+__attribute__((target("+sha2")))
+#endif
 static void sha_block_cpu(xh_sha256 *s, const uint8_t *p)
 {
   uint32x4_t abcd = vld1q_u32(s->h), efgh = vld1q_u32(s->h + 4), w[4];

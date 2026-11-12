@@ -2,9 +2,9 @@
 #   make            host build into build/host
 #   make test       host unit tests (generated fixtures, no Apple files)
 #   make android    cross-build for aarch64-linux-android into build/android
-NDK ?= $(HOME)/Android/Sdk/ndk/28.2.13676358
-ANDROID_CC ?= $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang
-ANDROID_AR ?= $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+include $(dir $(lastword $(MAKEFILE_LIST)))../host.mk
+ANDROID_CC ?= $(TOOLS)/aarch64-linux-android30-clang
+ANDROID_AR ?= $(TOOLS)/llvm-ar
 CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -Iinclude
 SRC := src/macho.c src/adt.c src/boot.c src/machine.c

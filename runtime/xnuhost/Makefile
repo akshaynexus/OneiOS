@@ -1,15 +1,18 @@
 # xnuhost: XNU as a process on Android's Linux kernel.
 #   make            the Android binary: build/android/xnuhost (static, aarch64-linux-android)
 #   make test       unit tests on the build host (portable parts; no Apple files), then, when
-#                   qemu-aarch64 is installed, the Android binary booting the test kernel under it
+#                   qemu-aarch64 is installed, the Android binary booting the test kernel under it (on an arm64
+#                   Linux host the binary runs as it is). A Linux test: on a Mac, ../host-tests.sh
 #   make check-arm64   only the second half
 # The loader library is ../loader.
-NDK ?= $(HOME)/Android/Sdk/ndk/28.2.13676358
-TOOLS := $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin
+include $(dir $(lastword $(MAKEFILE_LIST)))../host.mk
 ANDROID_CC ?= $(TOOLS)/aarch64-linux-android30-clang
 LLD := $(TOOLS)/ld.lld
 OBJCOPY := $(TOOLS)/llvm-objcopy
 QEMU ?= $(shell command -v qemu-aarch64 2>/dev/null)
+# On an arm64 Linux host (the Mac's container of ../host-tests.sh) the Android binary runs as it is, without qemu.
+ARM64_NATIVE := $(if $(filter Linux,$(HOST_OS)),$(filter aarch64 arm64,$(HOST_ARCH)))
+ARM64_RUN := $(if $(ARM64_NATIVE),,$(QEMU))
 
 WARN := -Wall -Wextra -Werror
 INC := -Iinclude -Isrc -Istub -I../loader/include -I../bridges/include -I../../drivers/bridge -I../../drivers/camera
@@ -127,7 +130,7 @@ $(A)/xnuhost: $(SRC:%=$(A)/%.o) $(A)/kctx.o $(A)/arch.o $(patsubst ../loader/src
 # ---- host unit tests ----
 $(H)/test_xnuhost: tests/test_xnuhost.c $(PORTABLE:%=src/%.c) $(HDR)
 	@mkdir -p $(H)
-	$(CC) -std=gnu11 -O1 -g $(WARN) $(INC) -fsanitize=address,undefined tests/test_xnuhost.c $(PORTABLE:%=src/%.c) ../loader/src/adt.c ../loader/src/boot.c -lpthread -o $@
+	$(CC) -std=gnu11 -O1 -g $(WARN) $(INC) -DXH_HOST_TEST -fsanitize=address,undefined tests/test_xnuhost.c $(PORTABLE:%=src/%.c) ../loader/src/adt.c ../loader/src/boot.c -lpthread -o $@
 # The real display.c (tests of test_xnuhost replace it) against a stand-in helper on the real socket.
 $(H)/test_display_mode: tests/test_display_mode.c src/display.c src/config.c src/log.c $(HDR)
 	@mkdir -p $(H)
@@ -152,14 +155,14 @@ $(A)/testimage/kernel.kc: $(A)/testkernel.elf $(H)/mkkernel
 	$(H)/mkkernel $(A)/testkernel.elf $@ $(A)/testimage/os.img
 
 check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
-	@if [ -z "$(QEMU)" ]; then echo "check-arm64: qemu-aarch64 not installed: skipped"; else \
+	@if [ -z "$(ARM64_NATIVE)$(QEMU)" ]; then echo "check-arm64: qemu-aarch64 not installed: skipped"; else \
 	  rm -f $(A)/testdata/data.img; \
-	  echo "check-arm64: booting the test kernel under $(QEMU)"; \
-	  timeout 30 $(QEMU) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M \
+	  echo "check-arm64: booting the test kernel under $(or $(ARM64_RUN),this arm64 Linux kernel)"; \
+	  timeout 30 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M \
 	     --display none --no-input --width 64 --height 64 2>&1 | tee $(A)/check.log; \
 	  grep -q 'TESTKERNEL: all passed' $(A)/check.log && \
 	  echo "check-arm64: a guest that keeps restarting: xnuhost starts again in place 8 times, then exit 3" && \
-	  { XNUHOST_RUNNER="$(QEMU)" timeout 60 $(QEMU) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 1 --ram 256M \
+	  { XNUHOST_RUNNER="$(ARM64_RUN)" timeout 60 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 1 --ram 256M \
 	     --display none --no-input --width 64 --height 64 --boot-args testkernel-restart > $(A)/restart.log 2>&1; code=$$?; \
 	    [ $$code = 3 ] && [ "$$(grep -c 'TESTKERNEL: restart' $(A)/restart.log)" = 9 ] || { tail -5 $(A)/restart.log; echo "check-arm64: restart: exit $$code"; false; }; }; fi
 

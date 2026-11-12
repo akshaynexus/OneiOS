@@ -19,7 +19,8 @@ struct xh_upcalls g_upcalls;
 bool g_upcalls_set;
 void (*xh_cpu_place)(int tid, unsigned vcpu);
 
-#if defined(__aarch64__) && defined(__linux__)
+// XH_HOST_TEST: the host unit tests (tests/test_xnuhost.c) take the stand-ins at the end, also on an arm64 Linux host.
+#if defined(__aarch64__) && defined(__linux__) && !defined(XH_HOST_TEST)
 #include <linux/futex.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>

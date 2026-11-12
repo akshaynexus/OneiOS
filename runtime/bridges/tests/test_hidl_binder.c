@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/android/binder.h>
+#include <linux/android/binderfs.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
@@ -446,9 +447,26 @@ static void full_session(int mode)
   CHECK(child_exit(hal, 3000) == 0);                                    // the fake HAL saw close and no bad parcel
 }
 
+// A binderfs starts with the devices of the kernel's CONFIG_ANDROID_BINDER_DEVICES. A kernel built with none
+// (Ubuntu's, and so colima's VM on a Mac) has only binder-control: ask it for the device by name.
+static void binderfs_add(const char *path)
+{
+  const char *slash = strrchr(path, '/');
+  if (!slash || access(path, F_OK) == 0) return;
+  char control[512];
+  snprintf(control, sizeof control, "%.*s/binder-control", (int)(slash - path), path);
+  int fd = open(control, O_RDWR | O_CLOEXEC);
+  if (fd < 0) return;
+  struct binderfs_device d = { 0 };
+  snprintf(d.name, sizeof d.name, "%s", slash + 1);
+  if (ioctl(fd, BINDER_CTL_ADD, &d)) printf("test_hidl_binder: %s: BINDER_CTL_ADD %s: %s\n", control, d.name, strerror(errno));
+  close(fd);
+}
+
 int main(void)
 {
   device = getenv("ONEIOS_HWBINDER");
+  if (device) binderfs_add(device);
   if (!device || access(device, R_OK | W_OK)) {
     printf("test_hidl_binder: set ONEIOS_HWBINDER to a binderfs hwbinder (make test-binder does)\n");
     return 77;

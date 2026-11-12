@@ -17,7 +17,13 @@ uses this host (the hosted machine layer inside XNU) does not exist yet. Section
 runtime/build.sh STAGE        # Android binary -> STAGE/bin/xnuhost (static, 1.2 MB; the task stub is inside),
                               # and the bridges' bin/oneios-audio, bin/oneios-net.sh
 runtime/build.sh --test       # loader tests, xnuhost tests, and the binary booting the test kernel under qemu-aarch64
+runtime/host-tests.sh         # every host test of the runtime; on a Mac in an arm64 Linux container, where the
+                              # binary boots the test kernel as it is (no qemu)
 ```
+
+Both build hosts work: a Linux x86_64 PC and a Mac (`runtime/host.mk` picks the NDK's `linux-x86_64` or
+`darwin-x86_64` tools). The host unit tests are Linux tests; `tests/test_xnuhost.c` is built with `-DXH_HOST_TEST`,
+so `cpu.c` and `task.c` take their stand-ins on an arm64 Linux host too ([building.md](building.md) section 4).
 
 Command line (the first line is what the OneOS fork runs, `oneos/interface.md` section 4):
 

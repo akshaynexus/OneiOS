@@ -3,6 +3,10 @@
 
   pack.py check STAGE              refuse Apple files and anything the OneOS fork's unpacker rejects
   pack.py manifest STAGE VERSION GIT_COMMIT GIT_DIRTY MIN_FORK PLACEHOLDER   write STAGE/runtime.json
+  pack.py archive STAGE MEMBERS MTIME OUT.tar   a ustar archive of the files MEMBERS lists, in that order, owner 0:0,
+                                   time MTIME: what GNU tar --format=ustar --owner=0 --group=0 --numeric-owner
+                                   --mtime=@MTIME --no-recursion -T MEMBERS writes (package.sh uses it where tar is not
+                                   GNU tar, as on macOS)
 
 The manifest is the one oneos/interface.md section 1 defines (format 1), with these keys added:
 git, min_oneos_fork, placeholder, kernel.
@@ -22,6 +26,7 @@ import re
 import stat
 import struct
 import sys
+import tarfile
 
 SEGMENT = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9._+-]*$')
 APPLE_NAMES = ('kernelcache*', '*cryptex*', '*.ipsw', '*.dmg', '*.aea', '*.img', '*.simg', '*.erofs', '*.im4p',
@@ -180,12 +185,29 @@ def manifest(stage, version, commit, dirty, min_fork, placeholder):
     os.chmod(os.path.join(stage, MANIFEST), 0o644)
 
 
+def archive(stage, members, mtime, out):
+    with open(members) as stream:
+        names = [line.rstrip('\n') for line in stream if line.strip()]
+    with tarfile.open(out, 'w', format=tarfile.USTAR_FORMAT) as tar:
+        for name in names:
+            info = tar.gettarinfo(os.path.join(stage, name), arcname=name)
+            if not info.isreg():
+                raise Refused(f'{name}: not a regular file')
+            info.uid = info.gid = 0
+            info.uname = info.gname = ''
+            info.mtime = int(mtime)
+            with open(os.path.join(stage, name), 'rb') as data:
+                tar.addfile(info, data)
+
+
 def main(argv):
     try:
         if len(argv) == 3 and argv[1] == 'check':
             check(argv[2])
         elif len(argv) == 8 and argv[1] == 'manifest':
             manifest(*argv[2:])
+        elif len(argv) == 6 and argv[1] == 'archive':
+            archive(*argv[2:])
         else:
             sys.exit(__doc__)
     except Refused as refusal:

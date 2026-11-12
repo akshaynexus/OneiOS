@@ -1,6 +1,8 @@
 # Building and testing OneiOS
 
-Everything builds on a Linux x86_64 PC, iOS user-space code included (section 9); no Mac is needed. Long steps run in tmux with `scripts/bg.sh NAME CMD...` (log in `logs/NAME.log`, exit
+Everything builds on a Linux x86_64 PC, iOS user-space code included (section 9); no Mac is needed. The runtime
+(section 4: xnuhost, the helpers, the phone tools, the package) also builds on a Mac, and its host tests run from
+the Mac in an arm64 Linux container. Long steps run in tmux with `scripts/bg.sh NAME CMD...` (log in `logs/NAME.log`, exit
 code in `logs/NAME.exit`, state with `scripts/bg.sh -s NAME`). tmux does not pass environment variables: put them
 inside the command (`scripts/bg.sh x env VAR=1 cmd`).
 
@@ -13,8 +15,9 @@ and `out/`.
 |---|---|---|
 | python3 3.11+, zstd, tmux, git, curl, patch | everything | `patch`: xnuhost's Makefile applies `runtime/xnuhost/drm2kgsl/patches` to a copy of drm2kgsl |
 | clang (stock, recent) | the kernel | the kernel build uses stock clang plus xnu-linux-toolchain's ld64 (set up by the kernel scripts, no root) |
-| Android NDK 28.2 | xnuhost, the helpers, the phone tools | `$HOME/Android/Sdk/ndk/28.2.13676358`, or `$NDK` / `$ANDROID_NDK_HOME` |
-| Android SDK build-tools (`d8`) and a JDK (`javac`) | the display helper's dex | |
+| Android NDK 28.2 | xnuhost, the helpers, the phone tools | `$HOME/Android/Sdk/ndk/28.2.13676358` (Linux), `$HOME/Library/Android/sdk/ndk/28.2.13676358` (macOS), or `$NDK` / `$ANDROID_NDK_HOME` |
+| Android SDK build-tools (`d8`) and a JDK (`javac`) | the display helper's dex | the newest `build-tools/*/d8` beside the NDK's SDK; on a Mac the Homebrew JDK 17 (`brew install openjdk@17`), elsewhere `javac` from `PATH` |
+| docker, colima (Mac only) | the runtime's host tests from a Mac | `runtime/host-tests.sh`, section 4 |
 | apfs-fuse | reading the OS volume for the Data seed | github.com/sgan81/apfs-fuse; read-only, no root |
 | qemu-user (`qemu-aarch64`) | booting xnuhost and the kernel on the PC | |
 | `ipsw` CLI | AEA decryption | `scripts/fetch/get-ipsw-cli.sh` installs the pinned version to `out/bin/ipsw` |
@@ -92,16 +95,86 @@ and why, and the original functions still on the panic stub. Details: [kernel/pr
 
 ## 4. The runtime (xnuhost, helpers, phone tools)
 
+Build hosts: a Linux x86_64 PC, or a Mac (Apple Silicon; macOS 27 tested). `runtime/host.mk`, which every runtime
+Makefile includes, picks the NDK's prebuilt tools by `uname -s` (`linux-x86_64` or `darwin-x86_64`; the darwin tools
+are universal binaries) and the NDK's default place; `NDK=` overrides it everywhere. The scripts use no GNU-only
+tool: sizes with `wc -c`, CPUs with `getconf _NPROCESSORS_ONLN`, checksums with `sha256sum` or `shasum -a 256`.
+
 ```sh
-runtime/build.sh --test           # host unit tests of the loader and xnuhost, then the Android binary on qemu-aarch64
 runtime/build.sh STAGE            # -> STAGE/bin/xnuhost (static), the bridges' helpers, the display helper,
                                   #    and the phone checks (gpuctl, bridgectl, brightctl, batteryctl, displayctl, camctl)
 runtime/package.sh 0.1.0-dev      # -> out/release/oneios-runtime-0.1.0-dev-arm64.tar.zst + .sha256 + runtime.json
+runtime/host-tests.sh             # every host test of the runtime, one summary line per part (below)
+runtime/build.sh --test           # Linux: the loader, xnuhost and display tests (xnuhost's with the Android binary on
+                                  #   qemu-aarch64); macOS: the same as runtime/host-tests.sh
 ```
 
-Each part has its own host tests too: `make -C runtime/xnuhost test`, `make -C runtime/display test`,
-`make -C runtime/bridges/brightness test`, `make -C runtime/bridges/camera test`, `runtime/package/test.sh`,
-`scripts/image/tests/run.sh`.
+`external/virglrenderer` (`scripts/setup/get-references.sh virglrenderer`) must be there before a build that goes to
+the phone: without it xnuhost and gpuctl build with the 2D GPU only and say so at run time ([releases.md](releases.md)).
+
+`runtime/host-tests.sh` runs, and prints one line each for: `loader` (`make -C runtime/loader test`), `xnuhost`
+(`make -C runtime/xnuhost test`: the unit tests, drm2kgsl and its leak test with LeakSanitizer, the image set, and
+the Android xnuhost booting the test kernel), `display` (`make -C runtime/display test`), `bridges`
+(`runtime/bridges/tests/host.sh`: the unit tests, `test-binder`, brightness, battery), `camera`
+(`runtime/bridges/camera/tests/host.sh`) and `package` (`runtime/package/test.sh`, when the NDK is there).
+A part that ends with exit 0 but skipped something shows the first "skipped" line. The exit code is 1 when a part
+failed. Other host tests: `scripts/image/tests/run.sh`.
+
+### The host tests from a Mac
+
+The host tests are Linux tests (binderfs, udmabuf, user namespaces, LeakSanitizer, glibc): `make test` refuses to
+start on macOS and names `runtime/host-tests.sh`. On a Mac that script:
+
+1. builds the Android parts with the Mac's NDK (`make -C runtime/loader android`, `runtime/xnuhost all
+   build/android/testkernel.elf`, `runtime/bridges all`, `runtime/bridges/camera all`, `runtime/display all`), so
+   the container needs no NDK;
+2. runs `runtime/host-tests.sh --suite` in an arm64 Ubuntu 24.04 container (image `oneios-hosttests:1`, built from the
+   Dockerfile inside the script the first time: gcc 13, clang 18, OpenJDK 17, zstd, patch). The checkout is mounted
+   at its own path; nothing else of the Mac is. The container is **privileged**: `test-binder` mounts a binderfs in a
+   user namespace, and LeakSanitizer stops threads with ptrace. On arm64 the Android xnuhost runs as it is (static,
+   bionic), so `check-arm64` boots the test kernel without qemu;
+3. runs `runtime/package/test.sh` on the Mac.
+
+Once per Mac (colima's VM keeps its disk across restarts):
+
+```sh
+colima start --arch aarch64 --vm-type vz --mount-type virtiofs --cpu 6 --memory 8 --disk 60
+# binderfs for test-binder: colima's Ubuntu kernel has it as a module (binder_linux) in linux-modules-extra
+colima ssh -- sudo sh -c 'apt-get update -qq && apt-get install -y -qq linux-modules-extra-$(uname -r) && modprobe binder_linux'
+```
+
+After a restart of the VM `runtime/host-tests.sh` loads `binder_linux` again itself (`colima ssh -- sudo modprobe
+binder_linux`). Without the module `bridges` says `test-binder: skipped (no binderfs in this kernel)`. colima mounts
+the home folder only: the checkout must be under `$HOME`. `IMAGE=`, `DOCKER=` and `JOBS=` override the image, the
+docker command and the parallel jobs.
+
+Checked on 2026-11-12, Mac (Apple Silicon, macOS 27, Xcode 27.2, NDK 28.2.13676358, Homebrew JDK 17, colima 6 CPUs
+with the VM's kernel 6.8.0-117, 4 KiB pages):
+
+| Part | Result |
+|---|---|
+| `runtime/build.sh STAGE` (clean tree) | 13 files: the 12 `bin/` files, all arm64 ELF, and `lib/oneios-display.dex`; xnuhost 1,371,200 bytes, with drm2kgsl |
+| loader | 160 checks, 0 failed |
+| xnuhost | 13248 checks, 0 failed; display mode 5 scenarios, 0 failed; drm2kgsl 3 + 23 checks, 0 failed; leak scenarios 956 checks, 0 failed, LeakSanitizer no leaks; image set 37 checks, 0 failed; `check-arm64` `TESTKERNEL: all passed` and the restart test (8 restarts, then exit 3) |
+| display | 72 checks, 0 failed; mode choice 5 checks, 0 failed |
+| bridges | 200 checks, 0 failed; `test-binder` 38 checks, 0 failed; brightness 74 checks, 0 failures; battery 57 checks, 0 failures |
+| camera | 131 checks, 0 failed |
+| package (on the Mac) | 19 tests passed (the Apple-file refusals among them) |
+
+What the port changed, and why (none of it changes a phone binary: every staged file had the same SHA-256 before and
+after):
+
+- On an arm64 Linux host, `__aarch64__` code that the x86_64 PC never compiled is compiled for the tests.
+  `tests/test_xnuhost.c` is built with `-DXH_HOST_TEST`, so `cpu.c` and `task.c` take the stand-ins they had on
+  x86_64 (the real vCPU and task code needs the Android binary's assembly). `imageset.c`'s SHA-256 instructions are
+  tested on the host: GCC needs `target("+sha2")`, clang (the NDK's) takes `target("sha2")`.
+- Ubuntu's GCC turns on `_FORTIFY_SOURCE`: `tests/test_xnuhost.c` checks the result of `freopen`.
+- Ubuntu's kernel (and so colima's) builds binderfs with no default devices: `test_hidl_binder` asks
+  `binder-control` for `hwbinder`.
+- `check-arm64` runs the Android binary without qemu on an arm64 Linux host.
+- macOS's `tar` is bsdtar (no `--mtime`): `runtime/package.sh` writes the archive with `pack.py archive` where `tar`
+  is not GNU tar. For the same files it is byte-identical to GNU tar 1.35's `--format=ustar` archive (checked).
+- macOS's `wc -l` pads its count: `runtime/package/test.sh` strips it.
 
 ## 5. Booting on the PC (qemu-aarch64)
 
