@@ -5,7 +5,7 @@ diff --git a/osfmk/arm/pmap/pmap.h b/osfmk/arm/pmap/pmap.h
  	 * (the shared region) it has filled pages in since its last full flush; bit 511 = past the 16 GiB the bits cover. */
  	uint32_t hosted_tlb_word;
  	uint64_t hosted_nested_seen[8];
-+	/* 0047: the fault-around windows done since the task's last flush of them (base | 1; 16 slots by the base's bits) */
++	/* 0050: the fault-around windows done since the task's last flush of them (base | 1; 16 slots by the base's bits) */
 +	uint64_t hosted_around[16];
  #endif /* XNU_HOSTED */
  };
@@ -17,7 +17,7 @@ diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
  	/* 0045: the task's own TLB word, free, and no block of the nested region filled yet */
  	p->hosted_tlb_word = 0;
  	bzero(p->hosted_nested_seen, sizeof(p->hosted_nested_seen));
-+	bzero(p->hosted_around, sizeof(p->hosted_around));            /* 0047 */
++	bzero(p->hosted_around, sizeof(p->hosted_around));            /* 0050 */
  #endif
  	p->type = PMAP_TYPE_USER;
  
@@ -29,7 +29,7 @@ diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
   * TLB lock's taken, contended, wait ticks, held ticks. Read without the lock: a report, not an exact sum. */
  static uint64_t hosted_fault_around_maps;          /* 0046 (hosted_fill_around_locked) */
 -void hosted_pmap_perf(uint64_t out[16]);
-+static uint64_t hosted_fault_around_skipped;       /* 0047: windows done already */
++static uint64_t hosted_fault_around_skipped;       /* 0050: windows done already */
 +void hosted_pmap_perf(uint64_t out[18]);
  void
 -hosted_pmap_perf(uint64_t out[16])
@@ -41,7 +41,7 @@ diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
  	out[13] = hosted_unmap_stats.nested_flushes;
  	out[14] = hosted_unmap_stats.skipped;
  	out[15] = os_atomic_load(&hosted_fault_around_maps, relaxed);      /* 0046 */
-+	out[16] = os_atomic_load(&hosted_fault_around_skipped, relaxed);   /* 0047 */
++	out[16] = os_atomic_load(&hosted_fault_around_skipped, relaxed);   /* 0050 */
 +	out[17] = 0;
  }
  
@@ -51,7 +51,7 @@ diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
  	}
  	uint64_t span = (uint64_t)window * ARM_PGBYTES, base = va & ~(span - 1);
 +	/*
-+	 * 0047: once per window until the task's next flush of it. On the phone (oneios-fault-around=8) fault-around made
++	 * 0050: once per window until the task's next flush of it. On the phone (oneios-fault-around=8) fault-around made
 +	 * three maps per fault, 500,000-930,000 per 30 s, mostly again for windows it had done: every fault that goes to
 +	 * vm_fault is filled again at the return (the refill) and did its window again. Each map is an mmap in the task
 +	 * (about 30 us) carried by a release. A page of a done window that becomes valid later gets its own fault and
@@ -71,7 +71,7 @@ diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
  		(void)HPC(task_unmap, pmap->hosted_task, va, size, 0, 0);
  		os_atomic_inc(&hosted_pmap_stats.user_unmaps, relaxed);
  		hosted_check_unmapped(pmap, va, size);
-+		/* 0047: the fault-around windows the flush touches are to be done again */
++		/* 0050: the fault-around windows the flush touches are to be done again */
 +		for (unsigned i = 0; i < sizeof(pmap->hosted_around) / sizeof(pmap->hosted_around[0]); i++) {
 +			uint64_t base = pmap->hosted_around[i] & ~1ULL;
 +			if (pmap->hosted_around[i] != 0 && base < va + size && base + 16 * ARM_PGBYTES > va) {

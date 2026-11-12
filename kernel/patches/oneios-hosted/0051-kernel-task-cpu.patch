@@ -10,7 +10,7 @@ diff --git a/osfmk/arm64/hosted/hosted_user.c b/osfmk/arm64/hosted/hosted_user.c
 +}
 +
 +/*
-+ * 0048: where kernel_task's CPU goes. kernel_task is the kernel's own threads (the pager, the compressor, IOKit work
++ * 0051: where kernel_task's CPU goes. kernel_task is the kernel's own threads (the pager, the compressor, IOKit work
 + * loops, thread calls, the idle threads with the interrupts they take); the kernel's work for a user trap is charged to
 + * the user thread. On the phone a stall showed kernel_task at 127 %. For each period: its threads' CPU time (recount)
 + * summed, and the 8 threads that used most, by name (thread_get_thread_name) or else by where they continue next
@@ -73,7 +73,7 @@ diff --git a/osfmk/arm64/hosted/hosted_user.c b/osfmk/arm64/hosted/hosted_user.c
  #undef KT
  		hosted_perf_top("bsd (number calls x mean)", c.bsd_n, c.bsd_t, c0->bsd_n, c0->bsd_t, HOSTED_PERF_BSD, 12, false);
  		hosted_perf_top("mach traps", c.mach_n, c.mach_t, c0->mach_n, c0->mach_t, HOSTED_PERF_MACH, 8, true);
-+		hosted_perf_kernel_threads(wall_us);    /* 0048 */
++		hosted_perf_kernel_threads(wall_us);    /* 0051 */
  		hosted_perf_last = c;
  		user_last = u;
  		for (unsigned i = 0; i < 18; i++) {
