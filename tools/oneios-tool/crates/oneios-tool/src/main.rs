@@ -39,6 +39,10 @@ enum Tool {
         #[command(subcommand)]
         command: oneios_ioslog::Command,
     },
+    /// The phone on adb: status, switch, return, stage, sums, pull-data, sparse-write
+    Phone(oneios_phone::Cli),
+    /// The OneOS fork's app: version, build, doctor, install, stage-scripts
+    App(oneios_phone::AppCli),
 }
 
 fn main() {
@@ -50,6 +54,8 @@ fn main() {
             Tool::Prelink { command } => oneios_prelink::main(command),
             Tool::Image { command } => oneios_image::main(command),
             Tool::Ioslog { command } => oneios_ioslog::main(command),
+            Tool::Phone(cli) => oneios_phone::main(cli),
+            Tool::App(cli) => oneios_phone::app_main(cli),
         },
         Err(e) if !e.use_stderr() => {
             let _ = e.print();

@@ -590,7 +590,10 @@ what was changed for the iPhone's shared cache and what is verified: [gpu.md](gp
 `tools/oneios-tool` is one binary with the project's host tools in Rust: `sym` (the backtrace symbolizer,
 `scripts/debug/dsc.py`), `log` (reads an xnuhost session log), `image` (`scripts/image/imagetool.py`), `ioslog` (iOS's
 own unified log out of a copy of the phone's Data store, without a mount) and `prelink` (two steps of
-`kernel/prelink/build.sh` so far). Commands, crates, and each tool's comparison with the Python tool it replaces:
+`kernel/prelink/build.sh` so far). Since the third Linux round also `phone` (the adb
+workflow of section 6: status, stage, sums, switch, return, the Data store's copy) and `app` (the fork's app of
+section 7: version, doctor, build, install, stage-scripts); **neither has run on the real phone yet**, so sections
+6 and 7 still show the scripts and adb lines that were run. Commands, crates, and each tool's comparison with the Python tool it replaces:
 [tools/oneios-tool/README.md](../tools/oneios-tool/README.md); what is left:
 [tools/oneios-tool/todo_rust.md](../tools/oneios-tool/todo_rust.md).
 

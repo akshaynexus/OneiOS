@@ -10,6 +10,8 @@ script before it may replace it; the commands and the results are below. What is
 | `image` | `scripts/image/imagetool.py` | 9 subcommands in Rust, the rest run the Python tool | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds, byte for byte (the 36th: the Linux set has no `kernel.kc`) |
 | `ioslog` | the manual steps of `docs/newtodo.md` "How to resume" step 2 (mount, copy, `unifiedlog_iterator`) | done; not run on the phone's Data store yet | yes on 7 archives: CSV byte for byte from a `.logarchive`, from a Data-store image and from a mounted volume |
 | `prelink` | the steps of `kernel/prelink/build.sh` | 2 of 12 steps (`roots`, `hosted`) | yes for those two, byte for byte on the real kernelcache; the others are not ported |
+| `phone` | `scripts/phone/stage.sh`, the adb lines of `docs/building.md` section 6, the Mac's `sparsewrite.py` | written; **not run on the phone** (none on the box) | `stage` and `sums`: the same output and the same stage as `stage.sh` on a stand-in phone; 64 checks pass (`tests/phone/run.sh`) |
+| `app` | the app lines of `docs/building.md` section 7 (new) | written; **the app was not built or installed with it** (the owner's decision for this box) | not applicable; 65 checks pass with a stand-in checkout, gradlew, gh and phone (`tests/app/run.sh`); `app version` runs on the real clone |
 
 **Python stays the default.** No build script calls `oneios-tool` unless it is asked to
 (`IMAGETOOL_IMPL=rust` for `scripts/image/build.sh` and `verify.sh`), with one exception that changes no output:
@@ -66,6 +68,8 @@ exists or where ours is measured to be faster; each such part says why in its mo
 | `tar` 0.4 (`Header`) | `image seed-pack`: every 512-byte ustar block of `data.seed`, field by field (`crates/oneios-image/src/tar.rs`; what stays ours and why: below) |
 | `serde_json` (`ser::Formatter`), `serde` | every JSON file the tools write: Python's `json.dumps` layout is a `Formatter` (`oneios-common/src/pyjson.rs`) |
 | `base64`, `percent-encoding` | the seed's xattr values and their pax keys (`base64.b64encode`, `urllib.parse.quote`) |
+| `flate2` | `phone pull-data`, `phone sparse-write --gunzip`: the gzip stream of the phone's busybox |
+| `apk-info-zip` 1.1 (Apache-2.0, github.com/delvinru/apk-info) | `app`: an APK's signing certificates (schemes v1 to v3.x) |
 | `sha2` (`asm`), `rayon`, `memmap2`, `libc`, `anyhow` | hashing (the hash lists are `sha2` and `std::io::Write`), parallel work, file maps, `copy_file_range` (`image`, `sym`, `log`) |
 
 Hand-written, and why:
@@ -126,7 +130,7 @@ oneios-tool ioslog save SOURCE NAME.logarchive        # the copy the manual step
   `timed out after 3.000s`). **The patterns are the texts the project's notes quote; they were written without the
   phone's log at hand.** A count of 0 means the text is not in the log.
 - The guest's clock was about a day behind the host's in the 2026-11-12 sessions, so the log's dates are too.
-- Not there: `ioslog pull` (copying `data.img` from the phone; `docs/newtodo.md` has the adb command), an
+- Copying `data.img` from the phone is `oneios-tool phone pull-data OUT [--ioslog]` ("phone" below). Not there: an
   `Info.plist` in the saved archive (Apple's `log show --archive` wants one; Mandiant's tool does not).
 
 ### The comparison
@@ -339,6 +343,125 @@ panic, two runs of each equal; 1 s in all. `stacks` finds each log's slide from 
 lines and one crash only, so the tables (`gpu`, `cpu`, `display`, `perf`) and `timeline` had almost nothing to read:
 their test on real lines is the Mac's run of the first round (67 commands on four real session logs, all status 0)
 and the 7 unit tests on synthetic log text.
+
+## phone
+
+`oneios-tool phone [--serial S] CMD`: the phone on adb. **Not run on the real phone yet**: written and tested on a
+box with no phone, against a stand-in (`tests/phone/fake-adb.sh`). `scripts/phone/stage.sh` stays until it has.
+
+```sh
+oneios-tool phone status                      # root, the installed app, the session, `oneios_root.sh status` (read only)
+oneios-tool phone stage runtime DIR           # an unpacked runtime package, through oneios_root.sh begin/receive/finish
+oneios-tool phone stage runtime-asis DIR      # the same with each file's own size and SHA-256
+oneios-tool phone stage image DIR             # files of an image set at their paths; image.sha256 and image.ids follow
+oneios-tool phone sums                        # sha256 of the staged kernel.kc, its hash list, manifest.json, data.seed's line, xnuhost.conf, the runtime
+oneios-tool phone switch [--version-code N]   # busybox setsid sh oneios_root.sh switch <the installed app's versionCode> 1
+oneios-tool phone return [--timeout 180] [--note TEXT]   # session/return.request, then waits for "One UI restored"
+oneios-tool phone pull-data OUT [--ioslog]    # data/data.img: gzip -1 on the phone, zero runs as holes here
+oneios-tool phone sparse-write OUT [--gunzip] [--expect-size N]   # stdin to OUT, zero runs as holes (no phone)
+```
+
+The rules of `docs/building.md` section 6 are in the tool (`crates/oneios-phone/src/adb.rs`):
+- **One phone only.** `--serial`, `ANDROID_SERIAL`, or the only phone attached; several attached is refused, and
+  so is a phone adb lists as anything but `device`.
+- **Root first.** Every command asks `su -c 'id -u'` before anything else and says so when the answer is not 0
+  (KernelSU's root does not survive a restart of the phone). Nothing is changed then.
+- **Named files only.** No command sends `find`, `ls -R`, `du` or any walk of a tree to the phone (a walk of
+  sysfs or /proc panicked the phone's kernel on 2026-11-12). `stage image` lists the *local* folder.
+- **Nothing but status, return and log runs beside a session.** A session is open when `session/xnuhost.pid` names a live
+  process that is still an xnuhost (stage.sh's test). `sums` refuses too, which stage.sh's does not: it reads the
+  whole kernel collection.
+- **No restart, nothing under `/sys/power`**, and nothing of One UI's is written: only the stage, through the
+  fork's root script or stage.sh's own commands.
+- Words that go into a script for root's shell (file names, `runtime.json`'s fields, the note of `return`) are
+  refused or cut down unless they are letters, digits and `._+-/,`.
+
+What each does:
+- `switch` reads the versionCode from `dumpsys package com.fahadali.oneos` (not a fixed 115; `--version-code`
+  for a phone without the app). A refusal of the preflight (`@@REFUSED ...`) is printed and is exit status 1. If
+  `setsid` lets adb go before the script answers, the new `epoch` line of `switch.log` is the proof it started.
+- `return` does nothing when no session is open. Otherwise it notes `return.log`'s length, writes the request,
+  and reads only what the log gained, every 2 s, until `One UI restored` is there; then it prints
+  `return.outcome`. At `--timeout` it ends with status 1 and the last lines of the log (and says when the phone
+  no longer answers: a restart is the return's failsafe).
+- `pull-data` is the adb line of `docs/newtodo.md` "How to resume" step 2 with the Mac's `sparsewrite.py` built in:
+  `adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'"`, unpacked
+  with `flate2`, written to `OUT.part` (blocks of 4096 zero bytes are skipped, the length is set at the end) and
+  renamed to `OUT` only when as many bytes came as the phone's `stat -c %s` of that file says, before and after.
+  `--ioslog` then runs `ioslog boots OUT` and `ioslog checks OUT`.
+
+```sh
+tools/oneios-tool/tests/phone/run.sh          # 64 checks against the stand-in phone; ALL OK
+```
+
+The stand-in phone: `fake-adb.sh` runs what the tool sends on this machine, inside a folder that plays the
+phone's file system (`/data/...` becomes `FOLDER/data/...`); `su` is a stand-in that can refuse; the stage's
+`bin/oneios_root.sh` hands `status`, `begin`, `receive` and `finish` to **the OneOS fork's own root script under
+its test root** (`ONEIOS_TEST_ROOT`), and plays `switch` (a process named xnuhost whose log grows with a boot's
+lines) and the return (the restore line, `return.outcome`). `stage` and `sums` are compared with
+`scripts/phone/stage.sh` itself on a second, equal stand-in: the same output and the same stage afterwards
+(`runtime`, `runtime-asis`, `image`, a file that is not staged). Result, Linux x86_64, 2026-11-12: 64 checks, all
+ok, two runs. What the stand-in cannot show: the real `su`, adb's behaviour when One UI's framework stops, the
+time a 64 GiB store takes (6 min on the Mac with the Python script), the fork's real switch and return.
+
+## app
+
+`oneios-tool app [--oneos DIR] [--serial S] CMD`: the OneOS fork's app (`akshaynexus/OneOS`, branch `oneios`).
+**The app was not built and not installed with this tool yet**: the owner's decision is that the Linux box builds no
+app and gets no JDK 21 or Android SDK for it, so the tool is written for a host that has them (the Mac) and tested
+with stand-ins. `app version` was run on the real clone.
+
+```sh
+oneios-tool app version [--no-phone]     # applicationId, versionName, versionCode, the commit; the installed app's version and certificate
+oneios-tool app doctor                   # JDK 21, an Android SDK with platform 37, the GitHub Packages login
+oneios-tool app build [--no-test]        # cd app-android && ./gradlew test assembleFullDebug; then the APK's path, size, sha256, version
+oneios-tool app install [APK]            # adb install -r of the build output (or APK)
+oneios-tool app install --release 0.4.86 [--repo akshaynexus/OneOS] [--dir out/app]   # the CI prerelease oneios-<version>, through gh
+oneios-tool app stage-scripts            # the fork's oneios_switch.sh, oneios_return.sh and oneios_root.sh into the stage
+```
+
+- **The checkout** is `--oneos DIR`, else `ONEOS_DIR`, else the current folder when it is one (it has
+  `app-android/settings.gradle.kts`), else `OneOS` beside the OneiOS main checkout, found through
+  `git rev-parse --git-common-dir`, so it works from a worktree. The first line of every command says which one
+  and how it was found.
+- `version` reads `app-android/app/build.gradle.kts` (`applicationId`, `versionName`, `versionCode`; the `full`
+  flavour's `-<oneos.series>` suffix when `gradle.properties` sets one; the `probe` flavour's `.probe` and
+  `-probe`), the commit, the branch and whether the tree is dirty. With a phone on adb it adds the installed
+  app's version (`dumpsys package com.fahadali.oneos`) and the SHA-256 of its signing certificate; with none it
+  says why it did not ask. On the real clone (2026-11-12): `com.fahadali.oneos`, `0.4.86`, `115`, `f964d6e`
+  (branch `oneios`), clean.
+- **The certificate** of an APK is read with the `apk-info-zip` crate (the APK Signing Block, schemes v3.x, v3,
+  v2, else the v1 JAR signature). For the installed app the APK is the one file `pm path` names, copied with
+  `adb exec-out cat`.
+- `doctor` prints `ok`, `MISSING` (the build needs it; exit status 1) or `absent` (only `install` needs it) per
+  line: `gradlew`; a JDK 21 (`JAVA_HOME`'s `java`, else the one on `PATH`); an Android SDK (`ANDROID_HOME`,
+  `ANDROID_SDK_ROOT`, `local.properties`' `sdk.dir`, `~/Library/Android/sdk`, `~/Android/Sdk`) with
+  `platforms/android-37*`; the GitHub Packages login as `settings.gradle.kts` reads it
+  (`~/.config/twidget/github.properties` `ghUsername` and `ghAccessToken`, else `GH_PACKAGES_USER` and
+  `GH_PACKAGES_TOKEN`); `adb`; `gh`. **A token is never printed**, nor the user name: only where it was found,
+  its kind by its prefix (`ghp_`: classic; `github_pat_`: fine-grained, which cannot read GitHub Packages and is
+  reported as missing) and its length. Not checked: that the token really has `read:packages`.
+- `install` prints the APK's size, SHA-256 and certificate, then asks the phone: root first, no session open,
+  and **the installed app's certificate must be the APK's**. If it is not, the install is refused with the reason:
+  the tool never uninstalls (that wipes the app's data). `--release VERSION` downloads
+  `OneOS-oneios-VERSION-debug.apk` and its `.sha256` from the prerelease `oneios-VERSION` with
+  `gh release download` (`GH` names the program) and checks the one against the other first.
+- `stage-scripts` is for sessions started without the app (`docs/newtodo.md` step 4): each of the three files is
+  pushed, copied to `NAME.part` in the stage as root (`root:root`, mode 0700) and moved into place, so what was
+  there is replaced and never written through; the SHA-256 of each staged file is printed before and after and
+  must be the fork's file's. The app pins these three by SHA-256: staging other versions than the installed
+  app's makes the app's own checks refuse them until it stages its own again.
+
+```sh
+tools/oneios-tool/tests/app/run.sh            # 65 checks; ALL OK
+```
+
+The stand-ins: a OneOS checkout whose `gradlew` is a script that records its arguments and "builds" an APK; APKs
+made by `tests/app/mkapk.py` (a zip with an APK Signing Block v2 around a certificate made with `openssl`; the
+signature is filler, the tool reads the certificate and does not verify the APK); a `gh` that serves a release's
+two files; the stand-in phone of `tests/phone/`. Result, Linux x86_64, 2026-11-12: 65 checks, all ok. What they
+cannot show: a real Gradle build, real APKs signed by `apksigner` or Gradle (v2 and v3 blocks as Android writes
+them), `adb install` on Android, `gh` against GitHub.
 
 ## prelink
 

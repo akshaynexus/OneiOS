@@ -382,6 +382,27 @@ Open, in order:
    mostly are (2,910 of 3,347 in the SystemOS and AppOS images, the shared cache's `.symbols` among them), so
    `image apfs-copy` cannot replace a mount for `sym` yet. `flate2` and `lzfse_rust` would do it; LZVN needs a look.
 
+## 6. `phone` and `app`: the adb workflow and the fork's app (third Linux round)
+
+Written; **nothing of it ran on the real phone, and the app was not built or installed with it**. Crate
+`crates/oneios-phone` (`adb.rs`: the one phone and the rules; `phone.rs`; `sparse.rs`; `app.rs`). README "phone" and
+"app" have the commands and what the stand-in tests show (`tests/phone/run.sh` 64 checks, `tests/app/run.sh` 65).
+
+Open, in order:
+1. **The first run on the phone** (the Mac has it): `phone status`, then `phone sums` against
+   `scripts/phone/stage.sh sums` (the same text), a `stage image` of one small file, `switch`, `return`,
+   `pull-data --ioslog`. Things only the phone can show: the real `su`'s answers, whether `busybox setsid` lets
+   adb go before the script prints `@@OK switch` (the tool then reads `switch.log`'s new `epoch` line), adb while
+   One UI's framework stops and starts, the time `pull-data` takes on the 64 GiB store (6 min with the Python
+   script). Then `scripts/phone/stage.sh` can go.
+2. **`app` on the Mac**: `app doctor`, `app build`, `app install` (a real APK's v2/v3 signing block through
+   `apk-info-zip`; compare `app version`'s certificate with `apksigner verify --print-certs`), `app install
+   --release`, `app stage-scripts` against the app's own staging (the three SHA-256 values must be the ones the
+   installed app pins).
+3. `phone status`'s `session:` line is this tool's own test (stage.sh's: the pid file and /proc); the fork's
+   `@@RESULT session` line beside it is the root script's (its control folder). They can differ for a moment
+   around a switch.
+
 ## Docs
 
 Written in the Linux round: [README.md](README.md) (the tool's own: commands, crates, comparisons), `docs/building.md`

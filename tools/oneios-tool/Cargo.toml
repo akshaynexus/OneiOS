@@ -28,6 +28,7 @@ oneios-log = { path = "crates/oneios-log" }
 oneios-image = { path = "crates/oneios-image" }
 oneios-prelink = { path = "crates/oneios-prelink" }
 oneios-ioslog = { path = "crates/oneios-ioslog" }
+oneios-phone = { path = "crates/oneios-phone" }
 
 [profile.release]
 opt-level = 3
