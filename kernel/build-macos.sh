@@ -70,5 +70,5 @@ if [ "$rc" != 0 ]; then
   done
   exit 1
 fi
-python3 -I "$ROOT/kernel/build-record.py" finish --host macos --work "$(dirname "$TREE")" --config "$CONFIG_NAME" --out "${KERNEL_OUT:-$ROOT/out/kernel}"
+"$ONEIOS_TOOL" kernel build-record finish --host macos --work "$(dirname "$TREE")" --config "$CONFIG_NAME" --out "${KERNEL_OUT:-$ROOT/out/kernel}" --repo "$ROOT"
 echo "build-macos: done in $(( $(date +%s) - T0 )) s"

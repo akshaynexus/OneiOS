@@ -38,8 +38,14 @@ if [ -x kernel/tests/series-check.py ]; then
   python3 -I kernel/tests/series-check.py || fail "series"
   ok "patch series and profile"
 fi
-if [ -f kernel/build-record.py ]; then
-  python3 -I kernel/build-record.py --self-test || fail "build record"
+# The build record writer is `oneios-tool kernel build-record` (kernel/build-record.py until 2026-11-13). Its
+# self-test runs here when the tool is built; `cargo test` in tools/oneios-tool runs the same checks and the frozen
+# record of the Python writer.
+tool=${ONEIOS_TOOL:-tools/oneios-tool/target/release/oneios-tool}
+if [ -x "$tool" ]; then
+  "$tool" kernel build-record --self-test || fail "build record"
   ok "build record"
+else
+  echo "skipped: build record (no $tool: cargo build --release --manifest-path tools/oneios-tool/Cargo.toml)"
 fi
 echo "all $pass tests passed"
