@@ -165,11 +165,13 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
     header `bridges/camera.h`, `-I drivers/camera`), `XL_DEV_CAMERA` -> `/arm-io/camera`, compatible `oneios,camera`;
     `runtime/build.sh` stages `bin/oneios-camera` (dynamic) and `bin/camctl`. `ONEIOS_CAMERA=0` leaves it out,
     `ONEIOS_CAMERA_BACKEND=test` gives the guest a moving picture without a camera.
-  - kernel: `drivers/camera/oneios_camera.c` (Mach) and `oneios_camera_dev.c` (BSD) are in `drivers/build.py`'s list;
-    `oneios_drivers_start()` starts them; `/dev/oneios-camera` (root:mobile 0660); boot argument `oneios-camera=0`.
-  - userland: `userland/camera` (`build.sh` -> `out/userland/camera/OneiOSCamera.dylib`); the device object and the way
-    into `cameracaptured` are open (`userland/camera/README.md`, "Not written"). No `/arm-io/isp` or `/product/camera`
-    node until that works: with the nodes and no frame path the Camera app hangs at launch.
+  - kernel: `drivers/camera/oneios_camera.c` (Mach), `oneios_camera_dev.c` (BSD) and `OneiOSCameraService.cpp` (IOKit:
+    `AppleH9CamIn` + its user client) are in `drivers/build.py`'s list; `oneios_drivers_start()` starts them;
+    `/dev/oneios-camera` (root:mobile 0660); boot arguments `oneios-camera=0`, `oneios-camera-plugin=0`. Hosted 0056
+    shows `/private/var/oneios/addons/MediaCapture` over `/System/Library/MediaCapture`.
+  - userland: `userland/camera` (`build.sh` -> `out/userland/camera/H9ISP.mediacapture`), loaded by CMCapture 27 itself
+    for AppleH9CamIn; the image hook places it in the seed (`camera-plugin` tweak). No `/arm-io/isp` or
+    `/product/camera` node until a preview runs: with the nodes and no frame path the Camera app hangs at launch.
   - oneos: the helper is in the session's cgroup and ends with xnuhost. In a session it drives the camera provider
     HAL directly; whether a killed helper leaves the camera held is not known until tried on the phone.
 - drivers -> release-kernel: `drivers/README.md`, "Into the kernel".
@@ -830,6 +832,20 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   What the next log should show: `drm2kgsl: clock hold: ...` once; host line `submit->retired` near 2-3 ms,
   `clock held +N, keep-alives +M`; `display: 10 s: flushes ...` copy mean a few ms; KGSL gpuclk at the top while
   the screen moves.
+- 2026-11-12, camera -> parent, lead, kernel, booter: **the camera never reached iOS's capture stack; the route is now
+  Apple's own plug-in loader (built, not run).** iOS's log: CMCapture 27's probe waits 5 s for one of six camera driver
+  classes (`AppleCamera`, `AppleH16CamIn`, ..., `AppleH9CamIn`, `AppleH6CamIn`), found none, so
+  `BWFigCaptureDeviceVendor` had no create function ("Cannot create device without create function!", -12786 for every
+  client). Read in the 24A446 cache: for `AppleH9CamIn` it `dlopen()`s `/System/Library/MediaCapture/H9ISP.mediacapture`
+  and uses `H9ISPCaptureDeviceCreate`. Now: drivers/camera publishes `AppleH9CamIn` with a user client
+  (`AppleH9CamInUserClient`, which `cameracaptured`'s sandbox profile lists) on the node's session; hosted
+  **0056** shows `/private/var/oneios/addons/MediaCapture` over that empty sealed folder; `userland/camera` builds
+  `H9ISP.mediacapture` (FigCaptureDevice with the 27 layout read in H16ISP.mediacapture, formats from the V54
+  `AVCaptureSession.plist`), placed by the image hook's `camera-plugin` tweak. Kernel `HOSTED_OUT=cam` (xnu.macho
+  5938e79a), `out/kernel/cam-24A446/kernel.kc` afb491c8: audit 0 failures. To try it on the phone: that kernel.kc AND a
+  new image (seed + `overlay/userland/{owner-trust,tweaks.manifest}.json` + `manifest.json`): **a new seed starts the
+  Data store over**. The kernel alone is harmless (the probe then logs that the dylib could not load). Log lines to look
+  for: `userland/camera/README.md`, "What the next session's logs must show".
 
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 

@@ -275,4 +275,5 @@ void oneios_camera_start(void) {
     printf("ONEIOS CAMERA: on: %u cameras from the host so far, %u frame buffers of %u bytes, %s\n", count, (unsigned)OC_BUFFERS,
            (unsigned)OC_BUFFER_BYTES, oc.interrupt ? "interrupt" : "polling");
     oneios_camera_dev_attach();
+    oneios_camera_service_start(count);     // AppleH9CamIn: CMCapture's probe loads the capture plug-in for it
 }

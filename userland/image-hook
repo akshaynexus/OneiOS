@@ -14,6 +14,8 @@ Optional inputs, each used when it is there:
   ONEIOS_METAL_PLUGIN   a built Metal plugin bundle (default out/userland/NativeAdrenoMetal.bundle, from
                         userland/metal/build.sh); its build record NativeAdrenoMetal.build.json beside it is checked
   ONEIOS_SCALE          the UI scale, 3 (default) or 2: the device tree's, MobileGestalt's and xnuhost's (xnuhost.conf)
+  ONEIOS_CAMERA_PLUGIN  the capture plug-in's folder (default out/userland/camera, from userland/camera/build.sh): its
+                        H9ISP.mediacapture goes to /private/var/oneios/addons/MediaCapture of the seed
   ONEIOS_ROOTTWEAK_ARGS more `roottweak apply` arguments, split like a shell line (--group fewest, --disable LABEL)
 """
 import json
@@ -45,6 +47,9 @@ def main():
     plugin = env.get('ONEIOS_METAL_PLUGIN') or os.path.join(repo, 'out/userland/NativeAdrenoMetal.bundle')
     if os.path.isdir(plugin):
         args += ['--metal-plugin', plugin]
+    camera = env.get('ONEIOS_CAMERA_PLUGIN') or os.path.join(repo, 'out/userland/camera')
+    if os.path.isfile(os.path.join(camera, 'H9ISP.mediacapture')):
+        args += ['--camera-plugin', camera]
     if env.get('ONEIOS_SCALE'):
         args += ['--scale', env['ONEIOS_SCALE']]
     args += shlex.split(env.get('ONEIOS_ROOTTWEAK_ARGS', ''))

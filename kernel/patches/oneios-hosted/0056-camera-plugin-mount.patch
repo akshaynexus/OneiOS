@@ -1,0 +1,49 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -9200,7 +9200,37 @@
+ 	printf("oneios-gpu-list: %s \"%s\": %s (%d)\n", path, list, error < 0 ? "unchanged" : error ? "not written" : "written", error);
+ }
+ #endif
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0056): the capture plug-in. CMCapture 27 loads the FigCaptureDevice's maker for the camera driver
++ * its probe finds: for AppleH9CamIn (drivers/camera/OneiOSCameraService.cpp) it dlopen()s
++ * /System/Library/MediaCapture/H9ISP.mediacapture and looks up H9ISPCaptureDeviceCreate. That folder is empty on
++ * the sealed OS volume (H16ISP.mediacapture, the only one iOS has, lives in the shared cache), so the Data seed's
++ * folder (the image hook's camera-plugin tweak) is shown over it, read-only, as 0031 shows the Metal plug-in over
++ * /System/Library/Extensions. A Data store without the folder: stage 1 status 2, nothing mounted, and the capture
++ * stack logs that it could not load the dylib (as without a camera). oneios-camera-plugin=0: no mount.
++ */
++static volatile int oneios_camera_addon_stage = 0;
++static volatile int oneios_camera_addon_status = -1;
+ static void
++oneios_camera_addon_mount(proc_t p, user_addr_t scratch)
++{
++	static const char source[] = "/private/var/oneios/addons/MediaCapture", point[] = "/System/Library/MediaCapture";
++	uint32_t enabled = 1;
++	PE_parse_boot_argn("oneios-camera-plugin", &enabled, sizeof(enabled));
++	if (enabled == 0) {
++		printf("oneios-camera-addon: off (oneios-camera-plugin=0)\n");
++		return;
++	}
++	/* Scratch 0xa00..0xb28: after the wallpaper's 0x800 mount, before the parents' mkdir at 0xc00 and 0xe00's mount. */
++	native_gpu_addon_mount(p, scratch, 0xa00, source, sizeof(source), point, sizeof(point), point,
++	    "/System/Library/MediaCapture/H9ISP.mediacapture", &oneios_camera_addon_stage, &oneios_camera_addon_status);
++	printf("oneios-camera-addon: %s over %s: stage %d, status %d (stage 5 status 0: mounted, H9ISP.mediacapture "
++	    "visible; stage 1 status 2: this Data store has no capture plug-in)\n", source, point, oneios_camera_addon_stage,
++	    oneios_camera_addon_status);
++}
++#endif
++static void
+ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+ {
+ #if XNU_HOSTED
+@@ -9275,6 +9305,7 @@
+ 	native_gestalt_cache_drop(p, scratch);
+ 	native_ls_store_drop(p, scratch);
+ #if XNU_HOSTED
++	oneios_camera_addon_mount(p, scratch);        /* 0056 */
+ 	oneios_icon_store_refresh(p, scratch);        /* 0036 */
+ 	oneios_lsd_first_boot_done(p, scratch);       /* 0037 */
+ 	oneios_jobs_enable();                         /* 0044 */

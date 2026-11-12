@@ -9,7 +9,7 @@ ipados27/scripts/build-droidvm-devices.py builds its device sources:
   bridge/OneiOSBridge.c                 Mach universe   (record osfmk/DEVELOPMENT/startup.o.json)
   haptics/*.c, bluetooth/*.c            BSD universe    (record bsd/DEVELOPMENT/kern_control.o.json)
   haptics/*.cpp, bluetooth/*.cpp        IOKit universe  (record iokit/DEVELOPMENT/IOPlatformExpert.cpo.json)
-  camera/oneios_camera.c (Mach), camera/oneios_camera_dev.c (BSD)
+  camera/oneios_camera.c (Mach), camera/oneios_camera_dev.c (BSD), camera/OneiOSCameraService.cpp (IOKit)
 
   drivers/build.py [--records DIR] [--out DIR] [--check]
 
@@ -46,6 +46,7 @@ SOURCES = [
     ('iokit', 'thermal/OneiOSThermal.cpp'),
     ('mach', 'camera/oneios_camera.c'),
     ('bsd', 'camera/oneios_camera_dev.c'),
+    ('iokit', 'camera/OneiOSCameraService.cpp'),
 ]
 RECORDS = {'mach': 'osfmk/DEVELOPMENT/startup.o.json', 'bsd': 'bsd/DEVELOPMENT/kern_control.o.json',
            'iokit': 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'}

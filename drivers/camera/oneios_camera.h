@@ -9,6 +9,7 @@
 #define ONEIOS_CAMERA_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "oneios_camera_abi.h"
 #include "oneios_camera_proto.h"
@@ -34,6 +35,24 @@ void oneios_camera_release(unsigned buffer);
 /* What a waiting reader sleeps on: the device's interrupt wakes it. */
 extern int oneios_camera_event;
 void oneios_camera_dev_attach(void);
+
+/*
+ * ---- the session: one client of the camera at a time (oneios_camera_dev.c) ----
+ * The BSD node /dev/oneios-camera and the IOKit user client of AppleH9CamIn (OneiOSCameraService.cpp)
+ * both go through these. open: 0, EBUSY (another client), ENXIO (no camera device). read: the newest
+ * frame as the node gives it (struct oneios_camera_frame, then as much of the picture as fits in
+ * `room`), through `copy` (src, bytes, offset from the start); waits as the node does unless `nowait`;
+ * 0 with *given, EAGAIN on a time-out, else the errno. command: oneios_camera_abi.h's commands.
+ * cameras: the host's list (at most `max`).
+ */
+typedef int (*oneios_camera_copy_fn)(void *ctx, const void *src, size_t bytes, size_t at);
+int      oneios_camera_session_open(void);
+void     oneios_camera_session_close(void);
+int      oneios_camera_session_read(oneios_camera_copy_fn copy, void *ctx, size_t room, bool nowait, size_t *given);
+int      oneios_camera_session_command(const struct oneios_camera_command *command);
+uint32_t oneios_camera_session_cameras(struct oc_camera *cameras, uint32_t max);
+/* AppleH9CamIn: the IOKit service CMCapture's probe matches (OneiOSCameraService.cpp). */
+void     oneios_camera_service_start(uint32_t cameras);
 
 /* ---- pure parts ---- */
 struct oca_state {

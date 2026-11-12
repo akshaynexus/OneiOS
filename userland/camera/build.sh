@@ -1,37 +1,32 @@
 #!/bin/bash
-# Build OneiOSCamera.dylib, the capture plug-in for iOS 27 (arm64e), signed ad hoc with 4 KiB signature pages.
+# Build the capture plug-in for iOS 27 (arm64e): one dylib, H9ISP.mediacapture, signed ad hoc with 4 KiB pages.
 #
 #   userland/camera/build.sh [OUT_DIR]        default out/userland/camera (git-ignored)
 #
-# Toolchain: as userland/helpers/build.sh (its header says where each part comes from).
-#   macOS: Xcode with the iPhoneOS SDK. Linux: clang 19 or later, THEOS=DIR (ld64 and ldid), IOS_SDK=DIR.
-# NOT RUN on this project's build machine: it has no iPhoneOS SDK. tests/host.sh checks the source's syntax
-# against stand-in headers and runs the reader. Add the device-create source (README.md, "Not written") to
-# SOURCES when it exists; without it the plug-in loads, reports and replaces nothing.
+# Output: OUT_DIR/H9ISP.mediacapture and OUT_DIR/cdhashes.txt (its CDHash for the owner trust module). The image
+# hook's camera-plugin tweak places it in the Data seed as /private/var/oneios/addons/MediaCapture/H9ISP.mediacapture
+# (`roottweak apply --camera-plugin OUT_DIR`); hosted patch 0056 shows that folder over /System/Library/MediaCapture,
+# where CMCapture 27 loads it for the kernel's AppleH9CamIn (README.md).
+#
+# Toolchain: scripts/ios (docs/building.md section 9), as userland/helpers/build.sh: ios-clang, then ios-sign.py
+# (byte for byte `codesign --force --sign - --pagesize 4096`). macOS: Xcode's clang, ld and iPhoneOS SDK; Linux:
+# the cross toolchain. Linked against the guest's own iOS 27 stubs (out/ios27-tbd) when they are there.
+# No entitlements: a library takes the process's.
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 TARGET=${ONEIOS_IOS_TARGET:-arm64e-apple-ios27.0}
 OUT=${1:-$REPO/out/userland/camera}
-SOURCES=("$HERE/OneiOSCamera.c" "$HERE/oneios_camera_reader.c")
-FLAGS=(-O2 -Wall -Wextra -Werror -I"$HERE" -I"$REPO/drivers/camera" -dynamiclib -install_name /private/var/oneios/lib/OneiOSCamera.dylib
-       -framework CoreFoundation -framework CoreVideo -lobjc)
+NAME=H9ISP.mediacapture
 mkdir -p "$OUT"
-case "$(uname -s)" in
-Darwin)
-  SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-  xcrun clang -target "$TARGET" -isysroot "$SDK" "${FLAGS[@]}" "${SOURCES[@]}" -o "$OUT/OneiOSCamera.dylib"
-  codesign --force --sign - --pagesize 4096 --identifier com.oneios.OneiOSCamera "$OUT/OneiOSCamera.dylib"
-  ;;
-Linux)
-  TC=${THEOS:?set THEOS to a theos checkout with toolchain/linux/iphone (userland/helpers/build.sh)}/toolchain/linux/iphone/bin
-  SDK=${IOS_SDK:?set IOS_SDK to an iPhoneOS SDK directory (userland/helpers/build.sh)}
-  [ -x "$TC/ld" ] && [ -x "$TC/ldid" ] || { echo "missing $TC/ld or $TC/ldid" >&2; exit 1; }
-  clang -target "$TARGET" -isysroot "$SDK" --ld-path="$TC/ld" -Wno-unused-command-line-argument "${FLAGS[@]}" "${SOURCES[@]}" -o "$OUT/OneiOSCamera.dylib"
-  "$TC/ldid" -S -Icom.oneios.OneiOSCamera "$OUT/OneiOSCamera.dylib"
-  ;;
-*) echo "build.sh: macOS or Linux" >&2; exit 1 ;;
-esac
-# The CDHash for the kernel's owner trust module (overlay/userland/owner-trust.json).
-(cd "$HERE/.." && python3 -I -m roottweak cdhash "$OUT/OneiOSCamera.dylib") | tee "$OUT/cdhashes.txt"
-echo "built $OUT/OneiOSCamera.dylib"
+. "$REPO/scripts/ios/env.sh"
+echo "camera: SDK $IOS_SDK_VERSION ($IOS_SDK); stubs $([ -f "$IOS_TBD/usr/lib/libSystem.B.tbd" ] && echo "$IOS_TBD" || echo "none: the SDK's own"); $("$IOS_CLANG" --version | head -1)"
+"$IOS_DIR/ios-clang" -target "$TARGET" -O2 -Wall -Wextra -Werror -DONEIOS_CAMERA_IOKIT -I"$HERE" -I"$REPO/drivers/camera" \
+  -dynamiclib -install_name "/System/Library/MediaCapture/$NAME" \
+  "$HERE/OneiOSCamera.c" "$HERE/OneiOSCaptureDevice.c" "$HERE/oneios_camera_reader.c" \
+  -framework CoreFoundation -framework CoreMedia -framework CoreVideo -framework IOKit -o "$OUT/$NAME"
+"$IOS_DIR/ios-sign.py" --identifier com.oneios.H9ISP "$OUT/$NAME" >/dev/null
+python3 -I "$HERE/../tweak" cdhash "$OUT/$NAME" | tee "$OUT/cdhashes.txt"
+grep -q 'arm64e pages=4096' "$OUT/cdhashes.txt" || { echo "build.sh: $NAME is not arm64e with 4 KiB signature pages" >&2; exit 1; }
+nm -gU "$OUT/$NAME" | grep -q ' _H9ISPCaptureDeviceCreate$' || { echo "build.sh: $NAME does not export H9ISPCaptureDeviceCreate" >&2; exit 1; }
+echo "built $OUT/$NAME"

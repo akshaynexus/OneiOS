@@ -604,6 +604,21 @@ macOS-DroidVM's xnu-12377 patch 0039 (the same board clock). The guest's schedul
 Linux threads, and no host thread changes its policy. Built (`HOSTED_OUT=media`); not run. `docs/hardware.md`
 section 6 ("Very slow" playback).
 
+## 0056-camera-plugin-mount.patch (camera, 2026-11-12)
+
+- **Why.** CMCapture 27 loads the camera's FigCaptureDevice maker itself: when its probe (`fcc_probeCameraDriverService`)
+  finds a service of class `AppleH9CamIn` it `dlopen()`s `/System/Library/MediaCapture/H9ISP.mediacapture` and calls
+  `H9ISPCaptureDeviceCreate` (read in the 24A446 cache; `userland/camera/README.md`). The drivers archive publishes
+  `AppleH9CamIn` (`drivers/camera/OneiOSCameraService.cpp`). The folder is empty on the sealed OS volume, so this
+  patch shows the Data seed's `/private/var/oneios/addons/MediaCapture` over it: a read-only bindfs union made with
+  UniXNU's `native_gpu_addon_mount` (scratch offset 0xa00), called in `native_gpu_addon_prepare` before 0036's call.
+- **Log.** `oneios-camera-addon: /private/var/oneios/addons/MediaCapture over /System/Library/MediaCapture: stage N,
+  status E`. Stage 5 status 0: mounted, `H9ISP.mediacapture` visible. Stage 1 status 2: this Data store has no
+  plug-in (an older seed): nothing is mounted, and CMCapture logs that it could not load the dylib.
+- **Off.** `oneios-camera-plugin=0`: no mount (and no AppleH9CamIn). `sheng-gpu-addon=0` skips it too (that function
+  returns early).
+- **State.** Built on the Mac (`HOSTED_OUT=cam`, on the series through 0051: before 0052 landed); not run.
+
 ## 0049-wifi-association-event.patch (radio2, 2026-11-12)
 
 `kev_post_msg` (bsd/kern/kern_event.c) refuses an event that does not fit one mbuf without a cluster (`MLEN`), with

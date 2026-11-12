@@ -402,6 +402,34 @@ def metal_plugin(cx):
            ('' if cx.rw else '; shown over /System/Library/Extensions by the kernel (addon_mounts)'))
 
 
+def camera_plugin(cx):
+    """Places the capture plug-in where CMCapture 27 loads it for the kernel's AppleH9CamIn:
+    /System/Library/MediaCapture/H9ISP.mediacapture (userland/camera/README.md)."""
+    source = cx.options.get('camera_plugin')
+    if not source:
+        cx.say('off', 'camera plugin', 'no --camera-plugin DIR: iOS finds no camera (CMCapture loads no create function)')
+        return
+    name = 'H9ISP.mediacapture'
+    host = os.path.join(source, name) if os.path.isdir(source) else source
+    if os.path.basename(host) != name or not os.path.isfile(host):
+        raise TreeError(f'{source}: no {name} (the output of userland/camera/build.sh)')
+    if cx.rw:
+        tree, base, guest = cx.root, 'System/Library/MediaCapture', '/System/Library/MediaCapture'
+    else:
+        tree, base, guest = cx.data, f'{ONEIOS}/addons/MediaCapture', f'{ONEIOS_GUEST}/addons/MediaCapture'
+    tree.mkdir(base, ROOT, 0o755)
+    _install_binary(cx, tree, host, f'{base}/{name}', 0o755)
+    if not cx.rw:
+        cx.contract['addon_mounts'].append({
+            'source': guest, 'over': '/System/Library/MediaCapture', 'type': 'bindfs', 'union': True, 'readonly': True,
+            'how': 'mounted by the kernel before launchd (hosted 0056; oneios-camera-plugin=0 turns it off)'})
+    cx.contract['camera'] = {'plugin': f'/System/Library/MediaCapture/{name}', 'symbol': 'H9ISPCaptureDeviceCreate',
+                             'kernel': 'an IOService of class AppleH9CamIn (CMCapture probes for it by IOServiceMatching) '
+                                       'and its user client AppleH9CamInUserClient for the frames'}
+    cx.say('applied', 'camera plugin', f'{name} in {guest}' +
+           ('' if cx.rw else '; shown over /System/Library/MediaCapture by the kernel (addon_mounts, hosted 0056)'))
+
+
 # ---- cryptexes and the removable system apps -----------------------------------------------------------------------
 def _copy_tree(cx, tree, source, base):
     """Copies an extracted volume into a tree: files, directories and links, modes from the source."""
@@ -669,5 +697,5 @@ def identity(cx):
                'check target_type in the device profile against the IPSW')
 
 
-ALL = (version, launchd_jobs, launchd_crash_policy, host_services, metal_plugin, app_cryptex, staged_apps, preferences,
+ALL = (version, launchd_jobs, launchd_crash_policy, host_services, metal_plugin, camera_plugin, app_cryptex, staged_apps, preferences,
        data_layout, keybag, feature_flags, identity, kernel_features)

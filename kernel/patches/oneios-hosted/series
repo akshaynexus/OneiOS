@@ -157,6 +157,11 @@
 # buffer of about 60 ms or more: thread_policy_set failed, the HAL's I/O thread stopped after 0 frames, and every system
 # sound timed out after 3 s (iOS's log of the 2026-11-12 sessions). After macOS-DroidVM's xnu-12377 patch 0039.
 0052-rt-computation-held.patch
+# camera: the capture plug-in reaches cameracaptured. CMCapture 27 dlopen()s /System/Library/MediaCapture/H9ISP.mediacapture
+# when its probe finds AppleH9CamIn (drivers/camera/OneiOSCameraService.cpp); the Data seed's
+# /private/var/oneios/addons/MediaCapture is shown over that empty sealed folder, read-only, as 0031 shows the Metal
+# plug-in (oneios-camera-plugin=0: no mount). Numbered 0056 to stay clear of the 0052-0055 other agents had open.
+0056-camera-plugin-mount.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # net/build-oneios-net.py), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and

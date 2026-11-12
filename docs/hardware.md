@@ -924,13 +924,20 @@ yet: the audio test cycle adds it (below).
 - The Actuator device (Core Haptics taps, section 5) is an IOAudio2Device of the same archive, but its periods go to
   the haptics bridge, not to virtio-snd and this helper.
 
-## 7. Camera (fable-camera, 2026-11-11)
+## 7. Camera (fable-camera, 2026-11-11; camera, 2026-11-12)
 
-Built on all three sides; iOS shows no camera yet: the capture device object in the plug-in is not written. **One
-phone run (2026-11-11, `camctl` with the NDK back end): the cameras are listed and one opens, no frame arrived; the
-cause is fixed in the code and the fix has not run on the phone yet** ("The first phone run" below). Details:
-`runtime/bridges/camera/README.md` (the host, the route, the phone commands), `drivers/camera/README.md`,
-`userland/camera/README.md`.
+Built on all three sides. **Where it broke (iOS's own log of the 2026-11-12 sessions): iOS's capture stack never used
+our camera.** CMCapture 27 probes for one of six camera driver classes, found none in 5 s ("Camera driver not
+started in time"), so its device vendor had no create function and every client got error -12786 and no camera;
+the old plug-in was in no image and nothing would have loaded it. **The route now (2026-11-12, built, not run):
+Apple's own plug-in loader.** The kernel publishes `AppleH9CamIn`; for that class CMCapture `dlopen()`s
+`/System/Library/MediaCapture/H9ISP.mediacapture` and makes every device with its `H9ISPCaptureDeviceCreate`; that
+file is our plug-in, on the Data seed and shown there by hosted 0056; it reads frames through AppleH9CamIn's user
+client, which `cameracaptured`'s sandbox allows. No method of CMCapture is replaced. Details and the log lines the
+next session must show: `userland/camera/README.md`. The host side's first phone run (camctl, NDK back end, 2026-11-11):
+the cameras are listed and one opens, no frame arrived; the cause is fixed in the code and the fix has not run on
+the phone yet ("The first phone run" below). Also `runtime/bridges/camera/README.md` (the host, the phone commands),
+`drivers/camera/README.md`.
 
 ### The phone [F]
 
@@ -993,8 +1000,9 @@ with no error.
 |---|---|---|
 | Helper process `bin/oneios-camera`: opens a camera, NV12 frames with the sensor's time into a memfd ring | `runtime/bridges/camera` | built for Android; 131 host checks with a test picture; on the phone: the list and the open work, no frame yet (above) |
 | xnuhost: the helper's socket and ring, the `oneios,camera` virtio device (`/arm-io/camera`, `XL_DEV_CAMERA`) | `runtime/bridges/camera` (`libonecamera.a`), `runtime/xnuhost/src/main.c` | linked into xnuhost; the device tested on xnuhost's transport against a guest of plain memory |
-| Kernel: the transport and `/dev/oneios-camera` (the `NCFRAME1` layout of iOSPlus10's and HakiOS's node, NV12) | `drivers/camera` | compiles with the kernel's records, links against `xnu.macho`; 37 host checks of the pure parts; not run |
-| Plug-in: the node's reader, IOSurface-backed 420f pixel buffers, the report of what CMCapture 27 has, the vendor hook | `userland/camera` | reader host-tested (26 checks); the plug-in syntax-checked only (no SDK); **the FigCaptureDevice for CMCapture 27 is not written** |
+| Kernel: the transport and `/dev/oneios-camera` (the `NCFRAME1` layout of iOSPlus10's and HakiOS's node, NV12); `AppleH9CamIn` and its user client (the same session) | `drivers/camera` | compiles with the kernel's records, in the `HOSTED_OUT=cam` kernel; 37 host checks of the pure parts; on the phone (2026-11-12) the transport came up with 3 cameras; the service not run |
+| Kernel: the plug-in's folder over `/System/Library/MediaCapture` | `kernel/patches/oneios-hosted/0056-camera-plugin-mount.patch` | built; not run |
+| Plug-in `H9ISP.mediacapture`: `H9ISPCaptureDeviceCreate`, a FigCaptureDevice with the back and front streams, formats from the device's own `AVCaptureSession.plist`, frames scaled into the graph's pools | `userland/camera` | built with Xcode (arm64e, `macho-check.py` PASS); on the Mac macOS's own `BWFigCaptureDeviceVendor` makes a device with it and a frame reaches an output's handler (35 checks); not run in iOS; placed in the seed by the image hook (a new seed) |
 
 - **Route on the host** [F AOSP android15-release for the reason, I for Samsung's build]: the provider HAL directly
   when system_server is gone, Camera2 NDK through cameraserver while One UI runs (`auto`). cameraserver refuses every
@@ -1006,19 +1014,21 @@ with no error.
 - **A frame**: NV12, at most 1920x1080, 4:2:0 BT.601 full range (iOS's `420f`), a sequence number that rises by one
   per frame the camera made, the sensor's time, the camera's role and how it is turned. Copies: gralloc buffer ->
   ring (conversion), ring -> guest buffer, guest buffer -> reader (read()), reader -> IOSurface.
-- **What iOS needs** [F iOSPlus10 `docs/laurel_sprout/camera.md` section 3, `docs/camera-plan.md`]: Apple's path
-  (`AppleH1xCamIn`, its ISP firmware protocol) cannot be served by another camera, so no IOKit stand-in: a plug-in in
-  the capture server (`cameracaptured` on iOS 27 [I]) replaces `+[BWFigCaptureDeviceVendor
-  sharedCaptureDeviceVendor]` and makes a FigCaptureDevice whose stream hands CVPixelBuffers to the capture graph.
-  The app needs, in order: the capture servers running, a FigCaptureDevice with a steady preview stream, a still
-  from the same stream, and only then the Camera icon's device tree nodes (`/arm-io/isp` `camera-rear`,
-  `camera-front`; `/product/camera`): with the nodes and no frame path the launch hangs.
+- **What iOS needs** [F the 24A446 cache for the loader; F iOSPlus10 `docs/laurel_sprout/camera.md` section 3 for the
+  rest]: Apple's ISP firmware protocol cannot be served by another camera, so the IOKit side is only a name:
+  `AppleH9CamIn`, which CMCapture's probe matches and for which it loads `H9ISP.mediacapture` from
+  `/System/Library/MediaCapture` (on iOS 16 HakiOS had to replace `+[BWFigCaptureDeviceVendor
+  sharedCaptureDeviceVendor]` instead; iOS 27 takes the create function from the plug-in it loads). The plug-in's
+  FigCaptureDevice hands CVPixelBuffers to the capture graph. The app needs, in order: the capture servers running,
+  a FigCaptureDevice with a steady preview stream, a still from the same stream, and only then the Camera icon's
+  device tree nodes (`/arm-io/isp` `camera-rear`, `camera-front`; `/product/camera`): with the nodes and no frame
+  path the launch hangs.
 
 ### Missing, unknown
 
-- **The capture device object** (`oneios_camera_device_create`, `userland/camera/README.md`, "Not written"): needs
-  the 24A446 shared cache on the build machine and a guest that reaches SpringBoard. Also there: how the plug-in is
-  loaded into `cameracaptured`, the device tree nodes, the camera permission.
+- **The first session with the plug-in** (`userland/camera/README.md`, "What the next session's logs must show"):
+  whether the 27 capture graph takes the device as it is, and which properties it asks for that are not answered.
+  The device tree nodes for MobileGestalt and the camera permission are after that.
 - [U] on the phone: the capture again with the fix, the telephotos, the diagnostic run if no frame arrives
   (`runtime/bridges/camera/README.md`, "On the phone" and "When no frame arrives"), and "In a
   session" (the HAL back end with system_server stopped; whether Samsung's HAL takes a plain YCbCr_420_888 stream

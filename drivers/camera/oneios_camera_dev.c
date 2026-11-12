@@ -9,6 +9,11 @@
  * read() copies the picture out of the transport's buffer (mmap of a character device gives ENODEV
  * in this XNU, kern_mman.c); the buffer goes back to the host after the copy, so a picture is never
  * torn. The plug-in puts it into an IOSurface (userland/camera).
+ *
+ * The node's work is also the session API of oneios_camera.h (oneios_camera_session_*): the IOKit
+ * user client of AppleH9CamIn (OneiOSCameraService.cpp) uses it, because cameracaptured's sandbox
+ * lets that process open AppleH9CamInUserClient and not, as far as is known, a /dev node. One
+ * client at a time, whichever way it comes.
  */
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -104,8 +109,8 @@ ocd_start(void)
 	return 0;
 }
 
-static int
-ocd_open(dev_t dev __unused, int flags __unused, int devtype __unused, struct proc *p __unused)
+int
+oneios_camera_session_open(void)
 {
 	int e = 0;
 
@@ -122,18 +127,17 @@ ocd_open(dev_t dev __unused, int flags __unused, int devtype __unused, struct pr
 	return e;
 }
 
-static int
-ocd_close(dev_t dev __unused, int flags __unused, int devtype __unused, struct proc *p __unused)
+void
+oneios_camera_session_close(void)
 {
 	lck_mtx_lock(&ocd_lock);
 	ocd_stop();                     /* the camera is closed on the host: no light, no power */
 	d.open = false;
 	lck_mtx_unlock(&ocd_lock);
-	return 0;
 }
 
-static int
-ocd_read(dev_t dev __unused, struct uio *uio, int ioflag)
+int
+oneios_camera_session_read(oneios_camera_copy_fn copy, void *ctx, size_t room, bool nowait, size_t *given)
 {
 	struct oneios_camera_frame header;
 	struct oc_frame frame;
@@ -141,10 +145,15 @@ ocd_read(dev_t dev __unused, struct uio *uio, int ioflag)
 	unsigned buffer = 0;
 	int e = 0, waited = 0;
 
-	if (uio_resid(uio) < (user_ssize_t)sizeof(header)) {
+	*given = 0;
+	if (room < sizeof(header)) {
 		return EINVAL;
 	}
 	lck_mtx_lock(&ocd_lock);
+	if (!d.open) {
+		lck_mtx_unlock(&ocd_lock);
+		return ENXIO;
+	}
 	if (d.state.restart) {
 		ocd_stop();
 	}
@@ -156,7 +165,7 @@ ocd_read(dev_t dev __unused, struct uio *uio, int ioflag)
 		if (e != EAGAIN) {
 			break;                  /* a frame (0), or the camera stopped */
 		}
-		if (ioflag & IO_NDELAY) {
+		if (nowait) {
 			break;
 		}
 		if (waited >= (d.first ? OCD_FIRST_MS : OCD_NEXT_MS)) {
@@ -174,19 +183,88 @@ ocd_read(dev_t dev __unused, struct uio *uio, int ioflag)
 		d.state.started = false;        /* the host closed the camera: the next read starts it again */
 	}
 	if (!e) {
-		user_ssize_t room = uio_resid(uio) - (user_ssize_t)sizeof(header);
+		size_t bytes = MIN((size_t)frame.bytes, room - sizeof(header));
 
 		d.first = false;
 		d.frames++;
 		oca_header(&header, &frame, ocd_facing(frame.role), mach_absolute_time());
-		e = uiomove((const char *)&header, (int)sizeof(header), uio);
-		if (!e && room > 0) {
-			e = uiomove((const char *)picture, (int)MIN((user_ssize_t)frame.bytes, room), uio);
+		e = copy(ctx, &header, sizeof(header), 0);
+		if (!e && bytes > 0) {
+			e = copy(ctx, picture, bytes, sizeof(header));
+		}
+		if (!e) {
+			*given = sizeof(header) + bytes;
 		}
 		oneios_camera_release(buffer);
 	}
 	lck_mtx_unlock(&ocd_lock);
 	return e;
+}
+
+int
+oneios_camera_session_command(const struct oneios_camera_command *command)
+{
+	int e;
+
+	lck_mtx_lock(&ocd_lock);
+	e = oca_command(&d.state, command);
+	if (!e && command->command == ONEIOS_CAMERA_SENSOR) {
+		ocd_list();
+		if (d.ncameras) {               /* known cameras: one the host does not have is refused now */
+			bool have = false;
+
+			for (uint32_t i = 0; i < d.ncameras; i++) {
+				have = have || d.cameras[i].role == command->a;
+			}
+			e = have ? 0 : ENODEV;
+		}
+	}
+	lck_mtx_unlock(&ocd_lock);
+	return e;
+}
+
+uint32_t
+oneios_camera_session_cameras(struct oc_camera *cameras, uint32_t max)
+{
+	uint32_t n;
+
+	lck_mtx_lock(&ocd_lock);
+	ocd_list();
+	n = MIN(d.ncameras, max);
+	memcpy(cameras, d.cameras, n * sizeof(cameras[0]));
+	lck_mtx_unlock(&ocd_lock);
+	return n;
+}
+
+static int
+ocd_open(dev_t dev __unused, int flags __unused, int devtype __unused, struct proc *p __unused)
+{
+	return oneios_camera_session_open();
+}
+
+static int
+ocd_close(dev_t dev __unused, int flags __unused, int devtype __unused, struct proc *p __unused)
+{
+	oneios_camera_session_close();
+	return 0;
+}
+
+/* read() in order: `at` is where the uio already is. */
+static int
+ocd_uio_copy(void *ctx, const void *src, size_t bytes, size_t at __unused)
+{
+	return uiomove((const char *)src, (int)bytes, (struct uio *)ctx);
+}
+
+static int
+ocd_read(dev_t dev __unused, struct uio *uio, int ioflag)
+{
+	size_t given;
+
+	if (uio_resid(uio) < (user_ssize_t)sizeof(struct oneios_camera_frame)) {
+		return EINVAL;
+	}
+	return oneios_camera_session_read(ocd_uio_copy, uio, (size_t)uio_resid(uio), (ioflag & IO_NDELAY) != 0, &given);
 }
 
 static int
@@ -202,21 +280,7 @@ ocd_write(dev_t dev __unused, struct uio *uio, int ioflag __unused)
 	if ((e = uiomove((char *)&command, (int)sizeof(command), uio)) != 0) {
 		return e;
 	}
-	lck_mtx_lock(&ocd_lock);
-	e = oca_command(&d.state, &command);
-	if (!e && command.command == ONEIOS_CAMERA_SENSOR) {
-		ocd_list();
-		if (d.ncameras) {               /* known cameras: one the host does not have is refused now */
-			bool have = false;
-
-			for (uint32_t i = 0; i < d.ncameras; i++) {
-				have = have || d.cameras[i].role == command.a;
-			}
-			e = have ? 0 : ENODEV;
-		}
-	}
-	lck_mtx_unlock(&ocd_lock);
-	return e;
+	return oneios_camera_session_command(&command);
 }
 
 static const struct cdevsw ocd_cdevsw = {

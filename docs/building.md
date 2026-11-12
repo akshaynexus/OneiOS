@@ -510,6 +510,19 @@ ios-sign.py then left more room than codesign), `rcodesign print-signature-info`
 
 **Not checked: that the guest runs any of it.** No boot has exec'ed a binary built by either host.
 
+### The capture plug-in (the camera)
+
+```sh
+userland/camera/build.sh                # -> out/userland/camera/H9ISP.mediacapture, cdhashes.txt (2 s on the Mac)
+userland/camera/tests/host.sh           # the reader; on a Mac also the device under macOS's own CMCapture (35 checks)
+```
+
+Then rebuild the image set (section 1): the image hook places `H9ISP.mediacapture` in the Data seed at
+`/private/var/oneios/addons/MediaCapture` and lists its CDHash (`ONEIOS_CAMERA_PLUGIN=DIR` for another folder). That
+is a new seed: the phone's Data store starts over. The kernel needs AppleH9CamIn and hosted 0056
+([userland/camera/README.md](../userland/camera/README.md)). Checked on the Mac on 2026-11-12: arm64e, 4 KiB pages,
+`macho-check.py` PASS against the 24A446 stubs (114 symbols bound). Not run in iOS.
+
 ### The Metal plug-in
 
 ```sh
