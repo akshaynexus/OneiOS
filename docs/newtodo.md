@@ -64,10 +64,22 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
      root before the Data mount, or a Data volume gone read-only: `kernel/patches/oneios-hosted/README.md`, 0057);
      the next boot's `oneios-swap:` line decides it. Needs a kernel build (the Mac: this PC has no libdispatch for the
      Linux toolchain).
-   - **backboardd's GPU memory growth** (gpu): find what it keeps (pooled 64 MiB metal2vulkan blocks, IOSurfaces,
-     released blobs still held) and give memory back. Not started.
+   - **backboardd's GPU memory growth** (gpu): read, not fixed (2026-11-12). Upstream NativeMetal (at our pin)
+     already frees the runtime's empty 64 MiB blocks every 2 s even while backboardd draws (`watchIdleMemory`),
+     drops held surface imports and every kept block on a memory-pressure rise and keeps no spare room while it stays
+     raised (`watchImportPressure`, `NativeBridgeMetalFrontend.mm`). metal2vulkan keeps up to 2 empty blocks a pool
+     and frees a stale one only when a placement of that pool is returned (`memory.rs` `Pool::release`/`stale`), which
+     the 2 s timer covers. So the 170 MiB per 30 s is one of: IOSurface imports CoreAnimation still retains
+     ("wired"), partly used blocks, or blobs the guest released that the host still holds. **On the phone:** the
+     kernel's GPU report's clients line (own vs wired MiB for backboardd) and sizes line ("64+" count) every 10 s
+     across the 30 s of growth, and `m2v-mem.txt` in backboardd's temporary folder on the Data volume (copied with the
+     logarchive procedure below); then the fix goes where the number is (iOS side: built on the Mac).
 2. **The power key does nothing in iOS** since the haptics change (15:35 boot): the presses reach backboardd (34 HID
-   events, 0 dropped) but no `request_power_change`. Hypothesis (not proven): with closed-loop haptics, backboardd's
+   events, 0 dropped) but no `request_power_change`. **Read in 24A446 (2026-11-12, `docs/hardware.md` 5, "The power
+   key since the Actuator"):** ButtonResolver's AOP interface waits for Haptics.framework's button haptics loader and
+   the SPU haptics driver, and libMobileGestalt reads `/product/haptics closed-loop`; [I] with closed-loop = 1 the
+   resolver is never ready. Waits for the phone: boot with `oneios-actuator=0`, press the side key (lock, wake), read
+   ButtonResolver's `HasHaptic` lines; the fix candidates are written there. Hypothesis (not proven): with closed-loop haptics, backboardd's
    BKButtonHapticsController (its queue waits forever for button "click states") now sits in the button path. Quick
    test: boot with `oneios-actuator=0`. Fix: satisfy the click-state setup, or tell iOS the side buttons have no
    haptics. Not started.
@@ -82,8 +94,16 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
    slider moves the panel; auto-brightness: CoreBrightness refuses the light sensor (`AppleUSBALS: couldn't find the
    device version`).
 5. **Camera:** try the Camera app; the log lines to read are in `drivers/camera/README.md` / `runtime/bridges/camera/README.md`.
+   Waits for the phone. Steps: in One UI first `bin/camctl` (`runtime/bridges/camera/README.md`, "On the phone") to
+   see the host's cameras; then a session with the image set that has the plug-in (`data.seed` with
+   `H9ISP.mediacapture`, `oneios-camera-addon: ... stage 5, status 0` in the kernel's log), open Camera, and read
+   cameracaptured's lines in iOS's log (`fcc_probeCameraDriverService` finding AppleH9CamIn, the plug-in's
+   `H9ISPCaptureDeviceCreate`, its first frame).
 6. **Audio latency** stays ~130-140 ms (AAudio's fast/MMAP paths need a realtime thread, which is forbidden).
-7. **Bluetooth:** the uart.sk transport (e73c11d) has not been tried in iOS.
+7. **Bluetooth:** the uart.sk transport (e73c11d) has not been tried in iOS. Waits for the phone. Steps: a session,
+   Settings > Bluetooth on, then the expected lines of `docs/hardware.md` 4 ("Expected lines, in order"), from
+   `ONEIOS BT: dev: bluetoothd[N] opens /dev/btwake` to `bluetooth: the controller hears devices`; if they stop, the
+   last `bluetoothd: command 0x....` line names the command.
 8. **Hotel Wi-Fi:** iOS has an address; check that the captive-portal page shows and the internet works.
 9. **CLAUDE.md's side-key rule** names event0/event2/event4, but the numbers move between boots (in the 15:35 boot
    event4 was the vibration motor). Proposed wording, by name: never grab `gpio-keys`, `pmic_pwrkey`, `pmic_resin`.

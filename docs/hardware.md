@@ -719,6 +719,42 @@ In iOS's log: no `Haptics: unsupported` from `_UIKBFeedbackGenerator`. If the de
 started` line comes: VirtualAudio did not make the VAD (`Could not find actuator port`) or MobileGestalt still says
 no. To go back: `oneios-actuator=0` (no device, no node: the `vibrator` path as before).
 
+### The power key since the Actuator (15:35 boot; read in 24A446's shared cache on the Linux PC, mem, 2026-11-12)
+
+In the 15:35 boot the side key's presses reached backboardd (34 HID events, 0 dropped) and no `request_power_change`
+followed; the boots before the Actuator device locked and woke. What is read [V, `ipsw dyld disass`, SystemOS cryptex
+`043-70037-715.dmg`]; what follows from it is marked [I]:
+
+- iOS 27 resolves hardware button presses (single, double, long) in the private framework **ButtonResolver**
+  (`BRButtonResolverController`, `+[BRInterface interfaces]`: a `BRInterfaceLegacy`, a `BRInterfaceKeyboard` and, when
+  `+[BRInterfaceAOP interface]` gives one, a `BRInterfaceAOP`). The AOP interface is made when MobileGestalt's
+  `JwLB44/jEB8aFDpXQ16Tuw` answers 1, or with `initWithFastHaptics:YES` when `MGIsDeviceOneOfType` matches a list of
+  device types (0x2569b3e20-0x2569b3ee4; which models the list holds is not decoded). It talks to the always-on
+  processor's button and haptics drivers (strings `AppleSPUButtonDriver`, `AppleSPUHapticsAudioDriver`,
+  `IOServiceMatched`), loads the press haptics through Haptics.framework's `HAButtonHapticsLoader`, waits for
+  `HAButtonHapticsLoaderServiceIsAvailableNotification` (`-[BRInterfaceAOP _receiveLoaderAvailableNotification:]`),
+  and tells its users when it is ready (`scheduleReadyNotificationOnDispatchQueue:withBlock:`). This guest has none of
+  the SPU services.
+- libMobileGestalt reads `closed-loop` (the `/product/haptics` node that `drivers/haptics` publishes with the
+  Actuator device).
+- [I, not proven] With `closed-loop = 1` the haptics loader expects the SPU haptics path, which never appears, so the
+  resolver's haptic interface is never ready and the presses it should resolve are dropped; before the node, the
+  loader answered "no haptic" (`HasHaptic: NO`) and the presses went on. The media agent's earlier reading
+  (`BKButtonHapticsController`'s click states, harmless with `home-button-type 2`) is about another class.
+
+**The test (needs the phone):** boot with `oneios-actuator=0` (no Actuator device, so no `/product/haptics` node:
+`drivers/haptics` never publishes closed-loop without the Actuator route) and press the side key once (lock) and
+once more (wake). If it locks and wakes, the haptics node is the cause; then `oneios_haptic_ui=0` is the same with
+the kernel's UI haptics off as well. Read in iOS's log (backboardd, the logarchive procedure of `docs/newtodo.md`):
+ButtonResolver's lines `HasHaptic: ...`, `... get asset components: ... haptic: ... success: ...` and any
+`HAButtonHapticsLoader` line, with and without the switch.
+
+**Fix candidates, by what the test shows:** (1) the node off by default (`oneios_haptic_ui` default 0) until (2) is
+done: UI haptics then go through the vibrator path again; (2) keep closed-loop and tell iOS the side buttons have
+no haptics: an answer for ButtonResolver's haptics query that says "none" (a userland hook in backboardd, built with
+the Metal plug-in as `BacklightMode.inc` is) so that the AOP interface is ready without the loader; which call to
+answer is the first `HasHaptic` / loader line of the log above. Nothing of this is built yet.
+
 ### The bridge (`runtime/bridges/haptics/haptic.c`)
 
 - Finds the device by its EV_FF bits (`sec_vibrator_inputff` first), sets `FF_GAIN` 10000 once.

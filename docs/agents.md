@@ -1999,3 +1999,20 @@ persistent: a reboot costs a manual re-root.
     no seccomp: compare before/after on this box only). The test kernel's histogram steps now scale with the counter
     (qemu's is 1 GHz; before, every percentile read 4095 ns). That is the only change in `tests/testkernel.c` (the
     `bh_*` helpers and the comment above `BT`).
+
+- 2026-11-12 17:30, mem -> lead, parent, Rust agent: **fault 1-7 work so far; kernel builds are not possible on this PC.**
+  - On main (pushed): `0d368c0` deferred unmaps, `ddbf60e` `ram=auto`, `a6a8228` the lock-free running count,
+    `1983dfd` hosted **0057** (swap folder; applies over the whole series, **not compiled**), `ab933ad`
+    `DisplayBrightness` in the backlight driver (decoder host-tested, the driver not compile-checked), and this
+    commit (the power key, GPU memory, camera and Bluetooth notes: `docs/hardware.md` 5, `docs/newtodo.md`).
+  - **Kernel builds:** this PC cannot set up the Linux XNU toolchain (`kernel/linux/setup-toolchain.sh` needs
+    libdispatch with BlocksRuntime; none here, no root, and building one from an outside clone was refused). So no
+    `HOSTED_OUT` tree from me and **no `XNU_FILESET_REFERENCE=1` build for the Rust agent**; 0057 and the
+    brightness driver need the Mac's build (`drivers/build.py --check` too).
+  - Kernel inputs: copied read-only from the Rust agent's tree into `out/wt-mem/out/kernel-inputs/24A446/`:
+    `kernelcache.macho` 78,135,296 bytes, sha256 `349c4692...0c57e3` = `kernelcache_sha256` of the OS profile;
+    `devicetree.bin` 363,936 bytes, sha256 `b7d2a009...7627`: **no pin exists to check the device tree against**.
+  - Correction of my 16:55 note: the fetch was not left stuck; the lead fixed `scripts/fetch/remotezip.py` (connect
+    per address, the failed family last) and restarted it; it finished at 16:56 (`inputs/24A446`).
+  - 24A446's shared cache was read with `out/bin/ipsw` (SystemOS cryptex mounted read-only with apfs-fuse; symbol
+    cache `out/wt-mem/out/dsc-24A446.a2s`, git-ignored) for the brightness and power key findings.
