@@ -117,7 +117,7 @@ scripts/bg.sh prelink env KERNEL=out/kernel/current-hosted-me/xnu.macho REFERENC
 Linux and macOS (python3 3.11+, LLVM's `llvm-nm` and `llvm-mc`: on a Mac Homebrew's keg-only `llvm`, which the
 script puts on `PATH`). The input is `out/kernel-inputs/24A446/kernelcache.macho` (section 1:
 `scripts/image/kernel-inputs.sh`). It also writes `kernel.kc.hashes` (the 1 MiB chunk list of
-[image-format.md](image-format.md)). On the M4: 46 s cold, 19 s with the pairing reused; 94,109,696 bytes, 94
+[image-format.md](image-format.md)). On the M4: 46 s cold, 19 s with the pairing reused; 94,109,696 bytes, 92
 original functions on the stub and 9 data unpaired (with the reference).
 
 **The build fails** when `kernel/prelink/audit.py` finds a kext import that is not bound as

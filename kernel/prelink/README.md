@@ -221,10 +221,10 @@ The pairing of a kernelcache's imports must not move when the toolchain that bui
 it did: `fileset_match.py` pairs by code shape, and the Xcode 27.2 kernel and reference have other shapes than the
 Linux PC's. So the result of the pairing is now a committed list, and every build is checked against it.
 
-- `pairs-24A446.json`: 2,710 known-good pairs (2,463 functions, 247 data): every kext import of the collection that
+- `pairs-24A446.json`: 2,712 known-good pairs (2,465 functions, 247 data): every kext import of the collection that
   is bound, original -> our symbol, each with its `why`. `"leaf": true` marks an original that only computes registers
   and returns (`mov w0, #45; ret`): any of our functions with the same instructions is right for it.
-- `stubs-24A446.json`: the 94 originals left on the panic stub and the 9 data targets left unpaired, each with its
+- `stubs-24A446.json`: the 92 originals left on the panic stub and the 9 data targets left unpaired, each with its
   reason, the kexts that import it and the count of call sites in their code.
 - `emit.py --pairs --stubs` applies the list over the matcher, the inferred pairs and the reviewed records, and leaves
   the stub list unpaired. Names resolve to our kernel's **external** symbol: Xcode's kernel has local functions with
@@ -280,18 +280,21 @@ Per original import target of the 150-kext closure (functions and data):
 - (b): 108 of 121 functions are as close to the reference's function of that name as the pairs both agree on
   (instruction similarity 0.8 or more); the 13 below were read one by one (notes in their `why`).
 - The new collection `3476435a` (the same kernel, `pairs`/`stubs` applied): 2,710 paired, 94 on the stub, 9 data
-  unpaired, 0 audit failures, 507 `.original` stubs good. Against Linux: (a) 1 (`0xfffffe000b271b70`, above), (c) the
+  unpaired, 0 audit failures, 507 `.original` stubs good. Then two more pairs from the stub list (`vm_map_copy_discard`
+  for AMFI and lifs, `IOPMrootDomain::isLPWMode` for IOAccessoryManager; evidence in their `why`): `cdc47859`, 2,712
+  paired, 92 on the stub. Against Linux: (a) 1 (`0xfffffe000b271b70`, above), (c) the
   7 decided for the Mac, the rest equal or leaf-equal.
 
 ### What is still on the stub (`stubs-24A446.json`)
 
-Every one of the 94 functions and 9 data has callers in kext code; none was called in the Linux boot to the Home
+Every one of the 92 functions and 9 data has callers in kext code; none was called in the Linux boot to the Home
 Screen, where all of them were on the stub or unpaired too. That is the evidence, not a proof for every later path:
 - 56 are Tightbeam, the exclaves IPC (`tb_*` names): this kernel has no `tb_*` function and no exclaves. Importers:
   AppleALSColorSensor, AppleFirmwareKit, AppleH16ANEInterface, ExclavesAudioKext, on their exclave paths.
 - 8 are imported only by kexts that never start (personalities dropped: RTBuddy, AppleSEPManager, ApplePTD,
   AppleEmbeddedAudio, AppleHIDTransport, IOSerialFamily, AppleSMC).
-- 38 are not chosen yet: the names between their neighbours in the import tables are several (`imports.py` prints
+- 1 is `0xfffffe000b271b70` (above: the lead's record contradicted by the code).
+- 36 (functions and data) are not chosen yet: the names between their neighbours in the import tables are several (`imports.py` prints
   them) and the code has not told them apart. A stub panic from one of these names it (`unmapped.py`); its pair goes
   into the list.
 
