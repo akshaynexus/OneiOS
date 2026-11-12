@@ -102,11 +102,14 @@ typedef struct {
   int pid;
   uint32_t exit_status;
   uint32_t service_slot;
-  pthread_mutex_t lock;                      // one order batch at a time; the deferred maps
+  pthread_mutex_t lock;                      // one order batch or one release's maps at a time
   uint8_t areas[XS_MAX_THREADS / 8 + 1];     // thread areas in use
   // map-defer: task_map orders not sent yet. They go with the next release of one of the task's threads (carried out
   // by that thread in the stub's handler before it runs) or at the head of the task's next order, whichever is first,
-  // so they keep their place before any later unmap or protect. Under `lock`.
+  // so they keep their place before any later unmap or protect. Under `qlock`, which is held only to add to or take
+  // the queue: a task_map does not wait for a release whose thread is carrying out earlier maps (`lock`, about 100 us
+  // on the phone, while the kernel's caller holds the task's TLB lock with interrupts masked). A taker holds both.
+  pthread_mutex_t qlock;
   unsigned npending;
   struct xs_op pending[XS_PENDING_MAX];
   uint8_t service_placed, service_epoch;     // the vCPU + 1 its service thread was last put with (xh_cpu_place)
@@ -376,11 +379,13 @@ static int64_t order(task *t, const struct xs_op *ops, unsigned count)
   int64_t result = 0;
   if (count > XS_OPS_MAX - XS_PENDING_MAX) return -EINVAL;
   pthread_mutex_lock(&t->lock);
-  if (t->dead) { t->npending = 0; pthread_mutex_unlock(&t->lock); return -ESRCH; }
+  pthread_mutex_lock(&t->qlock);
+  if (t->dead) { t->npending = 0; pthread_mutex_unlock(&t->qlock); pthread_mutex_unlock(&t->lock); return -ESRCH; }
   // The deferred maps first, in their order: an unmap or protect after them must find them done.
   unsigned first = t->npending;
   memcpy(sp->ops, t->pending, first * sizeof *ops);
   t->npending = 0;
+  pthread_mutex_unlock(&t->qlock);
   // The service thread on the ordering vCPU's host CPU, as an iOS thread is (cpu-pin): the order is then a switch
   // on that core and back, not the wake-up of another core.
   xh_vcpu *v = xh_cpu_self();
@@ -446,6 +451,7 @@ static int64_t task_create_one(uint64_t *handle)
   if (slot < 0) { pthread_mutex_unlock(&T.lock); return -EAGAIN; }
   memset(t, 0, sizeof *t);
   pthread_mutex_init(&t->lock, NULL);
+  pthread_mutex_init(&t->qlock, NULL);
   t->service_slot = (uint32_t)slot;
   struct message m = { .kind = M_SPAWN, .slot = (uint32_t)slot };
   T.reply_ready = false;
@@ -562,10 +568,10 @@ int64_t xh_task_map(uint64_t handle, uint64_t va, uint64_t size, uint32_t prot, 
     // A TLB fill: it must be in place before any thread of the task touches the page again through this entry,
     // and before any later unmap or protect of the task; the queue gives both (task.npending). A fill that comes
     // late only costs the toucher one more fault, which the kernel fills again.
-    pthread_mutex_lock(&t->lock);
+    pthread_mutex_lock(&t->qlock);
     bool queued = !t->dead && t->npending < XS_PENDING_MAX;
     if (queued) t->pending[t->npending++] = op;
-    pthread_mutex_unlock(&t->lock);
+    pthread_mutex_unlock(&t->qlock);
     if (queued) { p->maps_deferred++; return 0; }
     if (t->dead) return -ESRCH;
   }
@@ -779,14 +785,16 @@ int64_t xh_thread_run(xh_vcpu *v, uint64_t handle, struct xh_user_state *state, 
   unsigned nops = 0;
   if (__atomic_load_n(&t->npending, __ATOMIC_RELAXED)) {
     pthread_mutex_lock(&t->lock);
+    pthread_mutex_lock(&t->qlock);
     nops = t->npending;
     if (nops && !t->dead) {
       memcpy((uint8_t *)tp + XS_OPS_OFF, t->pending, nops * sizeof(struct xs_op));
       t->npending = 0;
+      pthread_mutex_unlock(&t->qlock);
       tp->ops_done = 0;
       tp->nops = nops;
       draining = true;
-    } else pthread_mutex_unlock(&t->lock);
+    } else { pthread_mutex_unlock(&t->qlock); pthread_mutex_unlock(&t->lock); }
   }
   tp->state = *state;
   tp->command = XS_RUN;

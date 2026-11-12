@@ -289,6 +289,31 @@ Built on the Mac (`HOSTED_OUT=perf`, series through 0044, DEVELOPMENT and the RE
   most neighbours get used: `filled from the tables` against `fault-around maps` in oneios-perf says.
 - Built on the Mac (`HOSTED_OUT=perf`, series through 0046, DEVELOPMENT and the RELEASE reference). Not run: the hosted
   kernel cannot run in the Mac's container (no pointer authentication), so these are measured on the phone only.
+- **Phone, round 2** (boot 14:12, kernel.kc 29bef797, `oneios-fault-around=8`): the user words were taken 0.7-1.1 million
+  times per 30 s and waited for 1.7-6.7 s (the global word: 41-47 s before); unmaps: 234,435 for tasks' own flushes and
+  4,400 from 49 shared-region flushes, which skipped 2,432 tasks. But a fill from the tables took about 2.1 ms (26,576
+  fills, 56 s per 30 s) against 77 us for a vm_fault: fault-around made 500,000-930,000 maps per 30 s, three per
+  fault, mostly the same windows again (each vm_fault's refill did its window again), and each fill's maps waited for
+  the task's queue while another thread of the task carried out earlier maps (100-130 us a release). Fixed by 0047 and
+  xnuhost's queue lock (below).
+
+## 0047-0048: fault-around once per window, kernel_task's CPU (perf, 2026-11-12)
+
+- **0047.** A window is faulted around once until the task's next flush of it (16 slots per pmap,
+  `pmap->hosted_around`, cleared by `hosted_task_unmap_locked` for the windows a flush covers). A page of a done window
+  that becomes valid later gets its own fault and fill of that page only. The report adds `windows done already W`.
+- **xnuhost (same commit):** the map queue has its own lock (`task.qlock`); a `task_map` adds to it without waiting for a
+  release whose thread is carrying out earlier maps (the task's order lock), which is what made the fills wait with the
+  task's TLB word held. The order is unchanged: an order or a release takes both locks to take the queue.
+- **0048.** oneios-perf adds `kernel_task: N threads, T us of CPU (P% of a vCPU); most: NAME T ... #ID@0xCONT T ... us`:
+  the kernel's own threads (pager, compressor, IOKit work loops, thread calls, idle threads with the interrupts they
+  take), by name or by their continuation (unslid; name it against the kernel). A stall showed kernel_task at 127 %. The
+  kernel's work for a user trap is charged to the user thread, so it is not in this line.
+- Expected per fill without fault-around: a walk and one queue add (a host call of about 1 us), 3-5 us (round 1's first
+  window, before the global lock got busy: 77 ms for 27,605 fills, 2.8 us each); the page's mmap (about 30 us) is paid
+  at the next release, as before. With `oneios-fault-around=8` and 0047: up to 8 queue adds, about 10 us, and at most
+  7 extra maps per window per flush.
+- Built on the Mac (series through 0048, DEVELOPMENT and the RELEASE reference); not run.
 
 ## 0039-gpu-client-list-and-texts.patch (gpu, 2026-11-12)
 

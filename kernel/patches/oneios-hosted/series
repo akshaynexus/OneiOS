@@ -132,6 +132,12 @@
 # perf: oneios-fault-around=N (off by default): a fill also maps the other pages of its N-page window that the tables
 # already allow, as a TLB may.
 0046-fault-around.patch
+# perf: fault-around once per window until the task's next flush of it (the refill after each vm_fault did its window
+# again: three maps per fault on the phone with oneios-fault-around=8).
+0047-fault-around-once.patch
+# perf: oneios-perf also says where kernel_task's CPU goes: its threads' time and the 8 busiest, by name or continuation
+# (a stall showed kernel_task at 127 %).
+0048-kernel-task-cpu.patch
 # crashes: the SystemOS volume (the OS cryptex) answers FSIOC_AUTH_FS for AMFI as 0032's App volume does, once
 # native_owner_cache_prepare has checked it: SafariConfigurationSubscriber's own self launch constraint
 # (on-system-volume or on-authorized-authapfs-volume) failed with c[4]p[1]m[1]e[0] at each launch.

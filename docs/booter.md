@@ -269,7 +269,9 @@ store of a word in the shared trap page and, when the other side sleeps, a futex
   (`XS_OPS_OFF` in its slot) while xnuhost holds the task's order lock, or it goes at the head of the task's next order
   (unmap, protect, clone), whichever is first. So a map is in place before any thread of the task runs again and before
   any later unmap or protect of the task, which is what the kernel's TLB rule needs (`hosted_pmap.h`). `task_read` and
-  `task_write` send the queue first. A failed deferred map is logged (`tasks: pid N: a deferred map ... failed`); the
+  `task_write` send the queue first. The queue has its own lock: a `task_map` never waits for a release whose thread
+  is carrying out earlier maps (on the phone that made the kernel's fills wait about 100 us each, with the task's TLB
+  lock held). A failed deferred map is logged (`tasks: pid N: a deferred map ... failed`); the
   toucher faults again and the kernel fills again. `map-defer=0` orders each map as before.
 - **Spins (`spin-host`, `spin-task`, microseconds, default 0).** Each side may spin before it sleeps. With each thread
   on its own core this halves nothing that pinning does not already remove, and on a shared core it costs the spin
