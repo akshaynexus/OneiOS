@@ -49,7 +49,12 @@ static int helper_start(void *ctx, bool output, unsigned rate, unsigned channels
 {
   helper *h = ctx;
   struct au_header header = { .kind = AU_START, .output = output, .channels = (uint8_t)channels, .value = rate };
-  if (!output) h->in_channels = channels;
+  if (!output) {
+    // What the last recording left in the socket (and the helper's reports) is old: drop it.
+    struct { struct au_header header; int16_t pcm[AU_MAX_FRAMES]; } stale;
+    while (recv(h->fd, &stale, sizeof stale, MSG_DONTWAIT) > 0) {}
+    h->in_channels = channels;
+  }
   return send_message(h, &header, NULL, 0);
 }
 

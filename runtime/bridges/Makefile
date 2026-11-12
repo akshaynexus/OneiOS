@@ -42,6 +42,11 @@ $(H)/test_bridges: tests/test_bridges.c $(CORE:%=%.c) $(DEVICES:%=%.c) $(XNUHOST
 
 BINDER_TEST := tests/test_hidl_binder.c bt/hci.c bt/hidl_parcel.c bt/hci_hidl.c cpu/topology.c
 $(H)/test_hidl_binder: $(BINDER_TEST) $(HDR)
+# The AAudio helper against a fake AAudio (tests/fake/aaudio): its ring, drift steering, stop; real time, about 20 s.
+$(H)/test_audio_helper: tests/test_audio_helper.c audio/aaudio_helper.c audio/audio_proto.h tests/fake/aaudio/AAudio.h
+	@mkdir -p $(H)
+	$(CC) -std=gnu11 -O1 -g $(WARN) -Itests/fake -Iaudio -fsanitize=address,undefined tests/test_audio_helper.c -ldl -lpthread -lm -o $@
+
 	@mkdir -p $(H)
 	$(CC) -std=gnu11 -O1 -g $(WARN) $(INC) -fsanitize=address,undefined $(BINDER_TEST) -lpthread -o $@
 # The binderfs is mounted on build/host/binderfs inside the namespace only; it goes with the namespace.
@@ -50,10 +55,11 @@ test-binder: $(H)/test_hidl_binder
 	mkdir -p $(H)/binderfs; \
 	unshare -Urm sh -c 'mount -t binder binder "$$1" && ASAN_OPTIONS=detect_leaks=0 ONEIOS_HWBINDER="$$1/hwbinder" "$$2"' sh $(H)/binderfs $(H)/test_hidl_binder
 
-test: $(H)/test_bridges test-binder
+test: $(H)/test_bridges $(H)/test_audio_helper test-binder
 	ASAN_OPTIONS=detect_leaks=0 $(H)/test_bridges   # the devices live as long as xnuhost: the transport has no destroy
 	$(MAKE) -C brightness test
 	$(MAKE) -C battery test
+	ASAN_OPTIONS=detect_leaks=0 $(H)/test_audio_helper   # the fake streams are kept for the checks
 
 clean:
 	rm -rf build

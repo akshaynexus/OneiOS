@@ -1,11 +1,15 @@
 # Audio: speaker and microphone
 
-No source here. The kernel side is UniXNU-droidvm's, unchanged (f9121cd): `package/DroidVMAudio.cpp` (two
-`IOAudio2Device`s, "Speaker" and "Mic") over `DroidVMVirtioSnd.c` (virtio-snd: 48 kHz S16, stereo out, mono in,
-240-frame periods). `DroidVMVirtioSnd.c` compiles with our kernel records.
+No source here. The kernel side is UniXNU-droidvm's (f9121cd): `package/DroidVMAudio.cpp` (two `IOAudio2Device`s,
+"Speaker" and "Mic") over `DroidVMVirtioSnd.c` (virtio-snd: 48 kHz S16, stereo out, mono in, 240-frame periods).
+They are built into the hosted kernel by its audio archive, `kernel/patches/oneios-hosted/audio/build-oneios-audio.py`
+(since 2026-11-12; before, they were not built at all and iOS had no audio device): the transport unchanged,
+`DroidVMAudio.cpp` staged with boot arguments for its UIDs and its output latency, and `OneiOSAudio.c`, the start
+that `oneios_drivers_start` calls.
 
 The device it drives is `runtime/bridges/devices/virtio_snd.c` at `/arm-io/virtio-snd` (`droidvm,virtio-snd`),
-backed by the AAudio helper `oneios-audio`.
+backed by the AAudio helper `oneios-audio`. Everything else (boot arguments, log lines, measurements):
+`docs/hardware.md` section 6.
 
 Open on this side: an "Actuator" output for Core Haptics (a third device in `DroidVMAudio.cpp`, or ios-topaz's
 RedwoodAudio HAL plug-in) writing `/dev/oneios-haptic` (`../haptics/oneios_haptic.c`).

@@ -316,6 +316,9 @@ void oneios_bridge_start(void) {
 // OneiOSHidInput.cpp), which subclasses the kernel collection's IOHIDDevice and so is linked only into a kernel built
 // for that collection (kernel/build-hosted.sh). Weak: a kernel linked without the archive starts none.
 __attribute__((weak)) void oneios_hid_input_start(void) {}
+// The speaker and the microphone: the hosted kernel's audio archive (kernel/patches/oneios-hosted/audio,
+// OneiOSAudio.c: UniXNU-droidvm's virtio-snd transport and IOAudio2Devices). Weak: a kernel without it has none.
+__attribute__((weak)) void oneios_audio_start(void) {}
 
 void oneios_drivers_start(void) {
     oneios_bridge_start();
@@ -327,3 +330,4 @@ void oneios_drivers_start(void) {
     oneios_camera_start();
     oneios_hid_input_start();   // after the backlight: the light sensor's device listens to its readings
 }
+    oneios_audio_start();

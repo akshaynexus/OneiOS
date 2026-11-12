@@ -23,7 +23,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 | Wi-Fi / network | **none in the hosted kernel** (UniXNU-droidvm's virtio-net and DroidVMWifi.inc sources are not built into it; section 3) | design of 2026-11-12: iOS drives the vendor's supplicant (AIDL V2) and nl80211, frames by AF_PACKET on wlan0 (`runtime/bridges/wifi`, being written); old tap/NAT route (`runtime/bridges/net`) not used | iOS has had no en0 in any boot; the phone had no network to join on 2026-11-12 |
 | Bluetooth | `drivers/bluetooth` (port of iOSPlus10's transport) on `drivers/bridge` | `runtime/bridges/bt`: the HAL over `/dev/hwbinder` | both built; on by default in a session since 2026-11-11 (before: off, `bluetooth=virtual`); HAL client tested on the PC against a fake HAL on a real binder driver, not yet on the phone |
 | Haptics | `drivers/haptics` (port of iOSPlus10's LaurelVibrator and haptic node) | `runtime/bridges/haptics`: evdev force feedback | both built; host tested with a fake actuator |
-| Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp` (unchanged) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | host built and tested with a fake back end; AAudio as root without system_server is [U] |
+| Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp`: the hosted kernel's audio archive since 2026-11-12 (before: not built, no device in iOS) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | helper run on the phone beside One UI (plays and records, 0 underruns, about 130 ms); host-tested against a fake AAudio; in a session and the guest side not yet run (section 6) |
 | Camera | `drivers/camera`: the `oneios,camera` transport, `/dev/oneios-camera`; `userland/camera`: the capture plug-in (its device object not written) | `runtime/bridges/camera`: helper `oneios-camera` (provider HAL in a session, Camera2 NDK with One UI), ring, device, `camctl` | host and kernel sides built and host-tested; iOS shows no camera yet; one phone run (2026-11-11): cameraserver lists 4 cameras and opens one for a root client, no frame arrived (no binder threads in the process: fixed, the fix not yet run on the phone); the HAL back end never run (section 7) |
 | Backlight and light sensor | `drivers/brightness`: the backlight service (port of iOSPlus10's `AppleARMBacklight`), the light readings; the HID light sensor device, built into the hosted kernel's HID archive | `runtime/bridges/brightness`: the backlight sysfs node, `als_rear` by evdev, `brightctl` | both built; host tested; in a PC boot the HID device starts and Apple's `AppleUSBALSService` attaches to it; never run on the phone or in a session (section 7a) |
 | Battery | `drivers/battery`: an `IOPMPowerSource` powerd reads | `runtime/bridges/battery`: Android's `power_supply` nodes, polled, changes sent over the bridge channel; `batteryctl` | both built; host tested with a fake sysfs; never run on the phone or in a session (section 7c) |
@@ -449,12 +449,33 @@ so xnuhost's `/arm-io/net` device has had no driver in every boot so far and iOS
   `cirrus-codec-name`. LPASS macros `lpass-cdc-{rx,tx,va,wsa,wsa2}-macro`. The DSP graph is AudioReach
   (`android_vendor_qcom_opensource_agm`, `arpal-lx` in the same GitHub organisation).
 - `audioserver` runs in a session with `media.audio_flinger` and `media.aaudio`; Samsung's `ISecAudioHal` is the HAL.
+- Android 17 (SDK 37). Properties: `aaudio.mmap_policy` 2 (MMAP when it can), `aaudio.mmap_exclusive_policy` 2,
+  `audio.deep_buffer.media` true (a media track with no flags goes to the deep-buffer output). libaaudio exports
+  `AAudio_setMMapPolicy` and `AAudioStream_isMMapUsed` (AAudioTesting.h). The media stream's volume was 14 of 15
+  (2026-11-12).
 
-### iOS side (unchanged from UniXNU-droidvm f9121cd)
+### iOS side
 
-`package/DroidVMAudio.cpp`: two `IOAudio2Device`s, UIDs "Speaker" and "Mic", which VirtualAudio turns into routable
-ports; `DroidVMVirtioSnd.c`: virtio-snd transport, node `/arm-io/virtio-snd`, compatible `droidvm,virtio-snd`,
-48 kHz S16, stereo out, mono in, periods of 240 frames, polling. Both transports compile with our records.
+UniXNU-droidvm f9121cd's `package/DroidVMAudio.cpp` (two `IOAudio2Device`s, UIDs "Speaker" and "Mic", which
+VirtualAudio turns into routable ports) over `DroidVMVirtioSnd.c` (virtio-snd transport, node `/arm-io/virtio-snd`,
+compatible `droidvm,virtio-snd`, 48 kHz S16, stereo out, mono in, periods of 240 frames, polling).
+
+**Until 2026-11-12 neither was built into the hosted kernel**: iOS had no audio device at all. The five session logs
+on the phone of 2026-11-11/12 show `audio: on: helper ...` and then nothing: the guest never started a stream. Now
+they are the hosted build's audio archive, `kernel/patches/oneios-hosted/audio/build-oneios-audio.py`
+(`liboneiosaudio.a`, force-loaded; `oneios_drivers_start` calls `oneios_audio_start`, weak in `OneiOSBridge.c`):
+the transport unchanged (`-DDROIDVM_DEVICE_DYNAMIC=1`), `DroidVMAudio.cpp` staged with boot arguments, and
+`OneiOSAudio.c` (the start line and a report every 30 s while the counters move). Kernel log lines:
+`ONEIOS AUDIO: on|off: virtio-snd ... IOAudio2 devices: ...`, `DroidVMAudio: published Speaker=1 Mic=1 ...`,
+`ONEIOS AUDIO: speaker running|idle, ... engine N periods, N late, ...; virtio-snd N tx periods, N dropped ...`.
+Boot arguments: `droidvm-snd=0`, `droidvm-audio=0`, `oneios-audio-out-uid=`, `oneios-audio-in-uid=` (default
+Speaker, Mic; `none`: no microphone), `oneios-audio-latency=FRAMES` (the speaker's "output latency", default 6480 =
+135 ms: the host path below, so iOS keeps video in step), `oneios-audio-report=0`.
+
+VirtualAudio publishes only its Null device when the guest says it is a VM (`vmm-present` 1 in xnuhost's tree):
+the boot argument `owner-hide-vmm=audiomxd,com.apple.WebKit.GPU` (lead's decision of 2026-11-11, Droid-VM-UniXNU's
+`patches/xnu-12377/zzyd-owner-hide-vmm.patch`, in the arch series the build uses) hides it from audiomxd. xnuhost's default boot arguments do not carry it
+yet: the audio test cycle adds it (below).
 
 ### The bridge
 
@@ -463,22 +484,74 @@ ports; `DroidVMVirtioSnd.c`: virtio-snd transport, node `/arm-io/virtio-snd`, co
   receive buffers the guest posted).
 - `runtime/bridges/audio/aaudio_helper.c` -> `bin/oneios-audio`: **a helper process**, because AAudio is a shared
   library and xnuhost is static. xnuhost starts it (`br_audio_helper(path, &ctx)`, `posix_spawn`, a `SOCK_SEQPACKET`
-  pair); it plays through an AAudio low-latency stream fed from a 200 ms ring (the guest's clock and the DAC's
-  differ: an empty ring plays silence, a full one drops the oldest audio) and sends the microphone's bursts back.
+  pair); it lives in xnuhost's namespace and cgroup, and the return's SIGKILL of the namespace (or xnuhost's exit,
+  which closes the socket) ends it and with it the stream: audioserver closes a dead client's track.
+  - **No realtime thread, by construction.** AAudio makes a SCHED_FIFO thread for an MMAP stream and for a FAST
+    track with a data callback, and asks system_server's `scheduling_policy` service for it; in a session that
+    service is gone [I: AOSP's `requestPriority` waits for the service; not read in source here]. So the helper
+    uses no data callback (a blocking `AAudioStream_write` from its own thread), turns MMAP off for its process
+    (`AAudio_setMMapPolicy(NEVER)`) and asks for performance mode NONE. Measured beside One UI: every thread of the
+    helper SCHED_OTHER (policy 0), `mmap 0`, the threads in the parent's cpuset; AudioTrack sets the starting
+    thread's nice to -16 (`ANDROID_PRIORITY_AUDIO`, not realtime). LOW_LATENCY without MMAP and callback gave the
+    same normal-mixer track on the phone, so it is not offered. A guard checks every thread after each start and
+    every 10 s and sets one found SCHED_FIFO or SCHED_RR back to SCHED_OTHER (logged).
+  - Output: the guest's periods go into a ring; the writer moves 240-frame chunks into AAudio, whose buffer is cut
+    to 2 bursts (`ONEIOS_AUDIO_BURSTS`). Before the guest's first chunk, silence fills the level (the ring plus
+    what AAudio holds) to one burst plus a target (`ONEIOS_AUDIO_TARGET_MS`, 20 ms): the server takes a whole burst
+    per cycle. An underrun (AAudio about to run dry) plays silence, primes again and raises the target by 5 ms (at
+    most 80). Clock drift: the level averaged over 1 s is held within 5 ms of its value 1 s after the start by
+    playing a chunk from 239 or 241 ring frames (linear interpolation, at most 4166 ppm); a ring above the target
+    plus 10 ms is played faster the same way; above the target plus 60 ms it drops its oldest audio to the target
+    (an overflow: after a stall). The guest's STOP keeps the stream open, playing silence, for
+    `ONEIOS_AUDIO_LINGER_S` (15 s): iOS stops and starts its device around each sound, and a newly opened
+    deep-buffer track takes nothing for about 200 ms.
+  - Input: a reader thread, blocking `AAudioStream_read` of 240 frames, input preset VOICE_RECOGNITION, the first
+    channel to xnuhost. `backend.c` drops what an earlier recording left in the socket at each input START.
+  - Log (xnuhost's log): `oneios-audio: speaker open: ... none, sharing shared, mmap 0, burst 1600, buffer 3200 of
+    4800 frames, device 3`; every 10 s and at each stop `speaker running|stopped ...: frames in, played, underruns,
+    overflows, slips +N/-N, ring, AAudio N ms queued, N xruns; latency about N ms`; the same for the microphone.
+  - Fixed 2026-11-12: the helper's state reports were blocking sends that xnuhost reads only while the microphone
+    runs, so after a few hundred speaker starts the socket would fill and the helper stop for good. They are
+    `MSG_DONTWAIT` now.
 - Why AAudio and not tinyalsa: on this SoC a PCM device plays only after the AudioReach graph is set up through the
   AGM plug-ins and PAL, which the audio HAL does; opening the card beside it would also fight audioserver.
+- Tests: `runtime/bridges/tests/test_audio_helper.c` (in `make test`): the helper against a fake AAudio whose DAC
+  takes bursts of 1600 from a buffer of 2 bursts: no underrun or overflow at 0 and ±2000 ppm, the drift steered the
+  right way, latency under 120 ms, the microphone's periods in order, the linger (a quick restart takes the open
+  stream; the stream closes after the silence), a clean stop when the socket closes: 4049 checks.
+
+### Measured on the phone (2026-11-12, `bridgectl audio`, One UI running, no session)
+
+| What | Result |
+|---|---|
+| uid 0 opens an AAudio output and input beside One UI | yes, no SELinux denial (`dmesg`: 0 `avc: denied`), domain `ksu` |
+| Track | deep-buffer mixer track (AudioFlinger: flags 0x000, frame count 3200, `Latency 133 ms`), 48 kHz stereo, `mmap 0` |
+| 12 s of a 440 Hz tone at -30 dBFS | 0 underruns, 0 xruns, 0 overflows, 70 slips; a first run had 3 overflows at the start (the track's stall) |
+| Latency (written to presented, AAudio's timestamp) | 128-137 ms: AAudio 128-136 ms (our 67 ms buffer + the deep-buffer path), ring 1-5 ms |
+| Second tone 0.5 s after a stop | the lingering stream: no new open, no stall, 0 underruns |
+| Microphone, 2 s | 92,400 frames (96,000 expected; the stream's start), room noise RMS -52 dBFS, peak -41.5 dBFS |
 
 ### Missing, unknown
 
-- [U] **AAudio from uid 0 with system_server gone.** Playback: audioserver treats uids below 10000 as services and
-  asks no app-op [I from AOSP's audioserver]; audio policy lives in audioserver. Recording: the permission check for
-  `RECORD_AUDIO` normally goes to system_server; whether uid 0 passes is unknown. `bridgectl audio` plays a tone.
-- [U] volume: One UI's stream volume was set by AudioService (gone). The stream plays at the device's last media
-  volume; iOS's volume keys change the guest's digital level only.
-- booter: `runtime/build.sh` must put `oneios-audio` into the runtime package (`bin/oneios-audio`, mode 0755) and
-  start it before the vCPUs run.
-- Routing (speaker, receiver, wired or Bluetooth headset) is One UI's audio policy's default for a media stream.
-  Calls are out of scope (no baseband in the guest).
+- **The guest side has not booted yet.** Built on the Mac (`HOSTED_OUT=audio`, series through 0039, `xnu.macho`
+  `1279b87a...`; the archive compiles with `-Wall -Wextra -Werror` and `oneios_drivers_start` ends in a call of
+  `oneios_audio_start`) and prelinked (XnuPrelink 9b950f2, `kernel.kc` `61d926d8...`, 97 originals on the stub, 10
+  data unpaired: the same pairing as the Mac collection `eae11352` that panics 1.5 s in at Sandbox's
+  `mac_posixsem_check_create`, `kernel/prelink/README.md` "On the phone"). It waits for the agent prelink's audit
+  of the Mac pairing; the phone's baseline is the Linux-built `kernel.kc`, which has no audio archive.
+- [U] **AAudio from uid 0 with system_server gone** (a session): not run yet. Playback: audioserver treats uids
+  below 10000 as services and asks no app-op [I]; recording: audioserver's own checks pass root without
+  system_server [I], whether the record app-op silences it is the open question.
+- [U] Whether VirtualAudio of iPhone18,2 builds its speaker route on "Speaker" and "Mic" (UniXNU-droidvm's iPad
+  UIDs). iOSPlus10's iOS 16 iPhone needed "Speaker" with a silent stereo input and "Hawking"; the UIDs are boot
+  arguments now, a third device would be a change of the staged source.
+- Volume: iOS's volume keys scale the samples in iOS (VirtualAudio's software volume [I from iOSPlus10]); the
+  Android media stream stays at One UI's last volume (14 of 15 on 2026-11-12). Nothing turns it down for a session.
+- Latency 130 ms: the deep-buffer output. A FAST track would be lower but needs the realtime path above.
+- Routing: One UI's audio policy's default for a media stream (speaker; a wired or Bluetooth headset if connected
+  [U]). The earpiece needs a voice-communication stream or AAudio's device id of the earpiece port: not done. Calls
+  are out of scope (no baseband in the guest).
+- The Actuator stream (Core Haptics taps) shares nothing with this path yet (section 5).
 
 ## 7. Camera (fable-camera, 2026-11-11)
 

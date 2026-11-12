@@ -97,7 +97,8 @@ scripts/bg.sh kernel-hosted env HOSTED_OUT=me kernel/build-hosted.sh
   changes): `XNU_FILESET_REFERENCE=1` in the build's command. It lands next to the kernel as
   `out/kernel/current-hosted-me/reference.macho` (see [kernel/prelink/README.md](../kernel/prelink/README.md)).
 - The build also makes the hosted board's archives from `kernel/patches/oneios-hosted/`: the disks (`storage`), the
-  virtio GPU (`gpu`), software AES (`aes`) and the display (`display`: needs `external/NativeMobileDisplay` and
+  virtio GPU (`gpu`), software AES (`aes`), the speaker and microphone (`audio`: UniXNU-droidvm's virtio-snd and
+  IOAudio2Devices from `external/UniXNU-droidvm`) and the display (`display`: needs `external/NativeMobileDisplay` and
   `external/UniXNU-droidvm` from `scripts/setup/get-references.sh`; its input for another kernelcache is remade with
   `display/port-legacy-display.py`).
 - The VM kernel (UniXNU's own board, not used by xnuhost): `scripts/bg.sh kernel kernel/build-linux.sh`; on a Mac,

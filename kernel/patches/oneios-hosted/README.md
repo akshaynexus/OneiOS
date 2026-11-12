@@ -399,3 +399,14 @@ Seen under qemu-aarch64 (main at `3202197` plus this, 8 vCPUs, `--input-script r
 Not seen: backboardd or SpringBoard acting on an event (no user-space log was read, and no frame is drawn yet).
 Nothing ran on the phone.
 
+
+## audio/: the speaker and the microphone (audio, 2026-11-12)
+
+No numbered patch: an archive (`audio/build-oneios-audio.py`, hooked into `kernel/build-hosted.sh` like `hid/`)
+whose start, `oneios_audio_start` (`audio/OneiOSAudio.c`), is the last call of `oneios_drivers_start` (weak in
+`drivers/bridge/OneiOSBridge.c`). It holds UniXNU-droidvm's virtio-snd transport (`DroidVMVirtioSnd.c`, unchanged,
+`-DDROIDVM_DEVICE_DYNAMIC=1`) and its two IOAudio2Devices (`DroidVMAudio.cpp`, staged with the boot arguments
+`oneios-audio-out-uid`, `oneios-audio-in-uid`, `oneios-audio-latency`; its static initializer out of
+`__mod_init_func`, as the HID archive's: `droidvm_audio_attach` runs it in its own module load). Before it the
+hosted kernel had no audio device. Log lines, boot arguments and what was measured: `docs/hardware.md` section 6.
+Built on the Mac (`HOSTED_OUT=audio`); not yet booted.

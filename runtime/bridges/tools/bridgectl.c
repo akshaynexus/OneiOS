@@ -5,7 +5,9 @@
 //   bridgectl haptic-pattern         three taps and a ramp: what an iOS pattern feels like
 //   bridgectl bt                     opens the Bluetooth HAL, sends HCI Reset and Read BD_ADDR, prints the events
 //   bridgectl net                    opens the tap, answers the first DHCP request it sees, counts frames for 10 s
-//   bridgectl audio HELPER           plays a 440 Hz tone for 2 s through the helper (path of oneios-audio)
+//   bridgectl audio HELPER [S [record]]  a quiet 440 Hz tone for S s (2) through the helper (path of oneios-audio),
+//                                    then 0.5 s later a 660 Hz one for 0.5 s;
+//                                    with record, then 2 s of the microphone (frames, peak, RMS)
 // Each prints what it found and ends with "ok" or the reason it failed.
 #define _GNU_SOURCE
 #include "bridges/bridges.h"
@@ -13,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 static int cpu(int argc, char **argv)
@@ -107,22 +110,73 @@ static int net(void)
   return 0;
 }
 
-static int audio(const char *path)
+// A quiet tone (-30 dBFS: never loud, whatever the media volume) paced by the clock as the guest's engine paces
+// its periods; then, with `record`, two seconds of the microphone: frames, peak and RMS. The helper's own lines
+// (its stream's mode, the ring's report) are on stderr.
+static int audio(int argc, char **argv)
 {
+  const char *path = argv[2];
+  unsigned seconds = argc > 3 ? (unsigned)atoi(argv[3]) : 2;
+  bool record = argc > 4 && !strcmp(argv[4], "record");
+  if (seconds < 1 || seconds > 30) seconds = 2;
   void *ctx;
   const br_audio_backend *b = br_audio_helper(path, &ctx);
   if (!b || b->start(ctx, true, 48000, 2)) return 1;
   int16_t period[480];
   double phase = 0;
-  for (unsigned p = 0; p < 400; p++) {                          // 2 s of 5 ms periods
-    for (unsigned i = 0; i < 240; i++) { period[2 * i] = period[2 * i + 1] = (int16_t)(8000 * sin(phase)); phase += 2 * M_PI * 440 / 48000; }
-    b->write(ctx, period, 240);
-    usleep(5000);
+  struct timespec at;
+  clock_gettime(CLOCK_MONOTONIC, &at);
+  unsigned sent = 0;
+  for (unsigned p = 0; p < seconds * 200; p++) {                // 5 ms periods
+    for (unsigned i = 0; i < 240; i++) { period[2 * i] = period[2 * i + 1] = (int16_t)(1000 * sin(phase)); phase += 2 * M_PI * 440 / 48000; }
+    if (b->write(ctx, period, 240) == 240) sent++;
+    at.tv_nsec += 5000000;
+    if (at.tv_nsec >= 1000000000) { at.tv_nsec -= 1000000000; at.tv_sec++; }
+    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &at, NULL);
+  }
+  printf("audio: %u of %u periods of a 440 Hz tone at -30 dBFS sent\n", sent, seconds * 200);
+  b->stop(ctx, true);
+  // A second, short tone 0.5 s later, as iOS stops and starts its device around each sound: the helper's stream
+  // lingers, so this one starts without the track's stall (its report says so).
+  usleep(500000);
+  if (b->start(ctx, true, 48000, 2)) return 1;
+  clock_gettime(CLOCK_MONOTONIC, &at);
+  for (unsigned p = 0; p < 100; p++) {
+    for (unsigned i = 0; i < 240; i++) { period[2 * i] = period[2 * i + 1] = (int16_t)(1000 * sin(phase)); phase += 2 * M_PI * 660 / 48000; }
+    (void)b->write(ctx, period, 240);
+    at.tv_nsec += 5000000;
+    if (at.tv_nsec >= 1000000000) { at.tv_nsec -= 1000000000; at.tv_sec++; }
+    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &at, NULL);
   }
   b->stop(ctx, true);
-  usleep(100000);
+  int rc = sent ? 0 : 1;
+  if (record) {
+    if (b->start(ctx, false, 48000, 1)) { b->close(ctx); return 1; }
+    int16_t pcm[240];
+    uint64_t frames = 0, counted = 0;
+    double sum = 0;
+    int peak = 0;
+    struct timespec t0, t;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    do {
+      int n = b->read(ctx, pcm, 240);
+      if (n < 0) break;
+      // The first 250 ms are the input's start (a full-scale click on the phone): not counted in the peak and RMS.
+      for (int i = 0; i < n && frames + (uint64_t)i >= 12000; i++) { int v = abs(pcm[i]); if (v > peak) peak = v; sum += (double)pcm[i] * pcm[i]; counted++; }
+      frames += (uint64_t)(n > 0 ? n : 0);
+      clock_gettime(CLOCK_MONOTONIC, &t);
+    } while ((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000 < 2000);
+    b->stop(ctx, false);
+    double rms = counted ? sqrt(sum / (double)counted) : 0;
+    printf("audio: microphone: %llu frames in 2 s (96000 expected), peak %d (%.1f dBFS), RMS %.1f dBFS%s\n", (unsigned long long)frames, peak,
+           peak ? 20 * log10(peak / 32768.0) : -999.0, rms > 0 ? 20 * log10(rms / 32768.0) : -999.0,
+           frames && !peak ? " (all zero: silenced?)" : "");
+    if (!frames) rc = 1;
+  }
+  usleep(300000);                                               // the helper's last report
   b->close(ctx);
-  return 0;
+  usleep(100000);
+  return rc;
 }
 
 // The bridges' own lines (why a HAL was not found, the HAL's state), as xnuhost logs them.
@@ -139,7 +193,7 @@ int main(int argc, char **argv)
   else if (!strcmp(argv[1], "haptic-pattern")) rc = haptic(argc, argv, true);
   else if (!strcmp(argv[1], "bt")) rc = bt();
   else if (!strcmp(argv[1], "net")) rc = net();
-  else if (!strcmp(argv[1], "audio") && argc > 2) rc = audio(argv[2]);
+  else if (!strcmp(argv[1], "audio") && argc > 2) rc = audio(argc, argv);
   printf("%s\n", rc == 0 ? "ok" : rc == 2 ? "unknown command" : "failed");
   return rc;
 }

@@ -76,7 +76,8 @@ adb shell su -c '/data/local/tmp/bridgectl cpu'
 adb shell su -c '/data/local/tmp/bridgectl haptic 200 1000'
 adb shell su -c '/data/local/tmp/bridgectl haptic-pattern'
 adb shell su -c '/data/local/tmp/bridgectl bt'            # with Bluetooth off in One UI's settings (see below)
-adb shell su -c '/data/local/tmp/bridgectl audio /data/local/tmp/oneios-audio'
+adb shell su -c '/data/local/tmp/bridgectl audio /data/local/tmp/oneios-audio'          # 2 s, then 0.5 s
+adb shell su -c '/data/local/tmp/bridgectl audio /data/local/tmp/oneios-audio 12 record' # 12 s, then the microphone
 ```
 
 `bt` takes the controller from One UI's Bluetooth app if that app has it open: turn Bluetooth off first. It prints
@@ -85,4 +86,12 @@ controller is on (status 0)`, `state 1`, two events `<- type 4, 6 bytes: 0e 04 0
 12 bytes: 0e 0a 01 09 10 00 <address, low byte first>` (Read BD_ADDR), `bt: ok: 2 events ...`, then `ok`. The
 bridge's own lines (`error: bluetooth: ...`) say which step failed: not registered / find denied, `initialize`
 refused, or no `initializationComplete` in 15 s (then look for `avc: denied` lines with `hal_bluetooth` in dmesg). `haptic`
-and `audio` are harmless beside One UI. None of them has been run yet.
+and `audio` are harmless beside One UI.
+
+`audio` plays a 440 Hz tone at -30 dBFS (quiet at any media volume) for S seconds, then 0.5 s later a 660 Hz one
+for 0.5 s (the helper's stream lingers: no new open), and with `record` takes 2 s of the microphone. A pass, as on
+the phone on 2026-11-12 beside One UI: `oneios-audio: speaker open: 48000 Hz, 2 channel(s), none, sharing shared,
+mmap 0, burst 1600, buffer 3200 of 4800 frames`, the `speaker stopped by the guest` lines with `0 underruns` and
+`latency about 130 ms`, `audio: microphone: 92400 frames in 2 s (96000 expected), peak ... RMS -52.0 dBFS` (room
+noise), `ok`. `0 frames` or `all zero` is a silenced microphone; an `open speaker: ...` line is AAudio's refusal
+(then `dmesg | grep avc`). The other tools have not been run yet.
