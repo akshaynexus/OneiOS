@@ -1062,14 +1062,20 @@ kernel's thermal zones did not set it). The switch stops system_server, so whate
 whole session (sessions A and B ran with these; bringup's sessions 3 and 4, after a cool One UI, had 3340800 and 1000
 MHz). A session that starts after a warm One UI is slowed for its whole length, and one that starts cool has no case
 policy but ours. **The OneOS fork now saves and lifts them** (branch `oneios`, `oneios_switch.sh` `clocks_save` /
-`clocks_tops`, `oneios_return.sh`; the fork's `docs/oneios.md`, "Session flow"): at the baseline it saves
-`scaling_min_freq` and `scaling_max_freq` of each policy, `/sys/kernel/gpu/gpu_max_clock` and KGSL's `max_gpuclk`
+`clocks_tops`, `oneios_return.sh`; the fork's `docs/oneios.md`, "Session flow"): at the baseline it saves Samsung's
+`/sys/devices/system/cpu/cpufreq_limit/cpufreq_max_limit` and `cpufreq_min_limit`, `scaling_min_freq` and `scaling_max_freq` of each policy, `/sys/kernel/gpu/gpu_max_clock` and KGSL's `max_gpuclk`
 (`control/base/clocks`); once system_server is gone it writes the hardware's range (`cpuinfo_min_freq`,
 `cpuinfo_max_freq`, the top of the GPU tables) and logs each node `old -> new` in `switch.log`; the return writes One
 UI's values back before Gate A and zygote, on every way back but the reboot (a SIGKILL of xnuhost does not skip the
 return), and logs them in `return.log`. The kernel's thermal zones, trips and cooling devices and `/sys/power` are not
 written: the kernel's junction trips, LMh and xnuhost's thermal step are the session's caps. Tested against a fake
-sysfs (`OneiosScriptTest`); not yet run on the phone (it needs the next app build). xnuhost itself writes none of them.
+sysfs (`OneiosScriptTest`). The first phone run (prelink's session of 10:28) lifted the GPU (`gpu_max_clock` 500 -> 1000,
+`thermal_pwrlevel` 0) but not the CPUs: `scaling_max_freq` still read 1689600/2035200 after the write. The holder is
+Samsung's `cpufreq_limit` driver (`drivers/cpufreq/cpufreq_limit.c` of the SM8650 kernel, read at 809f7ed): SSRM writes
+one value to `cpufreq_max_limit` and the driver keeps a freq QoS max request per cluster of its own, which a write of
+`scaling_max_freq` cannot lift; `-1` releases it. All cooling devices were at 0, `msm_performance` `cpu_max_freq`
+unlimited and WALT's `sched_fmax_cap` only on cluster 0 (1804800). The fork now releases `cpufreq_limit` first and puts
+it back last (fork 2nd commit; tested against a fake sysfs, not yet on the phone). xnuhost itself writes none of them.
 
 ### Missing, unknown
 
