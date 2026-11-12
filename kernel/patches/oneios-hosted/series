@@ -132,6 +132,14 @@
 # perf: oneios-fault-around=N (off by default): a fill also maps the other pages of its N-page window that the tables
 # already allow, as a TLB may.
 0046-fault-around.patch
+# crashes: the SystemOS volume (the OS cryptex) answers FSIOC_AUTH_FS for AMFI as 0032's App volume does, once
+# native_owner_cache_prepare has checked it: SafariConfigurationSubscriber's own self launch constraint
+# (on-system-volume or on-authorized-authapfs-volume) failed with c[4]p[1]m[1]e[0] at each launch.
+0047-systemos-authenticated.patch
+# crashes: feature flags off in the Data store's override files before launchd (oneios-feature-off=DOMAIN/FLAG,...,
+# default CoreLocation/CLAutoCohort): with CoreLocation's automatic cohorts locationd crash-looped (pc 0 in
+# _dispatch_lane_serial_drain, 17 times a session); vphone-cli turns the flag off for iOS 27 guests.
+0048-feature-flags-off.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # net/build-oneios-net.py), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and

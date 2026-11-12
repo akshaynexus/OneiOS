@@ -329,7 +329,52 @@ answers `FSIOC_AUTH_FS` with success for that mount (`oneios_app_cryptex_authent
 User space cannot ask this ioctl. Other volumes go to APFS unchanged; AMFI still evaluates every other fact.
 At the first answer the kernel logs
 `OneiOS: AMFI launch constraints: App cryptex volume answered as authenticated (FSIOC_AUTH_FS)`. Full notes:
-`kernel/prelink/README.md`, "AMFI and launch constraints". Compiled; not yet run on the phone.
+`kernel/prelink/README.md`, "AMFI and launch constraints". Run on the phone (boot of 2026-11-11 23:00, saved as
+`c2`): the line came at +108 s; `webinspectord` and `webbookmarksd` started and the log has no crash line for them.
+
+## 0047-systemos-authenticated.patch and 0048-feature-flags-off.patch (crashes, 2026-11-12)
+
+Two loops of the boots of 2026-11-11/12 (`c2`, `diag`, `combo1` logs).
+
+- **0047.** `SafariConfigurationSubscriber.xpc` (SafariFoundation, on the SystemOS volume) was killed at each launch:
+  `AMFI: Launch Constraint Violation (enforcing), error info: c[4]p[1]m[1]e[0], (Constraint not matched)`. Its code
+  signature carries a self launch constraint of its own (`ipsw macho info --sig`: `on-system-volume` or
+  `on-authorized-authapfs-volume`, and `validation-category` 1; parent `is-init-proc`). The SystemOS volume is the upper
+  layer of the root union, not the root mount (`MNT_ROOTFS` stays with os.img), and APFS cannot authorize it without a
+  personalized manifest. `native_owner_cache_prepare` (kern_exec.c) checks that mount (read-only, APFS, on the device
+  the image set names, which xnuhost verifies chunk by chunk) and now names it to `oneios_systemos_verified`;
+  `oneios_app_cryptex_authenticated` answers `FSIOC_AUTH_FS` for it as for the App volume. First answer:
+  `OneiOS: AMFI launch constraints: SystemOS volume answered as authenticated (FSIOC_AUTH_FS)`. Programs of the root
+  volume are not affected (they meet `on-system-volume`), nor any other volume.
+- **0048.** locationd crashed 17 times in one session, every time the same way: `pc=0x0`,
+  `lr=_dispatch_lane_serial_drain+0x118` (`dsc.py --slide 0x124d8000`: `_dispatch_lane_invoke`,
+  `_dispatch_root_queue_drain_deferred_wlh`, `_dispatch_workloop_worker_thread`), a serial queue bound to a workloop.
+  At +0x118 libdispatch calls the item's `dx_invoke` (class word + 0x48). The item (`x25`/`x0`) lay at the same depth
+  of another worker thread's stack in every crash, and its class word (`x28`) was that thread's TSD base (a saved
+  `tpidrro_el0`), whose slot 9 (the semaphore cache) was 0, or once the port name `0x2c03` (`pc=0x2c03`). So the queue
+  drained an item from a stack frame that had already returned: the shape of a `dispatch_sync` waiter that left early
+  (inferred; the waiter was not caught). vphone-cli turns `CoreLocation/CLAutoCohort` off for iOS 27 guests
+  (`patch-locationd-cohorting`, "Disable automatic CoreLocation cohort queues"), droidvm saw locationd's crash on a
+  `Cohort:0` queue once a boot, and vphone's notes have 27.0's locationd failing with `EXC_ARM_PAC_FAIL` (the same item
+  with PAC on). The flag is `FeatureComplete` in the root's `/System/Library/FeatureFlags/Domain/CoreLocation.plist`.
+  The patch writes the override `/private/var/preferences/FeatureFlags/Domain/CoreLocation.plist` =
+  `{CLAutoCohort = {Enabled = false}}` before launchd (that is `/Library/Preferences/FeatureFlags`, the override path
+  libsystem_featureflags reads after the root's); the roottweak writes the same file into new seeds (docs/userland.md).
+  `oneios-feature-off=DOMAIN/FLAG[,...]` (default `CoreLocation/CLAutoCohort`, `-` none). A file that names the flag
+  is kept, another flag's file gets the entry, a binary file is left alone. Console:
+  `oneios-features: CoreLocation/CLAutoCohort: off (written)`, later boots `... named there already: kept`. With the
+  flag off CoreLocation logs `#Cohorting Process intended to sign up for auto cohorting but CoreLocation/CLAutoCohort=off`
+  (user-space log, not on the console). What iOS loses: locationd's silos keep their own queues instead of shared
+  cohort queues (an optimization of iOS 27; no feature depends on it as far as read). Built (HOSTED_OUT=crashes); not
+  run on the phone.
+- The speech audio units (`SiriAUSP`, `MacinTalkAUSP`, `MauiAUSP`, `KonaSynthesizer`, ExtensionKit extensions on the
+  root volume) are **not** fixed here. They are not refused by launch constraints: AMFI logs no violation for them,
+  their signatures carry no launch constraint, and the root volume meets `on-system-volume`. They die 0.4-5 s after
+  their start with no trap (xnuhost logs every fault, undefined instruction and `brk` of a task), so they abort or are
+  killed with a crash report; the console has only `Process[N] crashed: NAME. Too many corpses being created.` The
+  `_process_matches_constraint` lines do not line up with them. Next boot, to name the cause:
+  `sheng-exc-name=locationd,SiriAUSP,MacinTalkAUSP,MauiAUSP,KonaSynthesizer` (the EXC_CRASH line with its code and the
+  user backtrace, as locationd's second dump shows) and `oneios-sysfail=SiriAUSP,MacinTalkAUSP,MauiAUSP,KonaSynthesizer`.
 
 ## Written and never run
 

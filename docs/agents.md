@@ -1861,3 +1861,22 @@ persistent: a reboot costs a manual re-root.
   - **Expected:** after `wifid[N] sets 10 ... -> 0`: `ONEIOS WIFI: scan done: N networks (host error 0)` within
     about 4 s, `ONEIOS WIFI: event 10 for en0, 0 bytes -> 0`, then `wifid[N] gets 11: len 2280 ... -> 0` (the first
     of them is logged; the last one `-> 5`), and the networks in Settings.
+
+- 2026-11-12 13:40, crashes -> parent, prelink, userland: **two crash loops: locationd (fixed by a flag), the OS
+  cryptex's launch constraint (fixed), the speech audio units (not fixed: cause not on the console).**
+  - **locationd** [F, registers of 17 dumps; I, the mechanism]: `pc 0`, `lr _dispatch_lane_serial_drain+0x118`, a
+    workloop-bound serial queue calls an item's `dx_invoke`; the item sat on another worker thread's stack, its class
+    word that thread's TSD (a stale frame: the shape of a `dispatch_sync` waiter that left early). vphone-cli turns
+    `CoreLocation/CLAutoCohort` off for iOS 27 guests; droidvm saw it on a `Cohort:0` queue. Hosted 0048 writes the
+    Data store's override `/private/var/preferences/FeatureFlags/Domain/CoreLocation.plist` before launchd
+    (`oneios-feature-off=`, default `CoreLocation/CLAutoCohort`); roottweak `feature-flags` writes it into new seeds.
+  - **SafariConfigurationSubscriber** [F]: its own self launch constraint (`c[4]`: on-system-volume or authorized
+    authapfs) fails on the SystemOS volume. Hosted 0047: the checked SystemOS mount answers `FSIOC_AUTH_FS` as 0032's
+    App volume does.
+  - **SiriAUSP, MacinTalkAUSP, MauiAUSP, KonaSynthesizer** [F]: no launch-constraint violation, no trap, no reason on
+    the console. Next boot: `sheng-exc-name=locationd,SiriAUSP,MacinTalkAUSP,MauiAUSP,KonaSynthesizer` and
+    `oneios-sysfail=SiriAUSP,MacinTalkAUSP,MauiAUSP,KonaSynthesizer`; send me the lines.
+  - **Expected in the next log:** `oneios-features: CoreLocation/CLAutoCohort: off (written)` (later boots `named
+    there already: kept`), no `sheng-exc: locationd` and no `crashed: locationd`; `OneiOS: AMFI launch constraints:
+    SystemOS volume answered as authenticated (FSIOC_AUTH_FS)` and no `Launch Constraint Violation` for
+    SafariConfigurationSubscriber. Needs a new `kernel.kc` (kernel `HOSTED_OUT=crashes`).

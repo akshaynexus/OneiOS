@@ -268,8 +268,22 @@ class Sealed(Case):
         self.assertEqual(digest(self.data), first)
         self.assertEqual(entries(), manifest)
         states = self.states()
-        for item in ('disabled.plist', 'preferences: setup', 'preferences: coreanimation', 'data layout'):
+        for item in ('disabled.plist', 'preferences: setup', 'preferences: coreanimation', 'data layout', 'CoreLocation flags'):
             self.assertEqual(states[item], 'kept', item)
+
+    def test_corelocation_cohorts_are_off_on_the_data_volume(self):
+        flags = 'preferences/FeatureFlags/Domain/CoreLocation.plist'
+        os.makedirs(os.path.join(self.data, os.path.dirname(flags)))
+        with open(os.path.join(self.data, flags), 'wb') as f:
+            plistlib.dump({'Somebody': {'Enabled': True}}, f)
+        self.apply()
+        have = self.plist(self.data, flags)
+        self.assertEqual(have, {'Somebody': {'Enabled': True}, 'CLAutoCohort': {'Enabled': False}})
+        with open(os.path.join(self.data, flags), 'rb') as f:
+            self.assertTrue(f.read().startswith(b'<?xml'), 'XML, as the kernel (hosted 0048) reads it')
+        self.assertEqual(self.states()['CoreLocation flags'], 'applied')
+        # the sealed root keeps Apple's defaults and gets no ExtensionKit flag
+        self.assertFalse(os.path.exists(os.path.join(self.data, 'preferences/FeatureFlags/Domain/ExtensionKit.plist')))
 
     def test_the_data_layout(self):
         cache = 'containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches'

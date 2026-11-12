@@ -1,0 +1,149 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8938,10 +8938,137 @@
+ 		error = native_gpu_addon_write(path, (const uint8_t *)text, length, 0644, ctx);
+ 		if (error > 0) {
+ 			printf("oneios-jobs: %s not written (%d)\n", path, error);
++		}
++	}
++	kfree_data(text, cap);
++}
++#endif /* XNU_HOSTED */
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0048): feature flags turned off in the Data store's override files before launchd, for a Data store
++ * made from a seed that does not carry them (the image's roottweak writes the same files into new seeds). FeatureFlags
++ * (libsystem_featureflags) reads /System/Library/FeatureFlags/Domain/D.plist and then the override
++ * /Library/Preferences/FeatureFlags/Domain/D.plist, which is /private/var/preferences/... on the Data volume; the
++ * sealed root is not touched. The list is oneios-feature-off=DOMAIN/FLAG[,DOMAIN/FLAG...] (default
++ * CoreLocation/CLAutoCohort; "-" for none). A missing file is written as {FLAG = {Enabled = false}}; a file that
++ * names the flag already is left alone; another flag's file gets the entry after its top <dict>; a binary file is left
++ * alone. One line per flag:
++ *   oneios-features: CoreLocation/CLAutoCohort: off (written)        or: named there already: kept
++ * Why CLAutoCohort: with it locationd crash-looped (17 times in a session, phone 2026-11-12): a serial queue drained
++ * an item that lay on another worker thread's stack, so its "class" was that thread's TSD and the call went to 0
++ * (pc 0, lr _dispatch_lane_serial_drain+0x118). CoreLocation's automatic cohorts (CLAutoCohortUtilities) put silos that
++ * sync with each other on shared cohort queues; vphone-cli turns the flag off for iOS 27 guests
++ * (patch-locationd-cohorting) and droidvm saw the crash on a "Cohort:0" queue (with PAC on it is a PAC failure).
++ */
++static bool
++oneios_feature_name_ok(const char *name, size_t length)
++{
++	if (length == 0 || length > 64) {
++		return false;
++	}
++	for (size_t i = 0; i < length; i++) {
++		char c = name[i];
++		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' ||
++		    (c == '.' && i > 0))) {
++			return false;
++		}
++	}
++	return true;
++}
++
++static const char *
++oneios_feature_off(proc_t p, user_addr_t scratch, const char *domain, const char *flag)
++{
++	static const char head[] = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
++	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
++	    "<plist version=\"1.0\">\n<dict>\n";
++	static const char tail[] = "</dict>\n</plist>\n";
++	vfs_context_t ctx = vfs_context_current();
++	char path[160], entry[160];
++	snprintf(path, sizeof(path), "/private/var/preferences/FeatureFlags/Domain/%s.plist", domain);
++	snprintf(entry, sizeof(entry), "\t<key>%s</key>\n\t<dict>\n\t\t<key>Enabled</key>\n\t\t<false/>\n\t</dict>\n", flag);
++	const size_t cap = 64 * 1024;
++	char *text = kalloc_data(cap, Z_WAITOK | Z_ZERO);
++	if (text == NULL) {
++		return "no memory";
++	}
++	const char *said = NULL;
++	size_t length = 0;
++	vnode_t vp = NULLVP;
++	if (vnode_open(path, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx) == 0) {
++		off_t size = -1;
++		int resid = 0;
++		(void)vnode_size(vp, &size, ctx);
++		int error = size <= 0 || (size_t)size + strlen(entry) >= cap ? EFBIG : vn_rdwr(UIO_READ, vp, (caddr_t)text, (int)size,
++		    0, UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++		vnode_close(vp, FREAD, ctx);
++		length = (size_t)size;
++		char key[96];
++		snprintf(key, sizeof(key), "<key>%s</key>", flag);
++		char *top = error || resid ? NULL : strnstr(text, "<plist", length);
++		top = top ? strnstr(top, "<dict>", length - (size_t)(top - text)) : NULL;
++		if (error || resid) {
++			said = "the file there is not readable: left alone";
++		} else if (length >= 6 && !strncmp(text, "bplist", 6)) {
++			said = "the file there is a binary plist: left alone";
++		} else if (strnstr(text, key, length)) {
++			said = "named there already: kept";
++		} else if (top == NULL) {
++			said = "the file there has no top dictionary: left alone";
++		} else {
++			char *at = top + strlen("<dict>");
++			size_t add = strlen(entry);
++			memmove(at + 1 + add, at, (size_t)(text + length - at));
++			at[0] = '\n';
++			memcpy(at + 1, entry, add);
++			length += 1 + add;
+ 		}
++	} else {
++		length = strlcpy(text, head, cap);
++		length = strlcat(text, entry, cap);
++		length = strlcat(text, tail, cap);
++		int error = native_gpu_addon_parents(p, scratch, path);
++		if (error) {
++			said = "its folder could not be made";
++		}
+ 	}
++	if (said == NULL) {
++		int error = native_gpu_addon_write(path, (const uint8_t *)text, length, 0644, ctx);
++		said = error > 0 ? "not written" : "off (written)";
++	}
+ 	kfree_data(text, cap);
++	return said;
+ }
++
++static void
++oneios_feature_flags_off(proc_t p, user_addr_t scratch)
++{
++	char list[256] = "CoreLocation/CLAutoCohort";
++	(void)PE_parse_boot_argn("oneios-feature-off", list, sizeof(list));
++	if (list[0] == 0 || !strcmp(list, "-")) {
++		return;
++	}
++	for (char *item = list; *item;) {
++		char *end = item;
++		while (*end && *end != ',') {
++			end++;
++		}
++		char saved = *end;
++		*end = 0;
++		char *slash = strchr(item, '/');
++		if (slash == NULL || !oneios_feature_name_ok(item, (size_t)(slash - item)) ||
++		    !oneios_feature_name_ok(slash + 1, strlen(slash + 1))) {
++			printf("oneios-features: %s: not DOMAIN/FLAG (letters, digits, '_', '-', '.'): ignored\n", item);
++		} else {
++			*slash = 0;
++			const char *said = oneios_feature_off(p, scratch, item, slash + 1);
++			printf("oneios-features: %s/%s: %s\n", item, slash + 1, said);
++			*slash = '/';
++		}
++		*end = saved;
++		item = saved ? end + 1 : end;
++	}
++}
+ #endif /* XNU_HOSTED */
+ static void
+ native_ls_store_drop(proc_t p, user_addr_t scratch)
+@@ -9151,6 +9278,7 @@
+ 	oneios_icon_store_refresh(p, scratch);        /* 0036 */
+ 	oneios_lsd_first_boot_done(p, scratch);       /* 0037 */
+ 	oneios_jobs_enable();                         /* 0044 */
++	oneios_feature_flags_off(p, scratch);         /* 0048 */
+ #endif
+ }
+ 

@@ -613,9 +613,25 @@ def keybag(cx):
     cx.say('applied' if changed else 'kept', 'systembag.kb', 'plain property-list keybag, root 0600')
 
 
+# Feature flags turned off on the Data volume in both layouts: /private/var/preferences/FeatureFlags/Domain/D.plist is
+# /Library/Preferences/FeatureFlags, the override libsystem_featureflags reads after the root's defaults. The kernel
+# writes the same entries into a Data store made from an older seed (hosted 0048, oneios-feature-off).
+DATA_FLAGS_OFF = {
+    # locationd crash-looped (17 times a session, phone 2026-11-12): a serial queue drained an item left on another
+    # thread's stack (pc 0 from _dispatch_lane_serial_drain+0x118). vphone-cli turns this off for iOS 27 guests
+    # (patch-locationd-cohorting); droidvm saw the crash on a Cohort:0 queue. Cost: no automatic cohort queues.
+    'CoreLocation': ('CLAutoCohort',),
+}
+
+
 def feature_flags(cx):
-    """On a root we write, the extension cache's signature no longer matches; without this flag installd and lsd
-    refuse every app extension (iOSPlus10 root-tweaks-extra.py, ios26-root-spec.py). A sealed root keeps Apple's."""
+    """CoreLocation's automatic cohorts off on the Data volume (DATA_FLAGS_OFF), in both layouts. On a root we write,
+    also the extension cache's flag: its signature no longer matches; without the flag installd and lsd refuse every
+    app extension (iOSPlus10 root-tweaks-extra.py, ios26-root-spec.py). A sealed root keeps Apple's."""
+    for domain, flags in DATA_FLAGS_OFF.items():
+        changed = cx.data.merge_plist(f'preferences/FeatureFlags/Domain/{domain}.plist',
+                                      {flag: {'Enabled': False} for flag in flags}, ROOT, 0o644, binary=False)
+        cx.say('applied' if changed else 'kept', f'{domain} flags', ', '.join(f'{flag} off' for flag in flags))
     if not cx.rw:
         cx.say('kept', 'ExtensionKit flag', 'sealed root: the extension cache is Apple\'s and its signature holds')
         return
