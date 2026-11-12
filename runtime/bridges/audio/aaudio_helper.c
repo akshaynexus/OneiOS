@@ -12,11 +12,14 @@
 //   - clock drift: the level (the ring plus what AAudio holds) is averaged over about 1 s; its value 1 s after the
 //     start is the reference, and while the average is more than 5 ms above or below it, each chunk of 240 frames
 //     is played from 241 or 239 ring frames (linear interpolation: up to 4166 ppm), never by cutting audio;
-//   - a ring that holds more than the target plus 60 ms (a stall: a deep-buffer track takes nothing for about
-//     200 ms after it leaves standby) drops its oldest audio down to the target (an overflow), and a ring above the
-//     target plus 10 ms on average is played 0.4 % faster;
-//   - the guest's STOP keeps the stream open and playing silence for ONEIOS_AUDIO_LINGER_S (15 s): iOS starts and
-//     stops its device around each sound, and a reopened track would stall again. Then it is closed.
+//   - a ring that holds more than the target plus 60 ms drops its oldest audio down to the target (an overflow),
+//     and a ring above the target plus 10 ms on average is played 0.4 % faster (1.25 % above 40 ms). Until the
+//     server has taken the stream's first frames (a new deep-buffer track takes nothing for about 200 ms) the
+//     limit is the whole ring (500 ms), then what the stall left plus 40 ms, shrinking as it plays: on the phone a cut there
+//     lost the first 120 ms of iOS's first sound;
+//   - the guest's STOP keeps the stream open for ONEIOS_AUDIO_LINGER_S (15 s): what the ring still holds plays,
+//     then silence; iOS starts and stops its device around each sound, and a reopened track would stall again.
+//     Then it is closed.
 // Input: a reader thread reads the microphone in periods of 240 frames (blocking AAudioStream_read) and sends each
 // one to xnuhost.
 //
@@ -51,7 +54,7 @@
 #include <unistd.h>
 
 #define RATE 48000u
-#define RING_FRAMES 9600u                        // 200 ms of stereo at 48 kHz
+#define RING_FRAMES 24000u                       // 500 ms of stereo at 48 kHz (a new track's stall and a burst)
 #define MAX_BURST 9600u                          // the largest AAudio burst taken as it is
 #define IN_PERIOD 240u
 #define FRAMES_MS(f) ((unsigned)((f) * 1000ull / RATE))
@@ -65,6 +68,8 @@ static unsigned buffer_bursts = 2;
 static int16_t ring[RING_FRAMES * 2];
 static unsigned ring_head, ring_count, target;   // frames
 static bool priming = true, guest_on;            // guest_on: between the guest's START and STOP
+static bool consuming;                           // the server has taken frames from this stream (after its start stall)
+static unsigned allowance = RING_FRAMES;         // the most the ring may hold now: the stall's backlog, shrinking as it plays
 static unsigned generation;                      // counts the guest's STARTs: the writer measures its level anew
 static unsigned linger_s = 15;
 static pthread_mutex_t ring_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -207,7 +212,8 @@ static void out_report(const char *when)
 // more or fewer to steer the fill toward the target), linear interpolation between them.
 static void resample(int16_t *out, unsigned want, const int16_t *in, unsigned take)
 {
-  if (take == want || take < 2 || want < 2) { memcpy(out, in, (take < want ? take : want) * 4u); if (take < want) memset(out + 2 * take, 0, (want - take) * 4u); return; }
+  // A slip (a few frames more or fewer) is interpolated; a short chunk (an underrun, a sound's tail) is padded.
+  if (take == want || take < 2 || want < 2 || take + 4 < want || take > want + 4) { memcpy(out, in, (take < want ? take : want) * 4u); if (take < want) memset(out + 2 * take, 0, (want - take) * 4u); return; }
   for (unsigned i = 0; i < want; i++) {
     uint64_t pos = (uint64_t)i * (take - 1) * 65536u / (want - 1);
     unsigned a = (unsigned)(pos >> 16), b = a + 1 < take ? a + 1 : a, f = (unsigned)(pos & 0xffff);
@@ -228,16 +234,23 @@ static void *writer(void *arg)
 {
   (void)arg;
   dir_state *d = &out_dir;
-  static int16_t chunk[CHUNK * 2], from[(CHUNK + 1) * 2];
+  static int16_t chunk[CHUNK * 2], from[(CHUNK + 4) * 2];
   const int64_t low = d->burst / 2;
   double level = -1, reference = -1;                     // ring + AAudio's queue, averaged over about 200 chunks (1 s)
   unsigned settled = 0, seen = 0;
   double ring_average = 0;
   while (atomic_load(&d->run)) {
     int64_t queued = queued_frames(d);
+    bool taken = AAudioStream_getFramesRead(d->stream) > 0;
     unsigned take = 0;
     bool play = false;
     pthread_mutex_lock(&ring_lock);
+    if (taken && !consuming) allowance = ring_count;    // the stall is over: what it left is the allowance
+    consuming = taken;
+    if (consuming) {
+      unsigned floor = target + MS_FRAMES(60), now = ring_count > floor ? ring_count : floor;
+      if (now < allowance) allowance = now;
+    }
     if (seen != generation) { seen = generation; level = reference = -1; settled = 0; ring_average = 0; }
     if (priming) {
       // Before the guest's first chunk (and while it is stopped) AAudio is kept at a whole burst (what the server
@@ -246,8 +259,8 @@ static void *writer(void *arg)
       if (ring_count >= CHUNK + 1 && (int64_t)ring_count + queued >= (int64_t)(d->burst + target)) priming = false;
       else if (queued < (int64_t)(d->burst + target)) play = true;                   // a chunk of silence
     }
-    if (play) {}
-    else if (!priming && ring_count >= CHUNK + 1) {
+    if (play || priming) {}
+    else if (ring_count >= CHUNK + 4) {
       play = true;
       double now = (double)ring_count + (double)queued;
       level = level < 0 ? now : level + (now - level) / 200.0;
@@ -255,12 +268,18 @@ static void *writer(void *arg)
       ring_average += (ring_count - ring_average) / 200.0;
       take = CHUNK;
       // Drift: one frame more or fewer in this chunk while the level is off its reference; and fewer while the
-      // ring holds more than it needs (after a stall or a burst of late periods: that is latency).
-      if ((reference >= 0 && level > reference + MS_FRAMES(5)) || ring_average > target + MS_FRAMES(10)) {
+      // ring holds more than it needs (after a stall or a burst of late periods: that is latency), three fewer
+      // while it holds 40 ms more (1.25 %: a stall's backlog of 200 ms goes in about 16 s).
+      if (ring_average > target + MS_FRAMES(40)) { take = CHUNK + 3; ostat.slips_down += 3; level -= 3; ring_average -= 3; }
+      else if ((reference >= 0 && level > reference + MS_FRAMES(5)) || ring_average > target + MS_FRAMES(10)) {
         take = CHUNK + 1; ostat.slips_down++; level -= 1; ring_average -= 1;
       }
       else if (reference >= 0 && level + MS_FRAMES(5) < reference) { take = CHUNK - 1; ostat.slips_up++; level += 1; }
-    } else if (!priming && queued < low) {               // AAudio is about to run dry
+    } else if (!guest_on) {                              // the guest stopped: its tail, then silence
+      play = true;
+      take = ring_count;
+      if (!take) priming = true;
+    } else if (queued < low) {                           // AAudio is about to run dry
       play = true;
       {
         take = ring_count;
@@ -354,9 +373,7 @@ static void pause_output(void)
   if (!out_dir.stream || !guest_on) return;
   out_report("stopped by the guest");
   pthread_mutex_lock(&ring_lock);
-  guest_on = false;
-  ring_head = ring_count = 0;
-  priming = true;
+  guest_on = false;                                      // the writer plays what the ring holds, then silence
   pthread_mutex_unlock(&ring_lock);
   clock_gettime(CLOCK_MONOTONIC, &idle_since);
 }
@@ -365,9 +382,7 @@ static int start_dir(bool output, unsigned rate, unsigned channels)
 {
   dir_state *d = output ? &out_dir : &in_dir;
   if (output && d->stream && rate == (unsigned)AAudioStream_getSampleRate(d->stream) && channels == d->channels) {
-    pthread_mutex_lock(&ring_lock);                      // the lingering stream: on at once
-    ring_head = ring_count = 0;
-    priming = true;
+    pthread_mutex_lock(&ring_lock);                      // the lingering stream: on at once (a tail still in the ring plays first)
     guest_on = true;
     generation++;
     memset(&ostat, 0, sizeof ostat);
@@ -378,6 +393,8 @@ static int start_dir(bool output, unsigned rate, unsigned channels)
   stop_dir(output);
   if (output) {
     pthread_mutex_lock(&ring_lock);
+    consuming = false;
+    allowance = RING_FRAMES;
     ring_head = ring_count = 0;
     priming = true;
     guest_on = true;
@@ -406,7 +423,10 @@ static void put_pcm(const int16_t *pcm, unsigned frames)
   pthread_mutex_lock(&ring_lock);
   ostat.in += frames;
   if (!guest_on) { pthread_mutex_unlock(&ring_lock); return; }
-  unsigned limit = target + MS_FRAMES(60) < RING_FRAMES ? target + MS_FRAMES(60) : RING_FRAMES;
+  // Before the server takes its first frames (a new track's stall, about 200 ms) the whole ring holds: the start of
+  // a short sound is all there is of it.
+  unsigned limit = !consuming ? RING_FRAMES : allowance + MS_FRAMES(40) > target + MS_FRAMES(60) ? allowance + MS_FRAMES(40) : target + MS_FRAMES(60);
+  if (limit > RING_FRAMES) limit = RING_FRAMES;
   if (ring_count + frames > limit) {                   // far ahead of the DAC: drop the oldest audio down to the target
     unsigned keep = target < ring_count ? target : ring_count;
     if (keep + frames > RING_FRAMES) keep = RING_FRAMES - frames;

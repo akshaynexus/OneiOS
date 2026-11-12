@@ -642,9 +642,11 @@ yet: the audio test cycle adds it (below).
     most 80). Clock drift: the level averaged over 1 s is held within 5 ms of its value 1 s after the start by
     playing a chunk from 239 or 241 ring frames (linear interpolation, at most 4166 ppm); a ring above the target
     plus 10 ms is played faster the same way; above the target plus 60 ms it drops its oldest audio to the target
-    (an overflow: after a stall). The guest's STOP keeps the stream open, playing silence, for
-    `ONEIOS_AUDIO_LINGER_S` (15 s): iOS stops and starts its device around each sound, and a newly opened
-    deep-buffer track takes nothing for about 200 ms.
+    (an overflow). Until the server takes the stream's first frames (a newly opened deep-buffer track takes
+    nothing for about 200 ms) nothing is cut: the ring holds 500 ms, and after the stall its backlog (plus 40 ms)
+    is the limit, shrinking as it plays at up to 1.25 % faster. The guest's STOP keeps the stream open for
+    `ONEIOS_AUDIO_LINGER_S` (15 s): what the ring holds plays, then silence; iOS stops and starts its device around
+    each sound, and a reopened track would stall again.
   - Input: a reader thread, blocking `AAudioStream_read` of 240 frames, input preset VOICE_RECOGNITION, the first
     channel to xnuhost. `backend.c` drops what an earlier recording left in the socket at each input START.
   - Log (xnuhost's log): `oneios-audio: speaker open: ... none, sharing shared, mmap 0, burst 1600, buffer 3200 of
@@ -671,17 +673,30 @@ yet: the audio test cycle adds it (below).
 | Second tone 0.5 s after a stop | the lingering stream: no new open, no stall, 0 underruns |
 | Microphone, 2 s | 92,400 frames (96,000 expected; the stream's start), room noise RMS -52 dBFS, peak -41.5 dBFS |
 
+### In a session (2026-11-12, agent prelink's two sessions: `kernel.kc` `66faa3e8` from main 924a0d9, runtime 0.1.8-dev; read from their `xnuhost.log`)
+
+- Kernel: `ONEIOS AUDIO: on: virtio-snd up: output stream 0, input stream 1 x1 (found 1, stage 3, 2 streams);
+  IOAudio2 devices: Speaker and Mic published`, `DroidVMAudio: published Speaker=1 Mic=1 ... output latency 6480
+  frames`, 1.2 s after xnuhost placed the kernel.
+- audiomxd opens both devices and takes hog mode: `2 clients (hog 106)`, `4 selectors (0 refused, last 6)`, `9 maps`
+  (the status pages and both rings), without `owner-hide-vmm`. In the first session nothing started IO.
+- The second session played iOS's first sound through the whole path: the helper opened its stream (`none, sharing
+  shared, mmap 0, burst 1600, buffer 3200 of 4800`), 12,720 frames (265 ms) came in 0.2 s, and the guest stopped.
+  The helper of that runtime cut 5,760 frames (2 overflows: the new track's stall against an 80 ms limit) and
+  cleared the ring at the STOP: fixed after it (above), not yet run on the phone. `0 underruns`, `0 xruns`; the
+  stream closed after the 15 s linger. Which sound it was and whether it was heard: not known (not my session).
+- With system_server gone the helper opened and played (the stream above): AAudio from uid 0 works in a session.
+
 ### Missing, unknown
 
-- **The guest side has not booted yet.** Built on the Mac (`HOSTED_OUT=audio`, series through 0039, `xnu.macho`
-  `1279b87a...`; the archive compiles with `-Wall -Wextra -Werror` and `oneios_drivers_start` ends in a call of
-  `oneios_audio_start`) and prelinked (XnuPrelink 9b950f2, `kernel.kc` `61d926d8...`, 97 originals on the stub, 10
-  data unpaired: the same pairing as the Mac collection `eae11352` that panics 1.5 s in at Sandbox's
-  `mac_posixsem_check_create`, `kernel/prelink/README.md` "On the phone"). It waits for the agent prelink's audit
-  of the Mac pairing; the phone's baseline is the Linux-built `kernel.kc`, which has no audio archive.
-- [U] **AAudio from uid 0 with system_server gone** (a session): not run yet. Playback: audioserver treats uids
-  below 10000 as services and asks no app-op [I]; recording: audioserver's own checks pass root without
-  system_server [I], whether the record app-op silences it is the open question.
+- **Not run yet in a test cycle of mine:** `owner-hide-vmm=audiomxd,com.apple.WebKit.GPU` (VirtualAudio's Null device
+  when the guest says it is a VM; audiomxd took both devices without it, so whether it changes the routes is [U]),
+  the kernel's self-test tone, a sound iOS is asked for (the lock click with the power key; [U] iOS's ringer state:
+  the buttons' Ring Enable bit is 0, which may mean silent, so UI sounds may be muted), the microphone in a session,
+  and the helper with the stall fix. The Mac `kernel.kc` I built before (`61d926d8`, `636ec3fa`) is superseded:
+  `kernel.kc` from main has the archive and boots.
+- Playback from uid 0 with system_server gone works (above). [U] Recording in a session: whether the record app-op
+  silences uid 0 without system_server (AppOpsManager is a system_server service) is not measured yet.
 - [U] Whether VirtualAudio of iPhone18,2 builds its speaker route on "Speaker" and "Mic" (UniXNU-droidvm's iPad
   UIDs). iOSPlus10's iOS 16 iPhone needed "Speaker" with a silent stereo input and "Hawking"; the UIDs are boot
   arguments now, a third device would be a change of the staged source.

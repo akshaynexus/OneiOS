@@ -23,6 +23,7 @@ struct AAudioStreamStruct {
   uint64_t dac_underflows, nonzero;
 };
 static double dac_ppm;                                  // the DAC's rate against the producer's clock
+static double dac_stall_s;                              // a new track takes nothing for this long after its first write
 
 static double elapsed(const struct timespec *t0) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (t.tv_sec - t0->tv_sec) + (t.tv_nsec - t0->tv_nsec) / 1e9; }
 // Frames the DAC has taken: whole bursts on its clock; when it finds less than a burst, it plays silence (an
@@ -30,7 +31,9 @@ static double elapsed(const struct timespec *t0) { struct timespec t; clock_gett
 static int64_t pulled(AAudioStream *s)
 {
   if (!s->started) return 0;
-  int64_t at = (int64_t)(elapsed(&s->t0) * s->rate * (1 + dac_ppm / 1e6) / s->burst) * s->burst - s->skipped;
+  double t = elapsed(&s->t0) - (s->direction == AAUDIO_DIRECTION_OUTPUT ? dac_stall_s : 0);
+  if (t < 0) return 0;
+  int64_t at = (int64_t)(t * s->rate * (1 + dac_ppm / 1e6) / s->burst) * s->burst - s->skipped;
   if (at > s->written) { s->dac_underflows++; s->skipped += at - s->written; at = s->written; }
   return at;
 }
@@ -213,14 +216,21 @@ int main(void)
 
   // 2. Linger: a START soon after a STOP takes the open stream (no new open, no stall); the stream closes after
   // the silence.
-  fprintf(stderr, "-- linger 1 s\n");
+  fprintf(stderr, "-- linger 1 s; the new track stalls 200 ms\n");
   dac_ppm = 0;
+  dac_stall_s = 0.2;
   helper_up("1");
   send_header(AU_START, true, 2, 48000);
   play(1, 0);
+  pthread_mutex_lock(&ring_lock);
+  CHECK(ostat.overflows == 0 && ostat.dropped == 0);      // the stall's audio waits in the ring, none is cut
+  pthread_mutex_unlock(&ring_lock);
   send_header(AU_STOP, true, 0, 0);
-  struct timespec nap = { 0, 300000000 };
+  struct timespec nap = { 0, 500000000 };
   nanosleep(&nap, NULL);
+  pthread_mutex_lock(&ring_lock);
+  CHECK(ostat.played == ostat.in && ring_count == 0);      // the tail played after the STOP, nothing was cleared
+  pthread_mutex_unlock(&ring_lock);
   AAudioStream *first_stream = last_out;
   CHECK(out_dir.stream != NULL);
   send_header(AU_START, true, 2, 48000);
