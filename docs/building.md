@@ -117,7 +117,7 @@ scripts/bg.sh kernel-hosted env HOSTED_OUT=me kernel/build-hosted.sh
   virtio GPU (`gpu`), software AES (`aes`), the speaker and microphone (`audio`: UniXNU-droidvm's virtio-snd and
   IOAudio2Devices from `external/UniXNU-droidvm`) and the display (`display`: needs `external/NativeMobileDisplay` and
   `external/UniXNU-droidvm` from `scripts/setup/get-references.sh`; its input for another kernelcache is remade with
-  `display/port-legacy-display.py`).
+  `oneios-tool kernel port-legacy-display`).
 - The VM kernel (UniXNU's own board, not used by xnuhost): `scripts/bg.sh kernel kernel/build-linux.sh`; on a Mac,
   `kernel/build-macos.sh`. See [kernel/README.md](../kernel/README.md).
 

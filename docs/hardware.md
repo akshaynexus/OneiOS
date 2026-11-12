@@ -313,7 +313,7 @@ by its own script), so iOS had no en0 in any boot. Now `build-hosted.sh` builds 
   collection and 25 of the 130 roots link it, so it cannot be replaced by a copy compiled into the kernel (what
   Droid-VM does). The classes are compiled against IONetworkingFamily-188's headers (APSL; fetched into
   `out/sources/IONetworkingFamily`), and the build checks those headers against the kernelcache's classes
-  (`IONetworking-24A446-v54.json`, made by `layout.py`): 250 and 221 vtable slots, every slot's
+  (`IONetworking-24A446-v54.json`, made by `oneios-tool kernel layout net`): 250 and 221 vtable slots, every slot's
   pointer-authentication discriminator, and whether its function is the family's or the kernel's. 159 original
   functions are bound at their addresses in the collection through `.original` stubs (`stubs-check.py`: good).
 - The Apple80211 requests and events of DroidVMWifi.inc (below), with its made-up station replaced: `SCAN_REQ` sends

@@ -22,7 +22,7 @@ start is called from `oneios_drivers_start` (`drivers/bridge/OneiOSBridge.c`, a 
 |---|---|
 | `OriginalHidDeviceABI.h` | **The layout of the original `IOHIDDevice`** of the 24A446 iPhone18,2 collection ("v54"): members, every virtual in vtable order, the types their names mangle with. Its head lists each slot with its pointer-authentication discriminator and says where each fact was read. Any driver that subclasses `IOHIDDevice` includes it |
 | `include/IOKit/hid/IOHIDDevice.h` | The same header under the public header's name, for sources written against IOHIDFamily (NativeHidInput's arm64e build) |
-| `layout.py` | Reads the class from the kernelcache into `IOHIDDevice-24A446-v54.json` (run by hand; needs `out/kernel-inputs/24A446/kernelcache.macho` and a `kernel.kc.prelink.json`) |
+| `oneios-tool kernel layout hid` (was `layout.py` here) | Reads the class from the kernelcache into `IOHIDDevice-24A446-v54.json` (run by hand; needs `out/kernel-inputs/24A446/kernelcache.macho` and a `kernel.kc.prelink.json`) |
 | `IOHIDDevice-24A446-v54.json` | What the kernelcache says: size, metaclass, vtable, the 207 slots (target, discriminator, whether the target is the family's code), constructor, base destructor. Addresses and numbers only |
 | `oneios-tool kernel gen hid` | Checks the header against the record, stages and compiles the sources, generates the bindings, makes the archive |
 | `OneiOSHidInput.cpp` | `oneios_hid_input_start`: loads IOHIDFamily and IOHIDEventDriver, registers the classes below the live `IOHIDDevice`, starts the transport, publishes the two devices under `IOHIDResource`, starts the light sensor's device; the log lines |
@@ -38,7 +38,7 @@ keys and no touch screen; the transport keeps each touch frame's scan time and t
 
 ## The layout header: evidence
 
-A kext in the kernelcache has no symbols. `layout.py` reads, for `IOHIDDevice` in `com.apple.iokit.IOHIDFamily`:
+A kext in the kernelcache has no symbols. `oneios-tool kernel layout hid` reads, for `IOHIDDevice` in `com.apple.iokit.IOHIDFamily`:
 
 | Fact | Read from | Value |
 |---|---|---|
