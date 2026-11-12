@@ -483,9 +483,20 @@ What each does:
   `oneos/interface.md` section 3), or `logs/xnuhost-<epoch>.log` for an earlier session. `--list` prints each name
   with its size and time (`stat` of the named files, and the earlier sessions as the fork's read-only
   `oneios_root.sh logs` gives them): no folder of the phone is listed.
-  - `--tail N`; `--follow` (`tail -n +K -F` on the file): when adb drops, the follow waits (1 to 5 s) and starts
-    again after the last whole line it got, so no line is lost or printed twice; a log with fewer lines than were
-    read is a new session's and is read from its start. Ctrl-C ends it with status 0.
+  - `--tail N`; `--follow` (`tail -n +K -f` on the file's descriptor; before each connection one root script
+    looks at the file: `stat %i %Z`, `wc -l`, its first line, and for `xnuhost` switch.log's last `epoch`):
+    - after a switch only a log changed at or after it counts (the cycle's watch keeps the same rule): the switch
+      replaces `session/xnuhost.log` only about 40 s in, so a follow started right after `phone switch` says the
+      file there is the last session's and waits for this session's, printing none of the old one;
+    - when adb drops, the follow waits (1 to 5 s) and carries on after the last whole line it got when the file is
+      the same one (the same inode and first line, and not fewer lines than were read): no line lost or twice;
+      another file (another inode, even with the same first line, or another first line, or fewer lines) is read
+      from its start;
+    - while it reads, a look every 2 s ends the stream when the file was replaced (a switch while following), and
+      the new file is read from its start (`-F` would follow the new file inside the same stream, so the count of
+      lines read would mix the two files: the phone, 2026-11-12, printed the last session's log and, after a drop,
+      the whole current one a second time).
+    Ctrl-C ends it with status 0.
   - `--save PATH`, `--save-auto` (`out/session-logs/DATE/live-HHMMSS.log`): **every** line read goes to the file,
     whatever the filters print.
   - Filters (a line is printed when it matches any of them; none: every line): `--grep REGEX` (repeatable),
@@ -504,8 +515,10 @@ What each does:
     in the main checkout, or `ONEIOS_DSC_INDEX`). It is not line by line: the analysis is of the log so far.
 
 ```sh
-tools/oneios-tool/tests/phone/run.sh          # 64 checks against the stand-in phone; ALL OK
-tools/oneios-tool/tests/cycle/run.sh          # phone log, status --watch and cycle: 90 checks; ALL OK
+tools/oneios-tool/tests/phone/run.sh          # 76 checks against the stand-in phone; ALL OK
+tools/oneios-tool/tests/cycle/run.sh          # phone log, status --watch and cycle: 95 checks; ALL OK
+tools/oneios-tool/tests/phone/modes.sh        # phone, app and cycle in each /proc mode this host has (below); ALL OK
+FAKE_PROC=stand-in tools/oneios-tool/tests/phone/run.sh   # one suite with the stand-in's own /proc (macOS's way)
 ```
 
 The stand-in phone: `fake-adb.sh` runs what the tool sends on this machine, inside a folder that plays the
@@ -517,6 +530,45 @@ lines) and the return (the restore line, `return.outcome`). `stage` and `sums` a
 (`runtime`, `runtime-asis`, `image`, a file that is not staged). Result, Linux x86_64, 2026-11-12: 64 checks, all
 ok, two runs. What the stand-in cannot show: the real `su`, adb's behaviour when One UI's framework stops, the
 time a 64 GiB store takes (6 min on the Mac with the Python script), the fork's real switch and return.
+
+**/proc, and macOS.** The session check reads `/proc/PID/cmdline` on the phone (`adb.rs`
+`session_check_script`; a unit test and a stand-in check, which compares the root script the tool sent, keep it
+the phone's command byte for byte). The stand-in answers it in one of two modes, `FAKE_PROC`:
+- `host`: the phone's commands read this machine's `/proc` (Linux; the default where `/proc/self/cmdline` can be
+  read);
+- `stand-in`: `/proc/...` in what the tool sends becomes the stand-in's own `FOLDER/.fake/proc/...`
+  (`fake-rewrite.sh`, the same rewrite that maps `/data`), where each stand-in session (`fake-session.sh`, named
+  `fake-xnuhost`) keeps `PID/cmdline` while it runs and removes it when it ends; `fake-adb.sh` drops the entry of
+  a process that is gone, as the kernel does. macOS has no `/proc`, so this is its default; on Linux
+  `FAKE_PROC=stand-in` runs the same path, and `modes.sh` runs the phone, app and cycle suites in both modes.
+
+Before this (the Mac, 2026-11-12) the stand-in on macOS read a `/proc` that is not there: the tool never saw a
+stand-in session (status said none, the refusals in a session did not come, a return found "no session"), and
+the session lived on into the next case, where the fork's root script refused the switch. Simulated on Linux with
+the stand-in's `/proc` pointed at a folder that does not exist: the phone suite failed the Mac's 12 checks
+exactly, the cycle suite 31 of the Mac's 34. Of the other three, `log --since` and (probably) the collected log's
+comparison raced a log that kept growing because its session never ended. `log --analyze without a sym index`
+failed on the Mac for another reason: `--analyze` looks for the index in the main checkout of the folder's
+repository, and the test's folder lies inside the checkout's `out/` (the Mac's checkout has an index); the test's
+folder is now a repository of its own.
+
+Sessions: every case ends the stand-in session it left (`end_case`, so that one failure does not spread to the
+next case), and `lib.sh`'s traps end every stand-in session of the suite (its process group: fake xnuhost and
+what it started), and the suite's background jobs, on exit, a failure or Ctrl-C. Each suite's last check is that
+none is left running. The checks use GNU coreutils and sed (`stat -c`, `date +%N`, `sed -i`, `timeout`,
+`sha256sum`): on macOS put Homebrew's `coreutils` and `gnu-sed` gnubin folders first on PATH (the suites say so
+and stop otherwise). `setsid` comes from perl where it is missing (macOS). The rewrite uses `sed -E`, which GNU's
+and BSD's sed read the same way.
+Ctrl-C while the tool runs: the tool catches SIGINT and ends with status 0, so bash runs no INT trap and would go
+on; a small perl watcher in `lib.sh` turns the Ctrl-C into a SIGTERM for the suite, which then stops (status 143)
+and ends its sessions.
+
+Result, Linux x86_64, 2026-11-13 (`modes.sh`, two runs): `host` mode: phone 76, app 65, cycle 95 checks, all ok;
+`stand-in` mode: the same counts, all ok; no stand-in session left after any suite; a Ctrl-C sent to a cycle
+suite's process group while a session ran stopped it with none left, in both modes; `cargo test -p oneios-phone`:
+5 passed. Before the change, on the same box: the host mode passed (phone 73, cycle 90 checks); the stand-in's
+`/proc` pointed at nothing (the Mac's case) failed 12 and 31 (above). **Linux only**: macOS itself was not run
+here; there, `stand-in` is the only mode, and the GNU tools and perl's setsid are the Mac's.
 
 ## cycle
 
@@ -557,6 +609,16 @@ line, the folder); a second cycle that builds and stages nothing; a newer patch 
 that never gets ready; Ctrl-C in the hold with and without `--stay`; the lock; the three build failures; the
 three refused switches. What it cannot show: the real builds' times and outputs, the real switch and return,
 adb while One UI's framework stops.
+
+`phone log --follow` and the switch (2026-11-13; the phone's fault of 2026-11-12 above): the suite has 95 checks
+now (four for this, and the last check, that no stand-in session is left running). A follow started right after
+a switch while the last session's log is still there (the stand-in session replaces it 3 s in,
+`.fake/log-delay`; the phone takes about 40 s) says so and waits (1), and prints none of its lines (2); then adb
+drops (`FAKE_CUT`) while this session's log is read, and the follow carries on with no line twice (3); a drop
+that comes back to a new file with the same first line (`FAKE_DROP_NEW`) reads it from its start (4). The
+binary from before the fix, on the same suite: 1 to 3 fail as on the phone (the last session's log printed,
+then after the drop "is a new file" and 15 lines printed twice); 4 passes there too (that new file had fewer
+lines than were read). Results by mode below (`modes.sh`).
 
 ## app
 

@@ -8,10 +8,14 @@
 # scripts/phone/stage.sh on a second, equal stand-in phone (the same output, the same stage afterwards); the
 # refusals while a session is open; switch (the versionCode is the installed app's) and a refused preflight;
 # return (the restore line, no session, a return that hangs); pull-data (the copy is the phone's file, sparse;
-# a size that does not match); sparse-write.
+# a size that does not match); sparse-write. The session check's command is the phone's, byte for byte, and a pid
+# that is not an xnuhost's is no session. Every case ends the stand-in session it left (end_case), and at the
+# end, a failure or Ctrl-C none is left running (lib.sh's traps).
 # With the OneOS fork's checkout at hand (ONEOS_DIR, or ../OneOS beside the main checkout), begin, receive, finish
 # and status are the fork's own root script under its test root; without it those checks are skipped, with a line.
-# Env: TOOL (the binary), KEEP=1 (keep the scratch folder out/rustport-phone).
+# Env: TOOL (the binary), KEEP=1 (keep the scratch folder out/rustport-phone), FAKE_PROC=host|stand-in (the
+# /proc the stand-in's commands read: the host's, or the stand-in's own as on macOS; default: the host's where it
+# has one). tests/phone/modes.sh runs this suite, tests/app and tests/cycle in both.
 set -u
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "$HERE/../../../.." && pwd)
@@ -21,7 +25,9 @@ W=${WORK:-$ROOT/out/rustport-phone}
 . "$HERE/lib.sh"
 rm -rf "$W"; mkdir -p "$W/bin"
 ln -s "$HERE/fake-adb.sh" "$W/bin/adb"       # for scripts/phone/stage.sh, which calls `adb`
-export ADB=$HERE/fake-adb.sh FAKE_ADB_LOG=$W/adb.log
+export ADB=$HERE/fake-adb.sh FAKE_ADB_LOG=$W/adb.log FAKE_ROOT_LOG=$W/root.log
+[ -n "${FAKE_PROC:-}" ] || { [ -r /proc/self/cmdline ] && FAKE_PROC=host || FAKE_PROC=stand-in; }
+export FAKE_PROC; echo "(the stand-in's /proc: $FAKE_PROC)"
 unset ANDROID_SERIAL FAKE_NO_ROOT FAKE_DEVICES
 FORK=$(fork_dir)
 if [ -n "$FORK" ]; then export FAKE_FORK_ROOT_SH=$FORK/app-android/app/src/full/assets/root/oneios_root.sh; echo "(the fork's root script: $FAKE_FORK_ROOT_SH)"
@@ -134,6 +140,9 @@ check "manifest DIR --stage: the files and their manifest, then the check" 0 "im
 check "image-check: the set agrees again" 0 "image: manifest.json and the 4 files it lists agree" phone image-check
 
 # ---- switch, the refusals in a session, return
+echo $$ > "$S/session/xnuhost.pid"   # a pid used again: a live process that is not an xnuhost
+check "a pid that is not an xnuhost's is no session" 0 "kernel.kc" phone sums
+rm -f "$S/session/xnuhost.pid"
 echo "the phone is too warm (stand-in)" > "$P/.fake/preflight-refuses"
 check "switch: a refused preflight is the answer" 1 "did not start: @@REFUSED the phone is too warm" phone switch
 rm "$P/.fake/preflight-refuses"
@@ -147,6 +156,12 @@ for c in "switch" "sums" "stage image $I" "stage runtime $R" "pull-data $W/x.img
   check "in a session: $c is refused" 1 "a session is open: return to One UI first" phone $c
 done
 check "switch --version-code" 1 "a session is open" phone switch --version-code 7
+# the session check is the phone's command on every host: the stand-in maps /proc, the tool does not
+read -r want <<'CMD'
+p=$(cat /data/local/tmp/oneios/session/xnuhost.pid 2>/dev/null); [ -n "$p" ] && cat /proc/$p/cmdline 2>/dev/null | tr '\0' ' ' | grep -q xnuhost && echo open || echo closed
+CMD
+grep -Fxq -- "$want" "$W/root.log" && ! grep -F 'xnuhost.pid' "$W/root.log" | grep -Fxqv -- "$want" \
+  && ok "the session check sent is the phone's command, unchanged ($FAKE_PROC /proc)" || bad "the session check sent" "$(grep -F xnuhost.pid "$W/root.log" | sort -u | head -n 2 | tr '\n' '|')"
 wait_for 10 test -e "$S/session/ready"
 check "return: waits for One UI's restore line" 0 "One UI restored in place \(Enforcing\)\. \([0-9]+ s\)" phone return --note "run.sh: done; rm -rf /"
 grep -q "asked: run.sh: done rm -rf  ===" "$S/return.log" && ok "return: the note is in return.request, without shell characters" || bad "return: the note" "$(grep asked "$S/return.log")"
@@ -157,6 +172,7 @@ touch "$P/.fake/no-return"
 phone switch --version-code 115 > /dev/null 2>&1; wait_for 5 has_session "$P"
 check "return: a return that hangs ends at --timeout, with the log's tail" 1 "no restore line after [0-9]+ s" phone return --timeout 3
 rm "$P/.fake/no-return"; wait_for 10 no_session "$P" || end_session "$P"
+end_case
 
 # ---- pull-data and sparse-write
 check "pull-data" 0 "$W/data.img: 50331648 bytes, [0-9]+ of them written" phone pull-data "$W/data.img"
@@ -169,14 +185,14 @@ printf '#!/bin/sh\n[ "$1" = gzip ] && { head -c 1000000 "$4" | gzip -1 -c; exit 
 check "pull-data: fewer bytes than the phone's size" 1 "1000000 bytes came, the phone's data.img has 50331648" phone pull-data "$W/short.img"
 [ ! -e "$W/short.img" ] && [ -e "$W/short.img.part" ] && ok "pull-data: the short copy stays as .part" || bad "pull-data: the short copy's name"
 printf '#!/bin/sh\nexec "$@"\n' > "$P/data/adb/ksu/bin/busybox"
-if grep -Eqi 'find |ls -R|du |/sys/power|reboot' "$W/adb.log"; then bad "a tree walk, /sys/power or a restart was sent to the phone" "$(grep -Ei 'find |ls -R|du |/sys/power|reboot' "$W/adb.log" | head -n 2)"
-else ok "nothing sent to the phone walks a tree, writes /sys/power or restarts ($(wc -l < "$W/adb.log") adb calls)"; fi
+if grep -Eqi 'find |ls -R|du |/sys/power|reboot' "$W/adb.log" "$W/root.log"; then bad "a tree walk, /sys/power or a restart was sent to the phone" "$(grep -Ehi 'find |ls -R|du |/sys/power|reboot' "$W/adb.log" "$W/root.log" | head -n 2)"
+else ok "nothing sent to the phone walks a tree, writes /sys/power or restarts ($(wc -l < "$W/adb.log") adb calls, their root scripts too)"; fi
 "$TOOL" phone sparse-write "$W/sw.img" < "$S/data/data.img" > "$W/sw.out" 2>&1 && cmp -s "$W/sw.img" "$S/data/data.img" && [ $(($(stat -c %b "$W/sw.img") * 512)) -lt $((2 << 20)) ] \
   && ok "sparse-write: the same bytes, sparse" || bad "sparse-write" "$(cat "$W/sw.out")"
 gzip -1 -c "$S/data/data.img" | "$TOOL" phone sparse-write "$W/swz.img" --gunzip --expect-size 50331648 > "$W/sw.out" 2>&1 && cmp -s "$W/swz.img" "$S/data/data.img" \
   && ok "sparse-write --gunzip --expect-size" || bad "sparse-write --gunzip" "$(cat "$W/sw.out")"
 check "sparse-write --expect-size that does not match" 1 "50331648 bytes came, 5 were expected" sh -c "'$TOOL' phone sparse-write '$W/sw2.img' --expect-size 5 < '$S/data/data.img'"
 
-end_session "$P"; end_session "$P2"
+no_session_left "phone suite"
 [ -n "${KEEP:-}" ] || rm -rf "$W"
 [ $FAILED = 0 ] && echo "ALL OK" || { echo "FAILED: $FAILED"; exit 1; }

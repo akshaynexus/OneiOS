@@ -274,6 +274,176 @@ fn stream(adb: &Adb, cmd: &str, sink: &mut Sink) -> Result<bool> {
     Ok(status.map(|s| s.success()).unwrap_or(false))
 }
 
+/// What a look at the followed file found: its inode, change time (`stat %Z`), lines and first line.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Seen {
+    inode: u64,
+    ctime: u64,
+    lines: u64,
+    first: String,
+}
+
+/// One look at the followed file (one root script, the named files only): the file, or None when it is not there;
+/// with `switch`, the phone's second of the last switch (switch.log's last `epoch` line).
+fn look_at(adb: &Adb, path: &str, switch: bool) -> Result<(Option<Seen>, Option<u64>)> {
+    let mut script = format!("if [ -f {path} ]; then echo \"file $(stat -c '%i %Z' {path}) $(wc -l < {path})\"; echo \"first $(head -n 1 {path})\"; else echo missing; fi\n");
+    if switch {
+        script += &format!("echo \"switch $(grep epoch {STAGE}/switch.log 2>/dev/null | tail -n 1)\"\n");
+    }
+    Ok(parse_look(&adb.root_ok(&script, "looking at the log")?))
+}
+
+fn parse_look(out: &str) -> (Option<Seen>, Option<u64>) {
+    let mut seen = None;
+    let mut epoch = None;
+    for line in out.lines() {
+        if let Some(rest) = line.strip_prefix("file ") {
+            let n: Vec<u64> = rest.split_whitespace().filter_map(|w| w.parse().ok()).collect();
+            if n.len() == 3 {
+                seen = Some(Seen { inode: n[0], ctime: n[1], lines: n[2], first: String::new() });
+            }
+        } else if let (Some(rest), Some(s)) = (line.strip_prefix("first "), seen.as_mut()) {
+            s.first = rest.to_string();
+        } else if let Some(rest) = line.strip_prefix("switch ") {
+            epoch = rest.split_whitespace().skip_while(|w| *w != "epoch").nth(1).and_then(|e| e.parse().ok());
+        }
+    }
+    (seen, epoch)
+}
+
+/// Is `now` the file that was being read (`was`, of which `read` lines came): the same inode, the same first line
+/// once both have one, and not fewer lines than were read. A session's log is replaced, not truncated: another
+/// inode is another file even when its first line reads the same (a new log's first line often does).
+fn same_file(was: &Seen, now: &Seen, read: u64) -> bool {
+    was.inode == now.inode && (was.first.is_empty() || now.first.is_empty() || was.first == now.first) && now.lines >= read
+}
+
+/// After a switch only a log changed at or after it counts: the switch replaces session/xnuhost.log only about
+/// 40 s in, and until then the file there is the last session's (the cycle's watch keeps the same rule).
+fn before_switch(now: &Seen, switch: Option<u64>) -> bool {
+    switch.is_some_and(|epoch| now.ctime < epoch)
+}
+
+/// `--follow`: `tail -n +K -f` on the file (its descriptor: when the file is replaced the stream would go on with
+/// the old one, so a watcher looks at the file every 2 s and ends the stream when it was replaced). When adb drops,
+/// or the stream ends, it carries on after the last whole line read when the file is the same one; a new file is
+/// read from its start; a session's log older than the last switch is waited out.
+fn follow(adb: &Adb, name: &str, path: &str, tail: Option<u64>, sink: &mut Sink) -> Result<()> {
+    let session_log = name == "xnuhost";
+    let mut current: Option<Seen> = None;
+    let mut read = 0u64;
+    let mut drops = 0u64;
+    let mut said_wait = false;
+    let mut said_missing = false;
+    while !stopped() {
+        let (now, switch) = match look_at(adb, path, session_log) {
+            Ok(look) => look,
+            Err(e) => {
+                drops += 1;
+                eprintln!("phone log: {e:#}; looking again");
+                if sleep_or_stop(Duration::from_secs(drops.min(5))) {
+                    break;
+                }
+                continue;
+            }
+        };
+        let Some(now) = now else {
+            if !said_missing {
+                eprintln!("phone log: {path} is not there (yet); waiting for it");
+                said_missing = true;
+            }
+            if sleep_or_stop(Duration::from_secs(2)) {
+                break;
+            }
+            continue;
+        };
+        said_missing = false;
+        match current.as_mut() {
+            Some(was) if same_file(was, &now, read) => {
+                if was.first.is_empty() {
+                    was.first = now.first.clone();
+                }
+            }
+            _ => {
+                if before_switch(&now, switch) {
+                    if !said_wait {
+                        eprintln!(
+                            "phone log: {path} was last changed before the switch at {} (phone time {}): it is the last session's log; waiting for this session's (the switch replaces it about 40 s in)",
+                            switch.unwrap_or(0),
+                            now.ctime
+                        );
+                        said_wait = true;
+                    }
+                    if sleep_or_stop(Duration::from_secs(2)) {
+                        break;
+                    }
+                    continue;
+                }
+                read = match current {
+                    Some(_) => {
+                        eprintln!("phone log: {path} is a new file (another inode or first line); reading it from its start");
+                        0
+                    }
+                    None => tail.map(|n| now.lines.saturating_sub(n)).unwrap_or(0),
+                };
+                current = Some(now);
+            }
+        }
+        let following = current.clone().expect("a file is followed here");
+        let before = sink.lines;
+        let replaced = AtomicBool::new(false);
+        let done = AtomicBool::new(false);
+        let clean = std::thread::scope(|scope| {
+            scope.spawn(|| watch_replaced(adb, path, &following, &done, &replaced));
+            let r = stream(adb, &format!("su -c 'tail -n +{} -f {path}'", read + 1), sink);
+            done.store(true, Ordering::SeqCst);
+            r
+        })?;
+        read += sink.lines - before;
+        if stopped() {
+            break;
+        }
+        if replaced.load(Ordering::SeqCst) {
+            eprintln!("phone log: {path} was replaced after {} lines; reading the new one", sink.lines);
+            drops = 0;
+            continue;
+        }
+        drops = if sink.lines > before { 1 } else { drops + 1 };
+        eprintln!("phone log: adb {} after {} lines; connecting again", if clean { "ended" } else { "dropped" }, sink.lines);
+        if sleep_or_stop(Duration::from_secs(drops.min(5))) {
+            break;
+        }
+    }
+    eprintln!("phone log: stopped after {} lines", sink.lines);
+    Ok(())
+}
+
+/// While a stream reads `was`: every 2 s a look at the file; when it is another one (or gone), the stream is
+/// ended. A look that fails (adb dropping) is not an answer.
+fn watch_replaced(adb: &Adb, path: &str, was: &Seen, done: &AtomicBool, replaced: &AtomicBool) {
+    loop {
+        let end = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < end {
+            if done.load(Ordering::SeqCst) || stopped() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if !replaced.load(Ordering::SeqCst) {
+            match look_at(adb, path, false) {
+                Ok((Some(now), _)) if same_file(was, &now, 0) => continue,
+                Ok(_) => replaced.store(true, Ordering::SeqCst),
+                Err(_) => continue,
+            }
+        }
+        let child = CHILD.load(Ordering::SeqCst);
+        if child > 0 {
+            // Safety: the pid is our own adb child's, being read by stream()
+            unsafe { libc::kill(child, libc::SIGTERM) };
+        }
+    }
+}
+
 pub fn log(adb: &Adb, o: &Options, filter: Filter) -> Result<()> {
     adb.need_root()?;
     // one of the fixed names, or logs/xnuhost-<digits>.log: nothing else reaches the phone's shell
@@ -298,36 +468,7 @@ pub fn log(adb: &Adb, o: &Options, filter: Filter) -> Result<()> {
             bail!("reading {path} failed (phone log --list shows which logs are there)");
         }
     } else {
-        // `tail -n +K -F` on the one named file. When adb drops, start again after the lines that came whole.
-        let mut first = match o.tail {
-            Some(n) => {
-                let total: u64 = adb.root_ok(&format!("wc -l < {path} 2>/dev/null || echo 0\n"), "counting the log's lines")?.trim().parse().unwrap_or(0);
-                total.saturating_sub(n)
-            }
-            None => 0,
-        };
-        let mut drops = 0;
-        while !stopped() {
-            let before = sink.lines;
-            let clean = stream(adb, &format!("su -c 'tail -n +{} -F {path}'", first + 1), &mut sink)?;
-            first += sink.lines - before;
-            if stopped() {
-                break;
-            }
-            drops = if sink.lines > before { 1 } else { drops + 1 };
-            eprintln!("phone log: adb {} after {} lines; connecting again", if clean { "ended" } else { "dropped" }, sink.lines);
-            if sleep_or_stop(Duration::from_secs(drops.min(5))) {
-                break;
-            }
-            // a new session's log starts over: fewer lines than were read means a new file
-            if let Ok(r) = adb.root(&format!("wc -l < {path} 2>/dev/null || echo 0\n")) {
-                if r.out.trim().parse::<u64>().is_ok_and(|total| total < first) {
-                    eprintln!("phone log: {path} is a new file; reading it from its start");
-                    first = 0;
-                }
-            }
-        }
-        eprintln!("phone log: stopped after {} lines", sink.lines);
+        follow(adb, &o.file, &path, o.tail, &mut sink)?;
     }
     drop(sink.save.take());
     if let Some(p) = &o.save {
@@ -403,5 +544,25 @@ mod tests {
         assert!(path_of("xnuhost").unwrap().ends_with("/session/xnuhost.log"));
         assert!(path_of("logs/xnuhost-1794000000.log").is_ok());
         assert!(path_of("logs/../../etc/passwd").is_err() && path_of("session").is_err());
+    }
+
+    #[test]
+    fn follow_knows_the_file() {
+        let (seen, epoch) = parse_look("file 4242 1794000050 12\nfirst [    0.003] xnuhost I xnuhost: session ABI 1\nswitch === OneOS app switch 2026-11-13 00:01:02 epoch 1794000040 versionCode 115 ===\n");
+        let seen = seen.unwrap();
+        assert_eq!((seen.inode, seen.ctime, seen.lines, epoch), (4242, 1794000050, 12, Some(1794000040)));
+        assert_eq!(seen.first, "[    0.003] xnuhost I xnuhost: session ABI 1");
+        assert_eq!(parse_look("missing\nswitch \n"), (None, None));
+        // the switch's rule: changed before the switch is the last session's log; at or after it counts
+        assert!(before_switch(&Seen { ctime: 1794000039, ..seen.clone() }, epoch));
+        assert!(!before_switch(&Seen { ctime: 1794000040, ..seen.clone() }, epoch));
+        assert!(!before_switch(&seen, None));
+        // a drop: the same file grown is the same; another inode with the same first line, or fewer lines than
+        // were read, or another first line, is a new file
+        assert!(same_file(&seen, &Seen { lines: 30, ..seen.clone() }, 12));
+        assert!(!same_file(&seen, &Seen { inode: 4243, ..seen.clone() }, 0));
+        assert!(!same_file(&seen, &Seen { lines: 3, ..seen.clone() }, 12));
+        assert!(!same_file(&seen, &Seen { first: "[    0.004] another".into(), ..seen.clone() }, 0));
+        assert!(same_file(&Seen { first: String::new(), ..seen.clone() }, &seen, 0));
     }
 }
