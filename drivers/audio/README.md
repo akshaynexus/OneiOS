@@ -11,5 +11,6 @@ The device it drives is `runtime/bridges/devices/virtio_snd.c` at `/arm-io/virti
 backed by the AAudio helper `oneios-audio`. Everything else (boot arguments, log lines, measurements):
 `docs/hardware.md` section 6.
 
-Open on this side: an "Actuator" output for Core Haptics (a third device in `DroidVMAudio.cpp`, or ios-topaz's
-RedwoodAudio HAL plug-in) writing `/dev/oneios-haptic` (`../haptics/oneios_haptic.c`).
+Since 2026-11-12 (media) the archive also stages a third device, UID "Actuator" (Core Haptics, UI and keyboard
+taps): mono, the speaker's engine, its periods to `../haptics/oneios_haptic.c` (`oneios_haptic_actuator_play`), not to
+virtio-snd. `docs/hardware.md` section 5.

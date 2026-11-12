@@ -17,9 +17,11 @@
 //     server has taken the stream's first frames (a new deep-buffer track takes nothing for about 200 ms) the
 //     limit is the whole ring (500 ms), then what the stall left plus 40 ms, shrinking as it plays: on the phone a cut there
 //     lost the first 120 ms of iOS's first sound;
-//   - the guest's STOP keeps the stream open for ONEIOS_AUDIO_LINGER_S (15 s): what the ring still holds plays,
-//     then silence; iOS starts and stops its device around each sound, and a reopened track would stall again.
-//     Then it is closed.
+//   - the guest's STOP keeps the stream open for ONEIOS_AUDIO_LINGER_S (60 s): what the ring still holds plays,
+//     then silence; iOS starts and stops its device around each sound, and a reopened track stalls again (the
+//     open and the new track's first ~200 ms before the server takes frames: a UI sound after a pause came that
+//     much later than the rest). Then it is closed. 60 s covers a typing or a browsing session's pauses; the
+//     price is the phone's speaker path kept on with silence for that minute.
 // Input: a reader thread reads the microphone in periods of 240 frames (blocking AAudioStream_read) and sends each
 // one to xnuhost.
 //
@@ -71,7 +73,7 @@ static bool priming = true, guest_on;            // guest_on: between the guest'
 static bool consuming;                           // the server has taken frames from this stream (after its start stall)
 static unsigned allowance = RING_FRAMES;         // the most the ring may hold now: the stall's backlog, shrinking as it plays
 static unsigned generation;                      // counts the guest's STARTs: the writer measures its level anew
-static unsigned linger_s = 15;
+static unsigned linger_s = 60;
 static pthread_mutex_t ring_lock = PTHREAD_MUTEX_INITIALIZER;
 
 struct out_stats { uint64_t in, played, underruns, overflows, dropped, slips_up, slips_down; unsigned fill_min, fill_max; };
@@ -462,7 +464,7 @@ int main(int argc, char **argv)
   target_ms = env_ms("ONEIOS_AUDIO_TARGET_MS", 20, 5, 150);
   if (target_max_ms < target_ms) target_max_ms = target_ms;
   buffer_bursts = env_ms("ONEIOS_AUDIO_BURSTS", 2, 1, 8);
-  linger_s = env_ms("ONEIOS_AUDIO_LINGER_S", 15, 0, 600);
+  linger_s = env_ms("ONEIOS_AUDIO_LINGER_S", 60, 0, 600);
   mmap_off();
   fprintf(stderr, "oneios-audio: ready: performance mode none, MMAP off, AAudio buffer %u bursts, ring %u ms, target %u ms (at most %u), linger %u s\n",
           buffer_bursts, FRAMES_MS(RING_FRAMES), target_ms, target_max_ms, linger_s);

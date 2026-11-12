@@ -1,0 +1,26 @@
+diff --git a/osfmk/kern/thread_policy.c b/osfmk/kern/thread_policy.c
+--- a/osfmk/kern/thread_policy.c
++++ b/osfmk/kern/thread_policy.c
+@@ -404,6 +404,22 @@
+ 
+ 		info = (thread_time_constraint_with_priority_policy_t)policy_info;
+ 
++#if XNU_HOSTED
++		/*
++		 * OneiOS hosted: the guest's counter is the host's, 19.2 MHz on the phone, where max_rt_quantum (50 ms) is
++		 * 960000 ticks. iOS's audio server asks for its I/O thread a computation of 1200000 ticks (50 ms at Apple's
++		 * 24 MHz) when its I/O buffer is about 60 ms or more: thread_policy_set refused it (KERN_INVALID_ARGUMENT),
++		 * the HAL's I/O thread threw in its init ("configure_thread_for_realtime - thread_policy_set failed. Cycle
++		 * Size: 1536000 Thread Parameters: 1536000 1200000 1536000 1") and stopped after 0 frames, and each system
++		 * sound waited out the mixer's 3 s timeout (a 1024-frame buffer asks less, and it played).
++		 * A computation past the maximum is held to it when the constraint allows it, as a computation below half
++		 * the constraint is raised below. After macOS-DroidVM's xnu-12377 patch 0039 (the same 19.2 MHz board).
++		 * This is the guest's scheduler only: xnuhost's vCPUs stay normal Linux threads.
++		 */
++		if (info->computation > max_rt_quantum && info->constraint >= max_rt_quantum) {
++			info->computation = max_rt_quantum;
++		}
++#endif
+ 
+ 		if (info->constraint < info->computation ||
+ 		    info->computation > max_rt_quantum ||

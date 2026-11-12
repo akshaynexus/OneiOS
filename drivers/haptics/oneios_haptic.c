@@ -16,16 +16,23 @@
  * iOS paths (docs/hardware.md, Vibration and haptics):
  *   1. "vibrator" IOService: FigVibrator's legacy IOKit path (ringtone, alert and system-sound
  *      vibration). API oneios_haptic_vib(ms, intensity, hz): on for ms from now (0: stop).
- *   2. /dev/oneios-haptic and /dev/redwood-haptic (the node ios-topaz's RedwoodAudio HAL plug-in
- *      opens for its "Actuator" output): S16LE mono 48 kHz samples. 2 ms blocks with a peak above
- *      OH_SILENT are "on"; each write's loud span is played at once with the span's peak as the
- *      intensity and its zero-crossing rate as the frequency. This is the closed-loop path (Core
- *      Haptics, UIFeedbackGenerator, keyboard taps). It needs IODeviceTree:/product/haptics
- *      closed-loop = 1, which is published only when the root has an Actuator plug-in and
- *      VirtualAudio.plugin: with closed-loop on and no Actuator device iOS plays no vibration at all.
+ *   2. The "Actuator" audio device: the closed-loop path (Core Haptics, UIFeedbackGenerator,
+ *      keyboard taps; with closed-loop on also ringtone and alert patterns, through VirtualAudio's
+ *      VirtualAudioDevice_Actuator). Two ways in, both S16LE at 48 kHz:
+ *      a. the Actuator IOAudio2Device of the audio archive (kernel/patches/oneios-hosted/audio,
+ *         DroidVMAudio.cpp as staged): its engine hands every 5 ms period to
+ *         oneios_haptic_actuator_play(), which oneios_actuator.h turns into few requests;
+ *      b. /dev/oneios-haptic and /dev/redwood-haptic, for an Actuator HAL plug-in in the root
+ *         (ios-topaz's RedwoodAudio): 2 ms blocks with a peak above OH_SILENT are "on"; each write's
+ *         loud span is played at once with the span's peak as the intensity and its zero-crossing
+ *         rate as the frequency.
+ *      It needs IODeviceTree:/product/haptics closed-loop = 1, which is published only when one of
+ *      the two exists (and VirtualAudio.plugin): with closed-loop on and no Actuator device iOS plays
+ *      no vibration at all.
  *
  * Log: "ONEIOS HAPTIC: on: ..." or "ONEIOS HAPTIC: off: <why>"; "ONEIOS HAPTIC UI: on|off: <why>".
- * Kill switches: oneios_haptic=0 (all), oneios_haptic_ui=0 (no closed-loop node).
+ * Kill switches: oneios_haptic=0 (all), oneios_haptic_ui=0 (no closed-loop node, no Actuator device);
+ * the audio archive's oneios-actuator=0 (no Actuator device).
  */
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -42,6 +49,7 @@
 #include <kern/sched_prim.h>
 #include <pexpert/pexpert.h>
 #include "oneios_bridge.h"
+#include "oneios_actuator.h"
 
 extern kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
 extern kern_return_t thread_terminate(thread_t);
@@ -85,6 +93,76 @@ oneios_haptic_vib(uint32_t ms, uint32_t intensity, uint32_t frequency_hz)
 		    vib.frequency_hz, vib.frequency_hz ? "" : " (resonance)");
 	}
 	return rc;
+}
+
+/* ---- the Actuator IOAudio2Device (audio archive) --------------------------------------------------- */
+
+static LCK_MTX_DECLARE(oh_alock, &oh_grp);      /* the Actuator's state */
+static struct oa_state oh_act;
+static uint32_t oh_act_decided;                 /* 0: not yet, 1: no Actuator device, 2: published */
+static uint64_t oh_act_periods, oh_act_loud, oh_act_requests;
+static uint32_t oh_act_starts, oh_act_said;
+
+/* The audio archive asks before it publishes the device: only with the host's actuator and UI haptics on. */
+bool
+oneios_haptic_actuator_ready(void)
+{
+	return oh_ready && oh_ui != 0;
+}
+
+/* The audio archive's decision, once: whether an Actuator IOAudio2Device was published. */
+void
+oneios_haptic_actuator_published(bool yes)
+{
+	oh_act_decided = yes ? 2u : 1u;
+	printf("ONEIOS HAPTIC: Actuator audio device %s\n", yes ? "published (UID \"Actuator\", mono 48 kHz S16)" :
+	    "not published");
+}
+
+/* The device's StartIO and StopIO (audiomxd's I/O on VirtualAudioDevice_Actuator). */
+void
+oneios_haptic_actuator_running(bool on)
+{
+	lck_mtx_lock(&oh_alock);
+	if (!on && oh_act.on) {
+		(void)oneios_haptic_vib(0, 0, 0);
+	}
+	uint32_t starts = on ? ++oh_act_starts : oh_act_starts;
+	bzero(&oh_act, sizeof(oh_act));
+	lck_mtx_unlock(&oh_alock);
+	if (starts <= 3u || !on) {
+		char who[32];
+		proc_selfname(who, sizeof(who));
+		if (on) {
+			printf("ONEIOS HAPTIC: Actuator: I/O started by %s (start %u)\n", who, starts);
+		} else if (oh_act_said < OH_LOG) {
+			oh_act_said++;
+			printf("ONEIOS HAPTIC: Actuator: I/O stopped: %llu periods, %llu loud, %llu requests to the motor so far\n",
+			    oh_act_periods, oh_act_loud, oh_act_requests);
+		}
+	}
+}
+
+/* One engine period (240 frames, 5 ms) of the Actuator's samples; returns the frames taken. */
+uint32_t
+oneios_haptic_actuator_play(const int16_t *frames, uint32_t count, uint32_t channels)
+{
+	lck_mtx_lock(&oh_alock);
+	struct oa_request r = oa_period(&oh_act, frames, count, channels);
+	oh_act_periods++;
+	if (oh_act.run_us > 0 && oh_act.quiet_us == 0) {
+		oh_act_loud++;
+	}
+	if (r.action != OA_NONE) {
+		oh_act_requests++;
+	}
+	lck_mtx_unlock(&oh_alock);
+	if (r.action == OA_VIB) {
+		(void)oneios_haptic_vib(r.ms, r.intensity, r.hz);
+	} else if (r.action == OA_STOP) {
+		(void)oneios_haptic_vib(0, 0, 0);
+	}
+	return count;
 }
 
 /* ---- /dev/oneios-haptic -------------------------------------------------------------------------- */
@@ -236,8 +314,13 @@ oh_root_thread(__unused void *arg, __unused wait_result_t wr)
 		waited += 20;
 	}
 	oneios_haptic_make_node();
-	const char *plugin = NULL;
-	for (unsigned i = 0; rootvnode != NULLVP && i < sizeof(oh_plugins) / sizeof(oh_plugins[0]); i++) {
+	/* The audio archive decides about its Actuator device at the drivers' start, normally before the
+	 * root is mounted; without the archive (a kernel built without it) no decision comes. */
+	for (unsigned w = 0; oh_act_decided == 0 && w < 5000u; w += 20u) {
+		delay_for_interval(20, NSEC_PER_MSEC);
+	}
+	const char *plugin = oh_act_decided == 2u ? "the Actuator IOAudio2Device" : NULL;
+	for (unsigned i = 0; plugin == NULL && rootvnode != NULLVP && i < sizeof(oh_plugins) / sizeof(oh_plugins[0]); i++) {
 		if (oh_exists(oh_plugins[i])) {
 			plugin = oh_plugins[i];
 			break;
@@ -250,15 +333,16 @@ oh_root_thread(__unused void *arg, __unused wait_result_t wr)
 	} else if (!oh_node_made) {
 		printf("ONEIOS HAPTIC UI: off: no /dev/oneios-haptic\n");
 	} else if (plugin == NULL) {
-		printf("ONEIOS HAPTIC UI: off: no Actuator HAL plug-in in the root (%s, ...): iOS vibrates through the "
-		    "\"vibrator\" service (ringtones, alerts; no UI/keyboard taps)\n", oh_plugins[0]);
+		printf("ONEIOS HAPTIC UI: off: no Actuator audio device (%s) and no Actuator HAL plug-in in the root (%s, ...): "
+		    "iOS vibrates through the \"vibrator\" service (ringtones, alerts; no UI/keyboard taps)\n",
+		    oh_act_decided == 1u ? "not published" : "no decision from the audio archive in 5 s", oh_plugins[0]);
 	} else if (!oh_exists(OH_VIRTUAL) && !oh_exists(OH_VIRTUAL2)) {
 		printf("ONEIOS HAPTIC UI: off: no VirtualAudio.plugin: no Actuator route; \"vibrator\" service only\n");
 	} else if (oneios_haptic_publish_closed_loop() != 0) {
 		printf("ONEIOS HAPTIC UI: off: IODeviceTree:/product/haptics not published\n");
 	} else {
 		printf("ONEIOS HAPTIC UI: on: /product/haptics closed-loop = 1 (Core Haptics, UI and keyboard taps, "
-		    "ringtones -> Actuator of %s -> /dev/oneios-haptic)\n", plugin);
+		    "ringtones -> VirtualAudioDevice_Actuator -> %s -> the host's actuator)\n", plugin);
 	}
 	(void)thread_terminate(current_thread());
 }

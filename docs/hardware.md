@@ -22,8 +22,8 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 | GPU | UniXNU-droidvm's virtio-gpu 3D + NativeAdreno user client (unchanged) | booter's `virtio_gpu.c` + drm2kgsl | booter's; not owned here (section 2) |
 | Wi-Fi / network | `kernel/patches/oneios-hosted/net`: `IO80211Controller`/`IO80211Interface` under the collection's `IOEthernetController`/`IOEthernetInterface`, a station that asks the host, UniXNU-droidvm's virtio-net transport (section 3) | `runtime/bridges/wifi`: wlan0 is iOS's for the session: frames by AF_PACKET, scans by nl80211, joins by the vendor's supplicant (AIDL V2 over `/dev/binder`); `wifictl`; the old tap/NAT route only with `wifi=tap` | both built; host tested (132 + 35 checks, the binder client on a real binder driver); on the phone beside One UI: the supplicant's service and an nl80211 scan (53 networks) answer our client; **not yet run in a session** (wifid, a join, DHCP) |
 | Bluetooth | `drivers/bluetooth` (port of iOSPlus10's transport) on `drivers/bridge` | `runtime/bridges/bt`: the HAL over `/dev/hwbinder` | both built; on by default in a session since 2026-11-11 (before: off, `bluetooth=virtual`); HAL client tested on the PC against a fake HAL on a real binder driver, not yet on the phone |
-| Haptics | `drivers/haptics` (port of iOSPlus10's LaurelVibrator and haptic node) | `runtime/bridges/haptics`: evdev force feedback | both built; host tested with a fake actuator |
-| Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp`: the hosted kernel's audio archive since 2026-11-12 (before: not built, no device in iOS) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | helper run on the phone beside One UI (plays and records, 0 underruns, about 130 ms); host-tested against a fake AAudio; in a session and the guest side not yet run (section 6) |
+| Haptics | `drivers/haptics` (port of iOSPlus10's LaurelVibrator and haptic node) and, since 2026-11-12, the Actuator IOAudio2Device of the audio archive (UI and keyboard taps) | `runtime/bridges/haptics`: evdev force feedback | both built; host tested with a fake actuator; the `vibrator` path ran in sessions (alerts), the Actuator path not yet run (section 5) |
+| Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp`: the hosted kernel's audio archive since 2026-11-12 (before: not built, no device in iOS) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | helper run on the phone beside One UI (plays and records, 0 underruns, about 130 ms); host-tested against a fake AAudio; in sessions iOS's I/O thread failed for large buffers (system sounds 3 s late or lost): hosted 0052, not yet run (section 6) |
 | Camera | `drivers/camera`: the `oneios,camera` transport, `/dev/oneios-camera`; `userland/camera`: the capture plug-in (its device object not written) | `runtime/bridges/camera`: helper `oneios-camera` (provider HAL in a session, Camera2 NDK with One UI), ring, device, `camctl` | host and kernel sides built and host-tested; iOS shows no camera yet; one phone run (2026-11-11): cameraserver lists 4 cameras and opens one for a root client, no frame arrived (no binder threads in the process: fixed, the fix not yet run on the phone); the HAL back end never run (section 7) |
 | Backlight and light sensor | `drivers/brightness`: the backlight service (port of iOSPlus10's `AppleARMBacklight`), the light readings; the HID light sensor device, built into the hosted kernel's HID archive | `runtime/bridges/brightness`: the backlight sysfs node, `als_rear` by evdev, `brightctl` | both built; host tested; in a PC boot the HID device starts and Apple's `AppleUSBALSService` attaches to it; never run on the phone or in a session (section 7a) |
 | Battery | `drivers/battery`: an `IOPMPowerSource` powerd reads | `runtime/bridges/battery`: Android's `power_supply` nodes, polled, changes sent over the bridge channel; `batteryctl` | both built; host tested with a fake sysfs; never run on the phone or in a session (section 7c) |
@@ -83,7 +83,8 @@ Per area, in the sessions (lines of `xnuhost.log`):
   and `event2` (the two volume-key devices) open (agent touch).
 - **Audio**: `audio: on: helper /data/runtime/bin/oneios-audio`; no sound was played or checked.
 - **Haptics**: `haptics: on: /dev/input/event5 (sine effects, period 4..10 ms, level 40..255)`; iOS's `ONEIOS HAPTIC
-  UI: off: no Actuator HAL plug-in in the root` (ringtones and alerts only).
+  UI: off: no Actuator HAL plug-in in the root` (ringtones and alerts only). A kernel from 2026-11-12 (media) on has the
+  Actuator audio device (section 5).
 - **Bluetooth**: 0.1.7-dev: `bluetooth: on: the phone's controller through its HAL 1.1, address 02:d7:be:af:18:ea
   (made up: /mnt/vendor/efs/bluetooth/bt_addr not read)`; no line shows bluetoothd opening it. 0.1.6: `ONEIOS BT: off:
   the host serves no Bluetooth controller`.
@@ -661,6 +662,63 @@ absent: a reason not to run it on the phone as it is.
   zero-crossing rate as the frequency.
 - Messages: `OB_HAPTIC_VIB {on_ms, intensity 0..1000, frequency_hz}`, `OB_HAPTIC_STOP`.
 
+### UI haptics: the Actuator audio device (media, 2026-11-12; built, not run on the phone)
+
+Why taps did nothing [F, iOS's log of the 14:12 session]: `ONEIOS HAPTIC UI: off: no Actuator HAL plug-in in the
+root`, so no closed-loop node; UIKit then says `_UIKBFeedbackGenerator: ... Haptics: unsupported ... Mode: audio
+only`, `_UIFeedbackSystemSoundEngine` plays the feedback as a system sound, and backboardd says `Device doesn't support
+Haptic Music`. Only FigVibrator's legacy `vibrator` path ran (`ONEIOS VIBRATOR: request kind 1 from audiomxd`).
+
+How iOS 27 plays a tap [F 24A446 unless marked]: VirtualAudio.plugin (`/Library/Audio/Plug-Ins/HAL/VirtualAudio.plugin`
+on the OS volume, not in the shared cache) has `Device_Actuator_Aspen.cpp`, `VirtualAudioDevice_Actuator`,
+`VAD_Actuator`, `ActuatorIV`, `Creating Actuator Port`, `Could not find actuator port after 8 seconds`; its routing
+already looks for the actuator's settings (`Cannot find strips file oneios,xnuhost/VAD/d42_actuator_general` in every
+session). [V iOS 16, iOSPlus10 docs/haptics-plan.md 8.1; I for iOS 27] the physical device with UID **"Actuator"**
+becomes that VAD; UIKit's level 2 (taps, keyboard) and Core Haptics need MobileGestalt's closed-loop answer, which is
+`IODeviceTree:/product/haptics closed-loop`. The V54 device tree has `/product/haptics {closed-loop 1,
+supports-3rd-party-haptics 1, power-control-features 2, controller-coeff-cal "syscfg/CLCL"}`; the loader does not
+copy it (`/product`'s children are not copied). The kernel drops MobileGestalt's cache at each boot
+(`gestalt-cache-drop`), so a node published before the first answer is what it reads.
+
+What is built:
+- **The device**: the audio archive (`kernel/patches/oneios-hosted/audio/build-oneios-audio.py`) stages a third
+  IOAudio2Device into `DroidVMAudio.cpp`: UID `Actuator`, one output stream, mono S16 at 48 kHz
+  (`oneios-actuator-channels=2` for stereo), the speaker's engine (240-frame periods on the guest's clock), output
+  latency one period (not the speaker's 6480 frames: the haptic synth keeps haptics in step with a device's
+  latency). Each period goes to `oneios_haptic_actuator_play()`, not to virtio-snd. Published only when
+  `drivers/haptics` has the host's actuator and UI haptics are on; `oneios-actuator=0` leaves it out.
+- **The requests** (`drivers/haptics/oneios_actuator.h`, host-tested by `drivers/haptics/test_actuator.c`, 16 checks):
+  a period is loud above 256 of 32768; the first loud period asks 20 ms (a tap), the run renews when less than 12 ms
+  is left (50 ms segments after 20 ms) or the level moves by more than 100 of 1000; a run of 30 ms or more is stopped
+  after 10 ms of silence, a tap runs out. Intensity = the period's peak; frequency = the run's zero crossings with
+  hysteresis, after 10 ms. A tap is one request; a long vibration about 20 a second (each is an effect upload on
+  the CS40L26's I2C).
+- **The closed-loop node**: `oneios_haptic.c` waits (5 s at most) for the audio archive's decision
+  (`oneios_haptic_actuator_published`), then publishes `/product/haptics {closed-loop 1, supports-3rd-party-haptics 1}`
+  when the device exists (the old rule, an Actuator HAL plug-in in the root, stays as the second way in). Not copied
+  from the DT: `controller-coeff-cal` (a syscfg key the guest has not) and `power-control-features` (unknown use).
+- With closed-loop on, FigVibrator also takes the unified engine [V iOS 16]: ringtones and alerts then play on the
+  Actuator too, and the `vibrator` service gets no requests.
+
+backboardd's `BKButtonHapticsController` and its "click states" [F, backboardd strings]: it configures the click
+haptics of a button through the ButtonHaptics framework and the HID haptic interface (`BKSButtonHapticsDefinition
+homeButtonDefinition`, `clickStatesPending`, `clickStatesConfigured`, `BKHIDHapticFeedbackInterface`), the path of a
+haptic Home button or a touch-sensitive button, not of the Actuator audio device. The device above does not satisfy it;
+on this identity (`home-button-type 2`, no haptic Home button) its pending state is harmless [I].
+
+Next boot's log (kernel lines):
+```
+DroidVMAudio: published Speaker=1 Mic=1 Actuator=1 as IOAudio2Devices (UIDs Speaker, Mic, Actuator x1; ...)
+ONEIOS HAPTIC: Actuator audio device published (UID "Actuator", mono 48 kHz S16)
+ONEIOS HAPTIC UI: on: /product/haptics closed-loop = 1 (... -> VirtualAudioDevice_Actuator -> the Actuator IOAudio2Device -> the host's actuator)
+ONEIOS HAPTIC: Actuator: I/O started by audiomxd (start 1)          (at the first haptic)
+ONEIOS HAPTIC: play 1: 20 ms, intensity N of 1000, 0 Hz (resonance)   (each tap; the first 24 are logged)
+ONEIOS HAPTIC: Actuator: I/O stopped: N periods, N loud, N requests to the motor so far
+```
+In iOS's log: no `Haptics: unsupported` from `_UIKBFeedbackGenerator`. If the device is published and no `I/O
+started` line comes: VirtualAudio did not make the VAD (`Could not find actuator port`) or MobileGestalt still says
+no. To go back: `oneios-actuator=0` (no device, no node: the `vibrator` path as before).
+
 ### The bridge (`runtime/bridges/haptics/haptic.c`)
 
 - Finds the device by its EV_FF bits (`sec_vibrator_inputff` first), sets `FF_GAIN` 10000 once.
@@ -674,8 +732,8 @@ absent: a reason not to run it on the phone as it is.
 | iOS | Reaches the phone as |
 |---|---|
 | Ringtone, alert and system-sound patterns (`hertz_millisecs`) | on steps as sine effects at the step's intensity; off steps as silence |
-| Core Haptics continuous events (through the Actuator stream) | sine effects following the stream's level and frequency, 2 ms blocks |
-| Core Haptics transients, UI and keyboard taps (Actuator stream, 3-20 ms bursts) | a short sine burst. [U] how sharp it feels; the ROM "click" waveforms (`FF_CUSTOM` `[1, index]`) are the better fit and are not used yet |
+| Core Haptics continuous events (through the Actuator device) | sine effects following the stream's level and frequency, renewed every 30-40 ms |
+| Core Haptics transients, UI and keyboard taps (Actuator device, 3-20 ms bursts) | a 20 ms sine burst at the tap's peak. [U] how sharp it feels; the ROM "click" waveforms (`FF_CUSTOM` `[1, index]`) are the better fit and are not used yet |
 | Sharpness | frequency, within 100..250 Hz |
 
 ### Missing, unknown
@@ -683,11 +741,12 @@ absent: a reason not to run it on the phone as it is.
 - [U] the LRA's resonance (attribute `f0_measured` of class `sec_vib_inputff`): 6 ms (166 Hz) is a guess.
 - [U] whether the buzz generator stops fast enough for taps; if not, map bursts under about 25 ms to ROM clicks.
   The table of ROM/RAM indices is Samsung's firmware (`cs40l26.wmfw`/`.bin` on the phone), not in the kernel source.
-- The Actuator stream needs an audio HAL plug-in on the iOS side that writes the node (ios-topaz's RedwoodAudio, or
-  an Actuator device added to `DroidVMAudio.cpp`): userland / release-kernel. Until then only the `vibrator` path
-  works: ringtones and alerts yes, UI and keyboard taps no (same state as the Mi A3 on iOS 16).
-- [U] iOS 27: `hertz_millisecs` is still in the iOS 26.5 MediaExperience [F iOSPlus10]; whether iPhone18,2's
-  MobileGestalt answers closed-loop true from its own cache regardless of the device tree is not known.
+- Not run on the phone yet: the Actuator device (above). [U] whether iOS 27's VirtualAudio wants the `ActuatorIV`
+  input (current and voltage sense) as well; HackiOS ran iOS 16 without it. [U] whether the HAL asks the Actuator for
+  more than one channel (`LegacyHapticSynth: ... output bus format to 2-chan` in iOS's log is the synth's bus, not
+  the device's): `oneios-actuator-channels=2` if the log shows a refused format (selector 5).
+- [U] iOS 27: `hertz_millisecs` is still in the iOS 26.5 MediaExperience [F iOSPlus10]; that MobileGestalt's
+  closed-loop answer still comes from `/product/haptics` is [V] for iOS 16 only.
 - The key stop (`oneios_vibrator_key`) is not wired: the HID input driver must call it on power and volume presses.
 - The AIDL vibrator HAL is the second route (`IVibrator.compose`, `perform`): it needs a binder client for the AIDL
   binder (`/dev/binder`, another parcel format than `bt/hidl_parcel.c`). Not written; evdev as root is the first.
@@ -761,8 +820,9 @@ yet: the audio test cycle adds it (below).
     (an overflow). Until the server takes the stream's first frames (a newly opened deep-buffer track takes
     nothing for about 200 ms) nothing is cut: the ring holds 500 ms, and after the stall its backlog (plus 40 ms)
     is the limit, shrinking as it plays at up to 1.25 % faster. The guest's STOP keeps the stream open for
-    `ONEIOS_AUDIO_LINGER_S` (15 s): what the ring holds plays, then silence; iOS stops and starts its device around
-    each sound, and a reopened track would stall again.
+    `ONEIOS_AUDIO_LINGER_S` (60 s since 2026-11-12, 15 s before): what the ring holds plays, then silence; iOS stops
+    and starts its device around each sound, and a reopened track stalls again (the open and about 200 ms before the
+    server takes frames). The price is One UI's speaker path kept on with silence for that minute.
   - Input: a reader thread, blocking `AAudioStream_read` of 240 frames, input preset VOICE_RECOGNITION, the first
     channel to xnuhost. `backend.c` drops what an earlier recording left in the socket at each input START.
   - Log (xnuhost's log): `oneios-audio: speaker open: ... none, sharing shared, mmap 0, burst 1600, buffer 3200 of
@@ -783,7 +843,7 @@ yet: the audio test cycle adds it (below).
 | What | Result |
 |---|---|
 | uid 0 opens an AAudio output and input beside One UI | yes, no SELinux denial (`dmesg`: 0 `avc: denied`), domain `ksu` |
-| Track | deep-buffer mixer track (AudioFlinger: flags 0x000, frame count 3200, `Latency 133 ms`), 48 kHz stereo, `mmap 0` |
+| Track | a normal mixer track (AudioFlinger: flags 0x000, frame count 3200, `Latency 133 ms`), 48 kHz stereo, `mmap 0`; written down as deep-buffer, but [F `/vendor/etc/audio_policy_configuration.xml`] the Speaker's route has only `primary-out`, `fast` and `mmap_no_irq_out`: [I] the track is on `primary-out` |
 | 12 s of a 440 Hz tone at -30 dBFS | 0 underruns, 0 xruns, 0 overflows, 70 slips; a first run had 3 overflows at the start (the track's stall) |
 | Latency (written to presented, AAudio's timestamp) | 128-137 ms: AAudio 128-136 ms (our 67 ms buffer + the deep-buffer path), ring 1-5 ms |
 | Second tone 0.5 s after a stop | the lingering stream: no new open, no stall, 0 underruns |
@@ -807,6 +867,40 @@ yet: the audio test cycle adds it (below).
   stream closed after the 15 s linger. Which sound it was and whether it was heard: not known (not my session).
 - With system_server gone the helper opened and played (the stream above): AAudio from uid 0 works in a session.
 
+### "Very slow" playback: the cause (media, 2026-11-12: iOS's logs of the 2026-11-11/12 sessions and the 14:12 session)
+
+- **[F] iOS's audio I/O thread could not start for large I/O buffers.** In every boot audiomxd logs `Throwing Exception:
+  not (kernel_error == 0) AMCP::Utility::Thread_Utilities::configure_thread_for_realtime - thread_policy_set failed.
+  Cycle Size: 1536000 Thread Parameters: 1536000 1200000 1536000 1` (2229115 for the Null device), then `An Exception
+  was thrown during Init`, `IO Stopped Context 80 after 0 frames`, `AQMEIO.cpp:201 timed out after 3.000s` and
+  `System sound finished playing ... total time 2441 ms` (2.4-3.3 s in each boot). The guest's counter runs at
+  19.2 MHz (`host: ... counter 19200000 Hz`): the cycle, 1536000 ticks, is 80 ms (`vaemCalculateAndSetDeviceBufferDuration:
+  duration = 0.080, ... 3840`), and the computation, 1200000 ticks, is 62.5 ms here but 50 ms at Apple's 24 MHz. XNU
+  refuses a computation above `max_rt_quantum` (50 ms = 960000 ticks at 19.2 MHz; osfmk/kern/thread_policy.c). So
+  every sound played with a large buffer (system sounds: buffer 3072 frames; long-form media) got no I/O at all and
+  waited out the 3 s timeout; a 1024-frame buffer (the Settings ringtone preview of the 14:12 session: `IO Stopped
+  Context 96 after 52224 frames`) asks less and played. macOS-DroidVM found the same on its 19.2 MHz board (WebKit's
+  players stopped at their first second). [I] This is the "very slow": sounds seconds late or missing, players that
+  stall.
+- **Fix: hosted 0052** (`kernel/patches/oneios-hosted/0052-rt-computation-held.patch`): a computation above the
+  maximum is held to it when the constraint allows. The guest's scheduler only: no host thread changes its policy.
+  Needs a new `kernel.kc`. Expected in iOS's log after it: no `configure_thread_for_realtime` exception, `IO Stopped
+  Context N after N frames` with N > 0 for system sounds, no `timed out after 3.000s`; in xnuhost's log a
+  `speaker open` at the lock click or a keyboard click, `frames in` close to the sound's length.
+- **The host path's latency** (the rest of the delay, after the fix): 131-142 ms in the 14:12 session (`AAudio 131 ms
+  queued`), as measured beside One UI. It is AAudio's buffer level (one 1600-frame burst plus a 20 ms target, about
+  53 ms) plus the normal mixer and the HAL (about 78 ms). What was looked at:
+  - a non-deep-buffer route: the track is on `primary-out` already (above); the `fast` port needs a FAST track,
+    which AudioFlinger grants only to a callback or a Java writer and then raises that client's thread to SCHED_FIFO
+    through system_server: not allowed (no realtime thread) and not there in a session. MMAP is out the same way.
+  - a smaller buffer: `ONEIOS_AUDIO_BURSTS=1` and `ONEIOS_AUDIO_TARGET_MS=10` are the knobs (xnuhost's environment, which the helper inherits; no `xnuhost.conf` key); not
+    made the default, because the server's mixer period on this phone is not measured (the burst of 1600 is the
+    track's notification period, not the mixer's) and an underrun is worse than 30 ms.
+  - the stream kept open in silence: the linger is 60 s now (above). A sound after a longer pause pays the open
+    and the new track's first 200 ms once.
+  - the latency iOS is told (`oneios-audio-latency`, 6480 frames = 135 ms): it matches the 131-142 ms measured; kept.
+  - iOS's own buffer: system sounds use a 3072-frame I/O buffer (64 ms) of iOS's choosing; not changed.
+
 ### Missing, unknown
 
 - **Not run yet in a test cycle of mine:** `owner-hide-vmm=audiomxd,com.apple.WebKit.GPU` (VirtualAudio's Null device
@@ -822,11 +916,13 @@ yet: the audio test cycle adds it (below).
   arguments now, a third device would be a change of the staged source.
 - Volume: iOS's volume keys scale the samples in iOS (VirtualAudio's software volume [I from iOSPlus10]); the
   Android media stream stays at One UI's last volume (14 of 15 on 2026-11-12). Nothing turns it down for a session.
-- Latency 130 ms: the deep-buffer output. A FAST track would be lower but needs the realtime path above.
+- Latency 130 ms: AAudio's level plus the normal mixer (the section above). A FAST track would be lower but needs the
+  realtime path above.
 - Routing: One UI's audio policy's default for a media stream (speaker; a wired or Bluetooth headset if connected
   [U]). The earpiece needs a voice-communication stream or AAudio's device id of the earpiece port: not done. Calls
   are out of scope (no baseband in the guest).
-- The Actuator stream (Core Haptics taps) shares nothing with this path yet (section 5).
+- The Actuator device (Core Haptics taps, section 5) is an IOAudio2Device of the same archive, but its periods go to
+  the haptics bridge, not to virtio-snd and this helper.
 
 ## 7. Camera (fable-camera, 2026-11-11)
 

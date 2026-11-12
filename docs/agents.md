@@ -1900,3 +1900,37 @@ persistent: a reboot costs a manual re-root.
     Settings shows the network joined; xnuhost `wifi: DHCP: iOS sends DISCOVER`, `wifi: DHCP: OFFER of a.b.c.d from
     e.f.g.h`, `wifi: DHCP: iOS sends REQUEST`, `wifi: DHCP: ACK of a.b.c.d from e.f.g.h`, and `wifi: 10 s after the
     join: N frames from iOS, M to it`. No `scan: no end from the host` line.
+
+- 2026-11-12, media -> parent, prelink, lead, audio: **"very slow" audio found, UI haptics written** (`docs/hardware.md`
+  sections 5 and 6). Built and prelinked; not run on the phone.
+  - **Audio cause [F, iOS's logs of every 2026-11-11/12 boot and the 14:12 session]:** audiomxd's HAL I/O thread asks
+    `THREAD_TIME_CONSTRAINT_POLICY` with a computation of 1200000 ticks (50 ms at 24 MHz) when its buffer is about
+    60 ms or more; the guest's counter is 19.2 MHz, so that is 62.5 ms, above `max_rt_quantum` (960000 ticks).
+    `thread_policy_set` fails, the I/O thread throws in its init, `IO Stopped Context 80 after 0 frames`, and each
+    system sound ends after the mixer's `timed out after 3.000s`. A 1024-frame buffer (the Settings ringtone preview)
+    played. **Hosted 0052** holds such a computation to the maximum (after macOS-DroidVM 0039). Guest scheduler only.
+  - **Latency:** the host path is 131-142 ms (AAudio's level of about 53 ms plus the normal mixer). The track is on
+    `primary-out` already (the vendor policy file has no deep-buffer route to the speaker); FAST and MMAP need a
+    SCHED_FIFO client thread: not allowed. Changed: the helper keeps its stream open 60 s in silence (was 15 s), so a
+    sound after a pause no longer pays the open and the new track's 200 ms. Knobs left as they were:
+    `ONEIOS_AUDIO_BURSTS`, `ONEIOS_AUDIO_TARGET_MS`, `oneios-audio-latency` (135 ms, matches).
+  - **UI haptics:** the audio archive stages a third IOAudio2Device, UID `Actuator` (iOS 27's VirtualAudio.plugin has
+    `Device_Actuator_Aspen`, `VirtualAudioDevice_Actuator`), mono 48 kHz, whose periods go to `drivers/haptics`
+    (`oneios_actuator.h`: a tap is one 20 ms request, a long vibration about 20 a second; host test 16 checks).
+    `drivers/haptics` publishes `/product/haptics {closed-loop 1, supports-3rd-party-haptics 1}` only when that device
+    exists (the V54 DT has the node; the loader does not copy `/product`'s children). `oneios-actuator=0` goes back.
+  - **backboardd's `BKButtonHapticsController` "click states":** not this path. It configures a haptic Home or
+    touch-sensitive button through the ButtonHaptics framework and the HID haptic interface; the Actuator does not
+    satisfy it, and with `home-button-type 2` its pending state is harmless [I].
+  - **prelink / parent:** my collection `out/kernel/media-24A446/kernel.kc` (kernel `HOSTED_OUT=media` on `507e196` plus
+    my commit, with the RELEASE reference), sha256 `74f21ff1...`: audit 2712 paired, 0 failures; `stubs-check.py` 666
+    good, 0 bad. The helper change needs a new runtime (test_audio_helper 4051 checks pass in the container).
+  - **Expected in the next boot:** kernel `DroidVMAudio: published Speaker=1 Mic=1 Actuator=1`, `ONEIOS HAPTIC:
+    Actuator audio device published`, `ONEIOS HAPTIC UI: on: /product/haptics closed-loop = 1 ...`, then at a tap
+    `ONEIOS HAPTIC: Actuator: I/O started by audiomxd` and `ONEIOS HAPTIC: play N: 20 ms, intensity ...`. iOS's log:
+    no `configure_thread_for_realtime` exception, no `timed out after 3.000s`, no `Haptics: unsupported`.
+  - **The owner should hear** the lock click, keyboard clicks and other UI sounds at once (about 0.2 s after the
+    action, not 2-3 s or never), and video or music play at normal speed; **and feel** a short buzz for switches,
+    long presses and keyboard keys (Settings > Sounds & Haptics > Keyboard Feedback > Haptic), and ringtone
+    vibration through the same path. If taps are felt as too soft or too long: tell me (the request rules are in
+    `oneios_actuator.h`).

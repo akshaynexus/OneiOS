@@ -582,6 +582,28 @@ hosted kernel had no audio device. Log lines, boot arguments and what was measur
 On the phone since `kernel.kc` `66faa3e8` (main 924a0d9, agent prelink's sessions of 2026-11-12): `ONEIOS AUDIO: on`,
 both devices published, audiomxd opens them and plays (`docs/hardware.md` section 6, "In a session").
 
+### The Actuator device (media, 2026-11-12)
+
+The archive also stages a third IOAudio2Device into `DroidVMAudio.cpp`: UID `Actuator` (VirtualAudio's
+`VirtualAudioDevice_Actuator`: Core Haptics, UI and keyboard taps), mono S16 at 48 kHz, the speaker's engine, whose
+periods go to `drivers/haptics` (`oneios_haptic_actuator_play`, the host's actuator) instead of virtio-snd. Published
+only when `drivers/haptics` has the host's actuator (`oneios-actuator=0`: never; `oneios-actuator-channels=2`:
+stereo). `drivers/haptics` publishes `/product/haptics closed-loop` only when the device exists. Built
+(`HOSTED_OUT=media`); not run. `docs/hardware.md` section 5 has the design, the log lines and the way back.
+
+## 0052-rt-computation-held.patch (media, 2026-11-12)
+
+`thread_policy_set(THREAD_TIME_CONSTRAINT_POLICY)` (osfmk/kern/thread_policy.c) refuses a computation above
+`max_rt_quantum`, 50 ms in the guest's ticks. The guest's counter is the phone's (19.2 MHz): 50 ms is 960000 ticks.
+iOS's audio server asks 1200000 ticks (50 ms at Apple's 24 MHz) for the HAL's I/O thread when its buffer is about
+60 ms or more (`configure_thread_for_realtime - thread_policy_set failed. Cycle Size: 1536000 Thread Parameters:
+1536000 1200000 1536000 1` in every boot's iOS log); the I/O thread then stopped after 0 frames, and each system
+sound waited out the mixer's 3 s timeout. With the patch a computation above the maximum is held to it when the
+constraint is at least the maximum, as the code below already raises a computation under half the constraint. After
+macOS-DroidVM's xnu-12377 patch 0039 (the same board clock). The guest's scheduler only: xnuhost's vCPUs are normal
+Linux threads, and no host thread changes its policy. Built (`HOSTED_OUT=media`); not run. `docs/hardware.md`
+section 6 ("Very slow" playback).
+
 ## 0049-wifi-association-event.patch (radio2, 2026-11-12)
 
 `kev_post_msg` (bsd/kern/kern_event.c) refuses an event that does not fit one mbuf without a cluster (`MLEN`), with

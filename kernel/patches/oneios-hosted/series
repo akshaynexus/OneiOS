@@ -152,6 +152,11 @@
 # perf: oneios-perf also says where kernel_task's CPU goes: its threads' time and the 8 busiest, by name or continuation
 # (a stall showed kernel_task at 127 %).
 0051-kernel-task-cpu.patch
+# media: a realtime computation past max_rt_quantum is held to it, not refused. The guest's counter is the phone's
+# 19.2 MHz, where 50 ms is 960000 ticks, and iOS's audio server asks 1200000 (50 ms at 24 MHz) for an I/O thread with a
+# buffer of about 60 ms or more: thread_policy_set failed, the HAL's I/O thread stopped after 0 frames, and every system
+# sound timed out after 3 s (iOS's log of the 2026-11-12 sessions). After macOS-DroidVM's xnu-12377 patch 0039.
+0052-rt-computation-held.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # net/build-oneios-net.py), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and
