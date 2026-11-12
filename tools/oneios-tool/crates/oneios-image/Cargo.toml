@@ -8,6 +8,11 @@ license.workspace = true
 anyhow.workspace = true
 memmap2.workspace = true
 rayon.workspace = true
-sha2.workspace = true
+# asm: sha2 0.10 uses the ARMv8 SHA-256 instructions on aarch64 only with this feature (without it: the plain
+# software rounds, about 8 times slower on an M4). The image tool hashes 16 GiB per build.
+sha2 = { workspace = true, features = ["asm"] }
 libc.workspace = true
 oneios-common.workspace = true
+# The profile (profiles/*.toml), as Python's tomllib reads it: preserve_order keeps the tables' key order, which
+# `image profile PROFILE` prints.
+toml = { version = "1", default-features = false, features = ["std", "serde", "parse", "preserve_order"] }
