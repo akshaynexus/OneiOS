@@ -581,6 +581,19 @@ hosted kernel had no audio device. Log lines, boot arguments and what was measur
 On the phone since `kernel.kc` `66faa3e8` (main 924a0d9, agent prelink's sessions of 2026-11-12): `ONEIOS AUDIO: on`,
 both devices published, audiomxd opens them and plays (`docs/hardware.md` section 6, "In a session").
 
+## 0049-wifi-association-event.patch (radio2, 2026-11-12)
+
+`kev_post_msg` (bsd/kern/kern_event.c) refuses an event that does not fit one mbuf without a cluster (`MLEN`), with
+`EMSGSIZE`. iOS 27's wifid reads a 540-byte record from the association event (ASSOC_DONE: ten 52-byte access point
+records, the join's result at 0x214 and a flag that it is valid at 0x218; an empty event is not safe on 24A446).
+The hosted Wi-Fi driver (`net/`) posts its events as kernel events, because it has no IO80211Family user client,
+the pipe these events take on Apple's hardware. On the phone on 2026-11-12 the supplicant joined an open network in
+3 s, the driver posted SSID_CHANGED, BSSID_CHANGED and LINK_CHANGED (32 bytes) and got `EMSGSIZE` (40) for
+ASSOC_DONE: wifid never learned of the join and Settings stayed at "connecting". With the patch an event of
+`KEV_VENDOR_APPLE` and `KEV_IEEE80211_CLASS` may be as long as an mbuf cluster (`MCLBYTES`) and is then built in one
+(`m_getcl`); every other event keeps the limit. It is UniXNU-sheng's `sheng-wifi-association-event.patch`, under
+`#if XNU_HOSTED`. Built (`HOSTED_OUT=radio`); not yet run.
+
 ## net/: the Wi-Fi, en0 on the phone's radio (radio, radio2, 2026-11-12)
 
 No numbered patch: an archive (`net/build-oneios-net.py`, hooked into `kernel/build-hosted.sh` like `hid/`) whose

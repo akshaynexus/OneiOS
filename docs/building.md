@@ -213,7 +213,7 @@ with the kernel above, 10 CPUs and 8 GiB, 4 KiB pages). The counts are the same 
 | loader | 160 checks, 0 failed |
 | xnuhost | 13248 checks, 0 failed (udmabuf checked, blobs past its limits split); display mode 5 scenarios, 0 failed; drm2kgsl 3 + 23 checks, 0 failed; leak scenarios 956 checks, 0 failed, LeakSanitizer no leaks; image set 37 checks, 0 failed; `check-arm64` `TESTKERNEL: all passed` and the restart test (8 restarts, then exit 3) |
 | display | 72 checks, 0 failed; mode choice 5 checks, 0 failed |
-| bridges | 201 checks, 0 failed; wifi 128 checks, 0 failed; `test-binder` 38 checks (the Bluetooth HAL client) and 35 (the Wi-Fi supplicant client), 0 failed; brightness 74 checks, 0 failures; battery 57 checks, 0 failures; thermal 56 checks, 0 failed (2026-11-12, after the Wi-Fi bridge) |
+| bridges | 204 checks, 0 failed; wifi 132 checks, 0 failed; `test-binder` 38 checks (the Bluetooth HAL client) and 35 (the Wi-Fi supplicant client), 0 failed; brightness 74 checks, 0 failures; battery 57 checks, 0 failures; thermal 56 checks, 0 failed (2026-11-12, after the Wi-Fi bridge) |
 | camera | 131 checks, 0 failed |
 | package (on the Mac) | 19 tests passed (the Apple-file refusals among them) |
 

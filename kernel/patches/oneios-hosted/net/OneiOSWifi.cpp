@@ -324,6 +324,15 @@ static void leave() {
     if (pending) post_assoc_done();   // the daemon's wait for the join ends now, with a failure (UniXNU-sheng's order)
 }
 
+// A join that worked, in the order of UniXNU-sheng's driver: the link (configd starts DHCP when it comes up), the
+// join's result, then the network's name and access point and the Apple80211 link event.
+static void joined() {
+    if (gLink) gLink(true);
+    post_assoc_done();
+    post_event(kEvSsidChanged, nullptr, 0); post_event(kEvBssidChanged, nullptr, 0);
+    link_event_post(true, false, 0);
+}
+
 // ---- the host's messages (the transport's receive worker) ----
 static void copy_bss(Net &to, const ow_bss &bss, const uint8_t *ies, size_t available) {
     to.bss = bss;
@@ -344,14 +353,20 @@ static void host_message(uint16_t type, const uint8_t *payload, size_t length) {
         const bool first = !gRadio && s.radio == OW_RADIO_OK, lost = gRadio && s.radio != OW_RADIO_OK;
         gRadio = s.radio == OW_RADIO_OK;
         if (s.country[0] >= 'A' && s.country[0] <= 'Z' && s.country[1] >= 'A' && s.country[1] <= 'Z') { gCountry[0] = (char)s.country[0]; gCountry[1] = (char)s.country[1]; }
+        // A state that says "up" for the network a join waits for is that join's result too: the result message
+        // itself can be lost when the receive ring is full (the host sends the state every 2 s while joined).
+        const bool completes = s.link == OW_LINK_UP && gAssocResult == kAssocRunning && gState >= kStaAuth && gState < kStaUp &&
+            s.bss.ssid_length == gCurrent.bss.ssid_length && !memcmp(s.bss.ssid, gCurrent.bss.ssid, gCurrent.bss.ssid_length > 32 ? 32 : gCurrent.bss.ssid_length);
+        if (completes) { gState = kStaUp; gAssocResult = kAssocOk; }
         if (s.link == OW_LINK_UP) {
             gRssi = s.rssi_dbm; gNoise = s.noise_dbm ? s.noise_dbm : -95; gRate = s.tx_rate_mbps;
-            copy_bss(gCurrent, s.bss, payload + sizeof s, length - sizeof s);
+            if (gState == kStaUp) copy_bss(gCurrent, s.bss, payload + sizeof s, length - sizeof s);
         } else if (gState == kStaUp) leave_locked(true, s.reason, &notify);
         IOLockUnlock(gLock);
         if (first) log("the host has the phone's radio (%02x:%02x:%02x:..)", s.mac[0], s.mac[1], s.mac[2]);
         if (lost) log("the host has no radio any more");
         if (notify) { log("link down (reason %u)", s.reason); left(true, s.reason); }
+        if (completes) { thread_call_cancel(gJoinTimeout); log("join done: joined (the host's state says so)"); joined(); }
         break;
     }
     case OW_BSS: {
@@ -392,14 +407,7 @@ static void host_message(uint16_t type, const uint8_t *payload, size_t length) {
         if (!pending) break;
         thread_call_cancel(gJoinTimeout);
         log("join %s (status %u, 802.11 code %u)", r.status == OW_JOIN_OK ? "done: joined" : "failed", r.status, r.code);
-        // The order of UniXNU-sheng's driver: the link (configd starts DHCP when it comes up), the join's result, then
-        // the network's name and access point and the Apple80211 link event.
-        if (r.status == OW_JOIN_OK && gLink) gLink(true);
-        post_assoc_done();
-        if (r.status == OW_JOIN_OK) {
-            post_event(kEvSsidChanged, nullptr, 0); post_event(kEvBssidChanged, nullptr, 0);
-            link_event_post(true, false, 0);
-        }
+        if (r.status == OW_JOIN_OK) joined(); else post_assoc_done();
         break;
     }
     default: break;

@@ -20,7 +20,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 |---|---|---|---|
 | CPU | `droidvm-amp.patch` + `DroidVMCpufreq.c` (UniXNU-droidvm, unchanged) | `runtime/bridges/cpu`: topology, vCPU plan, thread placement, the cpufreq device | host built and tested; kernel side waits for release-kernel (series, archive) and booter (device tree, placement calls) |
 | GPU | UniXNU-droidvm's virtio-gpu 3D + NativeAdreno user client (unchanged) | booter's `virtio_gpu.c` + drm2kgsl | booter's; not owned here (section 2) |
-| Wi-Fi / network | `kernel/patches/oneios-hosted/net`: `IO80211Controller`/`IO80211Interface` under the collection's `IOEthernetController`/`IOEthernetInterface`, a station that asks the host, UniXNU-droidvm's virtio-net transport (section 3) | `runtime/bridges/wifi`: wlan0 is iOS's for the session: frames by AF_PACKET, scans by nl80211, joins by the vendor's supplicant (AIDL V2 over `/dev/binder`); `wifictl`; the old tap/NAT route only with `wifi=tap` | both built; host tested (128 + 35 checks, the binder client on a real binder driver); on the phone beside One UI: the supplicant's service and an nl80211 scan (53 networks) answer our client; **not yet run in a session** (wifid, a join, DHCP) |
+| Wi-Fi / network | `kernel/patches/oneios-hosted/net`: `IO80211Controller`/`IO80211Interface` under the collection's `IOEthernetController`/`IOEthernetInterface`, a station that asks the host, UniXNU-droidvm's virtio-net transport (section 3) | `runtime/bridges/wifi`: wlan0 is iOS's for the session: frames by AF_PACKET, scans by nl80211, joins by the vendor's supplicant (AIDL V2 over `/dev/binder`); `wifictl`; the old tap/NAT route only with `wifi=tap` | both built; host tested (132 + 35 checks, the binder client on a real binder driver); on the phone beside One UI: the supplicant's service and an nl80211 scan (53 networks) answer our client; **not yet run in a session** (wifid, a join, DHCP) |
 | Bluetooth | `drivers/bluetooth` (port of iOSPlus10's transport) on `drivers/bridge` | `runtime/bridges/bt`: the HAL over `/dev/hwbinder` | both built; on by default in a session since 2026-11-11 (before: off, `bluetooth=virtual`); HAL client tested on the PC against a fake HAL on a real binder driver, not yet on the phone |
 | Haptics | `drivers/haptics` (port of iOSPlus10's LaurelVibrator and haptic node) | `runtime/bridges/haptics`: evdev force feedback | both built; host tested with a fake actuator |
 | Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp`: the hosted kernel's audio archive since 2026-11-12 (before: not built, no device in iOS) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | helper run on the phone beside One UI (plays and records, 0 underruns, about 130 ms); host-tested against a fake AAudio; in a session and the guest side not yet run (section 6) |
@@ -418,7 +418,7 @@ absent: a reason not to run it on the phone as it is.
 
 ### Tested
 
-- Host (arm64 Linux container, `runtime/host-tests.sh`): `test_wifi` 128 checks (frame rules; the netlink group reader; a 4000-byte coalesced
+- Host (arm64 Linux container, `runtime/host-tests.sh`): `test_wifi` 132 checks (frame rules; the netlink group reader; the DHCP reader; a 4000-byte coalesced
   IPv4 frame and a 3000-byte IPv6 one cut into three with right lengths, sequence numbers and checksums; the station
   against a fake radio; the AIDL parcels byte for byte; the join's plan for WPA2, WPA3, transition, WPA with TKIP,
   open, OWE and a network not seen; the supplicant's callbacks decoded); `test_aidl_binder` 35 checks: the client
@@ -426,6 +426,24 @@ absent: a reason not to run it on the phone as it is.
   the third lookup, the interface added and removed, the callback's descriptor and version asked for inside
   `registerCallback`, a join, a wrong key, a network not found, a rejection, a link that drops, a look without a
   callback, a supplicant that dies). Both ends of that test use `aidl.h`.
+- **Third session (2026-11-12, about 14:00, with `04ab894`)**: the networks show in Settings (`scan done: 64
+  networks`, `event 10 for en0, 0 bytes -> 0`, `wifid[41] gets 11: len 2280 -> 0` for each). The owner joined an
+  open network: `join: layout 656, authentication lower 0x1 upper 0x0, key of 0 bytes of kind 0`, xnuhost `join:
+  network 0 in the supplicant, open: selected`, `supplicant: scanning`, 2.9 s later `associating`, `associated`,
+  `completed: joined`, `join done (status 0, code 0)`, the guest `join done: joined`. At the return: `wifi: wlan0
+  given back: IPv6 off, GRO on` and `wifi: closed (96 frames to the guest, 45 from it, 0 cut, 0 dropped, 0 refused)`:
+  **the join through the vendor's supplicant, frames both ways and the give-back work.** Not working, fixed after it:
+  - **ASSOC_DONE was not posted**: `event 9 for en0, 540 bytes -> 40` (`EMSGSIZE`): a kernel event must fit one
+    mbuf. Settings stayed at "connecting". Hosted patch `0049-wifi-association-event.patch` lets an IEEE 802.11
+    event of Apple's fill an mbuf cluster (UniXNU-sheng's patch for the same event).
+  - **Two scans ended by the guest's 10 s timeout** (`scan: no end from the host in 10000 ms`): a scan's records
+    and its end are up to 65 frames in one burst, the guest's receive ring has 64 buffers, and the frame that found
+    no buffer was dropped: the end. The virtio-net device now holds a frame of the station's own type (0x88b5) for
+    up to 50 ms until the guest has a buffer; and in the guest a state message that says "up" for the network a
+    join waits for completes that join, so a lost result costs at most the 2 s to the next state.
+  - Whether iOS got an address is not in that log. The bridge now logs iOS's DHCP as it crosses (`wifi: DHCP: iOS
+    sends DISCOVER`, `wifi: DHCP: OFFER of a.b.c.d from e.f.g.h`, `REQUEST`, `ACK`) and, 10 s after a join, `wifi:
+    10 s after the join: N frames from iOS, M to it`.
 - **Second session (the diagnostic session of 2026-11-12 11:53, `kernel.kc` 8eff915f from `bd7c1fb`, with the
   medium fix)**: wifid takes en0 (`the interface is enabled (en0 is up)`, its whole attach: CARD_CAPABILITIES, POWER,
   RSSI_BOUNDS, HW_SUPPORTED_CHANNELS, `sets 564` FILTER_MONITOR_EVENTS with 33 bytes, STATE, PHY_MODE, OP_MODE ...)
@@ -455,8 +473,10 @@ absent: a reason not to run it on the phone as it is.
 
 ### Missing, unknown
 
-- [U] **Everything in a session**: whether wifid finds en0 and scans, what `ASSOCIATE` carries on iOS 27 (a
-  passphrase, or the 32-byte key: the driver's log line says which), DHCP by configd, the internet.
+- Seen in a session (2026-11-12): wifid takes en0, scans, lists the networks, joins an open network through the
+  vendor's supplicant; frames cross both ways; the give-back at the return. [U] still: what `ASSOCIATE` carries for
+  a secured network on iOS 27 (a passphrase, or the 32-byte key: the driver's log line says which), DHCP by
+  configd (the bridge logs it now), the internet, a wrong password, a WPA3 network.
 - [U] What the vendor stack does when system_server stops: whether the supplicant stays up with wlan0 (the bridge
   handles both: it takes the interface, or adds it), whether the Wi-Fi HAL or wificond take wlan0 down.
 - [U] Whether the supplicant's callbacks reach our process (binder calls from `hal_wifi_supplicant_default` into

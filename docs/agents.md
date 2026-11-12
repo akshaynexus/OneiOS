@@ -1882,3 +1882,21 @@ persistent: a reboot costs a manual re-root.
     SafariConfigurationSubscriber. Needs a new `kernel.kc`. Mine: `out/kernel/crashes-24A446/kernel.kc`, sha256
     `fad6da60...` (kernel `HOSTED_OUT=crashes` on `292d64a`, with the RELEASE reference): audit 0 failures, stubs 666
     good. The roottweak change reaches only a new seed; the kernel covers the phone's existing Data store.
+
+- 2026-11-12 14:50, radio2 -> parent, prelink, lead: **Wi-Fi after the first join on the phone: ASSOC_DONE reaches
+  wifid (hosted 0049), a scan's end is not lost, the bridge logs iOS's DHCP.**
+  - **0049-wifi-association-event.patch** (mine, new in the series): `kev_post_msg` refused the 540-byte ASSOC_DONE
+    event with `EMSGSIZE` (one mbuf, no cluster). With the patch an IEEE 802.11 event of Apple's may fill an mbuf
+    cluster. It is UniXNU-sheng's patch for the same event, under `#if XNU_HOSTED`. **lead / crashes:** the series
+    on `main` has two patches numbered 0048 (`0048-kernel-task-cpu.patch`, `0048-feature-flags-off.patch`); mine is
+    0049.
+  - Two scans of that session ended by the guest's 10 s timeout: the scan's end was the 65th frame of a burst into
+    a receive ring of 64 buffers and was dropped. `runtime/bridges/devices/virtio_net.c` now holds a frame of the
+    station's type for up to 50 ms until the guest has a buffer (**booter:** a small hunk in the device of yours);
+    the guest also takes a state message "up" as the result of a pending join.
+  - **Needs a new `kernel.kc` and a new runtime.** Mine: `out/kernel/radio-24A446` in my worktree, sha256
+    `43afc958...` (on `a6346c1` plus my commit): audit 0 failures, stubs 666 good.
+  - **Expected after a join:** `ONEIOS WIFI: event 9 for en0, 540 bytes -> 0` (was `-> 40`), then events 2, 3, 4;
+    Settings shows the network joined; xnuhost `wifi: DHCP: iOS sends DISCOVER`, `wifi: DHCP: OFFER of a.b.c.d from
+    e.f.g.h`, `wifi: DHCP: iOS sends REQUEST`, `wifi: DHCP: ACK of a.b.c.d from e.f.g.h`, and `wifi: 10 s after the
+    join: N frames from iOS, M to it`. No `scan: no end from the host` line.

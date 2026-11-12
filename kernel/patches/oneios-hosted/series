@@ -146,6 +146,12 @@
 # default CoreLocation/CLAutoCohort): with CoreLocation's automatic cohorts locationd crash-looped (pc 0 in
 # _dispatch_lane_serial_drain, 17 times a session); vphone-cli turns the flag off for iOS 27 guests.
 0048-feature-flags-off.patch
+# radio2: an IEEE 802.11 kernel event of Apple's may fill an mbuf cluster (kev_post_msg's limit is one mbuf, MLEN).
+# iOS 27's ASSOC_DONE event carries a 540-byte record that wifid reads: with the limit the post returned EMSGSIZE,
+# wifid never learned that a join was done and Settings stayed at "connecting" (the phone, 2026-11-12, an open
+# network joined by the supplicant in 3 s). The Wi-Fi driver's events are kernel events because it has no
+# IO80211Family user client. After UniXNU-sheng's sheng-wifi-association-event.patch; every other event keeps MLEN.
+0049-wifi-association-event.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # net/build-oneios-net.py), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and
