@@ -192,7 +192,8 @@ ocd_read(dev_t dev __unused, struct uio *uio, int ioflag)
 static int
 ocd_write(dev_t dev __unused, struct uio *uio, int ioflag __unused)
 {
-	struct oneios_camera_command command;
+	/* Zeroed: uiomove fills it, but Xcode 27.2's clang cannot see that (-Wuninitialized-const-pointer, -Werror). */
+	struct oneios_camera_command command = { 0 };
 	int e;
 
 	if (uio_resid(uio) < (user_ssize_t)sizeof(command)) {

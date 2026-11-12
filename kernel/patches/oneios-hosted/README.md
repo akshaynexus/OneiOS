@@ -10,8 +10,11 @@ corecrypto's start-up self-test. No user-mode code path has run. Nothing has run
 ## Build and run
 
 ```sh
-scripts/bg.sh kernel-hosted kernel/build-hosted.sh     # -> out/kernel/current-hosted/xnu.macho
+scripts/bg.sh kernel-hosted env HOSTED_OUT=lead kernel/build-hosted.sh     # -> out/kernel/current-hosted/xnu.macho
 ```
+
+Linux (stock clang and xnu-linux-toolchain) or macOS (Xcode's clang and iphoneos SDK; `ALLOW_XCODE=1` for an Xcode
+other than the pin): [kernel/README.md](../../README.md) "Build", [docs/building.md](../../../docs/building.md) 2.
 
 `build-hosted.sh` does not touch the VM kernel's build: own output root (`out/kernel-hosted`), own copy of
 `kernel/device` (as committed) with `series` of this directory added to the board's patch series, defconfig
@@ -187,6 +190,15 @@ backtrace).
   `mark_lsd_first_boot_done`), only while the view is on: `oneios-apps: lsd's first-boot semaphore made (0)`.
 
 Both built; not run.
+
+## 0038-proc-pid-declared.patch (mac-kernel, 2026-11-12)
+
+`hosted_machine.c`'s thread dump (0009, 0012) calls `proc_pid()`, which `osfmk/vm/vm_protos.h` declares only
+`#if DEVELOPMENT || DEBUG`. The DEVELOPMENT kernel compiled; the RELEASE reference of the prelink
+(`XNU_FILESET_REFERENCE=1`) did not on the Mac: Xcode 27.2's clang makes an implicit declaration an error, and on
+Linux `kernel/linux/clang-wrapper`'s `-w` hid it. The patch declares it at file scope, as `osfmk/kern/thread.c` and
+`task.c` do. No code changes. The file is the hosted layer's own (`osfmk/arm64/hosted/`), so there is no
+`#if XNU_HOSTED` around it. Built on the Mac (both kernels); not run.
 
 ## 0032-app-cryptex-authenticated.patch (amfi, 2026-11-11)
 

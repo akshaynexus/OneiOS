@@ -39,6 +39,7 @@ P='profiles/ios-27.0.1-iPhone18,2.toml'
 scripts/fetch/fetch.sh --list "$P"                  # optional: compare the profile with Apple's IPSW (about 1 MiB)
 scripts/bg.sh fetch scripts/fetch/fetch.sh "$P"     # 10.6 GiB of the IPSW's members from Apple, into inputs/24A446/
 scripts/image/kernel-inputs.sh "$P"                 # Apple's kernelcache and device tree -> out/kernel-inputs/24A446/
+                                                    # (without inputs/24A446/ it fetches only those, 24 MB)
 ```
 
 The set is built after `kernel.kc` exists (step 3), so that it carries the kernel:
@@ -54,10 +55,24 @@ runs by default. Format: [image-format.md](image-format.md).
 
 ## 2. The kernel
 
+Linux or macOS, the same command (the script picks the toolchain by `uname -s`):
+
 ```sh
 scripts/bg.sh kernel-hosted env HOSTED_OUT=me kernel/build-hosted.sh
 # -> out/kernel/current-hosted-me/xnu.macho (the hosted kernel: board series + kernel/patches/oneios-hosted/series)
 ```
+
+- **Linux** (x86_64 or arm64): stock clang plus xnu-linux-toolchain's ld64, mig and iig, set up by the script into
+  `out/toolchain` (no root; bubblewrap for the `/usr/bin` shims). Packages: [kernel/README.md](../kernel/README.md).
+- **macOS 27**: Xcode's clang and iphoneos SDK at `/Applications/Xcode.app` (`XCODE_APP=` for another place) and
+  Homebrew's `cmake ninja unifdef llvm lld` (installed when missing). The pin is Xcode 27.1; `ALLOW_XCODE=1` builds
+  with another. No container, no Linux toolchain.
+- One machine, one builder (the Mac of 2026-11-12): the default tree is then yours too. The command used there:
+  `scripts/bg.sh kernel-hosted env HOSTED_OUT=lead ALLOW_XCODE=1 XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`
+  (`HOSTED_OUT=lead` is the default tree, `out/kernel/current-hosted/`). On an M4 (10 cores, Xcode 27.2): 270 s from an
+  empty tree with UniXNU's source cache (`out/kernel-hosted/unixnu/feeds`) present, the RELEASE reference included;
+  the first run also fetches that cache (about 170 MB from GitHub: 14 min on the link of 2026-11-12). An incremental
+  rebuild: 30-100 s.
 
 - The kernel is built from the checkout whose `kernel/build-hosted.sh` you run: its `drivers/` and
   `kernel/patches/oneios-hosted/*` (the script exports `ONEIOS_REPO`). Before 2026-11-11 the archive scripts
@@ -72,8 +87,8 @@ scripts/bg.sh kernel-hosted env HOSTED_OUT=me kernel/build-hosted.sh
   build says so (remove `external/NativeHidInput` and fetch again).
 - Incremental work on one patch: `kernel/hosted-dev.sh` (see [kernel/patches/oneios-hosted/README.md](../kernel/patches/oneios-hosted/README.md)).
 - The reference for the prelink (optional, worth thousands of paired functions; rebuild only when the source
-  changes): `scripts/bg.sh ref env XNU_FILESET_REFERENCE=1 HOSTED_OUT=me kernel/build-hosted.sh` (see
-  [kernel/prelink/README.md](../kernel/prelink/README.md) for where it lands).
+  changes): `XNU_FILESET_REFERENCE=1` in the build's command. It lands next to the kernel as
+  `out/kernel/current-hosted-me/reference.macho` (see [kernel/prelink/README.md](../kernel/prelink/README.md)).
 - The build also makes the hosted board's archives from `kernel/patches/oneios-hosted/`: the disks (`storage`), the
   virtio GPU (`gpu`), software AES (`aes`) and the display (`display`: needs `external/NativeMobileDisplay` and
   `external/UniXNU-droidvm` from `scripts/setup/get-references.sh`; its input for another kernelcache is remade with
@@ -86,9 +101,15 @@ The kernel links Apple's `corecrypto` under its Internal Use License: it is buil
 ## 3. The kernel collection (`kernel.kc`)
 
 ```sh
-scripts/bg.sh prelink env KERNEL=out/kernel/current-hosted-me/xnu.macho REFERENCE=<the reference file> kernel/prelink/build.sh
-# -> out/kernel/24A446/kernel.kc (about 100 MB), kernel.kc.build.json, kernel.kc.prelink.json   (about 80 s)
+scripts/bg.sh prelink env KERNEL=out/kernel/current-hosted-me/xnu.macho REFERENCE=out/kernel/current-hosted-me/reference.macho kernel/prelink/build.sh
+# -> out/kernel/24A446/kernel.kc (about 94 MB), kernel.kc.hashes, kernel.kc.build.json, kernel.kc.prelink.json
 ```
+
+Linux and macOS (python3 3.11+, LLVM's `llvm-nm` and `llvm-mc`: on a Mac Homebrew's keg-only `llvm`, which the
+script puts on `PATH`). The input is `out/kernel-inputs/24A446/kernelcache.macho` (section 1:
+`scripts/image/kernel-inputs.sh`). It also writes `kernel.kc.hashes` (the 1 MiB chunk list of
+[image-format.md](image-format.md)). On the M4: 46 s cold, 16 s with the pairing reused; 94,109,696 bytes, 97
+original functions on the stub (with the reference; 396 without).
 
 A new kernel needs a new `kernel.kc`: every native address in it is that kernel's. The records list each kext left out
 and why, and the original functions still on the panic stub. Details: [kernel/prelink/README.md](../kernel/prelink/README.md).

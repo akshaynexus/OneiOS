@@ -98,3 +98,7 @@
 # lead: lsd's first-boot semaphore is made before launchd (Droid-VM's mark_lsd_first_boot_done): without it lsd drops
 # the apps of the staged-apps view from the second boot of a Data store on.
 0037-lsd-first-boot.patch
+# mac-kernel: proc_pid() declared in hosted_machine.c (0009/0012's thread dump): vm/vm_protos.h declares it only for
+# DEVELOPMENT || DEBUG, so the RELEASE reference of the prelink (XNU_FILESET_REFERENCE=1) failed on the Mac (Xcode's
+# clang: implicit declaration is an error; the Linux wrapper's -w hid it). The file is the hosted layer's own (no guard).
+0038-proc-pid-declared.patch

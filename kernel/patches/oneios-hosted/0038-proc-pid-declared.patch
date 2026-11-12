@@ -1,0 +1,16 @@
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+--- a/osfmk/arm64/hosted/hosted_machine.c
++++ b/osfmk/arm64/hosted/hosted_machine.c
+@@ -539,6 +539,12 @@
+  * A thread with a continuation has no stack to walk and is left out.
+  */
+ #include <kern/processor.h>
++/*
++ * proc_pid() is bsd/sys/proc.h's; osfmk declares it where it calls it (kern/thread.c, kern/task.c). Here it came
++ * from vm/vm_protos.h, which declares it only #if DEVELOPMENT || DEBUG: the RELEASE reference of the prelink
++ * (XNU_FILESET_REFERENCE=1) did not compile with Xcode's clang, for which an implicit declaration is an error (0038).
++ */
++extern int proc_pid(struct proc *);
+ void hosted_dump_blocked_threads(void);
+ void
+ hosted_dump_blocked_threads(void)

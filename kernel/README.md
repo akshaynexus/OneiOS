@@ -12,6 +12,18 @@ scripts/bg.sh kernel kernel/build-linux.sh       # Linux, no Mac. Or: kernel/bui
 scripts/bg.sh -s kernel                          # state; log in logs/kernel.log
 ```
 
+This is the VM kernel. The kernel xnuhost runs is the **hosted** one (`build-hosted.sh`, the same base plus
+`patches/oneios-hosted/series`), which builds on Linux and on a Mac with the same command:
+
+```sh
+scripts/bg.sh kernel-hosted env HOSTED_OUT=lead ALLOW_XCODE=1 XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh
+# -> out/kernel/current-hosted/xnu.macho, and with XNU_FILESET_REFERENCE=1 reference.macho (the prelink's reference)
+```
+
+`ALLOW_XCODE=1` is for a Mac whose Xcode is not the pin's (27.1); Linux ignores it. Without
+`XNU_FILESET_REFERENCE=1` the build skips the RELEASE reference. Mac run of 2026-11-12 (Apple M4, 10 cores,
+Xcode 27.2 27B52, macOS 27.2.1): see "macOS" below.
+
 | Output | What |
 |---|---|
 | `out/kernel/builds/<build id>/xnu.macho` | the native kernel: arm64e `MH_EXECUTE`, PIE, chained fixups, no Apple kext |
@@ -34,7 +46,9 @@ patched tree with one commit per patch, for writing patches), `kernel/tests/host
 3. `kernel/device/`: OneiOS as a UniXNU device repository: `board.toml`, `configs/oneios_defconfig`,
    `socs/linuxhost`, and the board series `patches/xnu-12377/series`: 18 of Droid-VM's iPadOS 27 patches, one of
    xnu-linux-toolchain, three of ours.
-4. `kernel/patches/unixnu/`: our changes to the driver itself (one: keep the submodules we checked out).
+4. `kernel/patches/unixnu/`: our changes to the driver itself (two: keep the submodules we checked out;
+   `0002`, stub the owner chain's `native_owner_boot_manifest_status` in the RELEASE reference, which Xcode's ld
+   does not leave undefined).
 5. Driver archives linked in: ArmDTPlatform, ArmCpu, libpthread's kernel part, libfirehose, and UniXNU's source
    corecrypto (see "Releases").
 6. The board's own archives, built between the two kernel passes by `device/scripts/build-oneios-board.py` and
@@ -73,15 +87,31 @@ What differs from a build with Apple's clang (recorded in the build record's `ho
 
 The Mac build is the reference for all five. Nobody has compared the two kernels yet.
 
-### macOS (`build-macos.sh`), the fallback
+### macOS (`build-macos.sh` and `build-hosted.sh`)
 
 Needs macOS 27 with **Xcode 27.1** at `/Applications/Xcode.app` (`XCODE_APP=`; another version only with
-`ALLOW_XCODE=1`), its iphoneos SDK, and Homebrew's `cmake ninja unifdef llvm lld` (installed when missing). It exports
-`MACOS_VERSION=26.5` (the macOS release of xnu-12377.121.6) and checks it against the OS profile. `KDK_HEADERS=1`
-adds a headers-only `KDKROOT` (`kdk-headers.py`: about 200 headers of KDK 26.5.2 25F84 read over HTTP, no 1.2 GB
-download), as iOSPlus10's `scripts/ios26/build-kernel.sh` does; off by default because UniXNU's series replaces
-those headers with public ones. Same series, configuration, record and output place as Linux.
-**Written and syntax-checked only (`bash -n`); it has not run: there is no Mac here.**
+`ALLOW_XCODE=1`), its iphoneos SDK, and Homebrew's `cmake ninja unifdef llvm lld` (installed when missing;
+`kernel/lib/host.sh` `xcode_setup`, shared by both scripts). No xnu-linux-toolchain, no bubblewrap: Xcode has `xcrun`,
+`plutil`, `codesign`, `ld64` and `mig`, and macOS has `/bin/csh`. UniXNU's driver takes its macOS path
+(`scripts/unixnu/kernel.py`: Xcode's clang, the iphoneos SDK). Two Mac rules that Linux gets from
+`linux/clang-wrapper`'s `-w`: `XNU_BUILD_WERROR=0` for xnu's sources, and `CCC_OVERRIDE_OPTIONS='# +-Wno-error'` for
+the board's archive builders, which replay the compile records with `-Werror` (`drivers/build.py`): Xcode 27.2 warns
+on Apple's own `EXTERNAL_HEADERS/corecrypto/ccchacha20poly1305.h` (`-Wextern-c-compat`). The warnings stay in the
+archive logs.
+
+`build-macos.sh` exports `MACOS_VERSION=26.5` (the macOS release of xnu-12377.121.6) and checks it against the OS
+profile. `KDK_HEADERS=1` adds a headers-only `KDKROOT` (`kdk-headers.py`: about 200 headers of KDK 26.5.2 25F84 read
+over HTTP, no 1.2 GB download), as iOSPlus10's `scripts/ios26/build-kernel.sh` does; off by default because UniXNU's
+series replaces those headers with public ones.
+
+**Tested (2026-11-12, mac-kernel):** `build-hosted.sh` on an Apple M4 Mac (10 cores, 16 GB, macOS 27.2.1, Xcode
+27.2 27B52, iphoneos SDK 27.2), the whole hosted series through `0038`, from an empty `out/`; then
+`kernel/prelink/build.sh` (`kernel/prelink/README.md`). Times and sizes are in [docs/building.md](../docs/building.md)
+2. Found on the way and fixed: `drivers/camera/oneios_camera_dev.c` (an uninitialized buffer that `uiomove` fills:
+`-Wuninitialized-const-pointer`), `0038-proc-pid-declared.patch` (the RELEASE reference). `build-macos.sh` (the VM
+kernel) shares the Xcode setup but **has not run** on the Mac. Nobody has compared a Mac kernel with a Linux one.
+The GNU-only commands of the kernel scripts (`sed -i`, `stat -c`, `nproc`, `sha256sum`) go through `lib/host.sh`;
+`kernel/tests/host.sh` checks those helpers on both (Mac, and Linux in an arm64 `python:3.13-slim` container).
 
 ## What the booter gets (kernel -> booter)
 
@@ -125,7 +155,7 @@ of 85 distinct registers, 127 `wfe`, 101 `tlbi`, 85 `dc`, 4 `ic`, 4 `at`, 4 `wfi
    `display/legacy-display-24A446-v54.json`); the VM kernel still has none of them.
 3. **The prelink** (`kernel.kc`): needs the AMFI address, the class list and the reviewed fileset of the iPhone
    kernelcache (`profiles/iphone18-2-ios27.md` section 3). `kernelcache_sha256` is pinned.
-4. A Mac build, and a comparison of it with the Linux build.
+4. A comparison of a Mac kernel with a Linux one (the hosted kernel builds on both since 2026-11-12).
 5. Any boot.
 
 ## Releases and licences

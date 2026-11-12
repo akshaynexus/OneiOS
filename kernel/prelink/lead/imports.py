@@ -13,8 +13,14 @@ import bisect, hashlib, json, struct, subprocess, sys
 from pathlib import Path
 
 S = Path(__file__).resolve().parent
-R = Path('/home/akshay/Documents/GitHub/OneiOS/out/lead-wt')
-sys.path.insert(0, str(R / 'external/XnuPrelink'))
+R = S.parents[2]                                   # the repository (was the lead's worktree on the Linux PC)
+_X = R / 'external/XnuPrelink'
+sys.path.insert(0, str(_X if (_X / 'kc_image.py').is_file() else R / 'external/Droid-VM-UniXNU/kits/XnuPrelink'))
+import os, shutil
+for _d in ('/opt/homebrew/opt/llvm/bin', '/usr/local/opt/llvm/bin'):     # llvm-nm: keg-only on a Mac
+    if os.path.isdir(_d):
+        os.environ['PATH'] = _d + os.pathsep + os.environ['PATH']
+KC = R / 'out/kernel/24A446'                         # kernel/prelink/build.sh's output
 from kc_image import Image
 
 ADD = '--add' in sys.argv
@@ -22,8 +28,8 @@ ONLY = sys.argv[sys.argv.index('--kext') + 1] if '--kext' in sys.argv else None
 reviewed = json.loads((R / 'kernel/prelink/reviewed-24A446-v54.json').read_text())
 lead_path = S / 'lead-reviewed.json'
 lead = json.loads(lead_path.read_text()) if lead_path.exists() else {'functions': []}
-m = json.loads((S / 'kc/work/match.map.json').read_text())
-report = json.loads((S / 'kc/kernel.kc.prelink.json').read_text())
+m = json.loads((KC / 'work/match.map.json').read_text())
+report = json.loads((KC / 'kernel.kc.prelink.json').read_text())
 raw = (R / 'out/kernel-inputs/24A446/kernelcache.macho').read_bytes()
 cache = Image(raw)
 kernel = Image(raw, cache.entries[reviewed['entry']][1])

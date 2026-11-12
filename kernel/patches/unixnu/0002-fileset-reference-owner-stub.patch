@@ -1,0 +1,19 @@
+diff --git a/scripts/build-xnu-4k-baseline.sh b/scripts/build-xnu-4k-baseline.sh
+index 7a6226f..71f4b7a 100755
+--- a/scripts/build-xnu-4k-baseline.sh
++++ b/scripts/build-xnu-4k-baseline.sh
+@@ -865,10 +865,12 @@ if [ "${XNU_FILESET_REFERENCE:-0}" = 1 ] && [ "$BOOTSTRAP" = 0 ]; then
+   # The board's archives are compiled from the DEVELOPMENT kernel's records, with its minimal UBSan checks, and a RELEASE kernel
+   # has no UBSan runtime: the handlers they call are empty functions in the reference, which is never booted. The same holds for
+   # the DEVELOPMENT allocator's call-site registration (kalloc_data's __zone_site_register startup entry), and the static-if key of
+-  # MACH_ASSERT's assert() (mach_assert_jump_key, a data object: RELEASE has no MACH_ASSERT).
++  # MACH_ASSERT's assert() (mach_assert_jump_key, a data object: RELEASE has no MACH_ASSERT). OneiOS: the owner chain's
++  # native_owner_boot_manifest_status (a weak import of the hosted AES archive; DEVELOPMENT-only), which Xcode's ld
++  # does not leave undefined in a static kernel link.
+   REFERENCE_STUBS=$ROOT/build/xnu/fileset-reference-ubsan.o
+   printf '%s\n' "$KERNEL_EXTRA_ARCHIVES" | tr ' ,' '\n\n' | grep '\.a$' | while read -r ARCHIVE; do
+-    [ -f "$ARCHIVE" ] && nm -u "$ARCHIVE" 2>/dev/null | grep -E '^(___ubsan_handle_.*_minimal|___zone_site_register|_mach_assert_jump_key)$' || true
++    [ -f "$ARCHIVE" ] && nm -u "$ARCHIVE" 2>/dev/null | grep -E '^(___ubsan_handle_.*_minimal|___zone_site_register|_mach_assert_jump_key|_native_owner_boot_manifest_status)$' || true
+   done | sort -u | sed -e 's/^_//' -e '/_jump_key$/ s/.*/unsigned long long &[4];/' -e '/_jump_key\[/! s/.*/void &(void) {}/' \
+     > "$ROOT/build/xnu/fileset-reference-ubsan.c"
+   xcrun clang -target "$XNU_ARCH_STRING-apple-ios$IOS_VERSION" -c -mkernel -fno-sanitize=all \

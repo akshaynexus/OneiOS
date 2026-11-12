@@ -25,7 +25,7 @@ ARCHIVE=$OUT/xnu-$ID.tar.zst
 ( cd "$STAGE" && ls | LC_ALL=C sort > "$OUT/.members" )
 tar -C "$STAGE" --format=ustar --owner=0 --group=0 --numeric-owner --mtime="@$EPOCH" -T "$OUT/.members" -cf - | zstd -q -19 -f -o "$ARCHIVE"
 rm -f "$OUT/.members"
-SHA=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)
+SHA=$( { sha256sum "$ARCHIVE" 2>/dev/null || shasum -a 256 "$ARCHIVE"; } | cut -d" " -f1)
 echo "publish: $ARCHIVE"
 echo "publish: line for kernel/release-kernel.txt:"
 echo "kernel-$ID $SHA"

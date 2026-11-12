@@ -4,14 +4,14 @@ Owner: fable-prelink. The hosted XNU (`kernel/build-hosted.sh`) prelinked with t
 iOS 27.0.1 (24A446) kernelcache, as one `MH_FILESET` that xnuhost loads.
 
 ```sh
-scripts/bg.sh prelink env REFERENCE=out/kernel/24A446/reference/mach.release.bcm2837.unstripped.noctf kernel/prelink/build.sh
+scripts/bg.sh prelink env REFERENCE=out/kernel/current-hosted/reference.macho kernel/prelink/build.sh
 ```
 
 | Input | From |
 |---|---|
 | `out/kernel/current-hosted/xnu.macho` (`KERNEL=FILE` for another) | `kernel/build-hosted.sh` |
 | `out/kernel-inputs/24A446/kernelcache.macho` | `scripts/image/kernel-inputs.sh` (the profile pins its SHA-256) |
-| `REFERENCE=FILE`, optional but worth 4,800 more paired functions | `XNU_FILESET_REFERENCE=1 HOSTED_OUT=<you> kernel/build-hosted.sh`: the same source as a RELEASE kernel with LTO and symbols, left in the tree's `build/xnu/fileset-reference/`. Never booted; it need not be rebuilt for each kernel |
+| `REFERENCE=FILE`, optional but worth 4,800 more paired functions (on the Mac: 299 fewer originals on the stub) | `XNU_FILESET_REFERENCE=1 HOSTED_OUT=<you> kernel/build-hosted.sh`: the same source as a RELEASE kernel with LTO and symbols, copied to `out/kernel/current-hosted*/reference.macho` (the tree's `build/xnu/fileset-reference/` has the original). Never booted; it need not be rebuilt for each kernel |
 
 | Output (`out/kernel/24A446/`) | |
 |---|---|
@@ -19,12 +19,14 @@ scripts/bg.sh prelink env REFERENCE=out/kernel/24A446/reference/mach.release.bcm
 | `kernel.kc.build.json` | the record: inputs and hashes, roots, each kext left out with its reason, the fileset entries, the rewrites, the AMFI pins, counts |
 | `kernel.kc.prelink.json` | the emitter's report: per kext, the original kernel functions bound to the panic stub (`stubbed`) and the data left unpaired (`missing`) |
 
-A build takes about 80 s (45 s of it the pairing, reused while the kernel, the kernelcache and the reference are
+A build takes about 80 s on the Linux PC, 45 s on the Mac (45 s of it the pairing on Linux, reused while the kernel, the kernelcache and the reference are
 the same). A new kernel needs a new `kernel.kc`: every native address in it is that kernel's.
 
 ## Steps (`build.sh`)
 
-1. `native-input.py`: the kernel's one weak bind (`native_source_storage_start`) resolved to its own definition;
+1. `native-input.py`: the kernel's weak-lookup binds resolved to its own definitions (Linux's ld64 left one,
+   `native_source_storage_start`; Xcode 27.2's ld leaves seven: the `boot_progress_*` and `boot_log_export_put`
+   defaults, `native_adreno_fences`, `native_ufs_dpu_map`), and the same for `REFERENCE`;
    XnuPrelink refuses an image with imports.
 2. `roots.py`: which kexts (below).
 3. `hosted.py`: the kexts for a kernel that is a process: `mrs/msr TPIDR_EL1` -> `TPIDR_EL0` (the current thread),
@@ -61,8 +63,9 @@ does not present (an Apple SoC block, I2C/SPI/SPMI part, RTBuddy/AFK/AOP endpoin
 Thunderbolt, accessory port), and seven decided by hand (`FORCE_OUT`: `kec.pthread`, the SEP keystore and its two
 clients, the ANE HAL, FairPlayIOKit, and IOAudioCodecs, whose start waits for FairPlayIOKit). The profile's 31 roots are kept whatever their personalities. A left-out kext that a kept one
 links against returns for its code only, without personalities. FairPlayIOKit is out although it is not hardware
-(obfuscated calls through computed tables; reason in `roots.py`). Today: 319 in the kernelcache, 133 roots, 154 in
-the closure (21 returned dependencies), 165 absent, 139 fileset entries (15 of the closure are codeless KPIs).
+(obfuscated calls through computed tables; reason in `roots.py`). Today (2026-11-12): 319 in the kernelcache, 130
+roots, 150 in the closure (20 returned dependencies), 169 absent, 135 fileset entries (15 of the closure are codeless
+KPIs). The counts of 2026-11-10 (133, 154, 139) were from before the last three `FORCE_OUT` entries.
 IOGPUFamily and what it links are roots; AGXG18P (the GPU's own driver) is left out. NativeAdreno's `AGXAccelerator`
 is linked into the kernel under IOGPUFamily's `IOAcceleratorES` (`kernel/patches/oneios-hosted/gpu`, `docs/gpu.md`
 5.1): two more `native_original_branches`, the class's constructor and base destructor.
@@ -150,7 +153,34 @@ is at 0x2000004000, so an original address A is at A - 0xfffffe0007004000 + 0x20
 Pairing: the matcher with the reference, the inferred pairs (order, structors and factories, slots, kernel class
 objects), 624 functions and 27 data reviewed by hand here, the lead's and fable-user's records (below), and
 50 carried over from XnuPrelink's iPad fixture. 214 original functions that kexts reference are on the panic stub
-and 18 data targets are unpaired; `kernel.kc.build.json` lists them per kext.
+and 18 data targets are unpaired; `kernel.kc.build.json` lists them per kext. That was the Linux build; the Mac build
+of 2026-11-12 (below) has 97 and 10.
+
+## On a Mac (2026-11-12, mac-kernel)
+
+The same command on macOS (python3 3.11+; Homebrew's keg-only `llvm` for `llvm-nm` and `llvm-mc`, which `build.sh`
+puts on `PATH`; XnuPrelink is `external/XnuPrelink` when it exists, else the kernel base's submodule
+`external/Droid-VM-UniXNU/kits/XnuPrelink` at `b74ed7c`). Inputs: the hosted kernel and reference built with Xcode
+27.2 (`kernel/README.md` "macOS"), the series through `0038`, and `out/kernel-inputs/24A446/kernelcache.macho`
+(`scripts/image/kernel-inputs.sh`; its SHA-256 is the profile's). Results:
+
+| | Mac, with `REFERENCE` | Mac, without | Linux PC (this README's figures; the size is the phone's `kernel.kc` of 2026-11-11 14:25, before 0035-0037) |
+|---|---|---|---|
+| `kernel.kc` | 94,109,696 bytes | 94,109,696 | 93,585,408 |
+| original functions on the stub | 97 | 396 | 214 |
+| data targets unpaired | 10 | 85 | 18 |
+| emitter's `stubbed` (functions bound to the stub, all kexts) | 210 | 1,692 | not in the docs |
+| fileset entries / roots / closure | 135 / 130 / 150 | the same | 139 / 133 / 154 (README of 2026-11-10) |
+| time | 45 s (cold, pairing included) | | about 80 s |
+
+Fewer stubs on the Mac is expected and **not yet a proof of better pairs**: Xcode's clang generates code closer to
+Apple's own kernel, so more functions match by shape. Nothing of this collection has run. `lead/imports.py` (the
+import-order check below; now run from the repository, paths relative) on it: 63 adjacent names out of order, 57 of
+them `pure-leaf` pairs (bodies that return a constant, as before), and 6 others for the prelink's owner to look at:
+`OSDictionary` C1 before `dictEntry::compare` (2 kexts, an aliased constructor), `vfs_context_is_dataless_manipulator`
+before `vfs_context_iopolicy_unassigned_0x8000` (the settled record), `random_cpu_init` (string pair) before
+`ml_set_interrupts_enabled`, `OSUnserializeXML` (reference order) before `OSUnserialize` (aligned), and
+`SecureDTFindEntry` twice (reference symbol and reviewed). XnuPrelink's own tests (`python3 -m unittest`, 59) pass.
 
 ## Records of several agents, and the import-order check
 

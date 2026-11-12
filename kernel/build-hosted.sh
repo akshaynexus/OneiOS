@@ -1,14 +1,19 @@
 #!/bin/bash
 # Build the hosted OneiOS XNU: the kernel of kernel/build-linux.sh plus the hosted machine layer
 # (kernel/patches/oneios-hosted), which runs as a Linux process under xnuhost instead of at EL1.
-#   scripts/bg.sh kernel-hosted kernel/build-hosted.sh
+#   scripts/bg.sh kernel-hosted env HOSTED_OUT=<name> kernel/build-hosted.sh
+#   XNU_FILESET_REFERENCE=1 ...  also the RELEASE reference of the prelink -> out/kernel/current-hosted*/reference.macho
+# Linux (x86_64 or arm64): the host's clang and xnu-linux-toolchain (kernel/linux/), as kernel/build-linux.sh.
+# macOS: Xcode's clang and iphoneos SDK, as kernel/build-macos.sh (Xcode of pins.sh; ALLOW_XCODE=1 accepts another,
+# XCODE_APP=... another place). Same series, archives and output on both.
 # Output: out/kernel-hosted/unixnu/oneios/<os profile>/oneios_hosted/kernel/kernel.macho, linked as
 # out/kernel/current-hosted/xnu.macho. The VM kernel's build (build-linux.sh, out/kernel/current) is not touched:
 # this one has its own output root and its own copy of the device repository (out/hosted-device: kernel/device as committed, with
 # the hosted series added to the board's patch series), so the two never share a work tree.
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-[ "$(uname -s)" = Linux ] || { echo "build-hosted: Linux only" >&2; exit 1; }
+HOST=$(uname -s)
+case "$HOST" in Linux|Darwin) ;; *) echo "build-hosted: Linux or macOS only" >&2; exit 1 ;; esac
 # HOSTED_OUT=NAME: a second, independent work tree and output (out/kernel-hosted-NAME, out/hosted-device-NAME,
 # out/kernel/current-hosted-NAME), so that several people can build and edit at once. The default tree is the lead's.
 # It must be named: HOSTED_OUT=lead is the default tree (out/kernel-hosted, out/kernel/current-hosted), which is the
@@ -18,10 +23,16 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 SUFFIX=${HOSTED_OUT:+-$HOSTED_OUT}
 export KERNEL_OUT=$ROOT/out/kernel-hosted$SUFFIX KERNEL_DEFCONFIG=oneios_hosted_defconfig
 . "$ROOT/kernel/lib/stage.sh"
-JOBS=${JOBS:-$(nproc)}
-TOOLCHAIN=${XNU_LINUX_PREFIX:-$ROOT/out/toolchain}
-"$ROOT/kernel/linux/setup-toolchain.sh"
-[ -x "$TOOLCHAIN/unixnu/CommandLineTools/usr/bin/xnu-host-cc" ] && [ "$TOOLCHAIN/unixnu" -nt "$ROOT/kernel/linux/clang-wrapper" ] || "$ROOT/kernel/linux/unixnu-layout.sh"
+. "$ROOT/kernel/lib/host.sh"
+JOBS=${JOBS:-$(host_jobs)}
+T0=$(date +%s)
+if [ "$HOST" = Linux ]; then
+  TOOLCHAIN=${XNU_LINUX_PREFIX:-$ROOT/out/toolchain}
+  "$ROOT/kernel/linux/setup-toolchain.sh"
+  [ -x "$TOOLCHAIN/unixnu/CommandLineTools/usr/bin/xnu-host-cc" ] && [ "$TOOLCHAIN/unixnu" -nt "$ROOT/kernel/linux/clang-wrapper" ] || "$ROOT/kernel/linux/unixnu-layout.sh"
+else
+  xcode_setup build-hosted
+fi
 stage_sources
 
 # The device repository of this build: the committed one, the hosted defconfig, and the hosted series last.
@@ -34,7 +45,7 @@ export ONEIOS_REPO=$ROOT
 rm -rf "$DEVICE"; mkdir -p "$DEVICE"
 git -C "$ROOT" archive HEAD kernel/device | tar -x -C "$DEVICE" --strip-components=2
 cp "$ROOT/kernel/device/configs/oneios_hosted_defconfig" "$DEVICE/configs/"
-sed -i "s#^\.\./\.\./\.\./\.\./external/#$ROOT/external/#" "$DEVICE/patches/xnu-12377/series"
+sed_i "s#^\.\./\.\./\.\./\.\./external/#$ROOT/external/#" "$DEVICE/patches/xnu-12377/series"
 python3 -I - "$DEVICE/board.toml" "${HOSTED_SERIES:-$ROOT/kernel/patches/oneios-hosted/series}" <<'PY'
 import re, sys
 path, series = sys.argv[1:]
@@ -152,6 +163,8 @@ mkdir -p "$UNIXNU_OUT_DIR"
 [ -e "$UNIXNU_OUT_DIR/feeds" ] || [ ! -d "$ROOT/out/kernel/unixnu/feeds" ] || ln -s "$ROOT/out/kernel/unixnu/feeds" "$UNIXNU_OUT_DIR/feeds"
 
 run_build() {
+  # macOS has xcrun, plutil, codesign and csh in place (Xcode); Linux gets UniXNU's shims there in a namespace.
+  if [ "$HOST" = Darwin ]; then "$@"; return; fi
   if [ -x /usr/bin/xcrun ] && [ -x /usr/bin/plutil ] && [ -x /usr/bin/codesign ] && [ -x /bin/csh ]; then "$@"; return; fi
   local binds=() shim
   for shim in xcrun plutil codesign csh; do
@@ -159,8 +172,11 @@ run_build() {
   done
   bwrap --dev-bind / / --overlay-src /usr/bin --tmp-overlay /usr/bin "${binds[@]}" -- "$@"
 }
-export UNIXNU_TOOLCHAIN=$TOOLCHAIN/unixnu ONEIOS_IOS_VERSION=27.0 JOBS
-export PATH=$TOOLCHAIN/unixnu/hostbin:$PATH
+export JOBS
+if [ "$HOST" = Linux ]; then
+  export UNIXNU_TOOLCHAIN=$TOOLCHAIN/unixnu ONEIOS_IOS_VERSION=27.0
+  export PATH=$TOOLCHAIN/unixnu/hostbin:$PATH
+fi
 export UNIXNU_OUT=$UNIXNU_OUT_DIR
 export -f unixnu
 export UNIXNU DEVICE UNIXNU_OUT_DIR
@@ -184,4 +200,11 @@ cp "$SEALED" "$ROOT/out/kernel/current-hosted$SUFFIX/xnu.macho"
 SEALED=$ROOT/out/kernel/current-hosted$SUFFIX/xnu.macho
 python3 -I "$ROOT/kernel/hosted-fixup.py" "$SEALED"
 ( cd "$WORK/tree" && UNIXNU_XNU_ARCH=arm64e python3 scripts/seal-source-crypto-kernel.py "$SEALED" )
-echo "build-hosted: $ROOT/out/kernel/current-hosted$SUFFIX/xnu.macho ($(stat -c %s "$SEALED") bytes, sha256 $(sha256sum "$SEALED" | cut -c1-16)...)"
+# XNU_FILESET_REFERENCE=1: the RELEASE reference of the prelink (kernel/prelink/build.sh REFERENCE=), next to the kernel.
+REF=$WORK/tree/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf
+if [ "${XNU_FILESET_REFERENCE:-0}" = 1 ]; then
+  [ -f "$REF" ] || { echo "build-hosted: XNU_FILESET_REFERENCE=1 left no $REF" >&2; exit 1; }
+  cp "$REF" "$ROOT/out/kernel/current-hosted$SUFFIX/reference.macho"
+  echo "build-hosted: reference $ROOT/out/kernel/current-hosted$SUFFIX/reference.macho ($(file_size "$REF") bytes)"
+fi
+echo "build-hosted: $ROOT/out/kernel/current-hosted$SUFFIX/xnu.macho ($(file_size "$SEALED") bytes, sha256 $(sha256 "$SEALED" | cut -c1-16)...) in $(( $(date +%s) - T0 )) s on $HOST"

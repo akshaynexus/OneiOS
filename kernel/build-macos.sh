@@ -7,7 +7,7 @@
 #   KDK_HEADERS=1 ...      add a headers-only KDKROOT (kernel/kdk-headers.py, about 200 headers read over HTTP from the
 #                          KDK of pins.sh; no 1.2 GB download). UniXNU's series replaces those headers with public
 #                          ones, so the default build needs no KDK; this is for comparing against Apple's.
-# Needs: macOS 27 with Xcode 27.1 at /Applications/Xcode.app (XCODE_APP=...), the iphoneos SDK it ships, and
+# Needs: macOS 27 with the Xcode of pins.sh (27.1) at /Applications/Xcode.app (XCODE_APP=...), the iphoneos SDK it ships, and
 # Homebrew's cmake, ninja, unifdef and llvm (lld). Missing brew packages are installed.
 # Env: XCODE_APP, JOBS, KERNEL_DEFCONFIG, KERNEL_OUT, KDKROOT, ALLOW_XCODE=1 (accept another Xcode version).
 # Output: out/kernel/builds/<build id>/ and out/kernel/current, as on Linux. The build stops before the prelink:
@@ -16,19 +16,8 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 [ "$(uname -s)" = Darwin ] || { echo "build-macos: this is the macOS build; on Linux use kernel/build-linux.sh" >&2; exit 1; }
 . "$ROOT/kernel/lib/stage.sh"
-APP=${XCODE_APP:-/Applications/Xcode.app}
-[ -d "$APP/Contents/Developer" ] || { echo "build-macos: no Xcode at $APP (Xcode $XCODE_VERSION; XCODE_APP=/path/to/Xcode.app)" >&2; exit 1; }
-export DEVELOPER_DIR=$APP/Contents/Developer
-have=$(xcodebuild -version | sed -n 's/^Xcode //p')
-if [ "$have" != "$XCODE_VERSION" ] && [ "${ALLOW_XCODE:-0}" != 1 ]; then
-  echo "build-macos: Xcode $have at $APP; the build is recorded with Xcode $XCODE_VERSION (ALLOW_XCODE=1 to try $have)" >&2
-  exit 1
-fi
-xcrun --sdk iphoneos --show-sdk-path >/dev/null || { echo "build-macos: Xcode at $APP has no iphoneos SDK" >&2; exit 1; }
-for t in cmake ninja unifdef; do
-  command -v $t >/dev/null || brew install $t
-done
-[ -x /opt/homebrew/opt/llvm/bin/ld.lld ] || [ -x /usr/local/opt/llvm/bin/ld.lld ] || [ -x /opt/homebrew/opt/lld/bin/ld.lld ] || brew install llvm lld
+. "$ROOT/kernel/lib/host.sh"
+xcode_setup build-macos
 JOBS=${JOBS:-$(sysctl -n hw.ncpu)}
 T0=$(date +%s)
 
@@ -61,10 +50,7 @@ if [ "${KDK_HEADERS:-0}" = 1 ]; then
 else
   unset KDKROOT
 fi
-# Xcode 27.1's clang warns on every kernel header; without this list the log grows to gigabytes (iOSPlus10
-# scripts/ios26/build-kernel.sh). UniXNU's script appends its own flags to CFLAGS_EXTRA.
-export XNU_BUILD_WERROR=0
-echo "build-macos: $(xcodebuild -version | tr '\n' ' ') MACOS_VERSION=$MACOS_VERSION KDKROOT=${KDKROOT:-none} jobs=$JOBS"
+echo "build-macos: MACOS_VERSION=$MACOS_VERSION KDKROOT=${KDKROOT:-none} jobs=$JOBS"
 
 export UNIXNU DEVICE UNIXNU_OUT_DIR UNIXNU_OUT=$UNIXNU_OUT_DIR JOBS
 unixnu defconfig "$CONFIG_NAME"
