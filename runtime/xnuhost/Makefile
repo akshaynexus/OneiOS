@@ -167,7 +167,9 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	    [ $$code = 3 ] && [ "$$(grep -c 'TESTKERNEL: restart' $(A)/restart.log)" = 9 ] || { tail -5 $(A)/restart.log; echo "check-arm64: restart: exit $$code"; false; }; }; fi
 
 # The trap path's costs (docs/booter.md 2.6a): the test kernel's benchmarks, then xnuhost's "perf:" report at the stop.
-# BENCH_SET="--set spin-host=5 ..." tries other settings. Native arm64 Linux only (qemu-user has no seccomp).
+# BENCH_SET="--set spin-host=5 ..." tries other settings. Native on an arm64 Linux host; on an x86_64 PC under
+# qemu-aarch64, where the times are qemu's (about 10x, no seccomp: `svc #0x80` rewritten by text_fixup): compare
+# runs on the same host only. In the Mac's container: add -o build/android/xnuhost -o build/android/testkernel.elf.
 bench-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	@rm -f $(A)/testdata/data.img
 	timeout 120 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M \

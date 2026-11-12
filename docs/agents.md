@@ -1966,3 +1966,20 @@ persistent: a reboot costs a manual re-root.
   - c3: locationd pid 59 all session, no exception; `SystemOS volume answered`, SafariConfigurationSubscriber ran.
   - kernel.kc: `out/kernel/crashes-24A446/kernel.kc`, sha256 `07975f04...` (HOSTED_OUT=crashes on `507e196` plus
     0053, RELEASE reference): audit 0 failures, stubs 666 good.
+
+- 2026-11-12 16:45, A (host tests) -> parent, mem: **the runtime's host tests on Linux x86_64 (CachyOS, NDK 28.2): every
+  part passes; the Mac container's NDK failure fixed (not run on a Mac).** Counts in `docs/building.md` 4.
+  - loader 160; xnuhost 13263 + display mode 5 + image set 37 + `check-arm64` under qemu (all passed, restart exit 3);
+    display 72 + 5; bridges 204, wifi 132, test-binder 38 + 35, brightness 74, battery 57, thermal 56, audio helper
+    4051; camera 131; package 19; `runtime/build.sh out/stage-linux` 15 files; `scripts/image/tests/run.sh` 23 OK.
+  - **Not run here:** drm2kgsl, the GPU leak test and the udmabuf import checks: `/dev/udmabuf` is `root:kvm 0660`,
+    ACL for `sddm` only (box setup; needs root: the `kvm` group or the seat). LeakSanitizer works here.
+  - **Mac:** the container's make walked the Android graph (FORCE sub-makes, the gpu3d stamp) and called the NDK's clang
+    when a source looked newer over the mount (reproduced with `NDK=/nonexistent`). `runtime/host-tests.sh` passes
+    `PREBUILT=1` to the container; the xnuhost part then runs `make test -o build/android/xnuhost -o
+    build/android/testkernel.elf`. The bridges part has no Android target in the container: its Mac failure is not
+    explained by this; send its log if it fails again.
+  - **mem:** `make -C runtime/xnuhost bench-arm64` works here under qemu-aarch64 (about 2 s; times about 10x the Mac's,
+    no seccomp: compare before/after on this box only). The test kernel's histogram steps now scale with the counter
+    (qemu's is 1 GHz; before, every percentile read 4095 ns). That is the only change in `tests/testkernel.c` (the
+    `bh_*` helpers and the comment above `BT`).

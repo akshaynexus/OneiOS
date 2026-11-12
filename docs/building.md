@@ -155,6 +155,28 @@ the Android xnuhost booting the test kernel), `display` (`make -C runtime/displa
 A part that ends with exit 0 but skipped something shows the first "skipped" line. The exit code is 1 when a part
 failed. Other host tests: `scripts/image/tests/run.sh`.
 
+Checked on 2026-11-12, Linux x86_64 CachyOS (kernel 7.3.1-1-cachyos with binderfs built in, 4 CPUs, 15 GiB; GCC
+16.2.1, clang 23.1.4, GNU make 4.4.1, Python 3.14, NDK 28.2.13676358, build-tools 35.0.0, Temurin JDK 17,
+qemu-aarch64 11.1.3 user mode, no binfmt), `runtime/host-tests.sh` on a clean tree, then again after the changes
+below (the same counts):
+
+| Part | Result |
+|---|---|
+| `runtime/build.sh out/stage-linux` (clean tree) | 15 files: 14 in `bin/` (13 arm64 ELF and `oneios-net.sh`) and `lib/oneios-display.dex`; xnuhost 4,198,048 bytes, with drm2kgsl (3.4 MB of it is `task.c`'s state `T` in `.data`: it has initialisers, so it is not `.bss`) |
+| loader | 160 checks, 0 failed |
+| xnuhost | 13263 checks, 0 failed; display mode 5 scenarios, 0 failed; image set 37 checks, 0 failed; `check-arm64` under qemu-aarch64 `TESTKERNEL: all passed` and the restart test (8 restarts, then exit 3). **Not run here:** drm2kgsl, the leak test and test_xnuhost's udmabuf import ("no /dev/udmabuf here (Permission denied)"): the box's `/dev/udmabuf` is `root:kvm 0660` with an ACL for the seat's user only (`sddm`); LeakSanitizer itself works here. Giving the user access (the `kvm` group, or the seat) is a root step |
+| display | 72 checks, 0 failed; mode choice 5 checks, 0 failed |
+| bridges | 204 checks, 0 failed; wifi 132 checks, 0 failed; `test-binder` 38 checks (the Bluetooth HAL client) and 35 (the Wi-Fi supplicant client), 0 failed; brightness 74 checks, 0 failures; battery 57 checks, 0 failures; thermal 56 checks, 0 failed; audio helper 4051 checks, 0 failed; Android build ok |
+| camera | 131 checks, 0 failed; Android build ok |
+| package | 19 tests passed |
+| `scripts/image/tests/run.sh` | 23 tests, OK |
+
+`make -C runtime/xnuhost bench-arm64` also runs here, under qemu-aarch64 (about 2 s): its times are qemu's (null
+system call 19.8 us mean, `task_unmap` 16.6 us; about ten times the Mac's container) and the task layer has no seccomp
+filter under qemu-user (`svc #0x80` is rewritten by `text_fixup`), so they say only how a change moves a cost on the
+same box. The test kernel's histogram now has steps of `hz / 24 MHz` ticks on a counter faster than 24 MHz (qemu's is
+1 GHz): before, every p50/p90/p99 under qemu read 4095 ns, the table's last tick.
+
 ### The host tests from a Mac
 
 The host tests are Linux tests (binderfs, udmabuf, user namespaces, LeakSanitizer, glibc): `make test` refuses to
@@ -163,12 +185,19 @@ start on macOS and names `runtime/host-tests.sh`. On a Mac that script:
 1. builds the Android parts with the Mac's NDK (`make -C runtime/loader android`, `runtime/xnuhost all
    build/android/testkernel.elf`, `runtime/bridges all`, `runtime/bridges/camera all`, `runtime/display all`), so
    the container needs no NDK;
-2. runs `runtime/host-tests.sh --suite` in an arm64 Ubuntu 24.04 container of Apple's `container` tool (each container
+2. runs `runtime/host-tests.sh --suite` (with `STRICT=1 PREBUILT=1`) in an arm64 Ubuntu 24.04 container of Apple's `container` tool (each container
    is its own small VM on Virtualization.framework). The image `oneios-hosttests:2` is built with `container build`
    from the Containerfile inside the script the first time (gcc 13, clang 18, OpenJDK 17, zstd, patch, and the kernel
    build's bc, bison, flex, libelf-dev, libssl-dev). The checkout is mounted at its own path (`-v ROOT:ROOT`); nothing
    else of the Mac is. On arm64 the Android xnuhost runs as it is (static, bionic), so `check-arm64` boots the test
-   kernel without qemu;
+   kernel without qemu. `PREBUILT=1` runs the xnuhost part as `make test -o build/android/xnuhost -o
+   build/android/testkernel.elf`: make keeps the Mac's binaries and does not walk their prerequisites (the bridges'
+   and camera's sub-makes, the gpu3d stamp), so nothing there can call the NDK the container does not have. Before,
+   a source that looked newer than its object over the mount made make call the NDK's clang in the container
+   (`aarch64-linux-android30-clang: No such file`, error 127 on `build/android/gpu3d.o`; reproduced on Linux with
+   `NDK=/nonexistent` and a touched source). A missing pre-built binary is a FAIL that names it. The fix is checked on
+   Linux (`NDK=/nonexistent PREBUILT=1 runtime/host-tests.sh --suite` after touching `src/gpu3d.c` and the bridges'
+   and camera's sources: every part passes, nothing asks for the NDK); not yet run on a Mac;
 3. runs `runtime/package/test.sh` on the Mac.
 
 **The container's kernel.** The default kernel of `container` (6.18.56) has no binderfs, no udmabuf and no modules
@@ -232,7 +261,8 @@ after):
   `EBUSY` ("fake hal: Device or resource busy", then `FAIL tests/test_hidl_binder.c:497`). A race in the test, not in
   the HAL client: the fake HAL now retries `EBUSY` for up to 2 s. Five runs in a row passed.
 - `check-arm64` runs the Android binary without qemu on an arm64 Linux host.
-- `make -C runtime/xnuhost bench-arm64` (in the container, after the Android build) runs the test kernel's benchmarks
+- `make -C runtime/xnuhost bench-arm64` (in the container, after the Android build, with
+  `-o build/android/xnuhost -o build/android/testkernel.elf` as above; on a Linux PC under qemu-aarch64, above) runs the test kernel's benchmarks
   of the trap path (boot argument `testkernel-bench`) and prints them with xnuhost's `perf:` report;
   `BENCH_SET="--set cpu-pin=0 --set map-defer=0"` measures other settings, `BENCH_SCALE=2` doubles the loops
   (`docs/booter.md` 2.6a has the numbers). Not part of `make test`.

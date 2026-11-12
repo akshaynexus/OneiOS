@@ -262,7 +262,9 @@ static void test_tasks(void)
 // ---- benchmarks of the trap path (boot argument testkernel-bench; `make bench-arm64`) -------------
 // Each loop times one kind of trip from the kernel's side, with the counter the iOS thread also reads (CNTVCT_EL0):
 // the user code stamps the time just before its svc (x0) and just after its resume, so the two hand-offs are seen
-// apart. Times are in counter ticks into a table of 4096 ticks (170 us at 24 MHz); later ones count in the last.
+// apart. Times go into a table of 4096 steps of one tick at 24 MHz or less (170 us at 24 MHz, 213 us at the phone's
+// 19.2 MHz) and of hz / 24 MHz ticks on a faster counter (qemu-user's is 1 GHz: 41 ns steps, 168 us), so the table
+// spans about the same time everywhere; later ones count in the last.
 #define BT 4096
 static void dec(uint64_t v)
 {
@@ -272,14 +274,26 @@ static void dec(uint64_t v)
   do { b[--i] = (char)('0' + v % 10); v /= 10; } while (v);
   put(b + i);
 }
-typedef struct { uint32_t *t; uint64_t n, sum; } bhist;
-static void bh_init(bhist *h) { h->t = (uint32_t *)(uintptr_t)kva(page_alloc()); h->n = h->sum = 0; }   // 4096 x 4 = one 16 KiB page
-static void bh_add(bhist *h, uint64_t ticks) { h->t[ticks < BT ? ticks : BT - 1]++; h->n++; h->sum += ticks; }
-static uint64_t bh_q(const bhist *h, uint64_t per_mille)
+typedef struct { uint32_t *t; uint64_t n, sum, step; } bhist;
+static void bh_init(bhist *h)   // 4096 x 4 = one 16 KiB page
+{
+  h->t = (uint32_t *)(uintptr_t)kva(page_alloc());
+  h->n = h->sum = 0;
+  h->step = H->info->timebase_hz / 24000000u;
+  if (!h->step) h->step = 1;
+}
+static void bh_add(bhist *h, uint64_t ticks)
+{
+  uint64_t i = ticks / h->step;
+  h->t[i < BT ? i : BT - 1]++;
+  h->n++;
+  h->sum += ticks;
+}
+static uint64_t bh_q(const bhist *h, uint64_t per_mille)   // in ticks: the start of the step the quantile falls in
 {
   uint64_t want = h->n * per_mille / 1000, seen = 0;
-  for (uint64_t i = 0; i < BT; i++) { seen += h->t[i]; if (seen > want) return i; }
-  return BT;
+  for (uint64_t i = 0; i < BT; i++) { seen += h->t[i]; if (seen > want) return i * h->step; }
+  return BT * h->step;
 }
 static void bh_put(const char *name, const bhist *h)
 {
