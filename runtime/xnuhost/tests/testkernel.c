@@ -527,6 +527,13 @@ void kernel_main(const struct boot_args *args, const struct xh_vector *vector, s
   const uint8_t *chosen = adt_child(tree, "chosen"), *host = chosen ? adt_child(chosen, "xnuhost") : NULL;
   const uint8_t *v = host ? adt_prop(host, "vector", &len, NULL) : NULL;
   check(v && *(const uint64_t *)v == (uint64_t)(uintptr_t)vector, "/chosen/xnuhost vector");
+  // The RAM's size as XNU reads it in three places (ram=auto sizes all of them: docs/booter.md 1).
+  const uint8_t *dram = chosen ? adt_prop(chosen, "dram-size", &len, NULL) : NULL;
+  check(dram && len == 8 && *(const uint64_t *)dram == args->mem_size && vector->info->ram_size == args->mem_size && !(args->mem_size & 0x3fff),
+        "the RAM's size agrees: boot_args.memSize, /chosen dram-size, xh_info.ram_size");
+  put("TESTKERNEL: RAM ");
+  dec(args->mem_size >> 20);
+  put(" MiB\n");
   const uint8_t *cpus = adt_child(tree, "cpus");
   check(cpus && adt_child(cpus, "cpu2") && !adt_child(cpus, "cpu3"), "/cpus has the three CPUs");
   const uint8_t *io = adt_child(tree, "arm-io");

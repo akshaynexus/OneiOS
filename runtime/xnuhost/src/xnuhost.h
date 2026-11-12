@@ -42,7 +42,15 @@ typedef struct {
   char  identity[512];      // decoded device tree of the device, default <image>/identity.adt if present
   char  boot_args[1024];
   unsigned ncpu;
-  uint64_t ram_bytes;
+  // ram=SIZE or ram=auto (the default). Auto (xh_ram_auto) is resolved by xh_config_finish from ram_meminfo:
+  // ram_bytes is then the guest's size and ram_auto_total/available what was read (both 0: not auto).
+  uint64_t ram_bytes;       // 0 = auto
+  bool  ram_given;          // ram= was set here (the command line wins over the image set's xnuhost.conf)
+  int   ram_percent;        // ram-percent=: the guest's share of MemTotal for ram=auto, 10-100; -1 = unset (90)
+  int64_t ram_host_floor;   // ram-host-floor=: what ram=auto always leaves the host, bytes; -1 = unset (1.5 GiB)
+  char  ram_meminfo[256];   // ram-meminfo=FILE: where ram=auto reads MemTotal (tests); default /proc/meminfo
+  uint64_t ram_auto_total, ram_auto_available;
+  int   host_mem_log;       // host-mem-log=SECONDS: the host's MemAvailable in the log every so often; 0 = off; -1 = unset (30)
   xh_disk_config disk[XH_MAX_DISKS];
   unsigned ndisk;
   char  display[16];        // "shm", "drm", "none"
@@ -86,6 +94,14 @@ int  xh_config_args(xh_config *c, int argc, char **argv);
 // Fills what depends on other values (kernel path, the image set's disks). Returns -1 on a problem.
 int  xh_config_finish(xh_config *c);
 uint64_t xh_parse_size(const char *text, bool *ok);
+// ram=auto (docs/booter.md 1): min(percent % of total, total - floor), rounded down to 256 MiB, at most XH_RAM_MAX;
+// 0 when that leaves the guest less than 1 GiB. Portable (unit-tested).
+#define XH_RAM_AUTO_PERCENT 90
+#define XH_RAM_AUTO_FLOOR   (3ull << 29)    // 1.5 GiB
+#define XH_RAM_MAX (64ull << 30)            // the RAM window and the kernel's own range share 0x20_0000_0000 .. 0x3c_0000_0000
+uint64_t xh_ram_auto(uint64_t total, unsigned percent, uint64_t floor);
+// MemTotal and MemAvailable of a /proc/meminfo file, in bytes: 0, or -1 when the file has not both.
+int      xh_meminfo(const char *path, uint64_t *total, uint64_t *available);
 
 // The display's mode plumbing (config.c; docs/booter.md 2.8).
 #define XH_PANEL_WIDTH  1440u          // the Galaxy S24 Ultra's panel, where the host's cannot be read

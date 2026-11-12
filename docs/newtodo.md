@@ -49,12 +49,15 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
      unmaps out; fixed (`task.unmaps_out`), with a two-vCPU check in the test kernel (`docs/booter.md` 2.6). The PC
      benchmark (qemu): the `task_unmap` call 17-19 us -> 0.9 us; a fault, fill and unmap ~55 -> ~37 us. On the phone:
      read the `perf:` line's `task_unmap N queued, M ordered` and the `VM_pageout_scan` share.
-   - **RAM: the owner's decision: iOS gets at least 90% of the phone's RAM.** Implement `ram=auto` in xnuhost:
-     guest = min(90% of MemTotal, MemTotal - a host floor of 1.5 GiB), rounded down to 256 MiB (about 9.5 GiB on
-     this phone); settings `ram-percent=`, `ram-host-floor=`; log the choice and the host's MemAvailable every 30 s;
-     check that the guest side scales (memory window, device-tree memory, zone map, GPU pool). Never change xnuhost's
-     OOM score (the way-back rule); if lmkd ends xnuhost, the watcher returns to One UI (the safe failure). Not
-     started.
+   - **RAM: the owner's decision: iOS gets at least 90% of the phone's RAM. `ram=auto` built and host-tested
+     (2026-11-12), the default; not on the phone.** Guest = min(90% of MemTotal, MemTotal - 1.5 GiB) in 256 MiB steps
+     (about 9.5 GiB on this phone); `ram-percent=`, `ram-host-floor=`, `host-mem-log=` (30 s), also in the image set's
+     `xnuhost.conf`; the choice and the host's MemAvailable in the log (`docs/booter.md` 1). Checked: the window,
+     `/chosen dram-size`, `boot_args.memSize`, `xh_info.ram_size` (test kernel); the GPU pool is fixed (8 MiB of
+     response buffers; blobs are guest pages). **Not checked:** XNU's zone map and kernel ranges with 9.5 GiB (a PC
+     boot with `--ram 9728M` once the IPSW and an image set are built). OOM score unchanged. On the phone: read the
+     two `memory:` lines; if `host MemAvailable` falls under ~300 MiB, lower `ram-percent` in the image's
+     `xnuhost.conf`.
    - **Swap:** make `/private/var/vm` (root:wheel 0755) on the Data store before swap starts; find the errno 30
      cause. Not started.
    - **backboardd's GPU memory growth** (gpu): find what it keeps (pooled 64 MiB metal2vulkan blocks, IOSurfaces,

@@ -161,6 +161,12 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	  timeout 30 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M \
 	     --display none --no-input --width 64 --height 64 2>&1 | tee $(A)/check.log; \
 	  grep -q 'TESTKERNEL: all passed' $(A)/check.log && \
+	  echo "check-arm64: ram=auto on a host of 3 GiB (ram-meminfo): the guest gets 1536 MiB" && \
+	  printf 'MemTotal:        3145728 kB\nMemAvailable:    2097152 kB\n' > $(A)/meminfo-3g && rm -f $(A)/testdata/data.img && \
+	  { timeout 30 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --set ram-meminfo=$(A)/meminfo-3g \
+	     --display none --no-input --width 64 --height 64 > $(A)/ramauto.log 2>&1; \
+	    grep -q 'ram=auto: host MemTotal 3072 MiB, MemAvailable 2048 MiB; the guest gets 1536 MiB' $(A)/ramauto.log && \
+	    grep -q 'TESTKERNEL: all passed' $(A)/ramauto.log || { grep -E 'memory|FAIL|TESTKERNEL' $(A)/ramauto.log | tail -8; echo "check-arm64: ram=auto failed"; false; }; } && \
 	  echo "check-arm64: a guest that keeps restarting: xnuhost starts again in place 8 times, then exit 3" && \
 	  { XNUHOST_RUNNER="$(ARM64_RUN)" timeout 60 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 1 --ram 256M \
 	     --display none --no-input --width 64 --height 64 --boot-args testkernel-restart > $(A)/restart.log 2>&1; code=$$?; \

@@ -29,7 +29,7 @@ Command line (the first line is what the OneOS fork runs, `oneos/interface.md` s
 
 ```sh
 xnuhost --session-abi 1 --mode takeover --runtime DIR --image DIR --data DIR --session DIR
-        [--kernel FILE] [--cpus N] [--ram SIZE] [--boot-args TEXT] [--display shm|drm|none]
+        [--kernel FILE] [--cpus N] [--ram SIZE|auto] [--boot-args TEXT] [--display shm|drm|none]
         [--width W --height H] [--hz N] [--scale 2|3] [--no-input] [--input-script FILE] [--no-tasks]
         [--config FILE] [--set KEY=VALUE] [-v]
 xnuhost --selftest            # on the phone: page size, address bits, PAC keys across fork, memfd, seccomp
@@ -41,7 +41,7 @@ xnuhost --selftest            # on the phone: page size, address bits, PAC keys 
 | `--kernel FILE` | `DIR/kernel.kc`, else `DIR/kernel.macho` | the kernel collection: `MH_FILESET`, or an `MH_EXECUTE` kernel |
 | `FILE.trustcache`, `.vroot`, `.gpuaddon`, `.ramdisk`, `.adt` | optional | DarwinBoot's sidecars beside the kernel, same formats and checks |
 | `DIR/identity.adt` | optional | the device's own decoded device tree: model, target-type, board name and `/product` are taken from it |
-| `DIR/xnuhost.conf` | optional | `key=value` lines: `boot-args`, `disk`, `disk-rw`, `data-store`, `scale`, `scale-fixup`, `text-fixup`; the command line wins |
+| `DIR/xnuhost.conf` | optional | `key=value` lines: `boot-args`, `disk`, `disk-rw`, `data-store`, `scale`, `scale-fixup`, `text-fixup`, `ram`, `ram-percent`, `ram-host-floor`, `host-mem-log`; the command line wins |
 | `DIR/overlay/userland/xnuhost.conf` | optional | the same, written by the userland hook: `scale=3` or `scale=2`, the UI scale the image's Data seed was made for (`docs/userland.md` "The screen") |
 | `--width W --height H`, `--hz N` (or `width=`, `height=`, `hz=` in the image set's `xnuhost.conf`) | the display helper's report of the panel | the guest's display mode (section 2.8); for a PC run or another panel |
 | `--scale 2\|3` (`--set scale=2`) | the image set's, else 3 | the UI scale: pixels per point |
@@ -49,7 +49,32 @@ xnuhost --selftest            # on the phone: page size, address bits, PAC keys 
 | `--data DIR` | none | `data.img`: the Data store, sparse, created on the first start; `unique-chip-id` |
 | `DIR/data.seed` | as present | a tar seed is served as the last read-only disk (the guest makes the Data volume and unpacks it); an APFS seed image is copied into a new store |
 | `--session DIR` | none | `xnuhost.pid`, `ready`, `return.request`, `display.sock` |
-| `--cpus`, `--ram` | 4, 4G | 1 to 8; a multiple of 2 MiB |
+| `--cpus` | the host's cores, at most 8 | 1 to 8 |
+| `--ram SIZE` or `--ram auto` (`ram=`) | `auto` | the guest's RAM: a multiple of 2 MiB, 256 MiB to 64 GiB. `auto`: the least of `ram-percent` of the host's `MemTotal` and `MemTotal` less `ram-host-floor`, rounded down to 256 MiB (below) |
+| `--set ram-percent=N` | 90 | `ram=auto`'s share of `MemTotal`, 10 to 100 |
+| `--set ram-host-floor=SIZE` | 1.5G | what `ram=auto` always leaves the host |
+| `--set host-mem-log=SECONDS` | 30 | a `memory: host MemAvailable` line every so often; 0 = only at the start and the stop |
+| `--set ram-meminfo=FILE` | `/proc/meminfo` | where `ram=auto` reads `MemTotal` and `MemAvailable` (tests) |
+
+**The guest's RAM (`ram=auto`, the owner's decision of 2026-11-12: iOS gets at least 90% of the phone's RAM).**
+In a session One UI's apps and system_server are gone, so the host needs little: the guest gets
+`min(ram-percent% of MemTotal, MemTotal - ram-host-floor)`, rounded down to 256 MiB. On a 12 GB phone (MemTotal
+about 11.2 GiB, an assumed figure until the first log line from the phone) that is the floor's 9.5 GiB (9728 MiB); 90%
+would be 10.0 GiB. A host where that leaves the guest less than 1 GiB is refused (exit 2, "give --ram SIZE"); a host
+with no `/proc/meminfo` gets the old 4 GiB. The RAM is a memfd that is never populated or locked: the host gives it
+pages only as the guest touches them (`ram_discard` gives them back). The log says what was chosen, and then what the
+host has left:
+
+```text
+memory: ram=auto: host MemTotal M MiB, MemAvailable A MiB; the guest gets G MiB: the least of 90% (.. MiB) and MemTotal less the host's floor of 1536 MiB (.. MiB), in 256 MiB steps
+memory: host MemAvailable A MiB of M MiB; the guest's RAM holds H of G MiB          every host-mem-log seconds, and at the stop
+```
+
+`H` is the memfd's resident pages (what the guest has touched and not given back). xnuhost never changes its own
+OOM score (the way back to One UI, section 2.9): if the host runs out and its low-memory killer ends xnuhost, the
+watcher returns to One UI, the safe failure. The GPU's host allocations (KGSL, the renderer) come out of the floor
+too: if `host MemAvailable` runs low in a session, lower `ram-percent` or raise `ram-host-floor` in the image set's
+`xnuhost.conf` (no new runtime needed).
 
 Log: standard error (the switch appends it to `session/xnuhost.log`). Lines `xnuhost I/E/D` are the host's,
 `guest` lines are the kernel's console, `xnuhost !!` lines come from signal context.
@@ -105,7 +130,7 @@ multiple of 2 MiB away from the link base, which is the slide the kernel finds w
 
 ### 2.2 Memory
 
-- One memfd is the guest's RAM. xnuhost maps it once at `0x2000000000 + (link base mod 2 MiB)` (retrying
+- One memfd is the guest's RAM (its size: section 1, `ram=auto`). xnuhost maps it once at `0x2000000000 + (link base mod 2 MiB)` (retrying
   higher), read-write-execute. **Physical address = that address** (`boot_args.physBase == virtBase`):
   one number names a byte for the kernel's pointers, its physical addresses (DMA addresses in virtqueues,
   page tables it may still write) and, minus the base, the offset a task maps.
@@ -115,6 +140,13 @@ multiple of 2 MiB away from the link base, which is the slide the kernel finds w
 - The board's device windows are a `PROT_NONE` reservation at their physical addresses
   (`0x08000000..0x0b000000`), so a device register's physical address is also its pointer and every access
   traps.
+- **What follows the RAM's size** (checked for `ram=auto` by the test kernel, `make check-arm64`'s third boot): the
+  window is the RAM less the boot framebuffer and the GPU's pool (8 MiB, the renderer's response buffers; fixed: the
+  GPU's blobs are guest pages, udmabufs of the window, and grow with it); `boot_args.memSize`, `/chosen dram-size` and
+  `xh_info.ram_size` all name the window; `kern.maxvnodes` in `/defaults` is the window / 64 KiB + 1024. The kernel's
+  own range below starts at the next GiB after the RAM, so a larger guest leaves it less: 102 GiB with 9.5 GiB of RAM
+  (107 GiB with 4 GiB). XNU sizes its zone map and its kernel ranges from `memSize` inside that range; that a hosted
+  kernel boots with 9.5 GiB has **not** been run yet (a PC boot with `--ram 9728M`, section 5 of building.md).
 - **The kernel's own address space** outside the window (zones, kalloc, stacks, IOKit buffers) is a
   no-access reservation from the end of the RAM, rounded up to 1 GiB, to `0x3c00000000`
   (`xh_info.kva_base/kva_size`). `kernel_map(va, size, prot, phys)` maps RAM pages into it and

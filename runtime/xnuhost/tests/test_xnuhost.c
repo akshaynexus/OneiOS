@@ -1071,6 +1071,67 @@ static void test_config(const char *dir)
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 10, argv2) == 0 && xh_config_finish(&c) == 0);
   CHECK(!strcmp(c.boot_args, "-v debug=0x8") && c.ncpu == 6 && c.ram_bytes == 6ull << 30 && !strcmp(c.display, "none") && !c.input && c.ndisk == 3);
+  // ram=auto (docs/booter.md 1): min(90% of MemTotal, MemTotal - 1.5 GiB) in 256 MiB steps, at least 1 GiB, at most 64 GiB.
+  // 11,746,000 kB stands for a 12 GB phone's MemTotal (about 11.2 GiB; the phone's own number is read at the start).
+  const uint64_t G = 1ull << 30, M = 1ull << 20, phone = 11746000ull << 10;
+  CHECK(xh_ram_auto(phone, 90, XH_RAM_AUTO_FLOOR) == 9728 * M);               // the floor decides: 9.5 GiB
+  CHECK(xh_ram_auto(phone, 50, XH_RAM_AUTO_FLOOR) == 5632 * M);               // the share decides
+  CHECK(xh_ram_auto(phone, 90, 4 * G) == 7168 * M);
+  CHECK(xh_ram_auto(64 * G, 90, XH_RAM_AUTO_FLOOR) == 58880 * M && xh_ram_auto(128 * G, 90, XH_RAM_AUTO_FLOOR) == XH_RAM_MAX);
+  CHECK(xh_ram_auto(2560 * M, 90, XH_RAM_AUTO_FLOOR) == G && xh_ram_auto(2 * G, 90, XH_RAM_AUTO_FLOOR) == 0 && xh_ram_auto(G, 100, 0) == G);
+  CHECK(xh_ram_auto(XH_RAM_AUTO_FLOOR, 90, XH_RAM_AUTO_FLOOR) == 0 && xh_ram_auto(0, 90, 0) == 0);
+  char meminfo[300], small[300], partial[300];
+  snprintf(meminfo, sizeof meminfo, "%s/meminfo", dir);
+  snprintf(small, sizeof small, "%s/meminfo-small", dir);
+  snprintf(partial, sizeof partial, "%s/meminfo-partial", dir);
+  f = fopen(meminfo, "w"); fputs("MemTotal:       11746000 kB\nMemFree:          401234 kB\nMemAvailable:    7340032 kB\nBuffers:            1234 kB\n", f); fclose(f);
+  f = fopen(small, "w"); fputs("MemTotal:        2097152 kB\nMemAvailable:    1048576 kB\n", f); fclose(f);
+  f = fopen(partial, "w"); fputs("MemTotal:        2097152 kB\nMemFree:          1048576 kB\n", f); fclose(f);
+  uint64_t total = 0, available = 0;
+  CHECK(xh_meminfo(meminfo, &total, &available) == 0 && total == phone && available == 7ull * G);
+  CHECK(xh_meminfo(partial, &total, &available) == -1 && xh_meminfo("/nonexistent/meminfo", &total, &available) == -1);
+  char set_meminfo[340], set_small[340], set_none[340];
+  snprintf(set_meminfo, sizeof set_meminfo, "ram-meminfo=%s", meminfo);
+  snprintf(set_small, sizeof set_small, "ram-meminfo=%s", small);
+  snprintf(set_none, sizeof set_none, "ram-meminfo=%s/none", dir);
+  char *ram1[] = { "xnuhost", "--image", image, "--set", set_meminfo };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 5, ram1) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 9728 * M && c.ram_auto_total == phone &&
+        c.ram_auto_available == 7ull * G && c.ram_percent == 90 && c.ram_host_floor == (int64_t)XH_RAM_AUTO_FLOOR && c.host_mem_log == 30);
+  char *ram2[] = { "xnuhost", "--image", image, "--set", set_meminfo, "--set", "ram-percent=50", "--set", "host-mem-log=0" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 9, ram2) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 5632 * M && c.host_mem_log == 0);
+  char *ram3[] = { "xnuhost", "--image", image, "--set", set_meminfo, "--set", "ram-host-floor=4G" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 7, ram3) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 7168 * M);
+  char *ram4[] = { "xnuhost", "--image", image, "--set", set_small };          // a host too small for auto: say so, start nothing
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 5, ram4) == 0 && xh_config_finish(&c) == -1);
+  char *ram5[] = { "xnuhost", "--image", image, "--set", set_none };           // no meminfo: the old 4 GiB
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 5, ram5) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 4 * G && c.ram_auto_total == 0);
+  char *ram6[] = { "xnuhost", "--image", image, "--set", set_small, "--ram", "1536M" };   // a size given: no auto
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 7, ram6) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 1536 * M && c.ram_auto_total == 0);
+  xh_config_defaults(&c);
+  CHECK(xh_config_set(&c, "ram-percent", "5") != 0 && xh_config_set(&c, "ram-percent", "101") != 0 && xh_config_set(&c, "ram", "0") != 0 &&
+        xh_config_set(&c, "ram", "lots") != 0 && xh_config_set(&c, "ram-host-floor", "x") != 0 && xh_config_set(&c, "host-mem-log", "-1") != 0);
+  char *ram7[] = { "xnuhost", "--image", image, "--ram", "65G" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 5, ram7) == 0 && xh_config_finish(&c) == -1);
+  // The image set's xnuhost.conf: its ram= and ram-percent= apply when the command line has none; --ram auto wins over it.
+  f = fopen(path, "w");
+  fprintf(f, "boot-args=-v debug=0x8\nram=3G\nram-percent=80\n%s\n", set_meminfo);
+  fclose(f);
+  char *ram8[] = { "xnuhost", "--image", image };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 3, ram8) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 3 * G && c.ram_percent == 80);
+  char *ram9[] = { "xnuhost", "--image", image, "--ram", "auto" };
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 5, ram9) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 8960 * M && c.ram_auto_total == phone);   // 80% of 11.2 GiB
+  f = fopen(path, "w");
+  fputs("# settings of this image\nboot-args=-v debug=0x8\n", f);
+  fclose(f);
   char *argv3[] = { "xnuhost", "--image", image, "--mode", "bench", "--bluetooth", "hidl" };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 7, argv3) == 0 && xh_config_finish(&c) == 0 && c.bridges == 0 && !strcmp(c.bluetooth, "hidl"));

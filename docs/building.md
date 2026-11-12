@@ -286,6 +286,9 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
 ```
 
 - `-cpu cortex-a710`, never qemu's default `max`: its 512-byte `DC ZVA` breaks XNU's `bzero`.
+- `--ram 4G`: without it xnuhost takes `ram=auto` (90% of the PC's MemTotal or all but 1.5 GiB: 13.75 GiB
+  of this 15 GiB box, which leaves too little for qemu and the build). `--ram 9728M` is the phone's size
+  ([booter.md](booter.md) 1).
 - `oneios-data-wait=3000`: under qemu the first boot spends minutes re-deriving the shared cache's 4 KiB code
   hashes (emulated SHA); the committed default (300 s) is for the phone.
 - `hosted_mapcheck=1` (boot argument, debugging only): the kernel records every page it maps into and unmaps
