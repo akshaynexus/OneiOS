@@ -44,6 +44,7 @@
  */
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
+#include <libkern/c++/OSBoolean.h>
 #include <libkern/c++/OSCollectionIterator.h>
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSDictionary.h>
@@ -56,6 +57,7 @@
 #include <pexpert/pexpert.h>
 
 #include "oneios_bridge.h"
+#include "oneios_bl_request.h"
 
 extern "C" void proc_selfname(char *buf, int size);
 
@@ -82,7 +84,36 @@ private:
 	void publish(uint32_t value, uint32_t nits16);
 	bool calibration();
 	void logRequest(OSDictionary *d, uint32_t level, uint32_t ms, bool linear);
+	int32_t displayBrightness(OSObject *value, uint32_t *fadeMs, char *raw, size_t rawSize);
 };
+
+/* What an OSObject holds, for the log (DisplayBrightness): its type and its value as the kernel received it. */
+static size_t
+obl_describe(OSObject *o, char *out, size_t size)
+{
+	OSNumber *n = OSDynamicCast(OSNumber, o);
+	OSData *data = OSDynamicCast(OSData, o);
+	OSString *str = OSDynamicCast(OSString, o);
+	OSBoolean *yes = OSDynamicCast(OSBoolean, o);
+	if (n != NULL) {
+		return (size_t)scnprintf(out, size, "number 0x%llx (%u bits)", n->unsigned64BitValue(), n->numberOfBits());
+	}
+	if (data != NULL) {
+		const uint8_t *b = (const uint8_t *)data->getBytesNoCopy();
+		size_t used = (size_t)scnprintf(out, size, "data of %u bytes:", data->getLength());
+		for (unsigned i = 0; b != NULL && i < data->getLength() && i < 16; i++) {
+			used += (size_t)scnprintf(out + used, size - used, " %02x", b[i]);
+		}
+		return used;
+	}
+	if (str != NULL) {
+		return (size_t)scnprintf(out, size, "string \"%.40s\"", str->getCStringNoCopy());
+	}
+	if (yes != NULL) {
+		return (size_t)scnprintf(out, size, "%s", yes->isTrue() ? "true" : "false");
+	}
+	return (size_t)scnprintf(out, size, "%s", o != NULL ? o->getMetaClass()->getClassName() : "nothing");
+}
 
 OSDefineMetaClassAndStructors(OneiOSBacklight, IOService);
 
@@ -266,6 +297,52 @@ OneiOSBacklight::logRequest(OSDictionary *d, uint32_t level, uint32_t ms, bool l
 	}
 }
 
+/*
+ * DisplayBrightness (iOS 27's CoreBrightness, README.md "DisplayBrightness"): the slider's position 0..1 as a number, or a
+ * dictionary { Brightness = 0..1, Commit, Period = seconds }. Returns the position as a fraction 0..65535 of the slider,
+ * or OBL_AMBIGUOUS / OBL_NOT_A_NUMBER; *fadeMs is set from Period when the dictionary has a usable one. `raw` gets what
+ * was received, for the log.
+ */
+int32_t
+OneiOSBacklight::displayBrightness(OSObject *value, uint32_t *fadeMs, char *raw, size_t rawSize)
+{
+	OSDictionary *dict = OSDynamicCast(OSDictionary, value);
+	OSObject *position = value;
+	size_t used = 0;
+	if (dict != NULL) {
+		position = dict->getObject("Brightness");
+		OSNumber *period = OSDynamicCast(OSNumber, dict->getObject("Period"));
+		used += (size_t)scnprintf(raw + used, rawSize - used, "dictionary: Brightness ");
+		used += obl_describe(position, raw + used, rawSize - used);
+		if (period != NULL) {
+			int32_t ms = obl_period_ms(period->unsigned64BitValue(), period->numberOfBits());
+			used += (size_t)scnprintf(raw + used, rawSize - used, ", Period 0x%llx (%d ms)", period->unsigned64BitValue(), ms);
+			if (ms >= 0) {
+				*fadeMs = (uint32_t)ms;
+			}
+		}
+		OSBoolean *commit = OSDynamicCast(OSBoolean, dict->getObject("Commit"));
+		if (commit != NULL) {
+			(void)scnprintf(raw + used, rawSize - used, ", Commit %s", commit->isTrue() ? "true" : "false");
+		}
+	} else {
+		(void)obl_describe(value, raw, rawSize);
+	}
+	OSNumber *n = OSDynamicCast(OSNumber, position);
+	OSData *data = OSDynamicCast(OSData, position);
+	OSString *str = OSDynamicCast(OSString, position);
+	if (n != NULL) {
+		return obl_number_fraction(n->unsigned64BitValue(), n->numberOfBits());
+	}
+	if (data != NULL && data->getBytesNoCopy() != NULL) {
+		return obl_data_fraction((const uint8_t *)data->getBytesNoCopy(), data->getLength());
+	}
+	if (str != NULL) {
+		return obl_string_fraction(str->getCStringNoCopy());
+	}
+	return OBL_NOT_A_NUMBER;
+}
+
 IOReturn
 OneiOSBacklight::setProperties(OSObject *properties)
 {
@@ -305,6 +382,27 @@ OneiOSBacklight::setProperties(OSObject *properties)
 			value++;
 		}
 		publish((uint32_t)value, (uint32_t)n16);
+		return kIOReturnSuccess;
+	}
+	OSObject *db = d != NULL ? d->getObject("DisplayBrightness") : NULL;
+	if (db != NULL) {
+		char raw[160];
+		raw[0] = 0;
+		int32_t fraction = displayBrightness(db, &set.fade_ms, raw, sizeof(raw));
+		if (fraction >= 0) {
+			/* The slider's position: as `brightness` (of the slider; the host's curve squares it). */
+			set.level = (uint32_t)fraction * OBL_FULL / OBL_FRACTION_FULL;
+			set.flags = 0;
+			logRequest(d, set.level, set.fade_ms, false);
+			IOLog("ONEIOS BACKLIGHT: DisplayBrightness %s -> slider %u of 65535\n", raw, (unsigned)fraction);
+			(void)oneios_bridge_send(OB_CH_BRIGHTNESS, OB_BRIGHT_SET, &set, sizeof(set));
+			uint32_t value = (uint32_t)(((uint64_t)fraction * OBL_VALUE_MAX + OBL_FRACTION_FULL / 2) / OBL_FRACTION_FULL);
+			publish(value, nits16For(value));
+			return kIOReturnSuccess;
+		}
+		logRequest(d, OBL_FULL + 1, 0, false);
+		IOLog("ONEIOS BACKLIGHT: DisplayBrightness %s: %s, nothing sent\n", raw,
+		    fraction == OBL_AMBIGUOUS ? "the integer 0 or 1 (a float that lost its fraction on the way?)" : "not a position 0..1");
 		return kIOReturnSuccess;
 	}
 	logRequest(d, OBL_FULL + 1, 0, false);

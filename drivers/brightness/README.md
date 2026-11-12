@@ -11,6 +11,7 @@ Marks: [V] read in a file here, [I] inference, [U] unknown. The service has run 
 |---|---|---|
 | `OneiOSBacklight.cpp` | the backlight service CoreBrightness drives; the host's light readings (`oneios_als_read`, `oneios_als_listen`) | built into `liboneiosdrivers.a` |
 | `oneios_als_hid.h` | the light sensor's HID report descriptor and report | host test (`test_als_hid.c`, run by `drivers/tests/host.sh`) |
+| `oneios_bl_request.h` | what a `DisplayBrightness` request holds, decoded with integers (the kernel has no floating point) | host test (`test_bl_request.c`, 2028 checks, run by `drivers/tests/host.sh`) |
 | `BacklightMode.inc` | backboardd only: CoreBrightness's BLControl in place of VMBLControl (below, "Why the slider did nothing") | user space, appended to the Metal plug-in by `userland/metal/build.sh stage`; not in `liboneiosdrivers.a` |
 | `OneiOSALSDevice.cpp` | the HID device that carries the readings to the original `AppleUSBALSService` | built into the hosted kernel's HID archive (`kernel/patches/oneios-hosted/hid`, against its `OriginalHidDeviceABI.h`), not into `liboneiosdrivers.a` |
 
@@ -167,6 +168,42 @@ each slider step: `ONEIOS BACKLIGHT: request N from backboardd {brightness-nits}
 fade 0 ms` (or `{brightness, FadePeriod}` with `(of the slider)`); in xnuhost's log the bridge's `brightness:` lines
 with the panel's new value. If the plug-in's line is missing, the plug-in did not load in backboardd (`docs/gpu.md`).
 If it is there and no request comes, look for `native-sandbox-grant: backboardd not in ...` in the kernel's log.
+
+## DisplayBrightness (15:35 session, 2026-11-12; read in 24A446's CoreBrightness on the Linux PC)
+
+In the 15:35 session the service got requests whose only key was `DisplayBrightness`, and the driver said `no brightness
+in it, nothing sent`. What the key holds, read with `ipsw dyld disass` in the 24A446 shared cache (the SystemOS
+cryptex `043-70037-715.dmg`; addresses are the cache's) [V]:
+
+- `__DisplaySetProperty_block_invoke` (0x22a9eeac8): for the key `DisplayBrightness` (`CFEqual`, 0x22a9eeaec), a
+  **CFNumber** is read with `CFNumberGetValue(..., kCFNumberFloatType)` (`mov w1, #0xc`, 0x22a9eeb20) and used as
+  the **slider's position 0..1**: multiplied by the slider table's points - 1 and interpolated in it (0x22a9eebbc-
+  0x22a9eebf8). A value that is not a number goes to 0x22a9eed40: a **CFDictionary** with `Brightness` (a number:
+  `CFNumberIsFloatType`, then Float32 or converted to float), `Commit` (a bool) and `Period` (a number, seconds),
+  which feed `__DisplaySetLogicalBrightnessWithFade` and `__DisplayReportCommit`. (UniXNU's port notes for another
+  board say the same: "scalar DisplayBrightness consumed by CBSliderCommitTelemetry as dictionary".)
+- `-[CBDisplayModuleHIDiOS setNits:withPeriod:]` (0x22aac5e20) posts `DisplayBrightness` as a notification and sets
+  the panel through an `IOHIDTransaction` (`IOHIDTransactionCommit` in its block): that module drives a HID display,
+  not this service.
+
+Not known [U]: how IOKit's serialization gives the kernel a CFNumber of a float type: its IEEE 754 bits, or the
+integer the value truncates to (then every position below the top arrives as 0). So the driver
+(`OneiOSBacklight::displayBrightness`, `oneios_bl_request.h`) takes a `DisplayBrightness` number, data or text as the
+slider's position only when it is unambiguous: a number whose bits are a float or double between 2^-27 and 1, 4 or 8
+bytes of data holding one, a decimal text, or the dictionary's `Brightness` in any of these forms with `Period` as the
+fade. It is sent as `brightness` is, a level of the slider (`(of the slider)`; the host's curve squares it). The
+integers 0 and 1 are not used (0 would put the panel at its floor for every position below the top), nor other
+integers. Every such request is logged with what was received:
+
+```
+ONEIOS BACKLIGHT: DisplayBrightness number 0x3f400000 (32 bits) -> slider 49151 of 65535
+ONEIOS BACKLIGHT: DisplayBrightness dictionary: Brightness number 0x3f000000 (32 bits), Period 0x3e800000 (250 ms), Commit true -> slider 32768 of 65535
+ONEIOS BACKLIGHT: DisplayBrightness number 0x0 (32 bits): the integer 0 or 1 (a float that lost its fraction on the way?), nothing sent
+```
+
+The third form means the float did not survive the serialization: the fix is then in backboardd (`BacklightMode.inc`:
+send `brightness-nits` from the same request) [I]. Written and host-tested on the Linux PC (the decoder); the driver's
+compile check needs a kernel build's records (`drivers/build.py --check`, the Mac); not run on the phone.
 
 ## Only a session can show
 

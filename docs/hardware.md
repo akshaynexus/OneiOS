@@ -1065,6 +1065,10 @@ Details and the phone test: `runtime/bridges/brightness/README.md`, `drivers/bri
   `{brightness, FadePeriod}` and `brightness-nits` and sends `OB_BRIGHT_SET` on the bridge channel. Since
   2026-11-12 also iOS 27's keys (from UniXNU-sheng's working iPadOS 27 service): `IODisplayParameters.BrightnessMilliNits`,
   `LmaxProduct`/`LmidProduct`/`LminProduct`, `NativeSandboxGrantProcess = backboardd`; `brightness-nits` signed.
+  Since the 15:35 session also `DisplayBrightness` (the slider's position 0..1, or a dictionary `{Brightness, Commit,
+  Period}`, read in 24A446's CoreBrightness): taken as the slider's level when its value is unambiguous (a float's bits,
+  data or text; not the integers 0 and 1), and logged with what it held (`drivers/brightness/README.md`,
+  "DisplayBrightness"). Host-tested decoder; not run.
 - **Why the slider did nothing** (phone, 2026-11-12): vmm-present makes MobileGestalt answer `IsVirtualDevice`, and
   24A446's CoreBrightness then runs `VMBLControl` (log: `Set VM Mode 3 BLControl`), which sends brightness to a
   Virtualization.framework host over remote XPC and never to the service. `drivers/brightness/BacklightMode.inc`,

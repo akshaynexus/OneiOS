@@ -74,7 +74,11 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
 3. **The display helper dropped after 7 frames** (dark panel while iOS drew; restarted by hand). Fixed in `2c7bbb5`
    (xnuhost keeps the socket on transient send errors and logs; the helper logs why its read ended); host tests were
    started, not read; not on the phone.
-4. **Brightness:** requests with the key `DisplayBrightness` are ignored ("no brightness in it"); check whether the
+4. **Brightness:** requests with the key `DisplayBrightness` were ignored ("no brightness in it"). **Handled (built,
+   host-tested decoder, not on the phone, 2026-11-12):** 24A446's CoreBrightness sends the slider's position 0..1 (a
+   float) or `{Brightness, Commit, Period}`; the driver takes it when unambiguous and logs what came
+   (`drivers/brightness/README.md`, "DisplayBrightness"). If the log says `the integer 0 or 1`, the float was lost in
+   IOKit's serialization and backboardd's side must send `brightness-nits`. Then check whether the
    slider moves the panel; auto-brightness: CoreBrightness refuses the light sensor (`AppleUSBALS: couldn't find the
    device version`).
 5. **Camera:** try the Camera app; the log lines to read are in `drivers/camera/README.md` / `runtime/bridges/camera/README.md`.
