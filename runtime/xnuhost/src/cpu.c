@@ -283,7 +283,13 @@ void xh_cpu_signal(int signo, siginfo_t *info, void *context, struct xh_cpu *cpu
     return;
   }
   if (g_upcalls.exception) {
-    divert(v, uc, XH_FRAME_EXCEPTION, g_upcalls.exception, far, esr_of(uc), info);
+    // A SIGTRAP's esr_context is never its own: Linux sends every SIGTRAP (brk, single step, watchpoint) through
+    // send_user_sigtrap(), which leaves thread.fault_code alone, and fault_code is written only when a fault
+    // signal is delivered. On a vCPU thread it is the last software-TLB fill's data abort, and the kernel took a
+    // UBSan soft trap (brk #UBSAN_SOFT_TRAP_SIGNED_OF in tcp_input's compute_iaj_meat) for a data abort at pc:
+    // "Unexpected fault in kernel physical aperture" (phone, 2026-11-12 23:15). Without a syndrome the kernel
+    // reads the brk at pc (hosted_kernel_esr).
+    divert(v, uc, XH_FRAME_EXCEPTION, g_upcalls.exception, far, signo == SIGTRAP ? 0 : esr_of(uc), info);
     errno = saved_errno;
     return;
   }

@@ -276,7 +276,15 @@ The same reading goes to the guest on the bridge's channel 6 (`drivers/thermal`)
   in interrupted `futex`/`usleep` calls ends in milliseconds. An order that is not answered in 10 s, or a
   thread that does not exit, is logged with each Linux thread's state and system call from `/proc`.
 - **Faults, undefined instructions, breakpoints, FP exceptions** arrive the same way as SIGSEGV/SIGBUS,
-  SIGILL, SIGTRAP, SIGFPE, with the fault address and Linux's ESR when it gives one.
+  SIGILL, SIGTRAP, SIGFPE, with the fault address and Linux's ESR when it gives one. **A SIGTRAP never has an ESR
+  of its own:** Linux sends every SIGTRAP (brk, single step, watchpoint) through `send_user_sigtrap()`, which leaves
+  `thread.fault_code` alone, and `fault_code` is written only when a fault signal is delivered; the signal frame's
+  `esr_context` is then the thread's last fault's. xnuhost passes no ESR with a SIGTRAP, in the kernel's upcall
+  (`cpu.c`: the kernel reads the `brk` at pc, `hosted_kernel_esr`) and in a task's trap (`stub.c`: `esr` 0 and the
+  instruction in `insn`, for 0002's `hosted_trap_esr`). Before that (phone, 2026-11-12 23:15), a UBSan soft trap in
+  `tcp_input` (`compute_iaj_meat`'s `cur_iaj_dev * cur_iaj_dev`, a signed multiply of a wrapped `uint32_t`
+  difference) came with a software-TLB fill's data abort and panicked iOS: "Unexpected fault in kernel physical
+  aperture"; an app's `brk` (Swift traps, `__builtin_trap`) reached iOS as that fault too, not as `EXC_BREAKPOINT`.
 - **Running a thread.** `thread_run(thread, state, trap)` releases the thread with the given registers (the
   handler returns through `rt_sigreturn`) and blocks the vCPU until the thread traps again: the vCPU "is in
   user mode". If the vCPU's interrupt line rises meanwhile, xnuhost signals the thread and it stops with

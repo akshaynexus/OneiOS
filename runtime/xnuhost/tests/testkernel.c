@@ -332,6 +332,9 @@ static void test_tasks(void)
   check(st.tsd == 0x1234500 && st.v[3].lo == 0x1122334455667788ull, "the thread register and a vector register came back unchanged");
   check(H->task_map(C0, task, data_va, 0x4000, XH_PROT_READ | XH_PROT_WRITE, data_pa) == 0, "the kernel maps the page (pmap_enter)");
   check(H->thread_run(C0, thread, &st, &trap) == 0 && trap.kind == XH_TRAP_BRK && st.pc == code_va + 20, "the store is retried, then brk traps");
+  // the store's fault came just before on this task: Linux's SIGTRAP carries that fault's syndrome as its own
+  // (stub.c), and the kernel would have reported the brk as a data abort
+  if (trapped) check(trap.esr == 0 && trap.insn == 0xd4200020, "brk after a fault: no syndrome of that fault, and the brk instruction for the kernel");
   check(*(uint64_t *)(uintptr_t)kva(data_pa) == 7, "the task's store is visible in the kernel's view of the page (shared memory)");
   uint64_t value = 0xfeedfacecafebeefull, back = 0;
   int64_t wrote = H->task_write(C0, task, data_va + 8, &value, 8);
