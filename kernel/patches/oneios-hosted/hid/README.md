@@ -179,7 +179,7 @@ oneios-hid: touch screen: Digitizer/Touch Screen, Built-In, DisplayIntegrated pu
 oneios-hid: touch screen: 1 user client(s) on the event service: IOHIDEventServiceUserClient (pid N, backboardd)
 oneios-hid: touch screen: N HID events queued for the service's client(s), 0 dropped
 oneios-hid: touch screen: N virtio-input events, N frames, N finger sets, N HID reports (last result 0x0), N contacts begun (N at an edge); the last began at x 49.8% y 100.0%, the last lift was at x 51.2% y 41.0%; 212 sets resent for a held finger
-oneios-hid: touch latency: N frames; the transport had each a/b/c us after its scan, its HID report was with the event driver d/e/f us after it (min/avg/max)
+oneios-hid: touch latency: N frames; the transport had each a/b/c us after its scan, its HID report was with the event driver d/e/f us after it (min/avg/max); interrupts +N, sleeps +N, timer ends +N (+N guard ends found a frame), 1 device(s) on the interrupt
 ```
 
 The two positions are what Apple's event driver put in its events (read by the edge wrapper, 0 % at the left and
@@ -214,6 +214,23 @@ speed) is not bent by the delay of the path or its jitter. Each touch report's t
 The held-finger resends (`touch_still`) and a frame without a usable scan time are stamped "now". A scan time is
 used only when it is less than 1 s old and not in the future: the guest's `mach_absolute_time` is the host's
 `CNTVCT_EL0` plus `cpu_base_timebase`, which XNU changes only at a wake from system sleep (never on this board).
+
+**Measured on the phone** (2026-11-12, session from 11:32: kernel.kc 8eff915f from bd7c1fb, runtime 0.1.9-dev, the
+owner's fingers on the lock screen, 15 gestures; per gesture min / avg / max):
+
+| Step | Value |
+|---|---|
+| The IC's frame spacing (Synaptics S3916T) | 7.5-8.7 ms: 120 Hz (2 gestures had one gap of 16-18 ms) |
+| xnuhost reads the frame, after the kernel's stamp | 14-24 us / 50-124 us / 0.2-7.0 ms |
+| The guest's worker has the frame, after the scan | 0.15-0.24 ms / 1.6-3.5 ms / 16-59 ms |
+| Its HID report is with Apple's event driver, after the scan | 0.19-0.30 ms / 2.1-3.9 ms / 17-59 ms |
+| The guest's next frame after a touch-down on a still screen | none in 15 of 15 (iOS drew nothing in answer: the unlock problem, not this path's) |
+
+So the host side costs about 0.1 ms and the guest side about 2-4 ms on average, with spikes to 59 ms. The time goes
+between the virtio interrupt and the transport's worker. A minimum of 0.15 ms with an average near 2 ms looks like the
+worker's 4 ms look while fingers are down, as if the interrupt did not wake it: the interrupt counts in the line above
+(added after this session) say which. After the power key's sleep and wake at 3108-3112 the line counted no touch
+frames any more, only key frames ("2 frames without a usable scan time"); not explained yet.
 
 Tested (2026-11-12, Mac): xnuhost's `test_input_filter` passes (the filter's events, the scan time, the resync after
 `SYN_DROPPED`, the still-screen timing; 13241 checks, 0 failed, in the arm64 Linux container); the kernel with the
