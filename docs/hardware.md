@@ -742,6 +742,10 @@ yet: the audio test cycle adds it (below).
   (the status pages and both rings), without `owner-hide-vmm`. In the first session nothing started IO.
 - The second session played iOS's first sound through the whole path: the helper opened its stream (`none, sharing
   shared, mmap 0, burst 1600, buffer 3200 of 4800`), 12,720 frames (265 ms) came in 0.2 s, and the guest stopped.
+  The guest's report after it: `6 selectors (0 refused, last 1)` (StartIO and StopIO), `engine 53 periods, 9 late,
+  12720 frames played`, `virtio-snd 53 tx periods, 0 dropped, 0 errors`: audiomxd ran IO for 265 ms, and 9 of 53
+  engine periods were late by more than a period (the vCPU ran late; the engine then sends back to back), which is
+  why the frames came in a burst.
   The helper of that runtime cut 5,760 frames (2 overflows: the new track's stall against an 80 ms limit) and
   cleared the ring at the STOP: fixed after it (above), not yet run on the phone. `0 underruns`, `0 xruns`; the
   stream closed after the 15 s linger. Which sound it was and whether it was heard: not known (not my session).

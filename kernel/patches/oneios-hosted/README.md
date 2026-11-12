@@ -409,7 +409,8 @@ whose start, `oneios_audio_start` (`audio/OneiOSAudio.c`), is the last call of `
 `oneios-audio-out-uid`, `oneios-audio-in-uid`, `oneios-audio-latency`; its static initializer out of
 `__mod_init_func`, as the HID archive's: `droidvm_audio_attach` runs it in its own module load). Before it the
 hosted kernel had no audio device. Log lines, boot arguments and what was measured: `docs/hardware.md` section 6.
-Built on the Mac (`HOSTED_OUT=audio`); not yet booted.
+On the phone since `kernel.kc` `66faa3e8` (main 924a0d9, agent prelink's sessions of 2026-11-12): `ONEIOS AUDIO: on`,
+both devices published, audiomxd opens them and plays (`docs/hardware.md` section 6, "In a session").
 
 ## net/: the Wi-Fi, en0 on the phone's radio (radio, radio2, 2026-11-12)
 
