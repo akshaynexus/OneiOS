@@ -590,7 +590,7 @@ Nothing ran on the phone.
 
 ## audio/: the speaker and the microphone (audio, 2026-11-12)
 
-No numbered patch: an archive (`audio/build-oneios-audio.py`, hooked into `kernel/build-hosted.sh` like `hid/`)
+No numbered patch: an archive (`oneios-tool kernel gen audio`, hooked into `kernel/build-hosted.sh` like `hid/`)
 whose start, `oneios_audio_start` (`audio/OneiOSAudio.c`), is the last call of `oneios_drivers_start` (weak in
 `drivers/bridge/OneiOSBridge.c`). It holds UniXNU-droidvm's virtio-snd transport (`DroidVMVirtioSnd.c`, unchanged,
 `-DDROIDVM_DEVICE_DYNAMIC=1`) and its two IOAudio2Devices (`DroidVMAudio.cpp`, staged with the boot arguments

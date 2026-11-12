@@ -681,7 +681,7 @@ copy it (`/product`'s children are not copied). The kernel drops MobileGestalt's
 (`gestalt-cache-drop`), so a node published before the first answer is what it reads.
 
 What is built:
-- **The device**: the audio archive (`kernel/patches/oneios-hosted/audio/build-oneios-audio.py`) stages a third
+- **The device**: the audio archive (`oneios-tool kernel gen audio`) stages a third
   IOAudio2Device into `DroidVMAudio.cpp`: UID `Actuator`, one output stream, mono S16 at 48 kHz
   (`oneios-actuator-channels=2` for stereo), the speaker's engine (240-frame periods on the guest's clock), output
   latency one period (not the speaker's 6480 frames: the haptic synth keeps haptics in step with a device's
@@ -810,7 +810,7 @@ compatible `droidvm,virtio-snd`, 48 kHz S16, stereo out, mono in, periods of 240
 
 **Until 2026-11-12 neither was built into the hosted kernel**: iOS had no audio device at all. The five session logs
 on the phone of 2026-11-11/12 show `audio: on: helper ...` and then nothing: the guest never started a stream. Now
-they are the hosted build's audio archive, `kernel/patches/oneios-hosted/audio/build-oneios-audio.py`
+they are the hosted build's audio archive, `oneios-tool kernel gen audio`
 (`liboneiosaudio.a`, force-loaded; `oneios_drivers_start` calls `oneios_audio_start`, weak in `OneiOSBridge.c`):
 the transport unchanged (`-DDROIDVM_DEVICE_DYNAMIC=1`), `DroidVMAudio.cpp` staged with boot arguments, and
 `OneiOSAudio.c` (the start line and a report every 30 s while the counters move). Kernel log lines:
