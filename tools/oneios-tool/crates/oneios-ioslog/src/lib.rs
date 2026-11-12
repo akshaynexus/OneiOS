@@ -76,7 +76,7 @@ pub struct From {
     /// Read the image as its block 0 describes it, not as its newest checkpoint does
     #[arg(long)]
     block0: bool,
-    /// The image's reader: ours, apfs-fuse (Linux), or ours and apfs-fuse when ours finds no log
+    /// The image's reader: ours, apfs-fuse (Linux), or ours and apfs-fuse when ours cannot read the image
     #[arg(long, value_enum, default_value = "auto")]
     apfs: oneios_image::apfs::fuse::Backend,
     /// Print the decoder's warnings on stderr

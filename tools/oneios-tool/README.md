@@ -169,7 +169,8 @@ Result (Linux x86_64, 2026-11-12, Mandiant's test archives of BUILDING.md; every
 | macOS 27 (tart_goldengate; the format of iOS 27) | 4,754,401 | 2,166,781,973 | 30.8 s | 20.0 s | 19.4 s | 1,048 files, 0.9 s |
 
 The image has no `logdata.LiveData.tracev3` (only `log collect` writes one), so its entry count is lower than the
-archive's. The box ran two other agents' jobs: the times are not clean.
+archive's. Run again on all seven after the third round's changes to the reader (compressed files, attributes kept
+in streams, the apfs-fuse backend): every step the same, 140 checks. The box ran two other agents' jobs: the times are not clean.
 
 `ioslog` decodes on one thread. Decoding the tracev3 files side by side was tried (2026-11-12) and is not in
 the tool: the library's per-file function needs its oversize cache, whose module is private, its string storage is
@@ -217,7 +218,9 @@ files; which kinds besides LZBITMAP the two images hold was not counted), and th
 **The apfs-fuse backend** (Linux; optional): `--apfs own|fuse|auto` on `image apfs-ls`, `image apfs-copy` and every
 `ioslog` command. `own` is our reader, `fuse` mounts the volume read-only with `apfs-fuse -o ro,vol=N` on a new
 folder under the temporary folder and reads the files there, and `auto` (the default) takes our reader and falls
-back to apfs-fuse only when ours refuses the image or the volume (for `ioslog`: finds no log), saying so on stderr.
+back to apfs-fuse only when ours refuses the image or the volume, saying so on stderr (for `ioslog`: when ours can
+read neither the container nor any volume; a volume it reads and that holds no log is an answer, and `--block0`
+never falls back).
 The mount is always taken down again (`fusermount3 -u`, else `fusermount -u`): at the end, after an error, and on
 Ctrl-C or SIGTERM (a lazy unmount from the signal handler, then exit status 130). apfs-fuse is GPL-2.0: it is
 started as a program and never linked. With `fuse`, `--volume` is a number (or a name our reader can look up), and

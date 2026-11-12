@@ -164,15 +164,17 @@ impl Source {
             return Source::layout(Store::Folder, root, what, what.to_string());
         }
         match backend {
-            Backend::Own => Source::open_image(what, volume, block0),
+            Backend::Own => Source::open_image(what, volume, block0).map_err(|(e, _)| e),
             Backend::Fuse => Source::open_mounted(what, volume),
+            // the other reader only when ours could not read the container or any volume of it: a volume that
+            // ours reads and that holds no log (also block 0's older state, --block0) is an answer, not a refusal
             Backend::Auto => match Source::open_image(what, volume, block0) {
                 Ok(source) => Ok(source),
-                Err(e) if fuse::available() => {
-                    eprintln!("{e:#}\nour APFS reader found no log; reading through apfs-fuse instead");
+                Err((e, true)) if !block0 && fuse::available() => {
+                    eprintln!("{e:#}\nour APFS reader refused the image; reading through apfs-fuse instead");
                     Source::open_mounted(what, volume)
                 }
-                Err(e) => Err(e),
+                Err((e, _)) => Err(e),
             },
         }
     }
@@ -204,10 +206,13 @@ impl Source {
         bail!("{what}: no volume with a unified log through apfs-fuse:\n  {}", tried.join("\n  "))
     }
 
-    fn open_image(what: &str, volume: Option<&str>, block0: bool) -> Result<Source> {
-        let count = ApfsTree::volume_count(what).map_err(|e| anyhow!("{e}"))?;
+    /// The image through our reader. The error says whether the reader refused (the container or every volume
+    /// could not be read) or read it and found no log.
+    fn open_image(what: &str, volume: Option<&str>, block0: bool) -> std::result::Result<Source, (anyhow::Error, bool)> {
+        let count = ApfsTree::volume_count(what).map_err(|e| (anyhow!("{e}"), true))?;
         let open = |index: usize| ApfsTree::open_volume(what, index, !block0).map_err(|e| anyhow!("{e}"));
         let mut tried = Vec::new();
+        let mut read_one = false;
         for index in 0..count {
             let tree = match open(index) {
                 Ok(tree) => tree,
@@ -216,6 +221,7 @@ impl Source {
                     continue;
                 }
             };
+            read_one = true;
             let wanted = match volume {
                 None => true,
                 Some(v) => v.parse::<usize>().map(|n| n == index).unwrap_or(v == tree.name),
@@ -231,7 +237,7 @@ impl Source {
                 Err(e) => tried.push(format!("volume {index} ({name}): {e}")),
             }
         }
-        bail!("{what}: no volume with a unified log{}:\n  {}", volume.map(|v| format!(" (--volume {v})")).unwrap_or_default(), tried.join("\n  "))
+        Err((anyhow!("{what}: no volume with a unified log{}:\n  {}", volume.map(|v| format!(" (--volume {v})")).unwrap_or_default(), tried.join("\n  ")), !read_one))
     }
 
     /// Find the log folders below `root` and list the files.
