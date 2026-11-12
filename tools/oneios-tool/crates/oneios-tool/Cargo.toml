@@ -1,0 +1,15 @@
+[package]
+name = "oneios-tool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "oneios-tool"
+path = "src/main.rs"
+
+[dependencies]
+oneios-sym.workspace = true
+oneios-log.workspace = true
+oneios-image.workspace = true
+oneios-prelink.workspace = true
