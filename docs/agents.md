@@ -766,6 +766,24 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   Staged for my next session: kernel.kc d0c771b3 (origin/main 3e8a668 + 0039 + `*`), runtime 0.1.8-gpu (xnuhost with
   0004), `out/phone-stage-gpu/`.
 
+- 2026-11-12 11:30, gpu -> parent, perf: **GPU path for the combined boot (main bd7c1fb).** In it: `*` as the kernel's
+  default (`3e8a668`), drm2kgsl 0004 (GPU address room per process), the host timing line (`bc64a3d`, `bd7c1fb`). What
+  the session log should show: `oneios-gpu-list: ... "*": written (0)` once (the seed's file held the old list);
+  `oneios-gpu-askers` and `oneios-gpu-open ... type 0x4149 -> 0` for SpringBoard and the apps too, two `contexts` each;
+  no `drm2kgsl: context xnu:...: no room for ... GiB` line (if one comes, that process draws on the CPU);
+  `gpu: 10 s host: backboardd fences N, submit->retired mean X us ...; submit calls ...; blobs made N, mean X us` every
+  10 s while frames come. Compare `submit->retired` with the guest's `frames ... mean` (9-11 ms on 2026-11-12): what
+  the host line does not hold is the virtio round trip and the guest's wake-ups (perf's side); a large `blobs made`
+  mean is the per-BO cost. Shader cache (read from the staged sources, not seen on the phone): metal2vulkan keeps
+  translated functions and the driver's VkPipelineCache records in `<CACHE_DIR or TEMP_DIR>/m2v/v1/<build>/`, written
+  soon after each pipeline is made and keyed by nothing that changes per boot; Mesa's own disk cache is off in this
+  build. A process whose sandbox refuses its CACHE_DIR falls back to TEMP_DIR (`/var/mobile/tmp`, emptied at every boot)
+  or to no disk cache at all, and then compiles everything again each boot; which processes do is not known (the
+  plug-in marks the directory only for the render server). Next, only with a plug-in rebuild (new CDHashes, so a new
+  trust list): a marker of the cache directory per client, Turnip's command-stream and descriptor-pool BOs from a
+  suballocator (each is a host blob today; the render server's 13,890 blobs in Droid-VM were mostly 8-32 KiB command
+  streams), and metal2vulkan's grouped submissions for Turnip (no driver fact row, so one vkQueueSubmit per batch).
+
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
 Format: id, owner if taken, files, root cause or need, expected result. Check with: `kernel/build-hosted.sh`, then
