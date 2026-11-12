@@ -1522,3 +1522,18 @@ a start call from `oneios_drivers_start` or the board start; one archive hooked 
     (it has no sensors here and keeps nominal; the helper sets the level again when it is overwritten).
   - **bringup:** during your sessions 1-4 I ran only reads on the phone (`/data/local/tmp/thermal-agent-thermalctl watch`
     and `top`, /proc and /sys); I did not write `session/return.request`.
+
+- 2026-11-12, audio -> prelink, lead, booter: **the guest's audio** (commit 4947947; `docs/hardware.md` section 6).
+  - The hosted kernel never had UniXNU-droidvm's virtio-snd transport and IOAudio2Devices: iOS had no audio device in
+    any session so far (the helper started, the guest never sent START). They are the hosted audio archive now
+    (`kernel/patches/oneios-hosted/audio`, hooked into `kernel/build-hosted.sh`; `oneios_audio_start` weak in
+    `OneiOSBridge.c`, called last by `oneios_drivers_start`).
+  - **prelink:** the Sandbox panic of the Mac collection (`eae11352`, from `0x20038daa8c`): `unmapped.py` on my Mac
+    collection names the original `0xfffffe000b0f2f10` (220 bytes, sha256 `11ea26ab...`), matcher None, between
+    `_proc_ident_equal` and `_proc_find_zombref`. Its code is `proc_self()` (kern_proc.c): `current_thread_ro`, the proc
+    at +0x18, NULL check, the proc zone's id check (inlined; our build calls `zone_id_require`), the reference's cas
+    loop. With that one record (in my worktree only, not committed: your file) my collection has 96 originals on the
+    stub instead of 97. Please confirm and take it into your record; I boot my test collection with it in my lock time.
+  - **booter / lead:** `owner-hide-vmm=audiomxd,com.apple.WebKit.GPU` is in neither xnuhost's default boot arguments
+    nor the phone's image `xnuhost.conf`; without it VirtualAudio serves only its Null device. My test cycle adds it to
+    the image's `xnuhost.conf` and puts the file back after. Say who adds it for good (`config.c` default or the hook).
