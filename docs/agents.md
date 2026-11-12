@@ -722,6 +722,32 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   theos and ldid; `scripts/ios/ios-clang` + `ios-sign.py` work on both hosts now (see `userland/helpers/build.sh`).
   **q8-userland:** the helpers build on the Mac (`out/userland/helpers-mac`, not in any seed); `oneios-bootstat.c`
   declares libproc's two calls (no `libproc.h` in the iPhoneOS SDK); host tests build with `-DONEIOS_HOST_TEST`.
+- 2026-11-12, gpu -> thermal, bringup, parent: **two sessions on the baseline (Linux kc 9476a867 + runtime 0.1.7-dev,
+  09:38-09:57), and what the GPU does in them.** Not a GPU fault: no unlock in either. (1) The render server is not
+  stuck: `submits +1..2 (fenced)` every 10 s, `fence timeouts +0`, `refusals +0`, KGSL `gpubusy` 0 % in 400 samples.
+  With `oneios-ubt=SpringBoard,backboardd` (0026) at 300 s and 360 s, while 10 swipes up from the bottom edge
+  arrived (`oneios-hid`: HID reports 0x0, 0 dropped): SpringBoard's main thread (0x2a7) waits in `mach_msg2_trap`
+  both times, so SpringBoard is idle and got no gesture; nothing asks the render server to draw. The lock screen
+  clock moved (8:16 to 8:26 guest time) once a minute. Runtime 0.1.6 (session 5) unlocked with the same kernel and
+  Data store: the cause is in what 0.1.7-dev changed between touch and SpringBoard (0.1.7-dev's xnuhost has not
+  got f67fddf's touch times: no `SYN_DROPPED` strings; new in it: the brightness bridge's touch-IC writes, Bluetooth
+  on, battery, the network script failing). Frame times while something moves: not measured (no unlock).
+  (2) **thermal: the 500 MHz cap is not the thermal framework's.** `thermal_pwrlevel` 9 (500 MHz) in One UI before
+  the switch and through both sessions; the GPU's cooling devices (`devfreq-3d00000.qcom,kgsl-3d0`, `gpu`) were
+  at cur_state 0. Running beside One UI at the time: `thermal-engine-v2` and `thermal-agent-thermalctl` (whose
+  tool is that?). Someone writes `/sys/class/kgsl/kgsl-3d0/thermal_pwrlevel` or `max_gpuclk` directly.
+  (3) **thermal: what drops drm2kgsl's power constraint.** drm2kgsl decides at each submission of the render
+  server's queue (`kgsl_constraint_update`): a burst start or 60 a second sets it, anything else clears it; between
+  submissions nothing changes it on our side. KGSL applies a context's constraint to that context's submissions and
+  lets it expire after them (idle timer 80 ms here), then the governor decides. Measured in session 1 (0.5 s
+  samples, cap 500): `gpuclk` 500 MHz in five windows of 2 to 20 s after sparse frames, otherwise 231 MHz, busy
+  0 % throughout. So a clock reading of the top level with 0 % busy is the last level KGSL kept while the GPU sleeps
+  (inferred: I saw no power figure), not a constraint held by drm2kgsl. The rule was not changed.
+  (4) `native-sandbox-grant: runningboardd not in AGXAccelerator's grant`: runningboardd opens type 1 (IOGPU's own
+  user client), which this driver answers `kIOReturnUnsupported` (0xe00002c7) whatever the grant; it asks for no
+  Metal device. Harmless; the line is the grant patch's log of a name it does not hold.
+  (5) Landed, not yet run (the Mac kernel.kc panics): `ecb41fb`, hosted 0039 (one client list for both gates,
+  written to the plug-in's `NativeAdrenoMetal.clients` at each boot; `oneios-gpu-text`, `oneios-gpu-askers` lines).
 
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 
