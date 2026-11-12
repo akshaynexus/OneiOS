@@ -499,7 +499,8 @@ member `AGXAccelerator::superClass` keeps the parent's unslid link address (noth
 
 ## 7. The Metal plug-in (`userland/metal`)
 
-Built on the Linux PC with the iOS cross toolchain ([building.md](building.md) section 9); no Mac.
+Built with the toolchain of [building.md](building.md) section 9: Xcode's on macOS, the cross toolchain on Linux. The
+same command on both; every link is against this guest's own iOS 27 stubs (`out/ios27-tbd`).
 
 ```sh
 scripts/bg.sh metal userland/metal/build.sh      # stage, turnip, plugin, finish, addon (each also runs alone)
@@ -515,10 +516,14 @@ scripts/bg.sh metal userland/metal/build.sh      # stage, turnip, plugin, finish
 
 The steps are the kernel base's own scripts (`build-turnip-darwin.py`, `build-adreno-metal-bridge.py`,
 `build-adreno-metal-plugin.py`, `--target ios27`), run from a staged copy of its tree in `out/metal/root` with
-`userland/metal/shim/` first in `PATH`: `xcrun`, `codesign`, `strip` and `nm` are answered by `scripts/ios` and
-cctools. The staged copies differ from upstream in four lines, which `stage` prints: meson's build-machine compiler,
-ninja's job count, a longer limit for the Rust build, and no `TurnipReplay.h` (it is recorded by a Mac-only host
-simulation; the plug-in includes it only when it exists, so the prefix-replay diagnostic is absent). Also not made:
+`userland/metal/shim/` first in `PATH`: `xcrun`'s clang is `scripts/ios/ios-clang` (so the links go through `ios-ld`
+and the stubs), `codesign` is `scripts/ios/ios-sign.py`, `strip` and `nm` are the linker's siblings; on macOS every
+other `xcrun` question, and any about another SDK (rustc's `--sdk macosx` for the crates' build scripts), goes to
+Xcode's `xcrun`, and `SDKROOT` is left unset so those build scripts link for the Mac. The staged copies differ from
+upstream in the lines `stage` prints: meson's build-machine compiler, ninja's job count, a longer limit for the Rust
+build, no `TurnipReplay.h` (it is recorded by a Mac-only host simulation; the plug-in includes it only when it
+exists, so the prefix-replay diagnostic is absent), and, only when the compiler knows the warning (clang 23 on the
+Linux PC, not Xcode 27.2's clang 21), `-Wno-error=unused-but-set-global`. Also not made:
 `build/prime-list.txt` (the image's `.metallib` paths for shader priming; the plug-in primes nothing without it).
 The script's probe daemon `adrenoprobed` is built beside the bundle (`out/metal/root/build/adreno-metal-plugin27/`)
 and not placed.
@@ -574,6 +579,21 @@ has it on the iPad; it only reads inside QuartzCore's image.
 both binaries (every library has a stub of 24A446 and every bound import is exported by it; Turnip's 5633 weak
 entrypoints are bound to itself); the image hook places the bundle and `owner-trust.json` lists both CDHashes
 (sizes and hashes: `out/userland/NativeAdrenoMetal.build.json`).
+**Built on the Mac** (2026-11-12, Xcode 27.2: SDK 27.2, Apple clang 21.0.0, ld-27106.1; Rust 1.98.0; stubs of
+cache `77BC8C63`, 4723 stubs): `scripts/bg.sh metal userland/metal/build.sh`, 6 minutes 12 seconds with the Rust crates
+already fetched (Turnip about 4 minutes, the bridge and the plug-in about 2). `macho-check.py` passes for both binaries
+(259 of Turnip's 5892 imports bound to 24A446 stubs, 5633 weak ones bound to itself).
+
+| File | Linux PC (2026-11-11, SDK 26.5, clang 23, ld64-956.6) | Mac (2026-11-12, SDK 27.2, Apple clang 21, Xcode's ld) |
+|---|---|---|
+| `NativeAdrenoMetal` | 19,091,344 bytes, CDHash `18535d2ab99e64fc2afa989e5000fc02c9e46f61` | 18,894,416 bytes, CDHash `efcefba302d65696438ff061c0a2c298aab86bff` |
+| `libvulkan_freedreno.dylib` | 16,738,288 bytes, CDHash `23299678fa1606669218773f458e53c2583f3bc4` | 16,871,920 bytes, CDHash `2899d180e9da5beea0aa7220a12c4f2af39064d9` |
+
+They differ because the compilers, the linkers and the SDK headers differ (the sources and the stubs are the same).
+A set built from either lists its own two CDHashes in `owner-trust.json`; the plug-in of one set does not run
+under the other's trust list. `ios-sign.py` is not a cause: it writes what Apple's codesign writes (Turnip's dylib
+re-signed by both: the same bytes).
+
 **Not verified:** anything at run time. No guest has loaded the bundle: until `0031-gpu-addon-mount.patch` no kernel
 showed it to iOS (section 5.1), and that patch has compiled but not run. Whether dyld and AMFI of this guest accept the binaries, whether the
 writes above have the effect they have on the iPad, and whether MetalCheck passes are all open.

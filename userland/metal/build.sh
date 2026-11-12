@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the Metal plug-in, NativeAdrenoMetal.bundle, for iOS 27 arm64e on Linux (no Mac), for this guest's shared cache.
+# Build the Metal plug-in, NativeAdrenoMetal.bundle, for iOS 27 arm64e on macOS (Xcode) or Linux, for this guest's shared cache.
 #
 #   scripts/bg.sh metal userland/metal/build.sh            everything (about 25 minutes the first time)
 #   userland/metal/build.sh stage|turnip|plugin|finish|addon   one step
@@ -17,7 +17,9 @@
 #
 # How: the kernel base's own build scripts (Droid-VM-UniXNU scripts/build-turnip-darwin.py, build-adreno-metal-bridge.py,
 # build-adreno-metal-plugin.py, --target ios27) run from a staged copy of its tree (out/metal/root), with this folder's
-# shim/ in front of PATH: xcrun, codesign, strip and nm answered by scripts/ios (ios-clang, ios-sign.py) and cctools.
+# shim/ in front of PATH: xcrun's clang is scripts/ios/ios-clang (so every link is against the guest's stubs), codesign
+# is scripts/ios/ios-sign.py (byte for byte Apple's codesign for a thin file; no bundle seal), strip and nm the linker's
+# siblings. On macOS ios-clang is Xcode's clang and ld, and xcrun's other answers are Xcode's; on Linux the cross toolchain.
 # The staged copies differ from upstream in the few lines `stage` prints. Before the compile, the plug-in's shared
 # cache addresses are replaced with this guest's (hooks/<product>-<build>.json); `finish` then marks the bundle with
 # `oneios-target`, which is what lets userland/roottweak place it.
@@ -26,6 +28,8 @@
 # NativeMobileDisplay, AdrenoPM4, metal2vulkan, mesa-droidvm, Droid-VM-UniXNU); meson, ninja, glslang, glslc, spirv-val, bison, flex, llvm-as,
 # llvm-objcopy, llvm-ar, python3 with mako and yaml; rustup with 1.98.0 and its rust-src
 # (rustup toolchain install 1.98.0 && rustup +1.98.0 component add rust-src).
+# macOS: brew install ninja glslang shaderc spirv-tools bison llvm (LLVM's tools are found in `brew --prefix llvm`/bin,
+# Homebrew's bison is put before /usr/bin's 2.3); uv pip install --python "$(command -v python3)" meson mako pyyaml.
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 HERE=$ROOT/userland/metal
@@ -37,11 +41,19 @@ R=$W/root
 EXT=$ROOT/external
 BASE=$EXT/Droid-VM-UniXNU
 OUT=${METAL_OUT:-$ROOT/out/userland}
-JOBS=${JOBS:-$(nproc)}
+JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN)}
 export PATH="$HERE/shim:$PATH"
-# cc-rs (the Rust crates' C and assembly) and rustc's own probes: the same compiler and SDK.
-export SDKROOT=$IOS_SDK CC_arm64e_apple_ios=$IOS_DIR/ios-clang CXX_arm64e_apple_ios=$IOS_DIR/ios-clang++
-export AR_arm64e_apple_ios=llvm-ar CARGO_TARGET_ARM64E_APPLE_IOS_LINKER=$IOS_DIR/ios-clang
+AR=llvm-ar
+if [ "$IOS_HOST" = Darwin ]; then
+  # Homebrew's LLVM is keg-only: its llvm-ar here, its llvm-as and llvm-objcopy found by the base's scripts themselves
+  LLVM_BIN=${LLVM_BIN:-$(brew --prefix llvm 2>/dev/null || echo /opt/homebrew/opt/llvm)/bin}
+  if [ -x "$LLVM_BIN/llvm-ar" ]; then AR=$LLVM_BIN/llvm-ar; else AR=$(/usr/bin/xcrun --sdk iphoneos --find ar); fi
+fi
+# cc-rs (the Rust crates' C and assembly) and rustc's own probes: the same compiler and SDK. On macOS SDKROOT stays
+# unset: the crates' build scripts are linked for the Mac with its SDK, and rustc asks xcrun (the shim) for iOS's.
+[ "$IOS_HOST" = Darwin ] || export SDKROOT=$IOS_SDK
+export CC_arm64e_apple_ios=$IOS_DIR/ios-clang CXX_arm64e_apple_ios=$IOS_DIR/ios-clang++
+export AR_arm64e_apple_ios=$AR CARGO_TARGET_ARM64E_APPLE_IOS_LINKER=$IOS_DIR/ios-clang
 
 say() { echo "metal: $*"; }
 
@@ -58,6 +70,10 @@ stage() {
   rsync -a --delete --exclude .git "$EXT/NativeMobileDisplay/" "$R/drivers/GopFramebuffer/"
   rsync -a --delete --exclude .git "$EXT/AdrenoPM4/" "$R/kits/AdrenoPM4/"
   ln -sf "$(command -v meson)" "$R/.cache/mesa-venv/bin/meson"
+  # macOS's own bison is 2.3: Homebrew's goes first (the base's scripts put .cache/mesa-tools/bin first in PATH)
+  if [ "$IOS_HOST" = Darwin ] && [ -x "$(brew --prefix bison 2>/dev/null)/bin/bison" ]; then
+    ln -sf "$(brew --prefix bison)/bin/bison" "$R/.cache/mesa-tools/bin/bison"
+  fi
   if [ ! -d "$R/.cache/mesa-work/.git" ]; then
     git clone -q "$EXT/mesa-droidvm" "$R/.cache/mesa-work"
     python3 - "$R" <<'EOF'
@@ -70,10 +86,14 @@ EOF
   fi
   [ -d "$R/.cache/gpu-reference/metal2vulkan/.git" ] || git clone -q "$EXT/metal2vulkan" "$R/.cache/gpu-reference/metal2vulkan"
   # The staged scripts and sources: what differs from upstream, each said.
-  python3 - "$R" "$HOOKS" "$JOBS" <<'EOF'
+  # clang 23's -Wunused-but-set-global: Xcode 27.2's clang 21 does not know it (and -Werror makes an unknown
+  # warning option an error), so the plug-in script is told about it only when the compiler knows it
+  local knows=0
+  echo 'int x;' | "$IOS_DIR/ios-clang" -Werror -Wno-error=unused-but-set-global -x c -c - -o /dev/null 2>/dev/null && knows=1
+  python3 - "$R" "$HOOKS" "$JOBS" "$knows" <<'EOF'
 import json, re, sys
 from pathlib import Path
-root, hooks, jobs = Path(sys.argv[1]), json.load(open(sys.argv[2])), sys.argv[3]
+root, hooks, jobs, knows = Path(sys.argv[1]), json.load(open(sys.argv[2])), sys.argv[3], sys.argv[4] == '1'
 
 def edit(path, pairs):
     text = (root / path).read_text()
@@ -96,9 +116,10 @@ edit('scripts/build-adreno-metal-bridge.py', [
 edit('scripts/build-adreno-metal-plugin.py', [
     ("subprocess.run(['python3', ROOT / 'scripts/gen-turnip-replay.py'], check=True)\n", '',
      "no TurnipReplay.h: it is recorded on a Mac's host simulation, and NativeAdrenoUserTest.h includes it only when it exists"),
+] + ([
     ("'-Wall', '-Wextra', '-Werror',", "'-Wall', '-Wextra', '-Werror', '-Wno-error=unused-but-set-global',",
      "clang 23's -Wunused-but-set-global (gZeroRest), which Xcode's clang does not have, is not an error"),
-])
+] if knows else []))
 # The frontend at b0d6a07 has the caller-by-framework answer of supportsFamily: for RenderBox and WebGPU; the base's
 # plug-in script inserts its own, newer one (ANGLE too) before installAnswers and the two collide. The frontend's
 # goes, the script's is inserted.
@@ -171,7 +192,8 @@ json.dump({
     'sdk': {'path': env['IOS_SDK'], 'version': env['IOS_SDK_VERSION']},
     'stubs': json.load(open(tbd)) if os.path.exists(tbd) else None,
     'deployment_target': env['IOS_MIN'], 'clang': subprocess.run([env['IOS_CLANG'], '--version'], capture_output=True, text=True).stdout.splitlines()[0],
-    'ld64': env['IOS_LD_VERSION'],
+    'ld64': env['IOS_LD_VERSION'] or None,
+    'linker': (subprocess.run([env['IOS_LD'], '-v'], capture_output=True, text=True).stderr.splitlines() or [''])[0].strip(),
     'rustc': subprocess.run(['rustc', '+1.98.0', '--version'], capture_output=True, text=True).stdout.strip(),
     'sources': {name: head(os.path.join(root, 'external', name)) for name in
                 ('NativeMetal', 'metal2vulkan', 'mesa-droidvm', 'Droid-VM-UniXNU', 'NativeAdreno', 'AdrenoPM4')},

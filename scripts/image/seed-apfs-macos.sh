@@ -6,8 +6,8 @@
 #
 # build.sh --seed apfs calls it. The volume is case-sensitive with expanded records (newfs_apfs -e -x), as an
 # iOS 27 device's Data volume is and as UniXNU makes its seed (UniXNU-droidvm build-droidvm-data-seed.py),
-# and has the UUID the profile pins. WRITTEN FROM THOSE SCRIPTS, NOT RUN: there is no Mac on this project's
-# build machine. Size: SEED_MIB (default: the tar's size plus a half, at least 256).
+# and has the UUID the profile pins. WRITTEN FROM THOSE SCRIPTS, NOT RUN: the Mac session of 2026-11-12 had no sudo
+# (the default tar seed needs none). Size: SEED_MIB (default: the tar's size plus a half, at least 256).
 set -euo pipefail
 die() { echo "seed-apfs: $*" >&2; exit 1; }
 [ "$(uname -s)" = Darwin ] || die "needs macOS (newfs_apfs); on Linux build with --seed tar"

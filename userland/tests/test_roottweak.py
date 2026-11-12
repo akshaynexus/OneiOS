@@ -607,6 +607,7 @@ class ReadWrite(Case):
 class Trees(unittest.TestCase):
     def test_links_are_followed_inside_the_tree_only(self):
         with tempfile.TemporaryDirectory() as top:
+            top = os.path.realpath(top)        # macOS: the temporary folder is under /var, a link to /private/var
             outside = os.path.join(top, 'outside')
             tree_top = os.path.join(top, 'tree')
             os.makedirs(os.path.join(tree_top, 'private/var'))

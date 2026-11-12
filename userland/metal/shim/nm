@@ -1,2 +1,4 @@
 #!/bin/sh
+# nm for the kernel base's build scripts: Xcode's on macOS, LLVM's on Linux.
+[ "$IOS_HOST" = Darwin ] && exec /usr/bin/xcrun nm "$@"
 exec llvm-nm "$@"

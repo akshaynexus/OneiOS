@@ -14,11 +14,12 @@ For each FILE:
 4. It is signed, with 4 KiB signature pages (scripts/ios/ios-sign.py).
 
 Prints a report per file and exits 0 only when every check of every file passes. Needs llvm-nm, llvm-objdump
-and PyYAML. From macos_helios300's macho-check.py (the same check for macOS x86_64).
+(on macOS Xcode's, through xcrun) and PyYAML. From macos_helios300's macho-check.py (the same check for macOS x86_64).
 """
 import argparse
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -38,6 +39,8 @@ TbdLoader.add_multi_constructor('!', lambda l, s, n: l.construct_mapping(n, deep
 
 
 def run(*a):
+    if sys.platform == 'darwin' and not shutil.which(a[0]):      # Xcode has llvm-nm and llvm-objdump, off the PATH
+        a = ('xcrun', *a)
     return subprocess.run(a, check=True, capture_output=True, text=True).stdout
 
 

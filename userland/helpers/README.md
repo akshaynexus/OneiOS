@@ -1,8 +1,9 @@
 # Guest helpers
 
-Small programs of ours that run inside the iOS guest. Source only; built by `build.sh` with an iOS SDK
-(Xcode on macOS, or stock clang with theos' ld64, ldid and SDK on Linux: the toolchain of iOSPlus10's
-`userland/ssh/build.sh`). The Linux build has not been run: this machine has no iOS SDK.
+Small programs of ours that run inside the iOS guest. Source only; built by `build.sh` with the toolchain of
+`scripts/ios` (docs/building.md section 9): Xcode's clang, ld and iPhoneOS SDK on macOS, the cross toolchain on
+Linux, linked against the guest's iOS 27 stubs and signed by `scripts/ios/ios-sign.py`. Built on the Mac
+(Xcode 27.2) on 2026-11-12; not built on Linux since the theos branch went.
 
 | File | What | Host test |
 |---|---|---|

@@ -232,7 +232,7 @@ static int open_log(const char *name) {
   return open(file, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0640);
 }
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(ONEIOS_HOST_TEST)
 static int have_bootstrap(void) {
   mach_port_t port = MACH_PORT_NULL;
   if (task_get_special_port(mach_task_self(), TASK_BOOTSTRAP_PORT, &port) != KERN_SUCCESS) return 0;

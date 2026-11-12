@@ -709,6 +709,19 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   `scripts/laurel/ios26-root-spec.py` `wallpaper()` (Autobahn flags off, `{Lock,Home}Background.cpbitmap`).
   Tests: the hook's on a fake root; no Apple file in git. Docs: `docs/userland.md` (the line that says the wallpaper
   mounts must go).
+- 2026-11-12, mac-image -> lead, kernel, fable-camera, q8-userland: **fetch, image set and iOS user space build on
+  the Mac** (no sudo, no xtool). Same commands as on Linux (`docs/building.md` sections 1 and 9). The Mac's image set
+  `out/image/24A446` (with `out/kernel/24A446/kernel.kc` `d01f7674...` of 07:42) has the phone's `os.img`,
+  `systemos.img`, `app.img` and trust files byte for byte; its `data.seed` matches the phone's in all 20,847 entries
+  but the two plug-in binaries, which the Mac builds differently (`NativeAdrenoMetal` `efcefba3...`,
+  `libvulkan_freedreno.dylib` `2899d180...`; `docs/gpu.md` section 7). So the phone needs no new image: a new
+  `kernel.kc` alone as before, or seed + `overlay/userland/{owner-trust,tweaks.manifest}.json` + `manifest.json`
+  together to run the Mac's plug-in (a new seed starts the Data store over). **kernel:** `scripts/ios` now uses
+  Xcode's clang and ld on Darwin; `ios-sign.py` is byte for byte Apple's codesign (its room changed: Linux-built
+  CDHashes change on the next Linux build). **fable-camera:** `userland/camera/build.sh`'s Linux branch still wants
+  theos and ldid; `scripts/ios/ios-clang` + `ios-sign.py` work on both hosts now (see `userland/helpers/build.sh`).
+  **q8-userland:** the helpers build on the Mac (`out/userland/helpers-mac`, not in any seed); `oneios-bootstat.c`
+  declares libproc's two calls (no `libproc.h` in the iPhoneOS SDK); host tests build with `-DONEIOS_HOST_TEST`.
 
 ## Work queue (lead writes, the parent dispatches; one entry per independent job)
 

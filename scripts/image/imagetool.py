@@ -8,7 +8,10 @@
     imagetool.py im4p IN OUT                                the payload of an IM4P (LZFSE decoded with `lzfse`)
     imagetool.py apfs-info IMAGE                            container and volume UUIDs of a raw APFS image
     imagetool.py hashes IMAGE OUT [--chunk BYTES]           the chunk hash list of an image
-    imagetool.py tree-copy SRC DST META                     copy a tree, recording owners, modes, times, xattrs
+    imagetool.py tree-copy SRC DST META [--owners-from IMAGE --owners-path DIR]
+                                                            copy a tree, recording owners, modes, times, xattrs
+                                                            (owners from IMAGE's APFS records: macOS without root)
+    imagetool.py apfs-owners IMAGE [DIR]                    the owners, modes and xattr names in IMAGE's records
     imagetool.py seed-pack TREE META OUT --epoch N [--owners FILE]   pack the Data seed (deterministic tar)
     imagetool.py manifest PROFILE SETDIR [--inputs FILE] [--seed-info FILE] [--tweaks FILE]
     imagetool.py verify SET [--quick]                       SET: a set folder or its .tar.zst
@@ -531,6 +534,145 @@ def apfs_info(path):
             "volumes": volumes}
 
 
+class ApfsTree:
+    """The owners, modes and xattr names of a volume's files, read from the APFS records of a raw image.
+
+    For macOS without root: an image a user attaches with `hdiutil attach -owners off` shows every file as the
+    user's own, so the real owners come from here. Reads the inode, directory and xattr records of the
+    file-system tree (physical, as on a sealed volume, or virtual through the volume's object map); no file
+    data. The first volume only, unencrypted. tree_copy checks it against the mounted volume entry by entry.
+    """
+    OBJ_PHYSICAL = 0x40000000
+    TYPE_INODE, TYPE_XATTR, TYPE_DIR_REC = 3, 4, 9
+    ROOT_DIR = 2
+
+    def __init__(self, path, volume=0):
+        self.path = path
+        self.cache = {}
+        info = apfs_info(path)
+        self.base, self.block = info["container_offset"], info["block_size"]
+        self.f = open(path, "rb")
+        head = self.read(0)
+        omap = self.read(struct.unpack_from("<Q", head, 160)[0])
+        fs_oids = [o for o in struct.unpack_from("<100Q", head, 184) if o]
+        sb = self.read(self.omap_lookup(struct.unpack_from("<Q", omap, 48)[0], fs_oids[volume]))
+        if sb[32:36] != b"APSB":
+            raise Error(f"{path}: no volume superblock for volume {volume}")
+        if not struct.unpack_from("<Q", sb, 0x108)[0] & 0x1:      # apfs_fs_flags: APFS_FS_UNENCRYPTED
+            raise Error(f"{path}: volume {volume} is encrypted")
+        self.vol_omap = struct.unpack_from("<Q", self.read(struct.unpack_from("<Q", sb, 0x80)[0]), 48)[0]
+        self.physical = bool(struct.unpack_from("<I", sb, 0x74)[0] & self.OBJ_PHYSICAL)   # apfs_root_tree_type
+        root = struct.unpack_from("<Q", sb, 0x88)[0]
+        self.root = root if self.physical else self.omap_lookup(self.vol_omap, root)
+        # In the hashed tree of a sealed volume (btree_info_t's BTREE_HASHED) an index entry's child is a number
+        # relative to the root's virtual object id (seen in 24A446's images: root 1158, children 1158 + 1..122).
+        hashed = struct.unpack_from("<I", self.read(self.root), self.block - 40)[0] & 0x80
+        self.child_base = root if hashed and not self.physical else 0
+
+    def close(self):
+        self.f.close()
+
+    def read(self, paddr):
+        data = self.cache.get(paddr)
+        if data is None:
+            self.f.seek(self.base + paddr * self.block)
+            data = self.f.read(self.block)
+            if len(data) != self.block:
+                raise Error(f"{self.path}: short read at block {paddr}")
+            if len(self.cache) > 8192:
+                self.cache.clear()
+            self.cache[paddr] = data
+        return data
+
+    def _node(self, paddr):
+        data = self.read(paddr)
+        flags, level, nkeys = struct.unpack_from("<HHI", data, 32)
+        toc_off, toc_len = struct.unpack_from("<HH", data, 40)
+        return data, flags, level, nkeys, 56 + toc_off, 56 + toc_off + toc_len, self.block - (40 if flags & 1 else 0)
+
+    def omap_lookup(self, paddr, oid):
+        """The block of the newest mapping of oid in the object map tree rooted at paddr."""
+        data, flags, level, nkeys, toc, keys, vals = self._node(paddr)
+        best = None
+        for i in range(nkeys):
+            k, v = struct.unpack_from("<HH", data, toc + 4 * i)
+            key_oid, key_xid = struct.unpack_from("<QQ", data, keys + k)
+            if level == 0:
+                if key_oid == oid and (best is None or key_xid > best[0]):
+                    best = (key_xid, struct.unpack_from("<Q", data, vals - v + 8)[0])
+            elif key_oid <= oid:
+                best = struct.unpack_from("<Q", data, vals - v)[0]
+        if best is None:
+            raise Error(f"{self.path}: object {oid} is not in the object map")
+        return best[1] if level == 0 else self.omap_lookup(best, oid)
+
+    def records(self, oid, paddr=None):
+        """(type, key, value) of every file-system record of object oid, in key order."""
+        data, flags, level, nkeys, toc, keys, vals = self._node(self.root if paddr is None else paddr)
+        if flags & 4:
+            raise Error(f"{self.path}: a file-system tree node with fixed-size entries")
+        mask = (1 << 60) - 1
+        children = []
+        for i in range(nkeys):
+            k_off, k_len, v_off, v_len = struct.unpack_from("<HHHH", data, toc + 8 * i)
+            key = data[keys + k_off:keys + k_off + k_len]
+            hdr = struct.unpack_from("<Q", key)[0]
+            if level == 0:
+                if hdr & mask == oid:
+                    yield hdr >> 60, key, data[vals - v_off:vals - v_off + v_len]
+            else:       # the child's object id (a hashed node's value has the child's hash after it)
+                children.append((hdr & mask, struct.unpack_from("<Q", data, vals - v_off)[0]))
+        for i, (first, child) in enumerate(children):
+            if first > oid:
+                break
+            if i + 1 < len(children) and children[i + 1][0] < oid:
+                continue
+            at = child if self.physical else self.omap_lookup(self.vol_omap, self.child_base + child)
+            if struct.unpack_from("<H", self.read(at), 34)[0] != level - 1:
+                raise Error(f"{self.path}: the file-system tree's node at block {at} is not on level {level - 1}")
+            yield from self.records(oid, at)
+
+    def entry(self, oid):
+        """The inode of oid ({"u", "g", "m": the whole st_mode}), its xattr names and its directory entries."""
+        inode, xattrs, entries = None, [], []
+        for kind, key, val in self.records(oid):
+            if kind == self.TYPE_INODE:
+                uid, gid, mode = struct.unpack_from("<IIH", val, 72)
+                inode = {"u": uid, "g": gid, "m": mode}
+            elif kind == self.TYPE_XATTR:
+                n = struct.unpack_from("<H", key, 8)[0]
+                xattrs.append(key[10:10 + n].rstrip(b"\0").decode("utf-8", "surrogateescape"))
+            elif kind == self.TYPE_DIR_REC:
+                if struct.unpack_from("<I", key, 8)[0] & 0x3FF == len(key) - 12:      # j_drec_hashed_key_t
+                    name = key[12:]
+                elif struct.unpack_from("<H", key, 8)[0] == len(key) - 10:           # j_drec_key_t
+                    name = key[10:]
+                else:
+                    raise Error(f"{self.path}: a directory record of object {oid} with an unknown key layout")
+                entries.append((name.rstrip(b"\0").decode("utf-8", "surrogateescape"), struct.unpack_from("<Q", val)[0]))
+        if inode is None:
+            raise Error(f"{self.path}: object {oid} has no inode record")
+        return inode, xattrs, entries
+
+    def walk(self, subdir=""):
+        """{path relative to subdir ('.' for subdir itself): {"u", "g", "m", "x": [xattr names]}}."""
+        oid = self.ROOT_DIR
+        for part in [p for p in subdir.split("/") if p]:
+            found = dict(self.entry(oid)[2])
+            if part not in found:
+                raise Error(f"{self.path}: no /{subdir} in the volume")
+            oid = found[part]
+        out = {}
+        stack = [(".", oid)]
+        while stack:
+            rel, oid = stack.pop()
+            inode, xattrs, entries = self.entry(oid)
+            out[rel] = dict(inode, x=sorted(xattrs))
+            for name, child in entries:
+                stack.append((name if rel == "." else rel + "/" + name, child))
+        return out
+
+
 # ---------------------------------------------------------------- chunk hash list
 
 def write_hashes(image, out, chunk=DEFAULT_CHUNK):
@@ -574,8 +716,45 @@ def check_hashes(image, hashes):
 
 # ---------------------------------------------------------------- Data seed
 
+_libc = None
+
+
+def _xattrs_darwin(path):
+    """os.listxattr and os.getxattr are Linux-only in Python: on macOS, libc's own, not following a link."""
+    global _libc
+    import ctypes
+    if _libc is None:
+        _libc = ctypes.CDLL(None, use_errno=True)
+        _libc.listxattr.restype = _libc.getxattr.restype = ctypes.c_ssize_t
+        _libc.listxattr.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_int]
+        _libc.getxattr.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t,
+                                   ctypes.c_uint32, ctypes.c_int]
+    nofollow = 0x0001                        # XATTR_NOFOLLOW
+    p = os.fsencode(path)
+    size = _libc.listxattr(p, None, 0, nofollow)
+    if size <= 0:
+        return {}
+    names = ctypes.create_string_buffer(size)
+    size = _libc.listxattr(p, names, size, nofollow)
+    out = {}
+    for name in names.raw[:max(size, 0)].split(b"\0"):
+        n = _libc.getxattr(p, name, None, 0, 0, nofollow) if name else -1
+        if n < 0:
+            continue
+        value = ctypes.create_string_buffer(max(n, 1))
+        n = _libc.getxattr(p, name, value, n, 0, nofollow)
+        if n >= 0:
+            out[os.fsdecode(name)] = value.raw[:n]
+    return out
+
+
 def _xattrs(path):
     out = {}
+    if sys.platform == "darwin":
+        for name, value in _xattrs_darwin(path).items():
+            if name not in DROP_XATTRS:
+                out[name] = base64.b64encode(value).decode()
+        return out
     try:
         names = os.listxattr(path, follow_symlinks=False)
     except (OSError, AttributeError):
@@ -591,8 +770,13 @@ def _xattrs(path):
     return out
 
 
-def tree_copy(src, dst, meta_path):
-    """Copy SRC to DST as the calling user and record what a non-root copy loses: owner, mode, time, xattrs."""
+def tree_copy(src, dst, meta_path, owners_from=None, owners_path=""):
+    """Copy SRC to DST as the calling user and record what a non-root copy loses: owner, mode, time, xattrs.
+
+    owners_from: the raw APFS image SRC is mounted from, with owners ignored (macOS without root): the owners
+    are read from its records below owners_path (ApfsTree), and every entry's type, mode and xattr names must
+    agree with what the mount showed.
+    """
     if os.path.exists(dst) and os.listdir(dst):
         raise Error(f"{dst}: not empty")
     os.makedirs(dst, exist_ok=True)
@@ -628,9 +812,33 @@ def tree_copy(src, dst, meta_path):
                 skipped.append(rel)        # sockets, fifos, devices: nothing a seed carries
                 continue
             meta[rel] = item
+    if owners_from:
+        _owners_from_image(meta, skipped, owners_from, owners_path)
     with open(meta_path, "w") as f:
         json.dump({"entries": meta, "skipped": skipped}, f)
     return len(meta) - 1, skipped
+
+
+def _owners_from_image(meta, skipped, image, subdir):
+    tree = ApfsTree(image)
+    try:
+        records = tree.walk(subdir)
+    finally:
+        tree.close()
+    kinds = {"d": stat.S_IFDIR, "l": stat.S_IFLNK, "f": stat.S_IFREG}
+    for rel, item in meta.items():
+        rec = records.get(rel)
+        if rec is None:
+            raise Error(f"{image}: /{subdir}/{rel} is mounted but not in the volume's records")
+        if stat.S_IFMT(rec["m"]) != kinds[item["t"]] or stat.S_IMODE(rec["m"]) != item["m"]:
+            raise Error(f"{image}: /{subdir}/{rel}: mode {rec['m']:o} in the records, {kinds[item['t']] | item['m']:o} mounted")
+        shown = sorted(item.get("x", {}))
+        if [x for x in rec["x"] if x not in DROP_XATTRS] != shown:
+            raise Error(f"{image}: /{subdir}/{rel}: xattrs {rec['x']} in the records, {shown} mounted")
+        item["u"], item["g"] = rec["u"], rec["g"]
+    extra = sorted(set(records) - set(meta) - set(skipped))
+    if extra:
+        raise Error(f"{image}: {len(extra)} entries of /{subdir} are in the records but were not copied: {extra[:5]}")
 
 
 def read_owners(path):
@@ -1021,11 +1229,14 @@ def main(argv):
         cmd_im4p(args)
     elif cmd == "apfs-info":
         print(json.dumps(apfs_info(args[0]), indent=2))
+    elif cmd == "apfs-owners":
+        tree = ApfsTree(args[0])
+        print(json.dumps(tree.walk(args[1] if len(args) > 1 else ""), sort_keys=True))
     elif cmd == "hashes":
         size, digest = write_hashes(args[0], args[1], int(_opt(args, "--chunk", DEFAULT_CHUNK)))
         print(f"{digest}  {size}  {args[0]}")
     elif cmd == "tree-copy":
-        count, skipped = tree_copy(args[0], args[1], args[2])
+        count, skipped = tree_copy(args[0], args[1], args[2], _opt(args, "--owners-from"), _opt(args, "--owners-path", ""))
         print(f"copied {count} entries" + (f", skipped {len(skipped)} special files" if skipped else ""))
     elif cmd == "seed-pack":
         count, added, changed = seed_pack(args[0], args[1], args[2], int(_opt(args, "--epoch")), _opt(args, "--owners"))

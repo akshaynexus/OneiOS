@@ -48,6 +48,80 @@ def fake_apfs(path, name="FakeOS", vol_uuid=None, role=1, blocks=64, fill=b""):
     return str(vol_uuid).upper()
 
 
+def fake_apfs_tree(path, entries, hashed=True):
+    """An APFS image whose one volume has a file-system tree, for imagetool.ApfsTree: entries are
+    (path, st_mode, uid, gid, [xattr names]) below the root, parents before children. The tree is laid out as a sealed
+    volume's is: a virtual root index node and, when hashed, children numbered relative to the root's object id."""
+    blocks, root_oid = 16, 1100
+    image = bytearray(BLOCK * blocks)
+    image[32:36] = b"NXSB"
+    struct.pack_into("<IQ", image, 36, BLOCK, blocks)
+    struct.pack_into("<QIQ", image, 160, 1, 0, 0)
+    struct.pack_into("<I", image, 180, 1)
+    struct.pack_into("<Q", image, 184, 1026)
+
+    def fixed_leaf(block, mappings):          # an object map: (oid, paddr), fixed-size entries
+        node = block * BLOCK
+        struct.pack_into("<HHI", image, node + 32, 1 | 2 | 4, 0, len(mappings))
+        struct.pack_into("<HH", image, node + 40, 0, 4 * len(mappings))
+        keys, vals = node + 56 + 4 * len(mappings), node + BLOCK - 40
+        for i, (oid, paddr) in enumerate(mappings):
+            struct.pack_into("<HH", image, node + 56 + 4 * i, 16 * i, 16 * (i + 1))
+            struct.pack_into("<QQ", image, keys + 16 * i, oid, 1)
+            struct.pack_into("<IIQ", image, vals - 16 * (i + 1), 0, BLOCK, paddr)
+
+    struct.pack_into("<Q", image, 1 * BLOCK + 48, 2)
+    fixed_leaf(2, [(1026, 3)])
+    vol = 3 * BLOCK
+    image[vol + 32:vol + 36] = b"APSB"
+    struct.pack_into("<Q", image, vol + 56, 0x28)
+    struct.pack_into("<I", image, vol + 0x74, 2)               # root tree: virtual
+    struct.pack_into("<QQ", image, vol + 0x80, 4, root_oid)    # volume object map, root tree oid
+    struct.pack_into("<Q", image, vol + 0x108, 1)              # unencrypted
+    image[vol + 704:vol + 708] = b"Fake"
+    struct.pack_into("<Q", image, 4 * BLOCK + 48, 5)
+    child = 1 if hashed else root_oid + 1
+    fixed_leaf(5, [(root_oid, 6), (root_oid + 1, 7)])
+
+    ids = {"": 2}
+    records = [((2 << 0) | (3 << 60), struct.pack("<QQ", 1, 2) + bytes(56) + struct.pack("<IIH", 0, 0, 0o40755) + bytes(10))]
+    for n, (rel, mode, uid, gid, xattrs) in enumerate(entries):
+        oid = 16 + n
+        ids[rel] = oid
+        parent = ids[os.path.dirname(rel)]
+        name = os.path.basename(rel).encode() + b"\0"
+        records.append((parent | (9 << 60), struct.pack("<I", len(name) | 0x1234 << 10) + name,
+                        struct.pack("<QQH", oid, 0, (mode >> 12) & 0xF)))
+        records.append((oid | (3 << 60), b"", struct.pack("<QQ", parent, oid) + bytes(56) + struct.pack("<IIH", uid, gid, mode) + bytes(10)))
+        for x in xattrs:
+            xn = x.encode() + b"\0"
+            records.append((oid | (4 << 60), struct.pack("<H", len(xn)) + xn, struct.pack("<HH", 2, 1) + b"v"))
+    records[0] = (records[0][0], b"", records[0][1])
+    records.sort(key=lambda r: (r[0] & ((1 << 60) - 1), r[0] >> 60, r[1]))
+
+    def var_node(block, level, items, flags, info=None):       # (key bytes, value bytes)
+        node = block * BLOCK
+        struct.pack_into("<HHI", image, node + 32, flags, level, len(items))
+        struct.pack_into("<HH", image, node + 40, 0, 8 * len(items))
+        keys, vals = node + 56 + 8 * len(items), node + BLOCK - (40 if flags & 1 else 0)
+        k_at = v_at = 0
+        for i, (key, val) in enumerate(items):
+            v_at += len(val)
+            struct.pack_into("<HHHH", image, node + 56 + 8 * i, k_at, len(key), v_at, len(val))
+            image[keys + k_at:keys + k_at + len(key)] = key
+            image[vals - v_at:vals - v_at + len(val)] = val
+            k_at += len(key)
+        if info is not None:
+            struct.pack_into("<II", image, node + BLOCK - 40, info, BLOCK)
+
+    var_node(7, 0, [(struct.pack("<Q", h) + rest, val) for h, rest, val in records], 2 | (8 if hashed else 0))
+    first = struct.pack("<Q", records[0][0]) + records[0][1]
+    var_node(6, 1, [(first, struct.pack("<Q", child) + bytes(32 if hashed else 0))], 1 | (8 if hashed else 0),
+             0x80 if hashed else 0)
+    with open(path, "wb") as f:
+        f.write(image)
+
+
 def fake_aea(payload=b"encrypted bytes"):
     fields = [(b"com.apple.wkms.url", b"https://keys.example.invalid"),
               (b"com.apple.wkms.fcs-key-url", b"https://keys.example.invalid/fcs-keys/abc=")]

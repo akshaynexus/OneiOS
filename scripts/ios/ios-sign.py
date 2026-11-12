@@ -131,14 +131,22 @@ def sign(path, identifier, entitlements, allocate):
     with tempfile.NamedTemporaryFile(dir=os.path.dirname(os.path.abspath(path)), delete=False) as tmp:
         tmp.close()
         try:
-            subprocess.run([allocate, '-i', path, '-a', arch, str(room), '-o', tmp.name], check=True)
-            with open(tmp.name, 'rb') as f:
-                data = bytearray(f.read())
-            info = parse(data)
-            offset, size = info['signature']
-            sig, cdhash = signature(data, info, identifier, entitlements)
-            if len(sig) > size or offset + size != len(data):
-                raise ValueError(f'signature of {len(sig)} bytes for {size} bytes of room')
+            # Twice: first with room to spare, to learn the signature's length (where it starts does not depend on
+            # the room), then with the room Apple's codesign leaves: the length plus 8, rounded up to 16. The file is
+            # then byte for byte what `codesign --force --sign - --pagesize 4096 [--entitlements]` writes (compared
+            # with Xcode 27.2's codesign on 2026-11-12: 16 identifier lengths, 23 entitlement sets).
+            for _ in range(2):
+                subprocess.run([allocate, '-i', path, '-a', arch, str(room), '-o', tmp.name], check=True)
+                with open(tmp.name, 'rb') as f:
+                    data = bytearray(f.read())
+                info = parse(data)
+                offset, size = info['signature']
+                sig, cdhash = signature(data, info, identifier, entitlements)
+                if len(sig) > size or offset + size != len(data):
+                    raise ValueError(f'signature of {len(sig)} bytes for {size} bytes of room')
+                room = (len(sig) + 8 + 15) & ~15
+                if size == room:
+                    break
             data[offset:offset + size] = sig + bytes(size - len(sig))
             with open(tmp.name, 'wb') as f:
                 f.write(data)

@@ -285,20 +285,21 @@ scale (3.27 would give 440 points) is not something UIKit has. So 3 stays the de
 | `oneios-mg` | Asks MobileGestalt and compares with `identity.expect` (ProductType iPhone18,2, DeviceClass iPhone, main-screen 1440x3120 at the image's scale, subtype 2868) |
 | `oneios-seed` | First start: unpacks `data.seed` (pax tar) into the new Data volume as root, with owners, modes, links and extended attributes; marks it with the seed's SHA-256; refuses `..`, absolute paths, links out of the volume, devices and hard links |
 
-Built by `helpers/build.sh` for `arm64e-apple-ios27.0`, signed ad hoc with 4 KiB signature pages: Xcode on
-macOS, or stock clang with theos' ld64, ldid and an iPhoneOS SDK on Linux (iOSPlus10's
-`userland/ssh/build.sh` toolchain). **Not built for iOS yet.** The project's own Linux toolchain now exists
-(`scripts/ios/ios-clang`, `ios-sign.py`, `macho-check.py`; `docs/building.md` section 9) and builds arm64e with
-4 KiB signature pages and DER entitlements; `helpers/build.sh`'s Linux branch still asks for theos and ldid and
-should be moved to it. arm64e because iOS 27
+Built by `helpers/build.sh` for `arm64e-apple-ios27.0` with the toolchain of `scripts/ios` (`docs/building.md`
+section 9: Xcode's on macOS, the cross toolchain on Linux), linked against the guest's iOS 27 stubs and signed by
+`scripts/ios/ios-sign.py` with 4 KiB pages and the `no-container` entitlement (XML and DER). Built on the Mac on
+2026-11-12 (Xcode 27.2): all four pass `macho-check.py`. `oneios-bootstat` declares libproc's two calls itself (the
+iPhoneOS SDK has no `libproc.h`; 24A446's libSystem exports both). **Not in any image yet:** with helpers in the seed
+the kernel starts `oneios-init`, which changes every boot, so the Mac build went to `out/userland/helpers-mac`, which
+the hook does not read (it reads `out/userland/helpers`, or `ONEIOS_HELPERS`). arm64e because iOS 27
 kills arm64 platform binaries at exec (ownervisor `build.py`). A debug shell (dropbear) is not built here;
 `helpers/README.md` says where to take one (`external/ownervisor`, `external/applebox`, droidvm
 `ipados27/scripts/add-ownervisor-data.py`).
 
 ### 7.1 The Metal plug-in
 
-Built by `userland/metal/build.sh` on the Linux PC (`docs/gpu.md` section 7 has the pieces, the pins and what
-differs from upstream), placed by this part. The build leaves `out/userland/NativeAdrenoMetal.bundle` (`Info.plist`,
+Built by `userland/metal/build.sh` on macOS (Xcode) or Linux (`docs/gpu.md` section 7 has the pieces, the pins, what
+differs from upstream and the sizes and CDHashes of each host's build), placed by this part. The build leaves `out/userland/NativeAdrenoMetal.bundle` (`Info.plist`,
 `NativeAdrenoMetal`, `libvulkan_freedreno.dylib`, `oneios-target`) and beside it `NativeAdrenoMetal.build.json`:
 the SDK used, the source pins, each binary's size and the CDHash the build signed it with. The hook picks the
 bundle up, reads each Mach-O's CDHash from its signature into `owner-trust.json`, and compares them with the build

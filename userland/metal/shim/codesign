@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""codesign for the kernel base's build scripts on Linux, over scripts/ios/ios-sign.py. The forms they use:
+"""codesign for the kernel base's build scripts (macOS and Linux), over scripts/ios/ios-sign.py. The forms they use:
   codesign --force --sign - --pagesize 4096 --identifier ID [--entitlements PLIST] FILE|BUNDLE
   codesign --verify --strict FILE|BUNDLE
   codesign --display --verbose=4 FILE|BUNDLE          (stderr: CDHash=..., Page size=...)

@@ -14,7 +14,8 @@
 // stages, in order: bootstat-up, backboardd-up, springboard-process, springboard-up. It also writes the last
 // stage to $ONEIOS_ROOT/state/boot. After springboard-up it keeps reporting lock and screen changes.
 //
-// Guest build: iOS SDK (notify.h, libproc.h). Host build (tests): states are read from files named by the
+// Guest build: iOS SDK (notify.h; libproc's two calls, which the iPhoneOS SDK exports from libSystem but has no
+// header for). Host build (tests, -DONEIOS_HOST_TEST, on Linux or macOS): states are read from files named by the
 // notification under $ONEIOS_FAKE_NOTIFY, processes from $ONEIOS_FAKE_NOTIFY/proc.<name>.
 #include <stdarg.h>
 #include <stdint.h>
@@ -24,8 +25,13 @@
 #include <time.h>
 #include <unistd.h>
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(ONEIOS_HOST_TEST)
+#if __has_include(<libproc.h>)
 #include <libproc.h>
+#else
+int proc_listallpids(void *buffer, int buffersize);
+int proc_name(int pid, void *buffer, uint32_t buffersize);
+#endif
 #include <notify.h>
 
 static int tokens[3] = {-1, -1, -1};

@@ -204,6 +204,36 @@ class ApfsAndHashesTest(Case):
             it.apfs_info(self.write("junk.img", b"\0" * 8192 + b"koly" + b"\0" * 508))
         self.assertIn("UDIF", str(e.exception))
 
+    def test_apfs_tree(self):
+        entries = [("private", 0o40755, 0, 0, []), ("private/var", 0o40755, 0, 0, []),
+                   ("private/var/mobile", 0o40750, 501, 501, []),
+                   ("private/var/mobile/a.plist", 0o100600, 501, 501, ["com.example.tag", "com.apple.decmpfs"]),
+                   ("private/var/db", 0o40700, 0, 0, []), ("private/var/db/l", 0o120755, 0, 80, [])]
+        for hashed in (True, False):
+            image = self.path(f"tree-{hashed}.img")
+            fixtures.fake_apfs_tree(image, entries, hashed)
+            tree = it.ApfsTree(image)
+            got = tree.walk("private/var")
+            tree.close()
+            self.assertEqual(sorted(got), [".", "db", "db/l", "mobile", "mobile/a.plist"])
+            self.assertEqual(got["mobile/a.plist"], {"u": 501, "g": 501, "m": 0o100600, "x": ["com.apple.decmpfs", "com.example.tag"]})
+            self.assertEqual((got["db/l"]["g"], got["mobile"]["m"]), (80, 0o40750))
+        # what a mount with owners ignored showed: every entry the user's own; the records put the owners back
+        meta = {".": {"t": "d", "m": 0o755, "u": 99, "g": 99}, "mobile": {"t": "d", "m": 0o750, "u": 99, "g": 99},
+                "mobile/a.plist": {"t": "f", "m": 0o600, "u": 99, "g": 99, "x": {"com.example.tag": "dg=="}},
+                "db": {"t": "d", "m": 0o700, "u": 99, "g": 99}, "db/l": {"t": "l", "m": 0o755, "u": 99, "g": 99}}
+        it._owners_from_image(meta, [], image, "private/var")
+        self.assertEqual([(meta[k]["u"], meta[k]["g"]) for k in ("mobile", "mobile/a.plist", "db/l")], [(501, 501)] * 2 + [(0, 80)])
+        for broken, why in ((lambda m: m["db"].update(m=0o755), "mode"), (lambda m: m["mobile/a.plist"].pop("x"), "xattrs"),
+                            (lambda m: m.pop("db/l"), "not copied"), (lambda m: m.update(extra={"t": "f", "m": 0o644}), "not in")):
+            m = json.loads(json.dumps(meta))
+            broken(m)
+            with self.assertRaises(it.Error) as e:
+                it._owners_from_image(m, [], image, "private/var")
+            self.assertIn(why, str(e.exception))
+        with self.assertRaises(it.Error):
+            it.ApfsTree(image).walk("private/nothing")
+
     def test_hash_list(self):
         data = os.urandom(4096 * 5 + 123)
         image, hashes = self.write("a.img", data), self.path("a.img.hashes")

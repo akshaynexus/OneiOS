@@ -1,17 +1,27 @@
 #!/bin/sh
-# xcrun for the kernel base's build scripts on Linux: the SDK and tools of scripts/ios/env.sh.
+# xcrun for the kernel base's build scripts: the SDK and clang of scripts/ios/env.sh, so that every link goes through
+# scripts/ios/ios-ld and the guest's stubs. On macOS every other question (and any about another SDK, such as rustc's
+# `--sdk macosx` for the build scripts it links for the Mac) goes to Xcode's own xcrun; on Linux cctools and LLVM answer.
 #   xcrun [--sdk iphoneos] --show-sdk-path | --find TOOL | TOOL ARGS...
+real() { [ "$IOS_HOST" = Darwin ] || { echo "xcrun shim: no tool $1" >&2; exit 1; }; exec /usr/bin/xcrun --sdk iphoneos "$@"; }
+if [ "$IOS_HOST" = Darwin ]; then
+  prev=
+  for a in "$@"; do
+    if [ "$prev" = --sdk ] || [ "$prev" = -sdk ]; then case "$a" in iphoneos*) ;; *) exec /usr/bin/xcrun "$@" ;; esac; fi
+    prev=$a
+  done
+fi
 while [ $# -gt 0 ]; do
   case "$1" in
-    --sdk) shift 2 ;;
-    --show-sdk-path) echo "$IOS_SDK"; exit 0 ;;
-    --find)
+    --sdk|-sdk) shift 2 ;;
+    --show-sdk-path|-show-sdk-path) echo "$IOS_SDK"; exit 0 ;;
+    --find|-find|-f)
       case "$2" in
         clang) echo "$IOS_DIR/ios-clang" ;;
         clang++) echo "$IOS_DIR/ios-clang++" ;;
-        ar) command -v llvm-ar ;;
+        ar) [ "$IOS_HOST" = Darwin ] && real --find ar; command -v llvm-ar ;;
         strip) echo "$IOS_CCTOOLS/strip" ;;
-        *) echo "xcrun shim: no tool $2" >&2; exit 1 ;;
+        *) real --find "$2" ;;
       esac
       exit 0 ;;
     *) break ;;
@@ -21,5 +31,5 @@ tool=$1; shift
 case "$tool" in
   clang) exec "$IOS_DIR/ios-clang" "$@" ;;
   clang++) exec "$IOS_DIR/ios-clang++" "$@" ;;
-  *) echo "xcrun shim: no tool $tool" >&2; exit 1 ;;
+  *) real "$tool" "$@" ;;
 esac

@@ -8,7 +8,7 @@ with names (install names, or their last component: Metal, libobjc.A.dylib) only
 
   --cache   the main cache file. Default: out/ios27-cache/dyld_shared_cache_arm64e when it is there (a copy of
             /System/Library/Caches/com.apple.dyld of systemos.img); otherwise out/image/24A446/systemos.img is
-            mounted with apfs-fuse for the run and unmounted after.
+            mounted for the run and unmounted after (Linux: apfs-fuse; macOS: hdiutil, read-only, no root).
   --out     default out/ios27-tbd. Laid out like an SDK: /usr/lib/libSystem.B.dylib -> usr/lib/libSystem.B.tbd,
             /System/Library/Frameworks/Metal.framework/Metal -> System/Library/Frameworks/Metal.framework/Metal.tbd.
 
@@ -79,8 +79,15 @@ def main():
             if not os.path.isfile(a.image):
                 sys.exit(f'make-tbds: no {a.image} (build the image set first, or give --cache)')
             mount = tempfile.mkdtemp(prefix='mnt-', dir=os.path.join(REPO, 'out'))
-            subprocess.run(['apfs-fuse', '-o', 'ro', a.image, mount], check=True)
-            cache = os.path.join(mount, 'root/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e')
+            if sys.platform == 'darwin':
+                subprocess.run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-noverify', '-noautoopen', '-owners', 'off',
+                                '-imagekey', 'diskimage-class=CRawDiskImage', '-mountpoint', mount, a.image],
+                               check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                volume = mount
+            else:
+                subprocess.run(['apfs-fuse', '-o', 'ro', a.image, mount], check=True)
+                volume = os.path.join(mount, 'root')
+            cache = os.path.join(volume, 'System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e')
         listing = json.loads(subprocess.run([ipsw, 'dyld', 'info', '--dylibs', '--json', cache], check=True,
                                             capture_output=True, text=True).stdout)
         images = [d['name'] for d in listing['dylibs']]
@@ -113,8 +120,9 @@ def main():
         return 1 if failed else 0
     finally:
         if mount:
-            subprocess.run(['fusermount3', '-u', mount])
-            shutil.rmtree(mount, ignore_errors=True)
+            subprocess.run(['hdiutil', 'detach', '-quiet', mount] if sys.platform == 'darwin' else ['fusermount3', '-u', mount])
+            if not os.path.ismount(mount):
+                shutil.rmtree(mount, ignore_errors=True)
 
 
 if __name__ == '__main__':

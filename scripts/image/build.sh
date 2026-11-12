@@ -26,9 +26,11 @@
 #   kernel.kc                       the kernel collection (from the kernel build)
 #   manifest.json                   every file's size and SHA-256
 #
-# Linux: nothing here needs root; the OS volume is read through apfs-fuse (FUSE, read-only).
-# macOS: run with sudo; the OS volume is attached read-only with hdiutil. The macOS path is written
-# from UniXNU's scripts and has not been run. Only --seed apfs needs macOS (newfs_apfs).
+# Nothing here needs root (only --seed apfs, which needs macOS and sudo).
+# Linux: the volumes are read through apfs-fuse (FUSE, read-only), with their owners.
+# macOS: the volumes are attached read-only with hdiutil, owners ignored (a user's attach shows every file as
+#   the user's own and lets the user read it); the owners of /private/var are read from the OS image's APFS
+#   records (imagetool.py tree-copy --owners-from) and checked entry by entry against the mounted volume.
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 TOOL=$ROOT/scripts/image/imagetool.py
@@ -70,12 +72,8 @@ Linux)
   fi
   [ "$seed" = tar ] || missing+=("macOS (--seed apfs makes an APFS volume; Linux builds --seed tar)") ;;
 Darwin)
-  [ "$seed" = tar ] || need newfs_apfs
-  if [ -z "$os_root" ]; then
-    need hdiutil
-    # an attached volume enforces the image's own permissions: only root reads all of /private/var
-    [ "$(id -u)" = 0 ] || missing+=("root (on macOS run it with sudo)")
-  fi ;;
+  [ "$seed" = tar ] || { need newfs_apfs; [ "$(id -u)" = 0 ] || missing+=("root (--seed apfs: run it with sudo)"); }
+  [ -n "$os_root" ] || need hdiutil ;;
 *) missing+=("Linux or macOS (this is $OS)") ;;
 esac
 [ ${#missing[@]} = 0 ] || die "missing tools: $(IFS=';'; echo "${missing[*]}" | sed 's/;/; /g')"
@@ -113,7 +111,7 @@ mounts=()
 unmount() {
   case "$OS" in
   Linux) fusermount3 -u "$1" 2>/dev/null || fusermount -u "$1" 2>/dev/null || true ;;
-  Darwin) hdiutil detach -quiet "$1" 2>/dev/null || hdiutil detach -quiet -force "$1" 2>/dev/null || true ;;
+  Darwin) hdiutil detach -quiet "$1" 2>/dev/null || hdiutil detach -quiet -force "$1" 2>/dev/null || true; rmdir "$1" 2>/dev/null || true ;;
   esac
 }
 cleanup() { for m in ${mounts[@]+"${mounts[@]}"}; do unmount "$m"; done; }
@@ -125,8 +123,10 @@ mount_ro() {
   case "$OS" in
   Linux) apfs-fuse "$1" "$2" >&2 || die "apfs-fuse cannot open $1"; echo "$2/root" ;;
   Darwin)
-    hdiutil attach -readonly -nobrowse -noverify -noautoopen -owners on -imagekey diskimage-class=CRawDiskImage \
-      -mountpoint "$2" "$1" >/dev/null || die "hdiutil cannot attach $1"
+    # -owners off: a user may read every file (the owners come from the image's records, see tree-copy below)
+    hdiutil attach -readonly -nobrowse -noverify -noautoopen -owners off -imagekey diskimage-class=CRawDiskImage \
+      -mountpoint "$2" "$1" 2>&1 >/dev/null | { grep -v 'is deprecated' >&2 || true; }
+    [ -d "$2/System" ] || die "hdiutil cannot attach $1"
     echo "$2" ;;
   esac
 }
@@ -151,12 +151,14 @@ done < <(tool profile "$profile" --members)
 
 # ---- the Data seed: the OS volume's /private/var, then the userland hook
 echo "reading $P_DATA_SOURCE of the OS volume"
+owners=()
 if [ -z "$os_root" ]; then
   mounts+=("$WORK/mnt/os")
   os_root=$(mount_ro "$NEW/$os_out" "$WORK/mnt/os")
+  [ "$OS" != Darwin ] || owners=(--owners-from "$NEW/$os_out" --owners-path "$P_DATA_SOURCE")
 fi
 [ -d "$os_root/$P_DATA_SOURCE" ] || die "the OS volume has no /$P_DATA_SOURCE"
-tool tree-copy "$os_root/$P_DATA_SOURCE" "$WORK/data" "$WORK/data.meta.json"
+tool tree-copy "$os_root/$P_DATA_SOURCE" "$WORK/data" "$WORK/data.meta.json" ${owners[@]+"${owners[@]}"}
 mkdir -p "$WORK/overlay"
 : > "$WORK/owners.tsv"
 tweaks=$WORK/tweaks.json
