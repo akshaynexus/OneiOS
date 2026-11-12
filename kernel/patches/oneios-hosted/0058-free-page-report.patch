@@ -1,0 +1,559 @@
+diff --git a/osfmk/arm64/hosted/free_report.h b/osfmk/arm64/hosted/free_report.h
+new file mode 100644
+index 0000000..be8461a
+--- /dev/null
++++ b/osfmk/arm64/hosted/free_report.h
+@@ -0,0 +1,80 @@
++/*
++ * OneiOS: free-page reporting, the guest's decisions (hosted kernel patch 0058). Freestanding C, no state.
++ *
++ * The goal: iOS keeps all of its ram=auto memory; the host gets back only pages iOS has freed. The guest gives
++ * back pages that sit on XNU's own free queue (memory iOS is not using at all), never cached, compressed or wired
++ * pages, through the ram_discard host call (a hole punched in the RAM memfd: the page reads as zero when it is
++ * used again). XNU's free count, targets and memorystatus are not changed by this.
++ *
++ * The same file is osfmk/arm64/hosted/free_report.h in the kernel (0058 adds it); runtime/xnuhost's host tests
++ * check that the two are the same and test these functions (tests/test_xnuhost.c, "free report").
++ */
++#ifndef XNUHOST_FREE_REPORT_H
++#define XNUHOST_FREE_REPORT_H
++
++#include <stdint.h>
++#include <stdbool.h>
++
++/*
++ * How many pages to give back now. `held` is the number of free-queue pages the host still holds (freed by iOS
++ * since they were last given back), `keep` the number the guest always leaves held (the pages the next
++ * allocations take: giving them back would only make the host fill them again), `hysteresis` how far above
++ * `keep` the count must go before a round starts, `batch` the most pages taken off the free queue at once.
++ * `active` is true while a round runs: a round starts above keep + hysteresis and goes on down to keep, so that a
++ * free count that moves around keep does not start a round for every few pages.
++ */
++static inline uint32_t
++xh_fr_batch(uint32_t held, uint32_t keep, uint32_t hysteresis, uint32_t batch, bool active)
++{
++	uint64_t start = (uint64_t)keep + (active ? 0 : hysteresis);
++	if ((uint64_t)held <= start || batch == 0) {
++		return 0;
++	}
++	return held - keep < batch ? held - keep : batch;
++}
++
++/*
++ * The pages of a batch as ranges for the host: sorts `pages` (page numbers) in place and writes runs of
++ * consecutive numbers to first[] and count[] (room for n of each). Returns the number of runs. Duplicates (none
++ * should exist) are merged, so a page is never given twice.
++ */
++static inline uint32_t
++xh_fr_runs(uint32_t *pages, uint32_t n, uint32_t *first, uint32_t *count)
++{
++	for (uint32_t i = 1; i < n; i++) {               /* insertion sort: n is a batch (<= 256) */
++		uint32_t v = pages[i], j = i;
++		while (j > 0 && pages[j - 1] > v) {
++			pages[j] = pages[j - 1];
++			j--;
++		}
++		pages[j] = v;
++	}
++	uint32_t runs = 0;
++	for (uint32_t i = 0; i < n; i++) {
++		if (runs > 0 && pages[i] <= first[runs - 1] + count[runs - 1]) {
++			if (pages[i] == first[runs - 1] + count[runs - 1]) {
++				count[runs - 1]++;
++			}
++			continue;
++		}
++		first[runs] = pages[i];
++		count[runs] = 1;
++		runs++;
++	}
++	return runs;
++}
++
++/*
++ * The share of `keep` each free queue (XNU's page colours) leaves held: the reporter takes from each queue only
++ * what it holds above this, coldest first.
++ */
++static inline uint32_t
++xh_fr_keep_per_queue(uint32_t keep, uint32_t queues)
++{
++	if (queues == 0) {
++		return keep;
++	}
++	return (keep + queues - 1) / queues;
++}
++
++#endif /* XNUHOST_FREE_REPORT_H */
+diff --git a/osfmk/arm64/hosted/hosted_pmap.h b/osfmk/arm64/hosted/hosted_pmap.h
+index 180142e..7b4436f 100644
+--- a/osfmk/arm64/hosted/hosted_pmap.h
++++ b/osfmk/arm64/hosted/hosted_pmap.h
+@@ -475,6 +475,9 @@ hosted_check_report(void)
+ 		} else if (note->kind == 2) {
+ 			printf("hosted check: page 0x%x is freed while %u task mapping(s) of it remain (pid %d frees it)\n",
+ 			    note->had_page, note->had_prot, note->pid);
++		} else if (note->kind == 4) {
++			printf("hosted check: page 0x%x is given back to the host (0058) while %u task mapping(s) of it remain%s\n",
++			    note->had_page, note->had_prot, note->now_page ? "; the pmap still maps it" : "");
+ 		} else {
+ 			printf("hosted check: audit: task %llu (in pid %d) va 0x%llx: the host maps page 0x%x prot %u, the page table has page 0x%x prot %u (entry 0x%llx)\n",
+ 			    note->task, note->pid, note->va, note->had_page, note->had_prot, note->now_page, note->now_prot, note->entry);
+@@ -483,6 +486,7 @@ hosted_check_report(void)
+ }
+ struct hosted_check_stats {
+ 	uint64_t fills, replaced, unmapped, freed_mapped, audits, stale;
++	uint64_t discards, discarded_mapped;    /* 0058: pages given back to the host, and with a mapping left */
+ } hosted_check_stats;
+ 
+ /* Before a fill, in thread context with no lock held: the tables the fill will write into. */
+@@ -621,6 +625,33 @@ hosted_check_page_free(ppnum_t pn)
+ 	}
+ }
+ 
++/*
++ * 0058: a free page is about to be given back to the host (ram_discard, vm_resident.c's free-page reporting): no
++ * task may have any 4 KiB part of it mapped as the kernel recorded it (its unmaps, queued by xnuhost or not, were
++ * all given), and the pmap must have no mapping of it. hosted_mapcheck=1 only. No lock held.
++ */
++void hosted_check_page_discard(ppnum_t pn);
++void
++hosted_check_page_discard(ppnum_t pn)
++{
++	pmap_paddr_t pa = ptoa(pn);
++
++	if (!hosted_check_on || hosted_check_counts == NULL || !hosted_pa_in_window(pa)) {
++		return;
++	}
++	hosted_check_stats.discards++;
++	uint32_t page = (uint32_t)((pa - hosted_info.ram_phys) >> 12), mapped = 0;
++	for (uint32_t k = 0; k < PAGE_SIZE / 4096; k++) {
++		uint8_t count = hosted_check_counts[page + k];
++		mapped += count != 255 ? count : 0;
++	}
++	bool pmapped = !pmap_verify_free(pn);
++	if (mapped != 0 || pmapped) {
++		hosted_check_stats.discarded_mapped++;
++		hosted_check_note(4, 0, 0, page, mapped, pmapped, 0, 0);
++	}
++}
++
+ /* One recorded mapping against the page table. TLB lock and the pmap's lock held. True if the table allows it. */
+ static bool
+ hosted_check_entry(pmap_t pmap, uint64_t va, uint32_t recorded, bool note)
+diff --git a/osfmk/vm/vm_page.h b/osfmk/vm/vm_page.h
+index 08f5e0c..4f6d670 100644
+--- a/osfmk/vm/vm_page.h
++++ b/osfmk/vm/vm_page.h
+@@ -341,7 +341,15 @@ struct vm_page {
+ #else
+ 		uint8_t                 __vmp_reserved2:1;
+ #endif
++#if XNU_HOSTED
++		/*
++		 * OneiOS hosted (0058): the page is on the free queue and given back to the host (ram_discard): the
++		 * host holds no memory for it until it is used again. Set and cleared with the free queue lock held.
++		 */
++		uint8_t                 vmp_hosted_reported:1;
++#else
+ 		uint8_t                 __vmp_reserved3:1;
++#endif
+ 	};
+ 
+ 	/*
+diff --git a/osfmk/vm/vm_pageout.c b/osfmk/vm/vm_pageout.c
+index 8c1a44c..b906678 100644
+--- a/osfmk/vm/vm_pageout.c
++++ b/osfmk/vm/vm_pageout.c
+@@ -5984,6 +5984,11 @@ vm_pageout(void)
+ //	vm_tests();
+ #endif /* __arm64__ */
+ 
++#if XNU_HOSTED
++	extern void hosted_free_report_start(void);
++	hosted_free_report_start();     /* OneiOS 0058: free pages given back to the host (vm_resident.c) */
++#endif /* XNU_HOSTED */
++
+ 	vm_pageout_continue();
+ 
+ 	/*
+diff --git a/osfmk/vm/vm_resident.c b/osfmk/vm/vm_resident.c
+index 8bebebb..4349328 100644
+--- a/osfmk/vm/vm_resident.c
++++ b/osfmk/vm/vm_resident.c
+@@ -954,6 +954,65 @@ vm_pages_free_mask_clear(uint32_t index, int8_t bit)
+ 
+ #endif /* CONFIG_SPTM */
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0058): free-page reporting. iOS keeps all of its ram=auto memory; the host gets back only pages iOS
++ * has freed. XNU's free queue is the only source: a page on it is memory iOS is not using at all; cached,
++ * compressed and wired pages are never touched, and nothing here changes the free count, the free target or what
++ * memorystatus sees (but for the moment a batch is off the queue, below).
++ *
++ * The RAM is xnuhost's memfd: the host holds a page once it was touched, until the kernel gives it back with the
++ * ram_discard host call (a hole punched in the memfd; the page reads as zero when it is used again). The free queues
++ * keep two kinds of pages, in this order:
++ *
++ *   head  [ pages iOS freed: the host still holds them ][ pages given back: the host holds nothing ]  tail
++ *
++ * A page iOS frees goes to the head (vm_page_free_queue_enter: enter_first), so the next allocation takes memory the
++ * host still holds; a page given back goes to the tail, used last. (Stock arm64 XNU enters every free page at the
++ * tail and takes from the head; with oneios-free-report=0 that is kept.) Pages released at startup were never
++ * touched: they enter as given back. Per colour queue: hosted_fr_held[] counts the held pages and
++ * hosted_fr_first[] is the first given-back page (every page after it is one too), both with the free queue lock.
++ * The reporting thread (below) takes the coldest held pages, those just before hosted_fr_first, and leaves the
++ * hottest at the head.
++ */
++#include <arm64/hosted/hosted.h>
++#include <arm64/hosted/free_report.h>
++static TUNABLE(uint32_t, hosted_fr_on, "oneios-free-report", 1);
++static uint32_t  hosted_fr_held[MAX_COLORS];
++static vm_page_t hosted_fr_first[MAX_COLORS];
++static uint32_t  hosted_fr_reported;            /* pages on the free queues given back */
++
++/* A regular page went onto colour `color`'s free queue. Free queue lock held. */
++static inline void
++hosted_fr_entered(vm_page_t mem, unsigned int color)
++{
++	if (mem->vmp_hosted_reported) {
++		hosted_fr_reported++;
++		if (hosted_fr_first[color] == VM_PAGE_NULL) {
++			hosted_fr_first[color] = mem;
++		}
++	} else {
++		hosted_fr_held[color]++;
++	}
++}
++
++/* A regular page is about to be unlinked from `queue` (colour `color`): called before, its next link is read. */
++static inline void
++hosted_fr_leaving(vm_page_queue_t queue, vm_page_t mem, unsigned int color)
++{
++	if (!mem->vmp_hosted_reported) {
++		hosted_fr_held[color]--;
++		return;
++	}
++	mem->vmp_hosted_reported = false;
++	hosted_fr_reported--;
++	if (hosted_fr_first[color] == mem) {
++		vm_page_t next = (vm_page_t)vm_page_queue_next(&mem->vmp_pageq);
++		hosted_fr_first[color] = ((void *)next == (void *)queue) ? VM_PAGE_NULL : next;
++	}
++}
++#endif /* XNU_HOSTED */
++
+ __attribute__((always_inline))
+ void
+ vm_page_free_queue_enter(vm_memory_class_t class, vm_page_t mem, ppnum_t pnum)
+@@ -1011,8 +1070,17 @@ vm_page_free_queue_enter(vm_memory_class_t class, vm_page_t mem, ppnum_t pnum)
+ 		mem->vmp_lopage      = false;
+ 		mem->vmp_canonical   = true;
+ 		enter_first          = false;
++#if XNU_HOSTED
++		/* 0058: a page iOS freed goes first (the host holds it), one given back goes last */
++		enter_first          = hosted_fr_on && !mem->vmp_hosted_reported;
++#endif /* XNU_HOSTED */
+ 		break;
+ 	}
++#if XNU_HOSTED
++	if (class != VM_MEMORY_CLASS_REGULAR) {
++		mem->vmp_hosted_reported = false;       /* 0058: only the regular free queues have given-back pages */
++	}
++#endif /* XNU_HOSTED */
+ 
+ #if HAS_MTE
+ 	if (mte_enabled()) {
+@@ -1057,6 +1125,9 @@ vm_page_free_queue_enter(vm_memory_class_t class, vm_page_t mem, ppnum_t pnum)
+ 	case VM_MEMORY_CLASS_REGULAR:
+ 		VM_COUNTER_INC(&vm_page_queue_free.vmpfq_count);
+ 		VM_COUNTER_INC(&vm_page_free_count);
++#if XNU_HOSTED
++		hosted_fr_entered(mem, color);
++#endif /* XNU_HOSTED */
+ 		break;
+ #if HAS_MTE
+ 	case VM_MEMORY_CLASS_DEAD_TAG_STORAGE:
+@@ -1494,6 +1565,11 @@ vm_page_free_queue_enter_list(vm_page_list_t list, vmp_release_options_t opts)
+ 		}
+ #endif /* CONFIG_SECLUDED_MEMORY */
+ 
++#if XNU_HOSTED
++		/* 0058: a page released at startup was never touched (the host holds none of it); any other was used */
++		mem->vmp_hosted_reported = hosted_fr_on && (opts & VMP_RELEASE_STARTUP) &&
++		    class == VM_MEMORY_CLASS_REGULAR;
++#endif /* XNU_HOSTED */
+ 		vm_page_free_queue_enter(class, mem, pnum);
+ 
+ 		switch (class) {
+@@ -1618,6 +1694,11 @@ vm_page_free_queue_remove(
+ 	} else
+ #endif /* CONFIG_SPTM */
+ 	{
++#if XNU_HOSTED
++		if (class == VM_MEMORY_CLASS_REGULAR) {
++			hosted_fr_leaving(queue, mem, color);   /* 0058 */
++		}
++#endif /* XNU_HOSTED */
+ 		vm_page_queue_remove(queue, mem, vmp_pageq);
+ 	}
+ 
+@@ -1715,6 +1796,12 @@ vm_page_free_queue_grab(
+ #endif /* !defined(__x86_64__) */
+ 		{
+ 			/* Other targets default to rotating colors after each pop. */
++#if XNU_HOSTED
++			if (class == VM_MEMORY_CLASS_REGULAR) {
++				/* 0058 */
++				hosted_fr_leaving(queue, (vm_page_t)vm_page_queue_first(queue), color);
++			}
++#endif /* XNU_HOSTED */
+ 			vm_page_queue_remove_first(queue, mem, vmp_pageq);
+ 		}
+ 
+@@ -1797,6 +1884,245 @@ vm_page_free_queue_grab(
+ }
+ 
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0058): the reporting thread. Every oneios-free-report-ms (1000) it looks at how many free-queue
++ * pages the host holds (vm_page_free_count less the given-back ones). Above keep + hysteresis it starts a round and
++ * gives pages back down to keep, a batch at a time:
++ *
++ *   keep        vm_page_free_target + oneios-free-report-keep MiB (32): the pages the next allocations take; XNU
++ *               keeps its free count between vm_page_free_min and vm_page_free_target under pressure, so pages that
++ *               cycle through the free queue are never given back (no punch, no refill, no cost to iOS);
++ *   hysteresis  oneios-free-report-hysteresis MiB (16);
++ *   (oneios-free-report-stress=1, a check: keep 0, so every held free page above the hysteresis is given back and
++ *   pages come back used at once: the races of the paths below, with hosted_mapcheck=1)
++ *   batch       oneios-free-report-batch pages (64, the most): taken off the free queue with its lock, given back
++ *               with the lock dropped, put back at the tail with the lock. While a batch is out, vm_page_free_count is
++ *               that much lower (at most 1 MiB, for the host calls' time, only while the free count is far above
++ *               the free target); nothing can allocate a page whose hole is being punched, and XNU's contiguous
++ *               allocator does not take pages that are off every queue (vm_page_is_relocatable: VM_PAGE_NOT_ON_Q).
++ *
++ * The decisions are arm64/hosted/free_report.h (xh_fr_batch, xh_fr_runs), the same file as xnuhost's, host-tested
++ * there. A page given back may still be mapped in no task: XNU's pmap removes every mapping before a page reaches
++ * the free queue; with hosted_mapcheck=1 each page is checked again (hosted_check_page_discard). A task whose unmap
++ * xnuhost still has queued (a deferred unmap, docs/booter.md 2.6) cannot run before the stub has carried it out,
++ * and the punch drops the page from that task's process too.
++ *
++ * Every oneios-free-report-log seconds (30; 0: never) the thread prints what XNU sees of its memory, also with
++ * oneios-free-report=0 (the lines to compare a boot with and without), and what was given back:
++ *   oneios-mem: free F MiB (G given back, H held), active ..., wired ..., compressor C MiB holding P MiB
++ *   oneios-mem: purgeable ..., file-backed ..., anonymous ..., secluded ... MiB; memorystatus available M MiB; RAM T MiB
++ *   oneios-mem: given back X MiB since boot in B batches, R runs, N rounds (0 failed, 0 out of order), D ms
++ */
++#define HOSTED_FR_BATCH_MAX 64                  /* vmp_free_list_result_t counts in uint8_t */
++static TUNABLE(uint32_t, hosted_fr_period_ms, "oneios-free-report-ms", 1000);
++static TUNABLE(uint32_t, hosted_fr_keep_mb, "oneios-free-report-keep", 32);
++static TUNABLE(uint32_t, hosted_fr_hysteresis_mb, "oneios-free-report-hysteresis", 16);
++static TUNABLE(uint32_t, hosted_fr_batch_pages, "oneios-free-report-batch", HOSTED_FR_BATCH_MAX);
++static TUNABLE(uint32_t, hosted_fr_log_s, "oneios-free-report-log", 30);
++/* a check, not a setting: keep 0 (every held free page above the hysteresis goes back, used pages come back at once) */
++static TUNABLE(uint32_t, hosted_fr_stress, "oneios-free-report-stress", 0);
++
++static struct {
++	uint64_t rounds, batches, pages, runs, failed, out_of_order, ticks;
++	bool     stopped;                       /* a host call failed: no more reporting this boot */
++} hosted_fr_stats;
++
++#if CONFIG_JETSAM
++extern uint32_t memorystatus_available_pages;
++#endif
++extern void hosted_check_page_discard(ppnum_t pn);
++
++#define HOSTED_FR_MIB(pages) ((unsigned long long)(((uint64_t)(pages) * PAGE_SIZE) >> 20))
++
++/*
++ * Free queue lock held. Takes up to `want` held pages off the free queues, from each colour's queue only what it
++ * holds above keep_q, coldest first (backwards from its first given-back page, or from its tail).
++ */
++static uint32_t
++hosted_fr_take(vm_page_t *out, uint32_t want, uint32_t keep_q)
++{
++	static unsigned int start;
++	uint32_t n = 0;
++
++	for (unsigned int i = 0; i < vm_colors && n < want; i++) {
++		unsigned int    color = (start + i) & vm_color_mask;
++		vm_page_queue_t queue = &vm_page_queue_free.vmpfq_queues[color].qhead;
++		uint32_t        spare = hosted_fr_held[color] > keep_q ? hosted_fr_held[color] - keep_q : 0;
++		vm_page_t       mem   = (vm_page_t)(hosted_fr_first[color] != VM_PAGE_NULL
++		    ? vm_page_queue_prev(&hosted_fr_first[color]->vmp_pageq)
++		    : vm_page_queue_last(queue));
++
++		while (spare > 0 && n < want && (void *)mem != (void *)queue) {
++			vm_page_t prev = (vm_page_t)vm_page_queue_prev(&mem->vmp_pageq);
++			if (mem->vmp_hosted_reported || mem->vmp_q_state != VM_PAGE_ON_FREE_Q) {
++				/* not the order above: leave this queue alone this time (counted, printed) */
++				hosted_fr_stats.out_of_order++;
++				break;
++			}
++			vm_page_free_queue_remove(VM_MEMORY_CLASS_REGULAR, mem, VM_PAGE_GET_PHYS_PAGE(mem), VM_PAGE_NOT_ON_Q);
++			out[n++] = mem;
++			spare--;
++			mem = prev;
++		}
++	}
++	start = (start + 1) & vm_color_mask;
++	return n;
++}
++
++/* No lock held. Gives the pages back to the host, as runs of consecutive pages. False if a host call failed. */
++static bool
++hosted_fr_give(vm_page_t *pages, uint32_t n)
++{
++	uint32_t pn[HOSTED_FR_BATCH_MAX], first[HOSTED_FR_BATCH_MAX], count[HOSTED_FR_BATCH_MAX];
++	bool ok = true;
++
++	for (uint32_t i = 0; i < n; i++) {
++		pn[i] = VM_PAGE_GET_PHYS_PAGE(pages[i]);
++	}
++	uint32_t runs = xh_fr_runs(pn, n, first, count);
++	for (uint32_t r = 0; r < runs; r++) {
++		for (uint32_t k = 0; k < count[r]; k++) {
++			hosted_check_page_discard(first[r] + k);        /* hosted_mapcheck=1 */
++		}
++		uint32_t old = hosted_irq_mask();
++		int64_t rc = hosted_hc(HOSTED_FN(ram_discard), hosted_cpu(), ptoa_64(first[r]), ptoa_64(count[r]), 0, 0, 0);
++		hosted_irq_restore(old);
++		if (rc != 0) {
++			if (hosted_fr_stats.failed++ == 0) {
++				printf("oneios-mem: ram_discard(0x%llx, %u pages) failed: %lld; free pages are no longer given back\n",
++				    (unsigned long long)ptoa_64(first[r]), count[r], (long long)rc);
++			}
++			ok = false;
++		}
++	}
++	hosted_fr_stats.runs += runs;
++	return ok;
++}
++
++/* No lock held. The batch back onto the free queues, at their tails if it was given back. */
++static void
++hosted_fr_return(vm_page_t *pages, uint32_t n, bool given)
++{
++	vmp_free_list_result_t result = { };
++
++	vm_free_page_lock_spin();
++	for (uint32_t i = 0; i < n; i++) {
++		pages[i]->vmp_hosted_reported = given;
++		vm_page_free_queue_enter(VM_MEMORY_CLASS_REGULAR, pages[i], VM_PAGE_GET_PHYS_PAGE(pages[i]));
++		result.vmpr_regular++;
++	}
++	if (vm_page_free_queue_has_any_waiters()) {
++		vm_page_free_queue_handle_wakeups_and_unlock(result);
++	} else {
++		vm_free_page_unlock();
++	}
++	VM_CHECK_MEMORYSTATUS;
++}
++
++static void
++hosted_fr_log(void)
++{
++	/* three lines: the console cuts a line past about 256 characters and puts the next message in it */
++	uint64_t ns = 0;
++	absolutetime_to_nanoseconds(hosted_fr_stats.ticks, &ns);
++	uint32_t reported = os_atomic_load(&hosted_fr_reported, relaxed), free = vm_page_free_count;
++	printf("oneios-mem: free %llu MiB (%llu given back, %llu held), active %llu, inactive %llu, speculative %llu, "
++	    "throttled %llu, wired %llu, compressor %llu MiB holding %llu MiB\n",
++	    HOSTED_FR_MIB(free), HOSTED_FR_MIB(reported), HOSTED_FR_MIB(free > reported ? free - reported : 0),
++	    HOSTED_FR_MIB(vm_page_active_count), HOSTED_FR_MIB(vm_page_inactive_count), HOSTED_FR_MIB(vm_page_speculative_count),
++	    HOSTED_FR_MIB(vm_page_throttled_count), HOSTED_FR_MIB(vm_page_wire_count), HOSTED_FR_MIB(VM_PAGE_COMPRESSOR_COUNT),
++	    HOSTED_FR_MIB(c_segment_pages_compressed));
++	printf("oneios-mem: purgeable %llu, file-backed %llu, anonymous %llu, secluded %llu MiB; "
++#if CONFIG_JETSAM
++	    "memorystatus available %llu MiB; "
++#endif
++	    "RAM %llu MiB\n",
++	    HOSTED_FR_MIB(counter_load(&vm_page_purgeable_count)), HOSTED_FR_MIB(vm_page_pageable_external_count),
++	    HOSTED_FR_MIB(vm_page_pageable_internal_count), HOSTED_FR_MIB(vm_page_secluded_count),
++#if CONFIG_JETSAM
++	    HOSTED_FR_MIB(memorystatus_available_pages),
++#endif
++	    HOSTED_FR_MIB(vm_page_pages));
++	printf("oneios-mem: given back %llu MiB since boot in %llu batches, %llu runs, %llu rounds (%llu failed, %llu out of order), "
++	    "%llu ms\n", HOSTED_FR_MIB(hosted_fr_stats.pages), hosted_fr_stats.batches, hosted_fr_stats.runs, hosted_fr_stats.rounds,
++	    hosted_fr_stats.failed, hosted_fr_stats.out_of_order, ns / NSEC_PER_MSEC);
++}
++
++static void
++hosted_fr_thread(__unused void *arg, __unused wait_result_t wr)
++{
++	static vm_page_t pages[HOSTED_FR_BATCH_MAX];
++	const uint32_t batch = MAX(1u, MIN(hosted_fr_batch_pages, HOSTED_FR_BATCH_MAX));
++	const uint32_t hysteresis = (uint32_t)(((uint64_t)hosted_fr_hysteresis_mb << 20) / PAGE_SIZE);
++	const uint32_t extra = (uint32_t)(((uint64_t)hosted_fr_keep_mb << 20) / PAGE_SIZE);
++	uint64_t last_log = 0, log_every = 0;
++
++	nanoseconds_to_absolutetime((uint64_t)hosted_fr_log_s * NSEC_PER_SEC, &log_every);
++	for (;;) {
++		bool active = false;
++		/* the free target is read each time: it is a sysctl (kern.vm_page_free_target) */
++		const uint32_t keep = hosted_fr_stress ? 0 : vm_page_free_target + extra, keep_q = xh_fr_keep_per_queue(keep, vm_colors);
++
++		while (hosted_fr_on && !hosted_fr_stats.stopped) {
++			uint32_t free = vm_page_free_count, reported = os_atomic_load(&hosted_fr_reported, relaxed);
++			uint32_t want = xh_fr_batch(free > reported ? free - reported : 0, keep, hysteresis, batch, active);
++			if (want == 0) {
++				break;
++			}
++			uint64_t began = mach_absolute_time();
++			vm_free_page_lock();
++			uint32_t n = hosted_fr_take(pages, want, keep_q);
++			vm_free_page_unlock();
++			if (n == 0) {
++				break;
++			}
++			if (!active) {
++				active = true;
++				hosted_fr_stats.rounds++;
++			}
++			bool ok = hosted_fr_give(pages, n);
++			hosted_fr_return(pages, n, ok);
++			hosted_fr_stats.batches++;
++			if (ok) {
++				hosted_fr_stats.pages += n;
++			} else {
++				hosted_fr_stats.stopped = true;
++			}
++			hosted_fr_stats.ticks += mach_absolute_time() - began;
++		}
++		uint64_t now = mach_absolute_time();
++		if (hosted_fr_log_s != 0 && now - last_log >= log_every) {
++			last_log = now;
++			hosted_fr_log();
++		}
++		assert_wait_timeout((event_t)&hosted_fr_stats, THREAD_UNINT, MAX(hosted_fr_period_ms, 10u), NSEC_PER_MSEC);
++		thread_block(THREAD_CONTINUE_NULL);
++	}
++}
++
++void hosted_free_report_start(void);
++void
++hosted_free_report_start(void)
++{
++	thread_t thread = THREAD_NULL;
++
++	printf("oneios-mem: free-page reporting %s (oneios-free-report=%u): keep %u pages (free target %u + %u MiB), "
++	    "hysteresis %u MiB, batch %u pages, every %u ms; %u of %u free pages never touched\n",
++	    hosted_fr_on ? (hosted_fr_stress ? "on, stress check" : "on") : "off", hosted_fr_on,
++	    hosted_fr_stress ? 0 : vm_page_free_target + (uint32_t)(((uint64_t)hosted_fr_keep_mb << 20) / PAGE_SIZE),
++	    vm_page_free_target, hosted_fr_keep_mb, hosted_fr_hysteresis_mb, MAX(1u, MIN(hosted_fr_batch_pages, HOSTED_FR_BATCH_MAX)),
++	    hosted_fr_period_ms, os_atomic_load(&hosted_fr_reported, relaxed), vm_page_free_count);
++	if (!hosted_fr_on && hosted_fr_log_s == 0) {
++		return;
++	}
++	if (kernel_thread_start_priority(hosted_fr_thread, NULL, BASEPRI_UTILITY, &thread) == KERN_SUCCESS) {
++		thread_set_thread_name(thread, "oneios_free_report");
++		thread_deallocate(thread);
++	}
++}
++#endif /* XNU_HOSTED */
++
+ #define COLOR_GROUPS_TO_STEAL   4
+ 
+ /* Called once during statup, once the cache geometry is known.

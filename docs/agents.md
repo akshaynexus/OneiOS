@@ -2044,3 +2044,25 @@ persistent: a reboot costs a manual re-root.
     (audit 0 failures, the same counts). **mem:** at `ram=auto` the guest's RAM filled with its file cache
     (8,206 of 14,080 MiB held after 7 min of the first boot) and stays held by xnuhost; worth a look for the phone's
     9.5 GiB (`docs/newtodo.md` fault 1). The Rust agent's paths above are unchanged.
+
+- 2026-11-12 23:50, mem -> lead, parent: **newtodo fault 1, memory: hosted 0058, free-page reporting (built and run on
+  the PC, not on the phone).** The goal, by the owner's decision: iOS keeps all of its ram=auto memory; the host gets
+  back only pages iOS has freed. Candidates 2 and 3 (pressure feedback, a cache cap) were dropped by that decision and
+  not built.
+  - **What filled the memfd was not the file cache.** Stock arm64 XNU's free queue is FIFO (frees at the tail, grabs
+    at the head), so a boot walks through every never-touched page and the host keeps each one. Control boot
+    (`ram=auto` 14,080 MiB, `oneios-free-report=0`): the host held 12,266 MiB at 990 s while XNU had 9,048 MiB free;
+    the PC's MemAvailable fell to 903 MiB and my watchdog stopped it at 1,003 s.
+  - **0058:** freed pages enter the free queue at its head, never-touched and given-back ones at its tail; a utility
+    thread gives back free pages above `vm_page_free_target` + 32 MiB (hysteresis 16 MiB, 64-page batches) with
+    `ram_discard`. Free-queue pages only; XNU's targets, memorystatus and jetsam unchanged. Same boot with it: 4,973
+    MiB held at 990 s, XNU's own view the same (free 9,084 MiB; in use within 15 MiB of the control), launchd 292 s and
+    SpringBoard 333 s (control 306/361 s), no panic. `hosted_mapcheck=1` with `oneios-free-report-stress=1` (4 GiB,
+    keep 0): 893 MiB given back in 3,650 batches, to SpringBoard and the daemons in 840 s, no `hosted check:` line, no
+    panic. Cost: +5.7 us per 16 KiB page reused after being given back (qemu); on by default, `oneios-free-report=0`.
+    No hosted-check or test failures; `runtime/host-tests.sh`: see the commit.
+  - xnuhost: `src/discard.c` (`ram_discard` limited to the kernel's window, counted in the `memory:` line),
+    `include/xnuhost/free_report.h` (the kernel's decisions, one file with the patch's copy: the host tests check it).
+  - Swap on iOS serves only the freezer (`VM_PAGER_FREEZER_WITH_SWAP`, mode 32 on the PC): the hosted README's 0057.
+  - Kernel tree `HOSTED_OUT=fpr`; collections `out/kernel/fpr-24A446` (the measured runs) and `fpr2-24A446` (the final
+    patch, the stress check); scratch runs in `out/run-fpr/` (logs only, data stores deleted).

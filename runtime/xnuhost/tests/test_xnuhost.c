@@ -10,7 +10,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "xnuhost.h"
+#include "xnuhost/free_report.h"
 #include "stub_abi.h"
+#include <sys/mman.h>
+#include <sys/syscall.h>
 
 static int failures, checks;
 #define CHECK(cond) do { checks++; if (!(cond)) { failures++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -1271,6 +1274,118 @@ static void test_perf(void)
   CHECK(xh_config_set(&c, "cpu-pin", "3") == -1);
 }
 
+// ---- free pages given back (discard.c, ram_discard; the kernel's free-page reporting, hosted 0058) ----------
+static uint64_t memfd_held(int fd) { struct stat st; return fstat(fd, &st) == 0 ? (uint64_t)st.st_blocks * 512 : ~0ull; }
+
+static void test_discard(void)
+{
+  // A RAM of 64 pages of 16 KiB at physical 0x40000000, as a memfd with xnuhost's shrink seal, mapped twice: the
+  // window and "a task" (MAP_SHARED, as task_map maps it).
+  const uint64_t page = 4096, gp = 16384, base = 0x40000000ull, size = 64 * gp;
+  int fd = (int)syscall(SYS_memfd_create, "xnuhost-test-ram", 2u /* MFD_ALLOW_SEALING */);
+  CHECK(fd >= 0 && ftruncate(fd, (off_t)size) == 0 && fcntl(fd, 1033 /* F_ADD_SEALS */, 2 /* F_SEAL_SHRINK */) == 0);
+  uint8_t *window = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  uint8_t *task = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+  CHECK(window != MAP_FAILED && task != MAP_FAILED);
+  if (fd < 0 || window == MAP_FAILED || task == MAP_FAILED) return;
+  for (uint64_t i = 0; i < size / 8; i++) ((uint64_t *)window)[i] = i | 1;
+  CHECK(memfd_held(fd) == size);
+  memset(&g_discard, 0, sizeof g_discard);
+  // Pages 8..15 given back: the memfd holds 8 pages less, both mappings read zero there and the rest is kept.
+  CHECK(xh_ram_discard_fd(fd, base, base, size, base + 8 * gp, 8 * gp, page) == 0);
+  CHECK(memfd_held(fd) == size - 8 * gp);
+  bool zero = true, kept = true;
+  for (uint64_t i = 0; i < size / 8; i++) {
+    uint64_t at = i * 8;
+    bool in = at >= 8 * gp && at < 16 * gp;
+    if (in) zero = zero && ((uint64_t *)window)[i] == 0 && ((uint64_t *)task)[i] == 0;
+    else kept = kept && ((uint64_t *)window)[i] == (i | 1) && ((uint64_t *)task)[i] == (i | 1);
+  }
+  CHECK(zero && kept);
+  // A read of a hole through a shared mapping fills it (shmem has no shared zero page): the pages read above are held
+  // again. Given back once more, then used again: a write makes one host page held, and the task's mapping sees it.
+  CHECK(memfd_held(fd) == size);
+  CHECK(xh_ram_discard_fd(fd, base, base, size, base + 8 * gp, 8 * gp, page) == 0 && memfd_held(fd) == size - 8 * gp);
+  window[9 * gp] = 0x5a;
+  CHECK(task[9 * gp] == 0x5a && memfd_held(fd) == size - 8 * gp + page);
+  // A page that is a hole already: nothing more to give, the call succeeds.
+  CHECK(xh_ram_discard_fd(fd, base, base, size, base + 10 * gp, gp, page) == 0 && memfd_held(fd) == size - 8 * gp + page);
+  // Refused, nothing changed: unaligned, empty, outside the window, past its end, a window that starts below the memfd.
+  CHECK(xh_ram_discard_fd(fd, base, base, size, base + 100, gp, page) == -EINVAL);
+  CHECK(xh_ram_discard_fd(fd, base, base, size, base, 100, page) == -EINVAL);
+  CHECK(xh_ram_discard_fd(fd, base, base, size, base, 0, page) == -EINVAL);
+  CHECK(xh_ram_discard_fd(fd, base, base, size, base - gp, gp, page) == -EINVAL);
+  CHECK(xh_ram_discard_fd(fd, base, base, size, base + 63 * gp, 2 * gp, page) == -EINVAL);
+  CHECK(xh_ram_discard_fd(fd, base, base + gp, size - gp, base, gp, page) == -EINVAL);    // below the window's start
+  CHECK(xh_ram_discard_fd(fd, base, base, size - gp, base + 63 * gp, gp, page) == -EINVAL); // above it (the framebuffer)
+  CHECK(xh_ram_discard_fd(fd, base + gp, base, size, base + gp, gp, page) == -EINVAL);      // window below the memfd
+  CHECK(((uint64_t *)window)[0] == 1 && ((uint64_t *)window)[63 * gp / 8] == ((63 * gp / 8) | 1));
+  CHECK(g_discard.calls == 3 && g_discard.bytes == 17 * gp && g_discard.failed == 0 && g_discard.refused == 8);
+  // fallocate's own failure is counted and returned (a closed descriptor).
+  CHECK(xh_ram_discard_fd(1000, base, base, size, base, gp, page) < 0 && g_discard.failed == 1 && g_discard.calls == 4);
+  munmap(window, size);
+  munmap(task, size);
+  close(fd);
+}
+
+static void test_free_report(void)
+{
+  // The batch and the hysteresis: a round starts above keep + hysteresis and runs down to keep.
+  CHECK(xh_fr_batch(100, 100, 50, 64, false) == 0);
+  CHECK(xh_fr_batch(150, 100, 50, 64, false) == 0);      // at keep + hysteresis: not yet
+  CHECK(xh_fr_batch(151, 100, 50, 64, false) == 51);
+  CHECK(xh_fr_batch(400, 100, 50, 64, false) == 64);     // at most a batch at once
+  CHECK(xh_fr_batch(120, 100, 50, 64, true) == 20);      // in a round: on down to keep
+  CHECK(xh_fr_batch(100, 100, 50, 64, true) == 0 && xh_fr_batch(99, 100, 50, 64, true) == 0);
+  CHECK(xh_fr_batch(0, 0, 0, 64, false) == 0 && xh_fr_batch(1, 0, 0, 64, false) == 1);
+  CHECK(xh_fr_batch(500, 100, 50, 0, false) == 0);
+  CHECK(xh_fr_batch(0xffffffffu, 0xfffffff0u, 0x100u, 64, false) == 0);  // keep + hysteresis past 32 bits
+  // A sequence of free counts: no round below the start, one round per rise, each down to keep exactly.
+  uint32_t held = 0, given = 0, rounds = 0;
+  bool active = false;
+  const uint32_t frees[] = { 30, 30, 30, 200, 0, 10, 10, 300, 0, 0 };
+  for (unsigned step = 0; step < sizeof frees / sizeof frees[0]; step++) {
+    held += frees[step];
+    uint32_t n;
+    bool started = false;
+    while ((n = xh_fr_batch(held, 100, 50, 64, active)) != 0) { if (!active) started = true; active = true; held -= n; given += n; }
+    active = false;
+    rounds += started;
+    CHECK(held <= 150);
+  }
+  CHECK(rounds == 2 && held == 100 && given == 510);
+  // Runs: sorted, consecutive pages merged, a duplicate given once.
+  uint32_t pages[] = { 9, 3, 4, 5, 20, 8, 21, 5, 100 }, first[9], count[9];
+  uint32_t runs = xh_fr_runs(pages, 9, first, count);
+  CHECK(runs == 4 && first[0] == 3 && count[0] == 3 && first[1] == 8 && count[1] == 2 && first[2] == 20 && count[2] == 2 &&
+        first[3] == 100 && count[3] == 1);
+  uint32_t one[] = { 7 }, f1[1], c1[1];
+  CHECK(xh_fr_runs(one, 1, f1, c1) == 1 && f1[0] == 7 && c1[0] == 1 && xh_fr_runs(one, 0, f1, c1) == 0);
+  uint32_t many[256], fm[256], cm[256];
+  for (uint32_t i = 0; i < 256; i++) many[i] = 1000 + (i * 37) % 256;    // every page of 1000..1255 once, shuffled
+  CHECK(xh_fr_runs(many, 256, fm, cm) == 1 && fm[0] == 1000 && cm[0] == 256);
+  CHECK(xh_fr_keep_per_queue(2048, 32) == 64 && xh_fr_keep_per_queue(2049, 32) == 65 && xh_fr_keep_per_queue(10, 0) == 10 &&
+        xh_fr_keep_per_queue(1, 32) == 1);
+  // The kernel's copy (kernel/patches/oneios-hosted/0058-free-page-report.patch adds osfmk/arm64/hosted/free_report.h)
+  // is this header, line for line.
+  FILE *patch = fopen("../../kernel/patches/oneios-hosted/0058-free-page-report.patch", "r"), *ours = fopen("include/xnuhost/free_report.h", "r");
+  CHECK(patch && ours);
+  if (patch && ours) {
+    char line[512], mine[512];
+    bool in = false, same = true;
+    unsigned lines = 0;
+    while (fgets(line, sizeof line, patch)) {
+      if (!strncmp(line, "diff --git", 10)) { if (in) break; in = strstr(line, "b/osfmk/arm64/hosted/free_report.h\n") != NULL; continue; }
+      if (!in || line[0] != '+' || !strncmp(line, "+++", 3)) continue;
+      lines++;
+      if (!fgets(mine, sizeof mine, ours) || strcmp(line + 1, mine)) { same = false; break; }
+    }
+    CHECK(same && lines > 20 && !fgets(mine, sizeof mine, ours));
+  }
+  if (patch) fclose(patch);
+  if (ours) fclose(ours);
+}
+
 int main(void)
 {
   char dir[] = "/tmp/xnuhost-test-XXXXXX";
@@ -1289,6 +1404,8 @@ int main(void)
   test_input_script();
   test_filter();
   test_perf();
+  test_discard();
+  test_free_report();
   if (!freopen("/dev/null", "w", stderr)) failures++;   // the refusals below print their reasons
   test_config(dir);
   char command[300];

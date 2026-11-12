@@ -56,11 +56,23 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
      `/chosen dram-size`, `boot_args.memSize`, `xh_info.ram_size` (test kernel); the GPU pool is fixed (8 MiB of
      response buffers; blobs are guest pages). **A large guest boots (the PC, 2026-11-12):** `ram=auto` on the PC
      (MemTotal 15,872 MiB) gave 14,080 MiB; XNU set up its ranges (`zones` 24G, the same at 2 GiB) and booted through
-     launchd to SpringBoard in 420 s under qemu with no panic. Seen there: the guest's RAM fills with its file cache and
-     stays filled (`the guest's RAM holds` 671 MiB at +30 s, 5,065 at +210 s, 8,206 MiB at +420 s, while the first boot
-     hashed the shared cache): what the host gives the guest it does not get back. OOM score unchanged. On the phone: read the
-     two `memory:` lines; if `host MemAvailable` falls under ~300 MiB, lower `ram-percent` in the image's
-     `xnuhost.conf`.
+     launchd to SpringBoard in 420 s under qemu with no panic. OOM score unchanged.
+   - **Free pages back to the host: hosted 0058, built and run on the PC (2026-11-12), not on the phone.** The goal: iOS
+     keeps all of its ram=auto memory; the host gets back only pages iOS has freed (the owner's decision: no pressure
+     feedback, no cache cap, XNU's targets, memorystatus and jetsam unchanged). What filled the memfd was not the file
+     cache: stock XNU's free queue is FIFO, so the boot walked through every never-touched page and the host kept all of
+     them (control boot at `ram=auto`, 14,080 MiB: 12,266 MiB held at 990 s while XNU had 9,048 MiB free; the PC's
+     MemAvailable fell under 1 GiB and the run was stopped). 0058 enters freed pages at the free queue's head and
+     never-touched or given-back ones at its tail, and gives back free pages above the free target + 32 MiB with
+     hysteresis (`ram_discard`, a hole in the memfd). Same boot with it: 4,973 MiB held at 990 s, XNU's view the same
+     (free 9,084 MiB; active, inactive, speculative, wired within 15 MiB of the control's), launchd 292 s and SpringBoard
+     333 s (control 306 s and 361 s), no panic; `hosted_mapcheck=1` boot: launchd, SpringBoard and the daemons, no panic, no `hosted check:` line, 893 MiB given back with
+     `oneios-free-report-stress=1` (4 GiB). Cost: a page given back and
+     used again costs the host's refill (+5.7 us per 16 KiB under qemu); on by default, `oneios-free-report=0` turns it
+     off (`kernel/patches/oneios-hosted/README.md`, 0058). On the phone: the `memory:` line's `holds` against
+     `oneios-mem:`'s in-use figures; if `host MemAvailable` still falls under ~300 MiB, lower `ram-percent` in the
+     image's `xnuhost.conf`; check `/sys/kernel/mm/transparent_hugepage/shmem_enabled` (a shmem huge page setting
+     may keep punched pages).
    - **Swap: built (the Linux PC, 2026-11-12), not on the phone.** Hosted 0057 makes `/private/var/vm` root:wheel 0755 before
      launchd in every Data store and, on each swap file failure, logs which volume the folder was on and whether it
      was read-only; the roottweak's `data_layout` puts the folder in new seeds. errno 30 is not settled (the sealed
@@ -68,7 +80,16 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
      **Settled on the PC:** both are early tries before the Data mount (errno 2: the freezer's budget probe before the
      root is mounted; errno 30: the creation thread's first `swapfile0` on the sealed root's read-only
      `/private/var/vm`); 0057's folder is then there on the Data volume. No swap file was made in 20 min at 2 GiB on
-     the PC (no swap-out asked). On the phone: a `Failed to open swap file` after the Data mount, or `swapfile0`. Compiled and prelinked on the Linux PC (`HOSTED_OUT=pc`,
+     the PC (no swap-out asked). **Swap serves only frozen apps on iOS (read in xnu-12377 and seen on the PC):** iOS's
+     kernel (`CONFIG_FREEZE`) defaults to `VM_PAGER_FREEZER_WITH_SWAP` (`vm_compressor_mode is 32` in the PC's log): the
+     compressor is on, `swap_is_active` is off and `freezer_swap_is_active` on, so a general compressed segment is never
+     queued for swap-out (`C_SWAPOUT_REG` needs `VM_CONFIG_SWAP_IS_ACTIVE`); only the freezer's segments
+     (`C_SWAPOUT_FREEZER`, frozen apps), donated early segments (`C_SWAPOUT_DONATE`) and, with the boot argument
+     `vm_compressor_scavenger_enabled=1` (off), old ones (`C_SWAPOUT_RIPE`) go to swap. So swap cannot relieve the
+     pageout scan of the 15:35 session; [I] it helps only once iOS's freezer freezes apps (userland decides that; not
+     seen on the PC). The device tree's `/defaults kern.vm_compressor` could set another mode (not set in the PC's
+     image; the phone's log line `vm_compressor_mode is N` says). On the phone: a `Failed to open swap file` after the
+     Data mount, or `swapfile0`. Compiled and prelinked on the Linux PC (`HOSTED_OUT=pc`,
      `kernel.kc` `ffbe95f7...`; `kernel/prelink/README.md`, "A Linux-built kernel against the list").
    - **backboardd's GPU memory growth** (gpu): read, not fixed (2026-11-12). Upstream NativeMetal (at our pin)
      already frees the runtime's empty 64 MiB blocks every 2 s even while backboardd draws (`watchIdleMemory`),

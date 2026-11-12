@@ -304,9 +304,12 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
 - `-cpu cortex-a710`, never qemu's default `max`: its 512-byte `DC ZVA` breaks XNU's `bzero`.
 - `--ram 4G`: without it xnuhost takes `ram=auto` (90% of the PC's MemTotal or all but 1.5 GiB: 13.75 GiB
   of this 15 GiB box, which leaves too little for qemu and the build). It boots (2026-11-12: 14,080 MiB, to SpringBoard
-  in 420 s), but the guest's RAM fills with its file cache (8 GiB held after 7 min) and the PC's MemAvailable fell to
-  about 5.9 GiB. `--ram 9728M` is the phone's size
-  ([booter.md](booter.md) 1).
+  in 420 s). Before hosted 0058 the memfd filled with pages XNU had freed (12 GiB held after 16.5 min with 9 GiB free
+  in XNU; the PC's MemAvailable fell under 1 GiB); with 0058 it holds about what XNU uses (5 GiB at 16.5 min).
+  `--ram 9728M` is the phone's size ([booter.md](booter.md) 1).
+- What XNU sees of its memory: `oneios-mem:` lines every 30 s (free, given back to the host, in use, memorystatus
+  available); `oneios-free-report=0` turns 0058's free-page reporting off for a comparison
+  ([kernel/patches/oneios-hosted/README.md](../kernel/patches/oneios-hosted/README.md), 0058).
 - `oneios-data-wait=3000`: under qemu the first boot spends minutes re-deriving the shared cache's 4 KiB code
   hashes (emulated SHA); the committed default (300 s) is for the phone.
 - `hosted_mapcheck=1` (boot argument, debugging only): the kernel records every page it maps into and unmaps
