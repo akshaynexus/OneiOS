@@ -310,7 +310,9 @@ store of a word in the shared trap page and, when the other side sleeps, a futex
   `thread_run` and not yet back, counted under the queue's lock in the same hold that takes the queue) cannot use it
   either, so its unmap goes into the same queue, after the maps queued before it, and returns (`XS_OP_UNMAP`: the stub
   carries out `munmap` in the queue's order). A task with a running thread, or a full queue, gets an order at once (the
-  order takes the queue first). Whoever takes queued unmaps (a release that carries the queue, or an order) holds the
+  order takes the queue first). The count takes no lock on a release (that cost every trip two lock pairs): a release
+  adds 1 and then reads the queue, an unmap adds itself to the queue and then reads the count (and takes itself back to
+  be ordered if a thread is counted), all sequentially consistent, so one of the two always sees the other. Whoever takes queued unmaps (a release that carries the queue, or an order) holds the
   task's order lock until they are done and marks them out (`task.unmaps_out`); until then no other thread of the task
   is released (it waits for that lock) and `task_read`/`task_write` wait too (a read through a flushed mapping would see
   a page that may be someone else's by now; it must fail, so the kernel fills it). A batch of maps only marks nothing:
@@ -341,22 +343,24 @@ measured on the phone; the hand-off across cores there may be cheaper or dearer 
 
 **Deferred unmaps, measured on the x86_64 PC** (2026-11-12, `make -C runtime/xnuhost bench-arm64 BENCH_SET="--set
 cpu-pin=2"`, the Android binary under qemu-aarch64 11.1.3 on 4 host CPUs; qemu's counter is 1 GHz and its times are
-qemu's, about ten times the container's: compare these with each other only). Means of three runs each, before
-(`main` `3394d1c`) and after (this change), alternated; 20,000 null calls, 5,000 faults, 2,000 interrupts:
+qemu's, about ten times the container's: compare these with each other only). Three runs each, before (`main`
+`43df9dd`) and after, alternated; mean (p50); 20,000 null calls, 5,000 faults, 2,000 interrupts:
 
 | Trip | Before | After |
 |---|---|---|
-| null system call, kernel to kernel | 18.96-19.67 us | 19.82-20.04 us |
-| page fault filled by `task_map`, as user code sees it | 35.0-36.0 us | 34.0-35.5 us |
-| `task_map` host call | 0.95-1.07 us | 0.94-0.97 us |
-| `task_unmap` host call | 17.3-18.9 us (an order: xnuhost's `order: unmap` p50 14-16 us) | 0.87-0.92 us (queued; 5,505 queued, 1 ordered) |
-| timer interrupt of a running thread | 66.2-72.0 us | 70.0-70.5 us |
+| null system call, kernel to kernel | 18.8-19.2 us (18.0-19.0) | 19.2-19.6 us (19.0) |
+| page fault filled by `task_map`, as user code sees it | 35.1-35.3 us (34.0) | 34.1-34.7 us (32.0-36.0) |
+| `task_map` host call | 0.94-1.10 us (0.98) | 0.94-1.11 us (0.98) |
+| `task_unmap` host call | 17.0-17.9 us (14.0): an order | 1.0-1.2 us (0.98): queued; 5,505 queued, 1 ordered |
+| timer interrupt of a running thread | 66.4-71.3 us (26.0-27.0) | 68.4-70.1 us (26.0-27.0) |
 
-So a fault, its fill and the later unmap of the page cost about 55 us of the vCPU's time before and 37 us after: the
+So a fault, its fill and the later unmap of the page cost about 53 us of the vCPU's time before and 36 us after: the
 unmap's round trip to the service thread is gone and the `munmap` rides on the next release with the maps (the fault
-row, which includes that release, did not grow). The other rows did not move beyond the runs' spread. On the phone
-(15:35 boot) the pageout's unmaps of tasks that were not running were 1.47 million round trips per 30 s (about 1.5
-vCPUs); how many of those this queues depends on how many of the tasks were running at the time: not measured yet.
+row, which includes that release, did not grow). The other rows did not move beyond the runs' spread. A first version
+that counted `task.running` under the queue's lock (two more lock pairs per release) cost every null call about 1 us
+here (p50 21.0 us); the lock-free count does not. On the phone (15:35 boot) the pageout's unmaps were 1.47 million
+round trips per 30 s (about 1.5 vCPUs); how many of them this queues depends on how many of those tasks were running
+then: not measured yet (the `perf:` line's `task_unmap N queued, M ordered`).
 
 **On the phone** (combined boot of 2026-11-12 12:30, kernel.kc 1e297354, runtime 0.1.10-dev; `cpu-pin=1`, vCPU *i*
 on CPU *i*; 30 s windows during the boot): 17,000-22,600 task traps a second, two to three faults for each system

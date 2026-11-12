@@ -47,7 +47,7 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
      its unmaps queued (up to 256 with the maps) and carried out by the stub before its next run. The WIP
      (`a97687f`) let another thread of the task run while a release or an order was still carrying the queued
      unmaps out; fixed (`task.unmaps_out`), with a two-vCPU check in the test kernel (`docs/booter.md` 2.6). The PC
-     benchmark (qemu): the `task_unmap` call 17-19 us -> 0.9 us; a fault, fill and unmap ~55 -> ~37 us. On the phone:
+     benchmark (qemu): the `task_unmap` call 17-18 us -> 1.0-1.2 us; a fault, fill and unmap ~53 -> ~36 us. On the phone:
      read the `perf:` line's `task_unmap N queued, M ordered` and the `VM_pageout_scan` share.
    - **RAM: the owner's decision: iOS gets at least 90% of the phone's RAM. `ram=auto` built and host-tested
      (2026-11-12), the default; not on the phone.** Guest = min(90% of MemTotal, MemTotal - 1.5 GiB) in 256 MiB steps

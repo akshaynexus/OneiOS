@@ -111,15 +111,17 @@ typedef struct {
   // on the phone, while the kernel's caller holds the task's TLB lock with interrupts masked). A taker holds both.
   pthread_mutex_t qlock;
   unsigned npending;
-  // Threads of the task released and not yet back (in user code, or on their way to or from it). Under qlock. While it
-  // is 0 nothing of the task can touch its memory, so an unmap waits in the queue for the next release (which carries it
-  // out before the thread runs) or the next order: the kernel's flush of a page of a task that is not running costs a
-  // queue add, not a round trip. A release adds 1 under qlock in the same hold that takes the queue, so an unmap queued
-  // before it is carried by it, and one that comes after sees the thread and is ordered at once.
+  // Threads of the task released and not yet back (in user code, or on their way to or from it). While it is 0 nothing
+  // of the task can touch its memory, so an unmap waits in the queue for the next release (which carries it out before
+  // the thread runs) or the next order: the kernel's flush of a page of a task that is not running costs a queue add,
+  // not a round trip. No lock on the release's side (it would cost every trip two lock pairs): a release adds 1, then
+  // reads npending and unmaps_out; an unmap adds itself to the queue (under qlock), then reads running, and takes
+  // itself back and is ordered if a thread is counted. All four are sequentially consistent, so at least one side sees
+  // the other: either the release finds the unmap and carries it, or the unmap finds the thread and is ordered.
   unsigned running;
-  // Unmaps in the queue (nunmaps), and whether a taker (a release that carries the queue, or an order) has taken some
-  // and not yet seen them done (unmaps_out). Under qlock; unmaps_out is set and cleared only by a taker that holds
-  // `lock` the whole time. While it is set no other thread of the task may be released (it waits for `lock`), and
+  // Unmaps in the queue (nunmaps, under qlock), and whether a taker (a release that carries the queue, or an order) has
+  // taken some and not yet seen them done (unmaps_out, atomic). unmaps_out is set (under qlock, before npending goes to
+  // 0) and cleared only by a taker that holds `lock` the whole time. While it is set no other thread of the task may be released (it waits for `lock`), and
   // task_read/task_write wait too: the kernel's flush has returned, so nothing may use the old mapping meanwhile.
   // A taker whose batch has only maps sets nothing: a map that comes late costs a fault, not a stale page.
   unsigned nunmaps;
@@ -389,10 +391,7 @@ static void log_map_failure(task *t, const struct xs_op *op, const char *how)
 // A taker's queued unmaps are done (or its task is gone): other releases of the task may go again. `lock` held.
 static void unmaps_done(task *t)
 {
-  if (!__atomic_load_n(&t->unmaps_out, __ATOMIC_RELAXED)) return;
-  pthread_mutex_lock(&t->qlock);
-  t->unmaps_out = false;
-  pthread_mutex_unlock(&t->qlock);
+  if (__atomic_load_n(&t->unmaps_out, __ATOMIC_RELAXED)) __atomic_store_n(&t->unmaps_out, false, __ATOMIC_SEQ_CST);
 }
 
 static int64_t order(task *t, const struct xs_op *ops, unsigned count)
@@ -406,8 +405,8 @@ static int64_t order(task *t, const struct xs_op *ops, unsigned count)
   // The deferred maps and unmaps first, in their order: an unmap or protect after them must find them done.
   unsigned first = t->npending;
   memcpy(sp->ops, t->pending, first * sizeof *ops);
-  t->npending = 0;
-  if (t->nunmaps) { t->unmaps_out = true; t->nunmaps = 0; }
+  if (t->nunmaps) { __atomic_store_n(&t->unmaps_out, true, __ATOMIC_SEQ_CST); t->nunmaps = 0; }   // before npending: as in thread_run
+  __atomic_store_n(&t->npending, 0, __ATOMIC_SEQ_CST);
   pthread_mutex_unlock(&t->qlock);
   // The service thread on the ordering vCPU's host CPU, as an iOS thread is (cpu-pin): the order is then a switch
   // on that core and back, not the wake-up of another core.
@@ -594,7 +593,7 @@ int64_t xh_task_map(uint64_t handle, uint64_t va, uint64_t size, uint32_t prot, 
     // late only costs the toucher one more fault, which the kernel fills again.
     pthread_mutex_lock(&t->qlock);
     bool queued = !t->dead && t->npending < XS_PENDING_MAX;
-    if (queued) t->pending[t->npending++] = op;
+    if (queued) { t->pending[t->npending] = op; __atomic_store_n(&t->npending, t->npending + 1, __ATOMIC_SEQ_CST); }   // read by releases without qlock
     pthread_mutex_unlock(&t->qlock);
     if (queued) { p->maps_deferred++; return 0; }
     if (t->dead) return -ESRCH;
@@ -617,8 +616,16 @@ int64_t xh_task_unmap(uint64_t handle, uint64_t va, uint64_t size)
     // takes it holds back the task's other releases until it is done (task.unmaps_out). A full queue: ordered, and the
     // order takes the queue first.
     pthread_mutex_lock(&t->qlock);
-    bool queued = !t->dead && t->running == 0 && t->npending < XS_PENDING_MAX;
-    if (queued) { t->pending[t->npending++] = op; t->nunmaps++; }
+    bool queued = false;
+    if (!t->dead && t->npending < XS_PENDING_MAX) {
+      unsigned n = t->npending;
+      t->pending[n] = op;
+      t->nunmaps++;
+      __atomic_store_n(&t->npending, n + 1, __ATOMIC_SEQ_CST);
+      queued = __atomic_load_n(&t->running, __ATOMIC_SEQ_CST) == 0;
+      // A thread is counted: take the unmap back (a release that saw it waits for qlock to take the queue).
+      if (!queued) { t->nunmaps--; __atomic_store_n(&t->npending, n, __ATOMIC_SEQ_CST); }
+    }
     pthread_mutex_unlock(&t->qlock);
     if (queued) { p->unmaps_deferred++; return 0; }
     if (t->dead) return -ESRCH;
@@ -785,12 +792,11 @@ void xh_tasks_dump(void)
   }
 }
 
-// The released thread is back (or its task is gone): it no longer counts as running.
+// The released thread is back (its trap seen with acquire, so its accesses came before), or its task is gone: it no
+// longer counts as running.
 static void run_ended(task *t)
 {
-  pthread_mutex_lock(&t->qlock);
-  if (t->running) t->running--;
-  pthread_mutex_unlock(&t->qlock);
+  __atomic_sub_fetch(&t->running, 1, __ATOMIC_SEQ_CST);
 }
 
 // thread_run's end, for perf.c: the trap's kind and when it was handed to the kernel.
@@ -835,30 +841,23 @@ int64_t xh_thread_run(xh_vcpu *v, uint64_t handle, struct xh_user_state *state, 
   // The thread counts as running from here (task.running, under qlock in the same hold that takes the queue).
   bool draining = false;
   unsigned nops = 0;
-  for (;;) {
-    if (__atomic_load_n(&t->npending, __ATOMIC_RELAXED) || __atomic_load_n(&t->unmaps_out, __ATOMIC_ACQUIRE)) {
-      // `lock`: also the wait for a taker that is carrying out unmaps (it holds `lock` until they are done).
-      pthread_mutex_lock(&t->lock);
-      pthread_mutex_lock(&t->qlock);
-      nops = t->npending;
-      if (nops && !t->dead) {
-        memcpy((uint8_t *)tp + XS_OPS_OFF, t->pending, nops * sizeof(struct xs_op));
-        t->npending = 0;
-        if (t->nunmaps) { t->unmaps_out = true; t->nunmaps = 0; }
-        tp->ops_done = 0;
-        tp->nops = nops;
-        draining = true;
-      }
-      t->running++;
-      pthread_mutex_unlock(&t->qlock);
-      if (!draining) pthread_mutex_unlock(&t->lock);
-      break;
-    }
+  __atomic_add_fetch(&t->running, 1, __ATOMIC_SEQ_CST);        // counted first, then the queue is read (task.running)
+  if (__atomic_load_n(&t->npending, __ATOMIC_SEQ_CST) || __atomic_load_n(&t->unmaps_out, __ATOMIC_SEQ_CST)) {
+    // `lock`: also the wait for a taker that is carrying out unmaps (it holds `lock` until they are done).
+    pthread_mutex_lock(&t->lock);
     pthread_mutex_lock(&t->qlock);
-    if (t->npending || t->unmaps_out) { pthread_mutex_unlock(&t->qlock); continue; }   // meanwhile: as above
-    t->running++;
+    nops = t->npending;
+    if (nops && !t->dead) {
+      memcpy((uint8_t *)tp + XS_OPS_OFF, t->pending, nops * sizeof(struct xs_op));
+      // unmaps_out before npending goes to 0: a release that reads npending 0 from here reads unmaps_out set.
+      if (t->nunmaps) { __atomic_store_n(&t->unmaps_out, true, __ATOMIC_SEQ_CST); t->nunmaps = 0; }
+      __atomic_store_n(&t->npending, 0, __ATOMIC_SEQ_CST);
+      tp->ops_done = 0;
+      tp->nops = nops;
+      draining = true;
+    }
     pthread_mutex_unlock(&t->qlock);
-    break;
+    if (!draining) pthread_mutex_unlock(&t->lock);
   }
   tp->state = *state;
   tp->command = XS_RUN;
