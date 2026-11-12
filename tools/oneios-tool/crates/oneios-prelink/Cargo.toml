@@ -12,3 +12,12 @@ clap.workspace = true
 # with plistlib and tomllib.
 plist = { version = "1", default-features = false }
 toml = { version = "1", default-features = false, features = ["std", "parse"] }
+# Maps that keep Python's dict order (the pairs, the symbol table, the fixup chains): later steps iterate them.
+indexmap = "2"
+rayon.workspace = true
+sha2.workspace = true
+# The matcher's function digests (hashlib.md5 in fileset_match.py), the collection's FIPS seals (hmac), and
+# random.Random's generator for align's holdout sample (MT19937).
+md-5 = "0.10"
+hmac = "0.12"
+rand_mt = "5"

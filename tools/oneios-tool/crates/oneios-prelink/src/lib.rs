@@ -7,6 +7,11 @@
 //! fileset_emit, fileset_layout, fileset_segmented), audit, record. kernel/prelink/build.sh runs the Python steps.
 
 mod hosted;
+pub mod image;
+mod matcher;
+mod merge_reviewed;
+mod native_input;
+mod pyset;
 mod roots;
 
 /// `oneios-tool prelink`'s steps (clap): each takes the arguments of the Python step it replaces.
@@ -22,6 +27,17 @@ pub enum Command {
     },
     /// hosted.py: the kexts' thread register rewrite and the list of privileged instructions
     Hosted(hosted::Args),
+    /// native-input.py: the kernel's weak-lookup binds resolved to its own definitions
+    NativeInput {
+        input: String,
+        output: String,
+        /// REPORT.json
+        report: String,
+    },
+    /// merge-reviewed.py: the other agents' reviewed records merged into the owner's
+    MergeReviewed(merge_reviewed::Args),
+    /// XnuPrelink's fileset_match.py: pair the original kernel's functions and data with the hosted kernel's
+    Match(matcher::Args),
 }
 
 #[derive(clap::Parser)]
@@ -63,6 +79,9 @@ pub fn main(command: Command) -> i32 {
     let (step, result) = match command {
         Command::Roots { kernelcache, out, profile } => ("roots", roots::run(&kernelcache, &out, profile.as_deref())),
         Command::Hosted(args) => ("hosted", hosted::run(args)),
+        Command::NativeInput { input, output, report } => ("native-input", native_input::run(&input, &output, &report)),
+        Command::MergeReviewed(args) => ("merge-reviewed", merge_reviewed::run(args)),
+        Command::Match(args) => ("match", matcher::run(args)),
     };
     match result {
         Ok(()) => 0,

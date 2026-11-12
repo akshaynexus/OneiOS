@@ -16,7 +16,7 @@ and the third Linux round, the owner's queue of eight items:
 | 4 | `cycle`, `phone log` | written, tested with stand-ins (`38c9b58`); **not run on the phone** |
 | 5 | APFS: decmpfs, the apfs-fuse backend | done (`687f0a7`): all 2,910 compressed files as apfs-fuse gives them |
 | 6 | `ioslog` in parallel | **not done**: the library's per-file entry point cannot be used from outside (section 5, "Parallel decoding"). The `sym --slide` question is settled (README "sym") |
-| 7 | `prelink`: the ten remaining steps | **not started** (section 4 is unchanged; main's `86bbb38` changed `audit.py`, `emit.py` and `pairs-24A446.json`: port the current versions) |
+| 7 | `prelink`: the ten remaining steps | **in work (fourth Linux round)**: `native-input`, `merge-reviewed` and `match` are ported and byte for byte Python's on the pc kernel (`match.map.json` the same; 3.6 s against Python's 70 s). Open: align, kclasses, structors, vtables, emit, audit, record, the `PRELINK_IMPL` switch (section 4) |
 | 8 | Retire the replaced Python and shell code | **not started**: nothing was retired, no caller was switched, Python is still the default everywhere |
 
 **Rule until further notice: Python stays the default and the only path the builds use.** The switches that
@@ -328,6 +328,14 @@ Known differences from the Python tool, on purpose (listed in `crates/oneios-ima
 - The usage text names `oneios-tool image`.
 
 ## 4. `prelink`: the kernel collection's pairing and build
+
+**Fourth Linux round, in work: five of twelve steps are ported** (`roots`, `hosted`, `native-input`, `merge-reviewed`,
+`match`). New modules: `image.rs` (XnuPrelink's `kc_image.py` and `fileset_shape.py`), `matcher.rs`
+(`fileset_match.py` at pin `9b950f2`; needs `--xnuprelink DIR` for the reviewed fixtures and the matcher
+signature), `pyset.rs` (CPython's set order and `random.sample`, for `align`), `native_input.rs`,
+`merge_reviewed.rs` (reads the symbol table itself, no `llvm-nm`). The Python reference run for comparisons is in
+the worktree's `out/kernel/py-pc/` (`work/` has every intermediate file; kernel.kc ffbe95f7). The text below this
+paragraph is the state before the round.
 
 **Two of twelve steps are ported.** `crates/oneios-prelink`: `roots.rs` (`roots.py`), `hosted.rs` (`hosted.py`).
 Each takes the Python step's arguments and writes the same files; `tests/prelink/compare-python.sh` runs both on the
