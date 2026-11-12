@@ -14,6 +14,7 @@ and `out/`.
 | Tool | For | Notes |
 |---|---|---|
 | python3 3.11+, zstd, tmux, git, curl, patch | everything | `patch`: xnuhost's Makefile applies `runtime/xnuhost/drm2kgsl/patches` to a copy of drm2kgsl |
+| Rust 1.88+ (`cargo`; rustup) | `tools/oneios-tool`: the kernel collection's build (section 3), the image tools and the phone workflow (section 10) | the build scripts run `cargo build --release --manifest-path tools/oneios-tool/Cargo.toml` when the binary is missing or older than its sources (`scripts/lib/oneios-tool.sh`); `ONEIOS_TOOL=PATH` names a built one. Built with 1.98.0; needs a C compiler (`sha2`'s `asm`) |
 | clang (stock, recent) | the kernel | the kernel build uses stock clang plus xnu-linux-toolchain's ld64 (set up by the kernel scripts, no root) |
 | libdispatch with BlocksRuntime (Linux only) | the kernel's toolchain (cctools' ld64) | Arch: `libdispatch` (6.2.2 on the PC of 2026-11-12: `/usr/include/dispatch`, `/usr/lib/libdispatch.so`, `libBlocksRuntime.so`); Debian/Ubuntu: `libdispatch-dev libblocksruntime-dev`. Without it `kernel/linux/setup-toolchain.sh` stops and no kernel builds. Also git, cmake, make, flex, bison, autoconf, automake, pkg-config ([kernel/README.md](../kernel/README.md)) |
 | Android NDK 28.2 | xnuhost, the helpers, the phone tools | `$HOME/Android/Sdk/ndk/28.2.13676358` (Linux), `$HOME/Library/Android/sdk/ndk/28.2.13676358` (macOS), or `$NDK` / `$ANDROID_NDK_HOME` |
@@ -130,13 +131,14 @@ scripts/bg.sh prelink env KERNEL=out/kernel/current-hosted-me/xnu.macho REFERENC
 #    kernel.kc.binds.json
 ```
 
-Linux and macOS (python3 3.11+, LLVM's `llvm-nm` and `llvm-mc`: on a Mac Homebrew's keg-only `llvm`, which the
-script puts on `PATH`). The input is `out/kernel-inputs/24A446/kernelcache.macho` (section 1:
+Linux and macOS. The steps are `oneios-tool prelink` (section 10); the script builds the binary when it is missing or
+older than its sources, so Rust is a prerequisite (section 0). No `python3` or `llvm-nm` is needed; LLVM's `llvm-mc`
+only with `X18=1` (on a Mac Homebrew's keg-only `llvm`, which the script puts on `PATH`). The input is `out/kernel-inputs/24A446/kernelcache.macho` (section 1:
 `scripts/image/kernel-inputs.sh`). It also writes `kernel.kc.hashes` (the 1 MiB chunk list of
 [image-format.md](image-format.md)). On the M4: 46 s cold, 19 s with the pairing reused; 94,109,696 bytes, 92
 original functions on the stub and 9 data unpaired (with the reference).
 
-**The build fails** when `kernel/prelink/audit.py` finds a kext import that is not bound as
+**The build fails** when the audit step (`oneios-tool prelink audit`) finds a kext import that is not bound as
 `kernel/prelink/pairs-24A446.json` says, or that is on the stub without a reason in `kernel/prelink/stubs-24A446.json`
 (it prints each one). A kernel that renames or drops a listed function, or a new root kext, needs its pairs reviewed
 into those lists first (kernel/prelink/README.md, "Known-good pairs").
@@ -322,8 +324,9 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   the phone; under qemu-user it cannot, and only pc and lr are shown); `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
 - A user process that dies: the kernel logs its registers and a backtrace (`sheng-exc`, `sheng-ubt` lines) for the
   processes named in the boot argument `sheng-exc-name=SpringBoard,backboardd,...` (default: backboardd, chronod,
-  liveactivitiesd; launchd always). `scripts/debug/dsc.py ADDR...` names those addresses in the image set's dyld
-  shared cache (it finds the slide from a whole backtrace; its header says how to give it the cache).
+  liveactivitiesd; launchd always). `oneios-tool sym ADDR...` names those addresses in the image set's dyld
+  shared cache (it finds the slide from a whole backtrace; `ONEIOS_DSC_DIR` or `--dsc` names the cache folder, and
+  after the first call the index in `out/dsc-index` is enough: section 10, `tools/oneios-tool/README.md` "sym").
 - Wi-Fi on the PC: add `--set wifi=sim`: a made-up radio with two networks for the guest's Wi-Fi driver and wifid
   (`ONEIOS WIFI:` lines; [hardware.md](hardware.md) section 3). Not possible in the Mac's container: its Linux has no
   pointer authentication (`xnuhost E an arm64e kernel needs pointer authentication ...; this host has none`).
@@ -352,7 +355,7 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
 - A user process that neither dies nor does its job: boot arguments `oneios-ubt=NAME[,NAME...]`
   (`oneios-ubt-at=SECONDS`, default 420; `oneios-ubt-every=SECONDS` to repeat) make the kernel print where every
   thread of those processes is (`oneios-ubt:` lines: scheduler state, saved pc and lr, the return addresses up the
-  frame pointers; `0026`). Give a long line's addresses to `scripts/debug/dsc.py` for the slide, then name the rest
+  frame pointers; `0026`). Give a long line's addresses to `oneios-tool sym` for the slide, then name the rest
   with `--slide`.
 - Who opens the GPU, and whether the Metal plug-in's folder was mounted: `oneios-gpu-addon:` and `oneios-gpu-open:` lines,
   always on (`docs/gpu.md` 5.1).
@@ -656,10 +659,10 @@ what was changed for the iPhone's shared cache and what is verified: [gpu.md](gp
 
 ## 10. Rust tools (`oneios-tool`)
 
-`tools/oneios-tool` is one binary with the project's host tools in Rust: `sym` (the backtrace symbolizer,
-`scripts/debug/dsc.py`), `log` (reads an xnuhost session log), `image` (`scripts/image/imagetool.py`), `ioslog` (iOS's
-own unified log out of a copy of the phone's Data store, without a mount) and `prelink` (two steps of
-`kernel/prelink/build.sh` so far). Since the third Linux round also `phone` (the adb
+`tools/oneios-tool` is one binary with the project's host tools in Rust: `sym` (the backtrace symbolizer; it replaced
+`scripts/debug/dsc.py`, deleted 2026-11-12), `log` (reads an xnuhost session log), `image` (`scripts/image/imagetool.py`), `ioslog` (iOS's
+own unified log out of a copy of the phone's Data store, without a mount) and `prelink` (all twelve steps of
+`kernel/prelink/build.sh`, behind `PRELINK_IMPL=rust`). Since the third Linux round also `phone` (the adb
 workflow of section 6: status, stage, sums, switch, return, log, the Data store's copy), `app` (the fork's app of
 section 7: version, doctor, build, install, stage-scripts) and `cycle` (one test cycle: build, tests, stage, switch, watch, hold, return, collect).
 **None of the three has run on the real phone yet**: sections 6 and 7 show the CLI first and, as the fallback, the
@@ -689,7 +692,7 @@ Rust 1.95 or newer (apk-info-zip 1.1.1 needs 1.95; built with 1.98.0 and 1.99.1)
 |---|---|---|
 | `scripts/image/build.sh`, `scripts/image/verify.sh` | `IMAGETOOL_IMPL=rust` (default `python`), `ONEIOS_TOOL=PATH` | `oneios-tool image` runs profile, apfs-info, apfs-owners, hashes, tree-copy, seed-pack, manifest and the set folder's verify; pack and the archive's verify stay with the Python tool. Same files, byte for byte (README "image") |
 | `scripts/image/kernel-inputs.sh` | none needed; `IM4P_TOOL=PATH` forces it | without the `lzfse` program the kernelcache is decoded by `oneios-tool image im4p`; the result is checked against the pinned SHA-256 either way (section 1) |
-| `kernel/prelink/build.sh` | none | Python only; `oneios-tool prelink roots` and `hosted` exist and are compared, the other steps are not ported |
+| `kernel/prelink/build.sh` | none: Rust only since 2026-11-12 (`ONEIOS_TOOL=PATH` for another binary) | `oneios-tool prelink` runs all twelve steps; the Python steps were deleted after every step's output was compared byte for byte, and their outputs are frozen as hashes (`tests/prelink/compare-golden.sh`). 14 s instead of two minutes |
 
 `oneios-tool image seed-pack` writes `data.seed`'s members in parallel, each at its own offset (the same bytes as
 `imagetool.py`'s; the SHA-256 is the one the trust list pins). `ONEIOS_IMAGE_TIMING=1` prints each phase's time;

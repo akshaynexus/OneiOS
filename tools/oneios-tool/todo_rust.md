@@ -16,8 +16,8 @@ and the third Linux round, the owner's queue of eight items:
 | 4 | `cycle`, `phone log` | written, tested with stand-ins (`38c9b58`); **not run on the phone** |
 | 5 | APFS: decmpfs, the apfs-fuse backend | done (`687f0a7`): all 2,910 compressed files as apfs-fuse gives them |
 | 6 | `ioslog` in parallel | **not done**: the library's per-file entry point cannot be used from outside (section 5, "Parallel decoding"). The `sym --slide` question is settled (README "sym") |
-| 7 | `prelink`: the ten remaining steps | **in work (fourth Linux round)**: `native-input`, `merge-reviewed`, `match`, `align`, `kclasses`, `structors` and `vtables` are ported and byte for byte Python's on the pc kernel (`tests/prelink/compare-python.sh` with `KERNEL=` and `REFERENCE=`). Open: emit, audit, record, the `PRELINK_IMPL` switch (section 4) |
-| 8 | Retire the replaced Python and shell code | **not started**: nothing was retired, no caller was switched, Python is still the default everywhere |
+| 7 | `prelink`: the ten remaining steps | **done (fourth Linux round)**: all twelve steps byte for byte Python's on the pc and pc2 kernels (`kernel.kc` `ffbe95f7`, `cdd98e7e`; audit 2,711 paired, 93 on the stub, 0 failures; 666 good stubs); `PRELINK_IMPL=python\|rust` in `kernel/prelink/build.sh`, default `python` (README "prelink") |
+| 8 | Retire the replaced Python and shell code | **in work (fourth Linux round)**: the prelink's eleven Python steps are deleted (goldens in `tests/prelink/golden/`, `kernel/prelink/build.sh` is Rust only); section 7 has the state of the others |
 
 **Rule until further notice: Python stays the default and the only path the builds use.** The switches that
 exist (`IMAGETOOL_IMPL` in `scripts/image/build.sh` and `verify.sh`, default `python`; `kernel-inputs.sh` takes
@@ -329,13 +329,25 @@ Known differences from the Python tool, on purpose (listed in `crates/oneios-ima
 
 ## 4. `prelink`: the kernel collection's pairing and build
 
-**Fourth Linux round, in work: nine of twelve steps are ported** (`roots`, `hosted`, `native-input`, `merge-reviewed`,
-`match`, `align`, `kclasses`, `structors`, `vtables`; open: `emit`, `audit`, `record`). New modules: `image.rs` (XnuPrelink's `kc_image.py` and `fileset_shape.py`), `matcher.rs`
-(`fileset_match.py` at pin `9b950f2`; needs `--xnuprelink DIR` for the reviewed fixtures and the matcher
-signature), `pyset.rs` (CPython's set order and `random.sample`, for `align`), `native_input.rs`,
-`merge_reviewed.rs` (reads the symbol table itself, no `llvm-nm`). The Python reference run for comparisons is in
-the worktree's `out/kernel/py-pc/` (`work/` has every intermediate file; kernel.kc ffbe95f7). The text below this
-paragraph is the state before the round.
+**Fourth Linux round: all twelve steps are ported and byte for byte Python's** (README "prelink" has the table:
+every step's files and stdout on the pc and pc2 kernels; the chain 19 s against Python's 194 s on the loaded box).
+`kernel/prelink/build.sh` takes `PRELINK_IMPL=python|rust` (default `python`). Modules: `image.rs` (XnuPrelink's
+`kc_image.py`, `fileset_shape.py`), `matcher.rs` (`fileset_match.py`), `pyset.rs` (CPython's set order and
+`random.sample`), `align.rs`, `kclasses.rs`, `structors.rs`, `vtables.rs`, `emit.rs` + `layout.rs` + `plistpy.rs`
+(`emit.py`, `fileset_emit.py`, `fileset_segmented.py`, `fileset_layout.py`, plistlib's writer), `audit.rs`,
+`record.rs`, `native_input.rs`, `merge_reviewed.rs`, `records.rs`.
+
+Open for prelink:
+1. A Mac-built kernel (the Mac's `eae11352` collection) through `tests/prelink/compare-python.sh`: only Linux-built
+   kernels were compared (the Python steps must still exist there, or use the goldens once they are frozen).
+2. `matcher.rs`, `emit.rs` and `layout.rs` are ports of XnuPrelink at pin `9b950f2`. When the pin moves, port the
+   change; `--xnuprelink` still supplies the fixtures and the files of the matcher signature.
+3. Not ported, on purpose: the Python tools `build.sh` does not run (`classes.py`, `unmapped.py`, `port-fixture.py`,
+   `stubs-check.py`, `lead/imports.py`, `lead/between.py`): review helpers, run by hand.
+4. The methods `fileset_match.py` defines and never calls (`align_orders`, `validate_calls`, `validate_diversity`,
+   `diversity_data`) are not in `matcher.rs`.
+
+The text below this paragraph is the plan the port followed (kept for the pitfalls).
 
 **Two of twelve steps are ported.** `crates/oneios-prelink`: `roots.rs` (`roots.py`), `hosted.rs` (`hosted.py`).
 Each takes the Python step's arguments and writes the same files; `tests/prelink/compare-python.sh` runs both on the

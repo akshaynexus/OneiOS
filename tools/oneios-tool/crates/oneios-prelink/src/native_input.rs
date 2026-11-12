@@ -1,6 +1,21 @@
 //! `prelink native-input IN OUT REPORT.json`: the hosted kernel as the emitter's native input, its weak-lookup
 //! binds resolved to its own definitions. A port of kernel/prelink/native-input.py (its header has the why):
 //! the same OUT and REPORT.json byte for byte, and the same line on stdout.
+//!
+//! The step as its Python original described it (kernel/prelink/native-input.py, retired 2026-11-12 after the
+//! comparison in tools/oneios-tool/README.md "prelink"; the usage line is that script's):
+//!
+//! ```text
+//! The hosted kernel as XnuPrelink's native input: its weak-lookup binds resolved to its own definitions.
+//!
+//! usage: native-input.py IN OUT REPORT.json
+//!
+//! The hosted xnu.macho (LC_DYLD_CHAINED_FIXUPS, DYLD_CHAINED_PTR_ARM64E_KERNEL) imports the board's optional entry
+//! points by weak lookup (ordinal BIND_SPECIAL_DYLIB_WEAK_LOOKUP, -3). Inside the kernel the only definition of each is
+//! the kernel's own weak default; dyld's weak lookup would bind it there. XnuPrelink refuses images with chained imports,
+//! so each such bind becomes the rebase to that definition, with its pointer-authentication fields unchanged, and the
+//! import table is emptied. Nothing else changes; a bind with another ordinal, or with no definition, stops the step.
+//! ```
 
 use crate::image::{cstr_at, hex, put32, put64, u16_at, u32_at, u64_at, LC_DYLD_CHAINED_FIXUPS, LC_SEGMENT_64, LC_SYMTAB};
 use anyhow::{anyhow, bail, Context, Result};

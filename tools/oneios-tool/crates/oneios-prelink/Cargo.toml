@@ -21,3 +21,6 @@ sha2.workspace = true
 md-5 = "0.10"
 hmac = "0.12"
 rand_mt = "5"
+# The prelink information's <data> elements (plistlib's base64 lines) and the search for the kexts' inline pools.
+base64 = "0.22"
+memchr = "2"

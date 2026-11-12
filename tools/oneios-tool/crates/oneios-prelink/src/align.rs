@@ -5,6 +5,29 @@
 //! Byte identity rests on three things of CPython, kept exactly: the holdout sample (`random.Random(2).sample` of
 //! a list made by iterating a set of addresses: `pyset.rs`), the scores (IEEE doubles, the same operations in the
 //! same order) and `round(score, 2)` with `repr`.
+//!
+//! The step as its Python original described it (kernel/prelink/align.py, retired 2026-11-12 after the
+//! comparison in tools/oneios-tool/README.md "prelink"; the usage line is that script's):
+//!
+//! ```text
+//! Pair original kernel functions the matcher left unpaired, by link order against the reference kernel.
+//!
+//! usage: align.py --xnuprelink DIR --kernelcache KC --reference REF --native NATIVE --map MAP --out aligned.json
+//!                [--threshold 2.0] [--holdout 2500]
+//!
+//! The original kernel and the RELEASE reference kernel (same source, link-time optimised) are linked in the same order.
+//! For an unpaired original function that a kext references, take the nearest paired functions before and after it
+//! (at most 60 functions apart) whose names the reference defines once and has in the same order about as far apart, and align the original functions between them
+//! with the reference's functions between the same two names (Needleman-Wunsch; a pair scores by the overlap of its
+//! named callees, strings and named data, by its size and by its call count). The function takes the name it is aligned
+//! with when the pair's score is at least --threshold, the native kernel defines that name once and no other original
+//! function has it. XnuPrelink's own order rule needs equal counts between the anchors; this one tolerates functions
+//! that only one side has.
+//!
+//! The same procedure run on already paired functions with their pairing hidden (--holdout N, a fixed sample) gives
+//! the error rate, written into the output with every pair: these are inferred, not reviewed. emit.py writes them into
+//! the pairing as 'how': 'aligned' after the matcher's own and before the reviewed records, which win.
+//! ```
 
 use crate::image::{hex, scan, u32_at, unhex, Image, Symbols};
 use crate::pyset::{PyRandom, PySet};

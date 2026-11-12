@@ -152,7 +152,7 @@ Changed (all `#if XNU_HOSTED`):
 Found on the phone: SpringBoard reached the Home Screen with an empty Dock and no icon, the App Library was empty,
 and on unlock SpringBoard died in an assertion of FrontBoardServices, `Invalid condition not satisfying:
 processIdentity` (`+[FBSSceneClientIdentity identityForProcessIdentity:]` with nil, called from SpringBoard's scene
-request for Spotlight while the lock screen's views appeared: named with `scripts/debug/dsc.py` from the `sheng-exc`
+request for Spotlight while the lock screen's views appeared: named with `scripts/debug/dsc.py` (now `oneios-tool sym`) from the `sheng-exc`
 backtrace).
 
 - **0035.** The removable system apps (Camera, Photos, Safari, Messages, Weather, ...: 52 bundles) are not in the

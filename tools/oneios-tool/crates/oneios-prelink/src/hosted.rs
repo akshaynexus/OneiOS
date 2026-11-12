@@ -2,6 +2,32 @@
 //! kernel: the thread register rewrite and the list of privileged instructions. A port of kernel/prelink/hosted.py
 //! (its header has the why of each rewrite): the same OUT and REPORT.json, byte for byte, and the same line on
 //! stdout.
+//!
+//! The step as its Python original described it (kernel/prelink/hosted.py, retired 2026-11-12 after the
+//! comparison in tools/oneios-tool/README.md "prelink"; the usage line is that script's):
+//!
+//! ```text
+//! Apple's kexts under the hosted kernel: the thread register rewrite and the list of privileged instructions.
+//!
+//! usage: hosted.py KERNELCACHE OUT REPORT.json [--closure select.json] [--x18]
+//!
+//! The hosted kernel (kernel/patches/oneios-hosted, hosted.h) keeps the current thread in TPIDR_EL0 and the vCPU block
+//! (struct xh_cpu *) in x18; TPIDR_EL1 does not exist for a process. Every `mrs xN, TPIDR_EL1` / `msr TPIDR_EL1, xN`
+//! in the executable segments of the fileset's kext entries (never the original kernel entry: it is replaced) becomes
+//! the same instruction on TPIDR_EL0, one word for one word. Every `mrs xN, MPIDR_EL1` becomes `ldr wN, [x18]`, the
+//! vCPU index at offset 0 of the vCPU block, as kernel/hosted-fixup.py does for the kernel itself (at EL0 Linux
+//! answers MPIDR_EL1 with a constant). Every `orr xD, xN, #0x00ff000000000000` becomes
+//! `and xD, xN, #0xff00ffffffffffff`: the inline smr_hash_array_decode of <kern/smr_hash.h> keeps the array's order in
+//! bits 48..55 of the pointer and restores them to 0xff, which is right for a kernel address on hardware and wrong here,
+//! where kernel addresses are low (the hosted kernel's own copy clears them, smr_hash.h under XNU_HOSTED). This runs on the kernelcache before the pairing and the
+//! emission, so the emitter's component HMACs are computed over the rewritten code. OUT is written only when a word
+//! changed; with no rewrite the build uses KERNELCACHE as it is.
+//!
+//! The report also counts, per kext, every other system-register, DAIF and EL1 `sys` instruction a process cannot
+//! execute (they reach
+//! xnuhost's SIGILL emulation), and with --x18 every instruction that names x18/w18 (llvm-mc; a kext that writes x18
+//! loses the vCPU block).
+//! ```
 
 use anyhow::{anyhow, Context, Result};
 use oneios_common::pyjson::{self, Value};

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>b</key>
+	<integer>-5</integer>
+	<key>a</key>
+	<array>
+		<string>x&lt;y&amp;z</string>
+		<true/>
+		<real>1.5</real>
+		<dict/>
+		<array/>
+	</array>
+	<key>d</key>
+	<dict>
+		<key>data</key>
+		<data>
+		AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKiss
+		LS4vMDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZ
+		WltcXV5fYGFiYw==
+		</data>
+	</dict>
+	<key>big</key>
+	<integer>18446744005107531776</integer>
+</dict>
+</plist>

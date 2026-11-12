@@ -11,7 +11,7 @@ daemons find the service they expect and the keychain can store items.
 ## Why
 
 The S24 Ultra has no Secure Enclave, and the collection's `com.apple.driver.AppleSEPKeyStore` (the real
-`AppleKeyStore` class, a SEP client) is left out of `kernel.kc` (`kernel/prelink/roots.py`, `FORCE_OUT`). Without a
+`AppleKeyStore` class, a SEP client) is left out of `kernel.kc` (`oneios-tool prelink roots`, `FORCE_OUT` in `tools/oneios-tool/crates/oneios-prelink/src/roots.rs`). Without a
 service of that name, launchd logged `failed to find AppleKeyStore service` and its keybag boot task
 `MKB_INIT: FATAL KEYBAG ERROR: failed to load system bag`.
 

@@ -5,11 +5,11 @@ script before it may replace it; the commands and the results are below. What is
 
 | Tool | Replaces | State | Same output as the old tool |
 |---|---|---|---|
-| `sym` | `scripts/debug/dsc.py` | done | yes: byte for byte on 18 of 18 address sets (Linux, 2026-11-12; the Mac's run: 18 of 18) |
+| `sym` | `scripts/debug/dsc.py` (**retired 2026-11-12**: deleted, its output frozen in `tests/sym/golden/`) | done | yes: byte for byte on 18 of 18 address sets (Linux, 2026-11-12; the Mac's run: 18 of 18) |
 | `log` | nothing (new) | done | not applicable; 33 commands end with status 0, two runs equal |
 | `image` | `scripts/image/imagetool.py` | 9 subcommands in Rust, the rest run the Python tool | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds, byte for byte (the 36th: the Linux set has no `kernel.kc`) |
 | `ioslog` | the manual steps of `docs/newtodo.md` "How to resume" step 2 (mount, copy, `unifiedlog_iterator`) | done; not run on the phone's Data store yet | yes on 7 archives: CSV byte for byte from a `.logarchive`, from a Data-store image and from a mounted volume |
-| `prelink` | the steps of `kernel/prelink/build.sh` | 2 of 12 steps (`roots`, `hosted`) | yes for those two, byte for byte on the real kernelcache; the others are not ported |
+| `prelink` | the steps of `kernel/prelink/build.sh` | all 12 steps (`PRELINK_IMPL=rust`) | yes: every step's files and stdout byte for byte on two Linux-built kernels, `kernel.kc` `ffbe95f7...` and `cdd98e7e...` |
 | `phone` | `scripts/phone/stage.sh`, the adb lines of `docs/building.md` section 6, the Mac's `sparsewrite.py` | written; **not run on the phone** (none on the box) | `stage` and `sums`: the same output and the same stage as `stage.sh` on a stand-in phone; 64 checks pass (`tests/phone/run.sh`) |
 | `app` | the app lines of `docs/building.md` section 7 (new) | written; **the app was not built or installed with it** (the owner's decision for this box) | not applicable; 65 checks pass with a stand-in checkout, gradlew, gh and phone (`tests/app/run.sh`); `app version` runs on the real clone |
 | `cycle`, `phone log` | the test cycle of `docs/building.md` section 6 by hand (new) | written; **not run on the phone or with real builds** | not applicable; 90 checks pass with a stand-in checkout and phone (`tests/cycle/run.sh`) |
@@ -65,7 +65,8 @@ exists or where ours is measured to be faster; each such part says why in its mo
 | `csv`, `serde_json`, `chrono`, `uuid`, `regex` | `ioslog`'s CSV and JSON lines (the same crates `unifiedlog_iterator` writes them with), times, `--grep` |
 | `tracing-subscriber` | `ioslog -v`: the decoder's warnings on stderr |
 | `simple_asn1`, `lzfse_rust` | `image im4p`: the IM4P container (DER) and its LZFSE payload; the LZFSE and LZVN kinds of compressed APFS files |
-| `plist`, `toml` | `prelink roots`: the kernelcache's `__PRELINK_INFO` and the kernel profile; `image profile`: the build profile |
+| `plist`, `toml` | `prelink roots` and `emit`: the kernelcache's `__PRELINK_INFO` and the kernel profile; `image profile`: the build profile |
+| `indexmap`, `md-5`, `hmac`, `rand_mt`, `memchr` | `prelink`: Python's dict order, the matcher's function digests, the collection's FIPS seals, `random.Random`'s generator for `align`, the search for the kexts' inline pools |
 | `tar` 0.4 (`Header`) | `image seed-pack`: every 512-byte ustar block of `data.seed`, field by field (`crates/oneios-image/src/tar.rs`; what stays ours and why: below) |
 | `serde_json` (`ser::Formatter`), `serde` | every JSON file the tools write: Python's `json.dumps` layout is a `Formatter` (`oneios-common/src/pyjson.rs`) |
 | `base64`, `percent-encoding` | the seed's xattr values and their pax keys (`base64.b64encode`, `urllib.parse.quote`) |
@@ -344,7 +345,8 @@ What the numbers say:
 ## sym
 
 `oneios-tool sym [--slide HEX] ADDR...` names user addresses of a boot log in the image's dyld shared cache, as
-`scripts/debug/dsc.py` does, from an index it builds once (`out/dsc-index/<cache UUID>/`, 1.07 GiB).
+`scripts/debug/dsc.py` did (the Python symbolizer it replaced; deleted on 2026-11-12, its output frozen as
+hashes), from an index it builds once (`out/dsc-index/<cache UUID>/`, 1.07 GiB).
 `ONEIOS_DSC_DIR` is the folder with `dyld_shared_cache_arm64e`. **No mount is needed** since the APFS reader
 decodes compressed files: `oneios-tool image apfs-copy out/image/24A446/systemos.img
 System/Library/Caches/com.apple.dyld out/dsc` copies the cache out of the image (82 files, 7,312,005,844 bytes,
@@ -355,9 +357,16 @@ that copy (18.6 s) is byte for byte the index built through an apfs-fuse mount (
 (2.5 s for its first 16 bytes), which is why `dsc.py` is so slow through it.
 
 ```sh
-ONEIOS_DSC_DIR=<cache folder> ONEIOS_LOG_DIR=<folder with *.log> tools/oneios-tool/tests/sym/compare-python.sh
-tools/oneios-tool/tests/sym/make-log.py <cache folder> OUT.log     # a stand-in log where there is none from the phone
+ONEIOS_DSC_DIR=<cache folder> tools/oneios-tool/tests/sym/compare-golden.sh
 ```
+
+The script writes two stand-in logs from the cache (`tests/sym/make-log.py`, fixed seeds), takes its 18 address
+sets from them, and compares `sym`'s stdout and exit status with `tests/sym/golden/24A446.txt`: per set, the
+SHA-256 of the arguments, of `dsc.py`'s stdout, and its status, taken from the last run of both tools. Result
+after `dsc.py` was deleted (2026-11-12, the cache copied out of the image with `apfs-copy`): 18 of 18 the same.
+With another cache the sets are other addresses and the script says "other arguments".
+
+**The comparison that froze them** (`tests/sym/compare-python.sh`, in git up to commit `06a9222`):
 
 Result on Linux x86_64 (2026-11-12): **18 of 18 address sets byte for byte the same as `dsc.py`**, exit status
 included. The box has no log from the phone, so the sets come from two stand-in logs that `make-log.py` wrote from
@@ -591,30 +600,88 @@ them), `adb install` on Android, `gh` against GitHub.
 
 ## prelink
 
-`oneios-tool prelink STEP ARGS...`: a step of `kernel/prelink/build.sh`, with the Python step's own arguments and
-output files, so that each can be swapped and compared alone.
+`oneios-tool prelink STEP ARGS...`: the steps of `kernel/prelink/build.sh`. They replaced the Python steps
+(`kernel/prelink/STEP.py` and XnuPrelink's matcher and emitter), which were **retired on 2026-11-12** after the
+comparison below; each step takes the arguments its Python original took and writes the same files, and each
+module's header keeps that script's description. `build.sh` runs nothing else (no `PRELINK_IMPL` any more) and
+builds the binary when it is missing or stale (`scripts/lib/oneios-tool.sh`).
 
-| Step | Python | State |
+| Step | Was (Python, retired) | Module |
 |---|---|---|
-| `roots KERNELCACHE OUT.json [PROFILE.toml]` | `roots.py` | ported |
-| `hosted KERNELCACHE OUT REPORT.json [--closure FILE] [--x18]` | `hosted.py` | ported (`--x18` starts `llvm-mc`, as Python does; not compared) |
-| native-input, merge-reviewed, match (XnuPrelink's `fileset_match.py`), align, kclasses, structors, vtables, emit (`emit.py` over XnuPrelink's `fileset_emit`, `fileset_layout`, `fileset_segmented`), audit, record | | **not ported** |
+| `roots KERNELCACHE OUT.json [PROFILE.toml]` | `roots.py` | `roots.rs` |
+| `hosted KERNELCACHE OUT REPORT.json [--closure FILE] [--x18]` | `hosted.py` | `hosted.rs` (`--x18` starts `llvm-mc`, as Python does; not compared) |
+| `native-input IN OUT REPORT.json` | `native-input.py` | `native_input.rs` |
+| `merge-reviewed --reviewed F --native K --out F EXTRA...` | `merge-reviewed.py` | `merge_reviewed.rs` (reads the kernel's symbol table itself: no `llvm-nm`) |
+| `match KERNELCACHE NATIVE --out MAP [--reference-kernel K] --xnuprelink DIR` | XnuPrelink's `fileset_match.py` (matcher version 8, pin `9b950f2`) | `matcher.rs` over `image.rs` (`kc_image.py`, `fileset_shape.py`) |
+| `align`, `kclasses`, `structors`, `vtables` (the Python steps' options) | `align.py`, `kclasses.py`, `structors.py`, `vtables.py` | `align.rs` (+ `pyset.rs`), `kclasses.rs`, `structors.rs`, `vtables.rs` |
+| `emit` (emit.py's options) | `emit.py` over XnuPrelink's `fileset_emit.py`, `fileset_layout.py`, `fileset_segmented.py` | `emit.rs`, `layout.rs`, `plistpy.rs` |
+| `audit` (audit.py's options, `--against` and `--draft` too; exit 1 on a failure) | `audit.py` | `audit.rs` |
+| `record --work DIR ... [--repo CHECKOUT]` | `record.py` | `record.rs` |
+| `pin PROFILE` | the `tomllib` one-liner of `build.sh` | prints `[kernel.prelink] kernelcache_sha256` |
+
+What the Rust steps still read from the XnuPrelink checkout (`--xnuprelink`, `external/XnuPrelink`): its reviewed
+fixtures (`fixtures/fileset-*-symbols.json`) and the files its matcher signature is the SHA-256 of
+(`fileset_match.py`, `kc_image.py`, `fileset_shape.py` and the fixtures). The signature is written into
+`match.map.json` and checked by `emit`, as XnuPrelink does: it says which matcher rules a map follows.
+`matcher.rs` and `emit.rs` are ports of the pin `9b950f2`; when the pin moves, the port must follow, and the
+comparison below shows a drift.
+
+Hand-written here, and why (the library rule): the Mach-O reader (`image.rs`: the chains' walk order, the kernel
+collection pointer formats 7 and 8 and fileset file offsets; `object` and `goblin` read none of the three),
+CPython's `set` order and `random.sample` (`pyset.rs`: `align`'s holdout sample is drawn from a list made by
+iterating a set; no library has them; the generator is the `rand_mt` crate), and `plistlib`'s XML writer
+(`plistpy.rs`: the rewritten prelink information is inside `kernel.kc`, whose hash is recorded; reading is the
+`plist` crate). Libraries: `indexmap` (Python's dict order), `md-5`, `sha2`, `hmac` (the FIPS seals), `rand_mt`,
+`plist`, `toml`, `base64`, `memchr`, `rayon` (the per-function scan, the audit's per-kext scan).
+
+The comparison today is with the frozen output of the Python chain (`tests/prelink/golden/`: per kernel, the name,
+size and SHA-256 of every file a step writes and the SHA-256 of every step's stdout; no Apple bytes):
 
 ```sh
 scripts/image/kernel-inputs.sh 'profiles/ios-27.0.1-iPhone18,2.toml'      # out/kernel-inputs/24A446/kernelcache.macho
-tools/oneios-tool/tests/prelink/compare-python.sh
+KERNEL=out/kernel/current-hosted-pc/xnu.macho REFERENCE=out/kernel/current-hosted-pc/reference.macho \
+  tools/oneios-tool/tests/prelink/compare-golden.sh     # 40 hashes; without KERNEL: roots and hosted only, 10 hashes
 ```
 
-Each step is run by both tools with the same arguments into its own folder; stdout, the exit status and every file
-written are compared with `cmp`. Result (Linux x86_64, 2026-11-12, kernelcache sha256 `349c4692...`):
+A golden exists for the kernelcache alone and for the two kernels the Python chain was run on (`13ed0b70...` and
+`399f50fa...`, both Linux-built, in the main checkout's `out/kernel/current-hosted-pc` and `-pc2`); for any other
+kernel the script says there is none and exits 3 (`UPDATE=1` records that run instead). In the JSON records and
+the stdout the work folder, the commit of `kernel.kc.build.json` and the folders of absolute input paths are
+taken out before hashing. Result, 2026-11-12, after the Python steps were deleted: 40 of 40 the same for each
+kernel, 10 of 10 for the kernelcache alone.
+
+**The comparison that froze them** (`tests/prelink/compare-python.sh` at commit `306b0a4`, the last with both
+implementations):
+
+Both chains run side by side, each step with the same arguments into the side's own folder, each side reading its
+own earlier outputs; stdout, the exit status and every file written are compared with `cmp` (in the three records
+that carry their folder's path, the path is taken out first). Result on Linux x86_64, 2026-11-12, kernelcache
+`349c4692...`, the Linux-built kernel `13ed0b70...` with its reference `ac72f98d...` ("pc"); the box had a load of
+7 from another agent's qemu boot (4 CPUs), so the times are loaded times:
 
 | Step | Same | Python | Rust |
 |---|---|---|---|
-| `roots` with the profile (`select.json`: 130 roots, 189 left out, 150 in the closure) | yes | 1.06 s | 0.05 s |
-| `roots` without a profile (125 roots, 194 left out) | yes | 0.23 s | 0.05 s |
-| `hosted --closure select.json` (`hosted.json`, `kernelcache.hosted.macho`: 5 MPIDR_EL1 and 11 pointer rewrites in 40,540,236 bytes of kext code) | yes | 5.3 s | 1.7 s |
-| `hosted` over every kext | yes | 5.3 s | 0.8 s |
+| `roots` with the profile, and without | yes (2) | 0.85 s, 0.33 s | 0.12 s, 0.11 s |
+| `hosted --closure`, and over every kext | yes (2) | 6.1 s, 6.9 s | 1.4 s, 1.3 s |
+| `native-input` of the kernel, and of the reference | yes (2) | 0.28 s, 0.21 s | 0.05 s, 0.02 s |
+| `merge-reviewed` (161 records added) | yes | 0.30 s | 0.02 s |
+| `match` with the reference (`match.map.json`: 11,458 of 21,793 functions, 540 data) | yes | 102.0 s | 5.4 s |
+| `align` by the kernel's own order (480 pairs), by the reference's (24) | yes (2) | 18.5 s, 10.0 s | 1.8 s, 1.0 s |
+| `kclasses` (157 classes), `structors` (233 pairs), `vtables` (587) | yes (3) | 4.6 s, 1.0 s, 2.2 s | 0.6 s, 0.7 s, 0.5 s |
+| `emit` (`kernel.kc`, `kernel.kc.prelink.json`) | yes | 24.7 s | 2.2 s |
+| `audit` (2,711 paired, 93 on the stub, 9 data unpaired, 0 failures), and with `--against` and `--draft` | yes (2) | 6.7 s, 8.8 s | 1.2 s, 1.9 s |
+| `record` | yes | 0.78 s | 0.98 s |
+| the chain | `kernel.kc` `ffbe95f7...` from both; `stubs-check.py`: 666 good | 194 s | 19 s |
 
-`kernel/prelink/build.sh` has no switch and runs the Python steps. `roots.rs` holds a copy of `roots.py`'s rule and
-lists (the hardware provider classes, the kexts left out by hand): **a change to one must be made to the other**,
-and the comparison shows when they drift.
+The same on the second tree ("pc2", kernel `399f50fa...`, the pc tree's reference): every step the same,
+`kernel.kc` `cdd98e7e...` from both, 666 good stubs; Python 159 s, Rust 17 s.
+`PRELINK_IMPL=rust kernel/prelink/build.sh` on the pc kernel: 14 s (Python, on the less loaded box: 125 s); its
+`kernel.kc`, `kernel.kc.hashes`, `kernel.kc.binds.json` and `kernel.kc.prelink.json` are the Python build's bytes,
+and `kernel.kc.build.json` differs in the commit it records (`tools.oneios`) and nothing else.
+
+Not compared: `hosted --x18` (minutes in Python), `align --explain` (a debugging print), an audit with failures
+(none exists: both lists agree with both kernels), a Mac-built kernel (the Mac's `eae11352`: not on this box).
+
+The rules now live in the Rust modules only (`roots.rs`: the hardware provider classes and the kexts left out by
+hand; `matcher.rs`, `emit.rs`, `layout.rs`: XnuPrelink's at pin `9b950f2`). A change of a rule changes the outputs
+and so the goldens: regenerate them with `UPDATE=1` in the same commit and say why.

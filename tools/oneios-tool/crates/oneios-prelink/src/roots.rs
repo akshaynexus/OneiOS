@@ -2,6 +2,23 @@
 //! each one that does not. A port of kernel/prelink/roots.py: the same OUT.json, byte for byte, and the same line
 //! on stdout. The rule and the two lists are that script's (kernel/prelink/README.md); when one changes there it
 //! must change here (tests/prelink/compare-python.sh compares the two on the real kernelcache).
+//!
+//! The step as its Python original described it (kernel/prelink/roots.py, retired 2026-11-12 after the
+//! comparison in tools/oneios-tool/README.md "prelink"; the usage line is that script's):
+//!
+//! ```text
+//! Which kexts of the iPhone18,2 kernelcache go into OneiOS's kernel.kc, and why each one that does not.
+//!
+//! usage: roots.py KERNELCACHE OUT.json [PROFILE.toml]
+//!
+//! Rule (kernel/prelink/README.md): every kext of the collection is a root, except a kext all of whose IOKit
+//! personalities attach to hardware that xnuhost does not present (an Apple SoC block, I2C/SPI/SPMI part, RTBuddy or
+//! AFK coprocessor endpoint, SEP endpoint, PCIe, USB, Thunderbolt or accessory transport, AOP/SPU sensor hub). Kexts with
+//! no personality (families, libraries, KPIs) and kexts with any personality on a software provider (IOResources, the
+//! storage and HID stacks, disk images, APFS) stay. The overrides below are decided by hand and carry their reason.
+//! A left-out kext that a kept kext links against comes back as a dependency, for its code only: XnuPrelink drops the
+//! personalities of every non-root (fileset_emit.rebase_collection).
+//! ```
 
 use anyhow::{anyhow, Context, Result};
 use oneios_common::pyjson::{self, Value};

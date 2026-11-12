@@ -5,6 +5,21 @@
 //! One difference in how, not in what: the Python step asks `llvm-nm --defined-only` which names the kernel
 //! defines; this one reads the kernel's symbol table itself (the same rows: every symbol that is not a debug
 //! entry and is defined in a section or absolute), so the step needs no LLVM.
+//!
+//! The step as its Python original described it (kernel/prelink/merge-reviewed.py, retired 2026-11-12 after the
+//! comparison in tools/oneios-tool/README.md "prelink"; the usage line is that script's):
+//!
+//! ```text
+//! Merge the other agents' reviewed function records into the owner's reviewed file for one build.
+//!
+//! usage: merge-reviewed.py --reviewed OWNER.json --native native.macho --out merged.json EXTRA.json...
+//!
+//! kernel/prelink/reviewed-*.json is fable-prelink's; the lead and fable-user keep their own records beside it
+//! (lead/reviewed-lead-*.json, user/reviewed-user-*.json: functions only, each with its evidence and byte check).
+//! The owner's record wins for an original both have; a disagreement is printed and listed in the output under
+//! `merge.disagreements`, so it gets looked at instead of silently decided. A record whose native symbol the kernel
+//! does not define is left out and listed (`merge.no_symbol`). EXTRA files are taken in the order given.
+//! ```
 
 use crate::image::{hex, unhex, Image};
 use anyhow::{anyhow, Context, Result};

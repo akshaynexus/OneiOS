@@ -24,46 +24,60 @@ kernel, the kernelcache, the reference and XnuPrelink's matcher are the same). A
 
 ## Steps (`build.sh`)
 
-1. `native-input.py`: the kernel's weak-lookup binds resolved to its own definitions (Linux's ld64 left one,
+Every step is `oneios-tool prelink STEP` (`tools/oneios-tool`, Rust; `build.sh` builds the binary when it is missing
+or older than its sources, `ONEIOS_TOOL=PATH` names another). The steps were Python scripts here (`STEP.py`) and
+XnuPrelink's `fileset_match.py`, `fileset_emit.py`, `fileset_segmented.py` and `fileset_layout.py` until 2026-11-12:
+they were retired after every step's files and stdout were compared byte for byte on two Linux-built kernels
+(`13ed0b70` and `399f50fa`: `kernel.kc` `ffbe95f7` and `cdd98e7e` from both chains; `tools/oneios-tool/README.md`
+"prelink"). Their outputs are frozen as hashes in `tools/oneios-tool/tests/prelink/golden/`, and
+`tools/oneios-tool/tests/prelink/compare-golden.sh` runs the chain against them. Each Rust module carries its
+Python original's description. The build takes 14 s (Python: about two minutes) and needs neither `python3` nor
+`llvm-nm`; `llvm-mc` only with `X18=1`. XnuPrelink's checkout (`external/XnuPrelink`, pin `9b950f2`) is still read
+for its reviewed fixtures and for the matcher signature (the SHA-256 over its matcher sources, written into the
+pairing and checked by the emitter); `matcher.rs`, `emit.rs` and `layout.rs` are ports of that pin and must follow
+it when it moves. Still Python, run by hand and not part of the build: `classes.py`, `unmapped.py`,
+`port-fixture.py`, `stubs-check.py`, `lead/imports.py`, `lead/between.py`.
+
+1. `prelink native-input`: the kernel's weak-lookup binds resolved to its own definitions (Linux's ld64 left one,
    `native_source_storage_start`; Xcode 27.2's ld leaves seven: the `boot_progress_*` and `boot_log_export_put`
    defaults, `native_adreno_fences`, `native_ufs_dpu_map`), and the same for `REFERENCE`;
    XnuPrelink refuses an image with imports.
-2. `roots.py`: which kexts (below).
-3. `hosted.py`: the kexts for a kernel that is a process: `mrs/msr TPIDR_EL1` -> `TPIDR_EL0` (the current thread),
+2. `prelink roots`: which kexts (below).
+3. `prelink hosted`: the kexts for a kernel that is a process: `mrs/msr TPIDR_EL1` -> `TPIDR_EL0` (the current thread),
    `mrs xN, MPIDR_EL1` -> `ldr wN, [x18]` (the vCPU index), the packed-pointer `orr` of `smr_hash` (State below), before the pairing so the emitter's HMACs cover the
    rewritten code. The record lists every rewrite and every other instruction a process cannot execute.
-4. `fileset_match.py` (XnuPrelink, `external/XnuPrelink`): pairs the functions and data of Apple's kernel that kexts
+4. `prelink match` (a port of XnuPrelink's `fileset_match.py`, `external/XnuPrelink`): pairs the functions and data of Apple's kernel that kexts
    reference with ours, by strings, call graphs, vtables and, with `REFERENCE`, names of the RELEASE build.
 5. What the matcher left, inferred (each pair is listed in the report, `reviewed_applied.aligned`):
-   - `align.py`: by link order, ours inside a source file with the reference's function of the same name as the
+   - `prelink align`: by link order, ours inside a source file with the reference's function of the same name as the
      shape (immediates, field offsets, named callees, strings), then the reference's own order. The error rate is
      measured on known pairs with their pairing hidden and written into the output (2 % today);
      `--explain ADDRESS` prints a window.
-   - `structors.py`: constructors and base destructors of classes that kexts subclass, by the vtable they store, and
+   - `prelink structors`: constructors and base destructors of classes that kexts subclass, by the vtable they store, and
      factories (`X::withFoo`) by the class they allocate and the init slot they call.
-   - `vtables.py`: every vtable paired by name, slot by slot (the public layouts are ABI). A slot overrides an
+   - `prelink vtables`: every vtable paired by name, slot by slot (the public layouts are ABI). A slot overrides an
      order-inferred pair; its disagreements with other pairs are listed under `conflicts`.
-6. `emit.py`: XnuPrelink's fileset emitter with our roots, the inferred pairs (slots and structors first) and the
+6. `prelink emit`: XnuPrelink's fileset emitter with our roots, the inferred pairs (slots and structors first) and the
    reviewed records, which win (`reviewed-24A446-v54.json`: functions, data, one pointer site, the AMFI
    initializer; each with evidence and a hash of the original bytes it was read from). Apple's kernel entry is
    replaced by ours, kexts stay where they are, the collection's header takes our kernel's CPU subtype (the loader
    compares them), and the kernel's `__DATA` becomes a root segment of its own (`__DATA_KERNEL`) at the end when it
    does not fit in front of the first kept kext's data (it is 10 MB with the virtio-gpu driver's static buffers).
-7. `record.py`.
+7. `prelink record`.
 
-Before step 2, `merge-reviewed.py` merges the other agents' reviewed records into ours for the build (below).
+Before step 2, `prelink merge-reviewed` merges the other agents' reviewed records into ours for the build (below).
 
 `port-fixture.py` carried 50 of XnuPrelink's reviewed iPad identities over (functions with the same bytes here);
 rerun it only when that fixture changes. `unmapped.py` names the original function behind a stub panic.
 
-## Which kexts (`roots.py`)
+## Which kexts (`prelink roots`)
 
 Every kext of the collection is a root, except one all of whose IOKit personalities attach to hardware xnuhost
 does not present (an Apple SoC block, I2C/SPI/SPMI part, RTBuddy/AFK/AOP endpoint, SEP endpoint, PCIe, USB,
 Thunderbolt, accessory port), and seven decided by hand (`FORCE_OUT`: `kec.pthread`, the SEP keystore and its two
 clients, the ANE HAL, FairPlayIOKit, and IOAudioCodecs, whose start waits for FairPlayIOKit). The profile's 31 roots are kept whatever their personalities. A left-out kext that a kept one
 links against returns for its code only, without personalities. FairPlayIOKit is out although it is not hardware
-(obfuscated calls through computed tables; reason in `roots.py`). Today (2026-11-12): 319 in the kernelcache, 130
+(obfuscated calls through computed tables; reason in `prelink roots`). Today (2026-11-12): 319 in the kernelcache, 130
 roots, 150 in the closure (20 returned dependencies), 169 absent, 135 fileset entries (15 of the closure are codeless
 KPIs). The counts of 2026-11-10 (133, 154, 139) were from before the last three `FORCE_OUT` entries.
 IOGPUFamily and what it links are roots; AGXG18P (the GPU's own driver) is left out. NativeAdreno's `AGXAccelerator`
@@ -146,7 +160,7 @@ node, standard topology). That is the hosted kernel's, not a pair.
 APFS also logs "failed to find named root snapshot: Need authenticator (81)" and goes on.
 
 Besides pairs, two things were needed for this:
-- `hosted.py` rewrites APFS's eleven inline `smr_hash_array_decode` (`orr xD, xN, #0x00ff000000000000` ->
+- `prelink hosted` rewrites APFS's eleven inline `smr_hash_array_decode` (`orr xD, xN, #0x00ff000000000000` ->
   `and xD, xN, #0xff00ffffffffffff`): the kexts restore bits 48..55 of a packed kernel pointer to 0xff, and hosted
   kernel addresses are low.
 - Kernel `0010`: the published boot manifest hash is mirrored onto the `/chosen` entry Image4 looked up before the
@@ -233,12 +247,12 @@ Linux PC's. So the result of the pairing is now a committed list, and every buil
   stays on the stub (below, "A Linux-built kernel against the list").
 - `stubs-24A446.json`: the 92 originals left on the panic stub and the 9 data targets left unpaired, each with its
   reason, the kexts that import it and the count of call sites in their code.
-- `emit.py --pairs --stubs` applies the list over the matcher, the inferred pairs and the reviewed records, and leaves
+- `prelink emit --pairs --stubs` applies the list over the matcher, the inferred pairs and the reviewed records, and leaves
   the stub list unpaired. Names resolve to our kernel's **external** symbol: Xcode's kernel has local functions with
   the names of external ones (two `_kalloc_type_impl`, `_kalloc_type_var_impl`, `_kfree_type_var_impl`), and the old
   `setdefault` over all symbols could take the local one (it did for those three in a first build of this list; the
   audit caught it).
-- `audit.py` (step 6b of `build.sh`, 3.5 s) reads every chained-fixup site of the kexts whose target is in Apple's
+- `prelink audit` (step 6b of `build.sh`, 3.5 s) reads every chained-fixup site of the kexts whose target is in Apple's
   kernel, the target it has in the built `kernel.kc`, and our kernel's symbol there. **The build fails** when an
   import is on the stub or unpaired without an entry in the stub list, when a stub-list entry is bound, when a bound
   import's symbol is not the list's (aliases at the same address agree; a leaf agrees by its instructions), and
@@ -246,7 +260,7 @@ Linux PC's. So the result of the pairing is now a committed list, and every buil
   `--against OTHER.kc` prints the a/b/c comparison below for any two collections; `--draft FILE` writes a
   collection's pairs in the list's format for review (never over the committed list).
 - A new pair (another kernelcache, a kext added to the roots, a kernel function renamed) fails the build until it
-  is reviewed into the list with its `why`. A kernel without a listed symbol fails `emit.py` by name.
+  is reviewed into the list with its `why`. A kernel without a listed symbol fails `prelink emit` by name.
 
 ### The audit of 2026-11-12: Linux `9476a867` (booted to the Home Screen) against Mac `eae11352`
 
@@ -308,7 +322,7 @@ Screen, where all of them were on the stub or unpaired too. That is the evidence
 ### A Linux-built kernel against the list (2026-11-12, pc-kernel)
 
 The list was drafted from the Xcode 27.2 kernel. The first Linux build since (the Linux PC, clang 23.1.4 and
-xnu-linux-toolchain, `HOSTED_OUT=pc` at `7652df1`, series through `0057`, RELEASE reference) stopped in `emit.py` on two
+xnu-linux-toolchain, `HOSTED_OUT=pc` at `7652df1`, series through `0057`, RELEASE reference) stopped in `prelink emit` on two
 names Xcode's kernel has and Linux's does not:
 - `0xfffffe000b13ba30` (`bti c; ret`, a leaf) was named by the clang block `___lck_mtx_gate_wait_block_invoke_2`; Linux
   clang spells block functions `..._block_invoke.NNN`, numbered by the file. Now named by `_panic_display_hibb`, an empty
@@ -317,7 +331,7 @@ names Xcode's kernel has and Linux's does not:
   `OSMetaClass`, OSAction's when null; it checks the action's class against it and calls the handler). Xcode's iig
   generates that one; the Linux toolchain's iig generates only the three-argument one, which returns
   `kIOReturnUnsupported` (`0xe00002c7`): not the same function. The entry now has `"absent"`: in a kernel without the
-  name, `emit.py` leaves the original on the stub and `audit.py` accepts that for this entry only (counted `absent`; bound
+  name, `prelink emit` leaves the original on the stub and `prelink audit` accepts that for this entry only (counted `absent`; bound
   to anything there, it fails). The Linux collection of 2026-11-11, which booted to the Home Screen, had it on the stub too.
 
 Result: `kernel.kc` `ffbe95f7...` (93,700,096 bytes; the pairing cold): 2,711 paired, 93
@@ -353,16 +367,16 @@ On the M4: one `match_images` (the original against the reference) takes 20 s, t
 same). In it: function digests and string tables of
 22,000 + 27,000 functions, and the length LCS of `anchor_reference_order` (a table of up to 40,000 cells per gap,
 four rounds). `kc_image.Image.fixups()` decodes 592,421 chained fixups of the kernelcache in about 1 s (pure Python
-`struct` per pointer); `audit.py` decodes three such tables and scans the stubbed slots' kexts for callers: 3.5 s.
-A warm build (pairing reused) took 19 s on 2026-11-12: the inputs and `hosted.py` 2 s, the two `align.py` runs 4 s,
-`kclasses.py`, `structors.py` and `vtables.py` 2 s, `emit.py` 8 s (XnuPrelink's emitter: layout, the fixup chains,
-the HMACs), `audit.py` 3 s, the record and the chunk hashes 1 s.
+`struct` per pointer); `prelink audit` decodes three such tables and scans the stubbed slots' kexts for callers: 3.5 s.
+A warm build (pairing reused) took 19 s on 2026-11-12: the inputs and `prelink hosted` 2 s, the two `prelink align` runs 4 s,
+`prelink kclasses`, `prelink structors` and `prelink vtables` 2 s, `prelink emit` 8 s (XnuPrelink's emitter: layout, the fixup chains,
+the HMACs), `prelink audit` 3 s, the record and the chunk hashes 1 s.
 
 ## Records of several agents, and the import-order check
 
 - `reviewed-24A446-v54.json` is fable-prelink's. The lead keeps `lead/reviewed-lead-24A446-v54.json` and fable-user
   `user/reviewed-user-24A446-v54.json` (functions only). `build.sh` merges them for each build
-  (`merge-reviewed.py`, into `work/reviewed.merged.json`): the owner's record wins for an original both have, and
+  (`prelink merge-reviewed`, into `work/reviewed.merged.json`): the owner's record wins for an original both have, and
   every disagreement is printed and written under `merge.disagreements`. There is none today: the three of
   2026-11-11 were settled with the lead by the code (`0xfffffe000abd8788` is `lck_ticket_destroy`,
   `0xfffffe000ae04840` is `decmpfs_hides_xattr`, `0xfffffe000ade775c` tests I/O policy bit 15 and is bound to
@@ -420,6 +434,6 @@ the HMACs), `audit.py` 3 s, the record and the chunk hashes 1 s.
   kernel function reached from a kext is worth one `unmapped.py --target` look at the caller's pair.
 - The class list (`abi/original-classes.json` of the iPad profile); `x18` use in kexts is not checked by default
   (`X18=1 build.sh`, slow).
-- `record.py` fails when `OUT` resolves outside the repository it runs from (a worktree with `out` as a symbolic
+- `prelink record` fails when `OUT` resolves outside the repository it runs from (a worktree with `out` as a symbolic
   link): `work/kernel.kc` is complete by then.
 - The phone run of the Mac collection: "On the phone (2026-11-12, prelink)" above.

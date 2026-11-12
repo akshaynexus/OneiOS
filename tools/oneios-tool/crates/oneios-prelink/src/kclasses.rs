@@ -1,6 +1,28 @@
 //! `prelink kclasses`: the original kernel's class objects (metaclass objects, the metaClass and superClass
 //! pointers, vtables) named by the names their static initializers register. A port of
 //! kernel/prelink/kclasses.py (its header has the method): the same kclasses.json byte for byte.
+//!
+//! The step as its Python original described it (kernel/prelink/kclasses.py, retired 2026-11-12 after the
+//! comparison in tools/oneios-tool/README.md "prelink"; the usage line is that script's):
+//!
+//! ```text
+//! Name the class objects of the original kernel: each class's metaclass, metaClass and superClass pointers, vtable.
+//!
+//! usage: kclasses.py --xnuprelink DIR --kernelcache KC --native NATIVE --map MAP --reviewed reviewed.json --out kclasses.json
+//!
+//! Kexts name these as data: X::metaClass for OSDynamicCast, X's vtable for a subclass's super calls, X::gMetaClass as
+//! a subclass's parent. The matcher pairs only some of them; an unpaired one keeps its collection address, which is
+//! another object of our kernel (a cast that always fails, a super call into nothing). Every class says its own name:
+//!
+//!   gMetaClass   the static initializer passes x0 = the object, x1 = the class name string, x2 = the parent's
+//!                metaclass to the OSMetaClass constructor
+//!   metaClass,   OSDefineMetaClass emits `X::metaClass = &X::gMetaClass` and `X::superClass = &Parent::gMetaClass` as
+//!   superClass   two adjacent constant pointers: the pair whose first points at X's object and second at its parent's
+//!   vtable       the table whose slot 7 is the function that returns X's metaclass object (getMetaClass)
+//!
+//! A name is used when our kernel defines it once. A pair the matcher or a reviewed record already has stands; a
+//! disagreement is listed under "conflicts". Output: {"data": [...]} for emit.py (--aligned), vtables.py and structors.py.
+//! ```
 
 use crate::image::{hex, scan, u32_at, Image, RefKind};
 use crate::records::{self, repr_counts};
