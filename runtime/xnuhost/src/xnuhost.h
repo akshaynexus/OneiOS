@@ -229,6 +229,7 @@ typedef struct {
   uint64_t traps[16];       // by xh_trap kind
   uint64_t host_sleeps, task_sleeps, host_wakes, task_wakes;   // futex waits and wakes the hand-offs made
   uint64_t maps_deferred, maps_ordered;   // task_map calls carried by a release / sent to the service thread
+  uint64_t unmaps_deferred, unmaps_ordered;   // task_unmap calls queued (no thread of the task ran) / sent as an order
   uint64_t timer_sets, timer_calls;       // the kernel's timer_set calls; those that reached timer_settime
   uint64_t ticks_user, ticks_idle;        // counter ticks spent inside thread_run (the iOS thread's turn) and cpu_idle
   // thread_run's bookkeeping between two calls

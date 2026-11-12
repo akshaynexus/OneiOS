@@ -100,11 +100,27 @@ static void irq_upcall(struct xh_cpu *cpu, struct xh_frame *frame)
   }
 }
 
+// vCPU 1's part of test_unmap_race: while armed it spins, and each time `go` moves it runs worker.thread once (from
+// worker_st) and reports the trap; otherwise it idles (SGI 6 wakes it to look again).
+static volatile struct { uint64_t thread; uint32_t armed, go, done, kind; uint64_t far; } worker;
+static struct xh_user_state worker_st;
+
 static void secondary_entry(struct xh_cpu *cpu, uint64_t arg)
 {
   secondary_seen = arg + cpu->index;
+  H->irq_enable(cpu, 6, 1);
   H->ipi(cpu, 0, 5);
-  for (;;) H->cpu_idle(cpu);
+  for (;;) {
+    if (!worker.armed) { H->cpu_idle(cpu); if (cpu->irq_pending) irq_upcall(cpu, NULL); continue; }
+    uint32_t go = __atomic_load_n(&worker.go, __ATOMIC_ACQUIRE);
+    if (go == worker.done) { __asm__ volatile("yield"); continue; }
+    struct xh_trap trap;
+    int64_t rc;
+    while ((rc = H->thread_run(cpu, worker.thread, &worker_st, &trap)) == 0 && trap.kind == XH_TRAP_INTERRUPT) irq_upcall(cpu, NULL);
+    worker.kind = rc ? 0xffffffffu : trap.kind;
+    worker.far = trap.far;
+    __atomic_store_n(&worker.done, go, __ATOMIC_RELEASE);
+  }
 }
 
 __attribute__((noreturn)) void psci_entry(uint64_t context, const struct xh_vector *vector, struct xh_cpu *cpu);
@@ -183,6 +199,83 @@ static void test_devices(void)
   r[0x64 / 4] = 1;
 }
 
+// The deferred unmaps (task.c, task.unmaps_out) with a loading thread: `ldr x0, [x1]; brk` at code_va + 32.
+static int load_once(struct xh_cpu *cpu, uint64_t thread, uint64_t code_va, uint64_t va, struct xh_trap *trap, uint64_t *value)
+{
+  static struct xh_user_state ls;
+  zero(&ls, sizeof ls);
+  ls.pc = code_va + 32;
+  ls.x[1] = va;
+  int64_t rc;
+  while ((rc = H->thread_run(cpu, thread, &ls, trap)) == 0 && trap->kind == XH_TRAP_INTERRUPT) irq_upcall(cpu, NULL);
+  if (value) *value = ls.x[0];
+  return rc == 0 ? (int)trap->kind : -1;
+}
+
+static void test_unmap_queue(uint64_t task, uint64_t thread, uint64_t code_va, uint64_t data_pa)
+{
+  struct xh_trap trap;
+  uint64_t got = 0;
+  const uint64_t x_va = 0x400000000ull, fill_va = 0x500000000ull;
+  uint64_t other_pa = page_alloc();
+  *(volatile uint64_t *)(uintptr_t)kva(data_pa) = 0x1111;
+  *(volatile uint64_t *)(uintptr_t)kva(other_pa) = 0x2222;
+  // In the queue's order: an unmap, then a map of the same address to another page.
+  check(H->task_map(C0, task, x_va, 0x4000, XH_PROT_READ, data_pa) == 0 && load_once(C0, thread, code_va, x_va, &trap, &got) == XH_TRAP_BRK &&
+        got == 0x1111, "deferred unmaps: a page mapped and loaded");
+  check(H->task_unmap(C0, task, x_va, 0x4000) == 0 && H->task_map(C0, task, x_va, 0x4000, XH_PROT_READ, other_pa) == 0 &&
+        load_once(C0, thread, code_va, x_va, &trap, &got) == XH_TRAP_BRK && got == 0x2222,
+        "an unmap and a new map of the same address, queued: the thread sees the new page");
+  // A full queue (256): the next unmap is ordered and takes the queue with it; the last one is queued again.
+  int ok = 1;
+  for (unsigned i = 0; i < 300; i++) ok &= H->task_unmap(C0, task, fill_va + (uint64_t)i * 0x4000, 0x4000) == 0;
+  check(ok && H->task_unmap(C0, task, x_va, 0x4000) == 0 && load_once(C0, thread, code_va, x_va, &trap, NULL) == XH_TRAP_FAULT &&
+        trap.far == x_va, "301 unmaps while the thread is stopped (more than the queue holds): the last is in force");
+  // task_read after a queued unmap: the read must not see the old page (it fails; the kernel would fault it in).
+  uint64_t back = 0;
+  int64_t read = (H->task_map(C0, task, x_va, 0x4000, XH_PROT_READ, data_pa), H->task_read(C0, task, x_va, &back, 8));
+  if (read == -38) { put("SKIP task_read after queued maps and unmaps: this host has no process_vm_readv\n"); H->task_unmap(C0, task, x_va, 0x4000); }
+  else check(read == 8 && back == 0x1111 && H->task_unmap(C0, task, x_va, 0x4000) == 0 && H->task_read(C0, task, x_va, &back, 8) < 0,
+             "task_read after a queued map reads the page, after a queued unmap it fails");
+}
+
+// Two threads of one task on two vCPUs. Thread A is stopped with the page at x_va mapped in its process; the kernel
+// queues 128 maps and then the unmap of x_va (no thread runs); then vCPU 1 releases thread B while vCPU 0 releases
+// thread A (round 0) or gives the task an order (round 1), so one of them takes the queue. Whoever does not must wait
+// until the unmap is done: both threads' loads of x_va fault, every time.
+static void test_unmap_race(uint64_t task, uint64_t a, uint64_t code_va, uint64_t data_pa)
+{
+  uint64_t b = 0;
+  if (H->thread_create(C0, task, &b)) { check(0, "unmap race: a second thread"); return; }
+  const uint64_t x_va = 0x400000000ull, fill_va = 0x600000000ull;
+  struct xh_trap trap;
+  unsigned rounds = 200, bad_a = 0, bad_b = 0, setup = 0;
+  worker.thread = b;
+  worker.done = worker.go = 0;
+  __atomic_store_n(&worker.armed, 1, __ATOMIC_RELEASE);
+  H->ipi(C0, 1, 6);
+  for (unsigned i = 0; i < rounds; i++) {
+    if (H->task_map(C0, task, x_va, 0x4000, XH_PROT_READ, data_pa) || load_once(C0, a, code_va, x_va, &trap, NULL) != XH_TRAP_BRK) { setup++; continue; }
+    for (unsigned j = 0; j < 128; j++) H->task_map(C0, task, fill_va + (uint64_t)j * 0x4000, 0x4000, XH_PROT_READ, data_pa);
+    H->task_unmap(C0, task, x_va, 0x4000);
+    zero(&worker_st, sizeof worker_st);
+    worker_st.pc = code_va + 32;
+    worker_st.x[1] = x_va;
+    uint32_t go = worker.go + 1;
+    __atomic_store_n(&worker.go, go, __ATOMIC_RELEASE);
+    if (i & 1) H->task_protect(C0, task, code_va, 0x4000, XH_PROT_READ | XH_PROT_EXEC);
+    else if (load_once(C0, a, code_va, x_va, &trap, NULL) != XH_TRAP_FAULT || trap.far != x_va) bad_a++;
+    uint64_t start = now();
+    while (__atomic_load_n(&worker.done, __ATOMIC_ACQUIRE) != go && now() - start < H->info->timebase_hz * 20) {}
+    if (worker.done != go || worker.kind != XH_TRAP_FAULT || worker.far != x_va) bad_b++;
+    if (worker.done != go) break;
+  }
+  __atomic_store_n(&worker.armed, 0, __ATOMIC_RELEASE);
+  if (bad_a || bad_b || setup) { put("  unmap race: rounds, bad A, bad B, setup: "); hex(rounds); put(" "); hex(bad_a); put(" "); hex(bad_b); put(" "); hex(setup); put("\n"); }
+  check(!setup && !bad_a && !bad_b, "unmap race: 200 rounds, the thread that did not carry a queued unmap never sees the old page");
+  check(H->thread_destroy(C0, b) == 0, "unmap race: the second thread destroyed");
+}
+
 static void test_tasks(void)
 {
   uint64_t task = 0, thread = 0;
@@ -198,9 +291,11 @@ static void test_tasks(void)
   code[4] = 0xf9000020;      // str x0, [x1]
   code[5] = 0xd4200020;      // brk #1
   code[6] = 0x14000000;      // b .
+  code[8] = 0xf9400020;      // ldr x0, [x1]      (test_unmap_race)
+  code[9] = 0xd4200020;      // brk #1
   // As the kernel does with a page of signed text before it maps it: on a host with no seccomp the
   // svc becomes the undefined instruction thread_run reports as a system call.
-  H->text_fixup(C0, code, 7 * 4);
+  H->text_fixup(C0, code, 10 * 4);
   const uint64_t code_va = 0x100000000ull, data_va = 0x200000000ull;
   check(H->task_map(C0, task, code_va, 0x4000, XH_PROT_READ | XH_PROT_EXEC, code_pa) == 0, "task_map of a code page at 0x100000000");
   check(H->task_map(C0, task, H->info->user_va_limit, 0x4000, XH_PROT_READ, code_pa) < 0, "task_map refuses the stub's region");
@@ -245,7 +340,14 @@ static void test_tasks(void)
   check(H->task_map(C0, task, other_va, 0x4000, XH_PROT_READ | XH_PROT_WRITE, data_pa) == 0 &&
         H->thread_run(C0, thread, &st, &trap) == 0 && trap.kind == XH_TRAP_BRK && st.pc == code_va + 20 &&
         ((uint64_t *)(uintptr_t)kva(data_pa))[0] == st.x[0], "a map given before the run is in place when the thread runs");
-  H->task_unmap(C0, task, other_va, 0x4000);
+  // task_unmap while no thread of the task runs waits in the queue (task.c): it must be in force when the thread runs.
+  check(H->task_unmap(C0, task, other_va, 0x4000) == 0, "an unmap while the task's thread is stopped");
+  st.pc = code_va + 16;
+  st.x[1] = other_va;
+  check(H->thread_run(C0, thread, &st, &trap) == 0 && trap.kind == XH_TRAP_FAULT && trap.far == other_va,
+        "it is in force when the thread runs again: the store faults");
+  if (trapped) test_unmap_queue(task, thread, code_va, data_pa);
+  if (trapped) test_unmap_race(task, thread, code_va, data_pa);
   // Preemption: a thread that never traps is stopped when the vCPU's timer fires.
   st.pc = code_va + 24;
   uint32_t fires = timer_fires;
@@ -375,7 +477,7 @@ static void bench(unsigned scale)
   }
   bh_put("page fault filled by task_map, as user code sees it", &fault);
   bh_put("  task_map (host call)", &map);
-  bh_put("  task_unmap (host call; an order to the service thread)", &unmap);
+  bh_put("  task_unmap (host call; queued while the thread is stopped)", &unmap);
 
   // 3. The interrupt of a running thread: the timer fires 50 us into a loop that never traps.
   bhist kick;

@@ -43,9 +43,12 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
    1.6 GB and backboardd's share grows 760 -> 930 MiB in 30 s; swap does not work ("Failed to open swap file",
    errno 2 and 30); `VM_pageout_scan` takes ~95% of a vCPU; every page it frees fans out unmaps to almost every task
    (1.47 million round trips per 30 s, ~1.5 vCPUs); page fills ~660 us. Fixes, in order:
-   - **Deferred unmaps** (a task with no running thread gets its unmaps queued, carried out before its next run;
-     the queue to 256; the stub carries unmaps). Unfinished and **not tested**: branch `wip/perf-deferred-unmaps`
-     (`a97687f`, on top of `2c7bbb5`). Finish, add the checks to the test kernel, run the container benchmark.
+   - **Deferred unmaps: built and host-tested (2026-11-12), not on the phone.** A task with no running thread gets
+     its unmaps queued (up to 256 with the maps) and carried out by the stub before its next run. The WIP
+     (`a97687f`) let another thread of the task run while a release or an order was still carrying the queued
+     unmaps out; fixed (`task.unmaps_out`), with a two-vCPU check in the test kernel (`docs/booter.md` 2.6). The PC
+     benchmark (qemu): the `task_unmap` call 17-19 us -> 0.9 us; a fault, fill and unmap ~55 -> ~37 us. On the phone:
+     read the `perf:` line's `task_unmap N queued, M ordered` and the `VM_pageout_scan` share.
    - **RAM: the owner's decision: iOS gets at least 90% of the phone's RAM.** Implement `ram=auto` in xnuhost:
      guest = min(90% of MemTotal, MemTotal - a host floor of 1.5 GiB), rounded down to 256 MiB (about 9.5 GiB on
      this phone); settings `ram-percent=`, `ram-host-floor=`; log the choice and the host's MemAvailable every 30 s;

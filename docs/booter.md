@@ -264,7 +264,7 @@ store of a word in the shared trap page and, when the other side sleeps, a futex
   `cpu-pin=2` also pins with no plan, vCPU *i* on CPU *i* (for `make bench-arm64`).
 - **Wakes only for a sleeper.** Each side says when it sleeps (`host_sleeping`, `task_sleeping` in the trap page) and
   the other side issues `FUTEX_WAKE` only then (`stub/stub_abi.h` has the rule and its barriers).
-- **`map-defer` (default 1).** `task_map` puts the map in the task's queue (up to 64) and returns. The queue goes with
+- **`map-defer` (default 1).** `task_map` puts the map in the task's queue (up to 256) and returns. The queue goes with
   the next release of one of the task's threads: that thread carries out the maps in the stub's handler before it runs
   (`XS_OPS_OFF` in its slot) while xnuhost holds the task's order lock, or it goes at the head of the task's next order
   (unmap, protect, clone), whichever is first. So a map is in place before any thread of the task runs again and before
@@ -272,7 +272,19 @@ store of a word in the shared trap page and, when the other side sleeps, a futex
   `task_write` send the queue first. The queue has its own lock: a `task_map` never waits for a release whose thread
   is carrying out earlier maps (on the phone that made the kernel's fills wait about 100 us each, with the task's TLB
   lock held). A failed deferred map is logged (`tasks: pid N: a deferred map ... failed`); the
-  toucher faults again and the kernel fills again. `map-defer=0` orders each map as before.
+  toucher faults again and the kernel fills again. `map-defer=0` orders each map (and each unmap) as before.
+- **Deferred unmaps (with `map-defer`, 2026-11-12).** `task_unmap` is the kernel's TLB flush: when it returns, no thread
+  of the task may use the old mapping. A task none of whose threads is released (`task.running`: released by
+  `thread_run` and not yet back, counted under the queue's lock in the same hold that takes the queue) cannot use it
+  either, so its unmap goes into the same queue, after the maps queued before it, and returns (`XS_OP_UNMAP`: the stub
+  carries out `munmap` in the queue's order). A task with a running thread, or a full queue, gets an order at once (the
+  order takes the queue first). Whoever takes queued unmaps (a release that carries the queue, or an order) holds the
+  task's order lock until they are done and marks them out (`task.unmaps_out`); until then no other thread of the task
+  is released (it waits for that lock) and `task_read`/`task_write` wait too (a read through a flushed mapping would see
+  a page that may be someone else's by now; it must fail, so the kernel fills it). A batch of maps only marks nothing:
+  the other releases still go at once. The test kernel checks it on two vCPUs: thread B released on vCPU 1 while thread A
+  (or an order) on vCPU 0 carries 128 maps and the unmap, 200 rounds; both threads' loads fault every time. Without the
+  `unmaps_out` wait (the first draft, `a97687f`) 40-60 of 200 rounds saw the old page.
 - **Spins (`spin-host`, `spin-task`, microseconds, default 0).** Each side may spin before it sleeps. With each thread
   on its own core this halves nothing that pinning does not already remove, and on a shared core it costs the spin
   every time (below), so both are off.
@@ -295,6 +307,25 @@ spin on each side; with each thread on its own core a 20 us spin gave 1.8 us. So
 and on the phone, where two vCPUs and their iOS threads share the two E cores, a spin would cost what it saves. Not
 measured on the phone; the hand-off across cores there may be cheaper or dearer than in this VM.
 
+**Deferred unmaps, measured on the x86_64 PC** (2026-11-12, `make -C runtime/xnuhost bench-arm64 BENCH_SET="--set
+cpu-pin=2"`, the Android binary under qemu-aarch64 11.1.3 on 4 host CPUs; qemu's counter is 1 GHz and its times are
+qemu's, about ten times the container's: compare these with each other only). Means of three runs each, before
+(`main` `3394d1c`) and after (this change), alternated; 20,000 null calls, 5,000 faults, 2,000 interrupts:
+
+| Trip | Before | After |
+|---|---|---|
+| null system call, kernel to kernel | 18.96-19.67 us | 19.82-20.04 us |
+| page fault filled by `task_map`, as user code sees it | 35.0-36.0 us | 34.0-35.5 us |
+| `task_map` host call | 0.95-1.07 us | 0.94-0.97 us |
+| `task_unmap` host call | 17.3-18.9 us (an order: xnuhost's `order: unmap` p50 14-16 us) | 0.87-0.92 us (queued; 5,505 queued, 1 ordered) |
+| timer interrupt of a running thread | 66.2-72.0 us | 70.0-70.5 us |
+
+So a fault, its fill and the later unmap of the page cost about 55 us of the vCPU's time before and 37 us after: the
+unmap's round trip to the service thread is gone and the `munmap` rides on the next release with the maps (the fault
+row, which includes that release, did not grow). The other rows did not move beyond the runs' spread. On the phone
+(15:35 boot) the pageout's unmaps of tasks that were not running were 1.47 million round trips per 30 s (about 1.5
+vCPUs); how many of those this queues depends on how many of the tasks were running at the time: not measured yet.
+
 **On the phone** (combined boot of 2026-11-12 12:30, kernel.kc 1e297354, runtime 0.1.10-dev; `cpu-pin=1`, vCPU *i*
 on CPU *i*; 30 s windows during the boot): 17,000-22,600 task traps a second, two to three faults for each system
 call. Each hand-off took 10-12 us at p50 (up and down alike), ten times the container's: the cores were slow then (the
@@ -309,7 +340,7 @@ faults are now the larger costs, not the hand-off (the kernel side: `kernel/patc
 and on SIGQUIT), for that period; at the stop and on SIGQUIT since the start:
 
 ```text
-perf: 30.0 s: N task traps (R/s): syscall .., fault .., interrupt .., other ..; futex sleeps: vCPU .., iOS thread .. (of .. hand-offs each way); futex wakes .. + ..; task_map .. carried by a release, .. ordered; timer_set .. (.. to the host timer)
+perf: 30.0 s: N task traps (R/s): syscall .., fault .., interrupt .., other ..; futex sleeps: vCPU .., iOS thread .. (of .. hand-offs each way); futex wakes .. + ..; task_map .. carried by a release, .. ordered; task_unmap .. queued, .. ordered; timer_set .. (.. to the host timer)
 perf:   up (trap->vCPU)    n ... mean ... p50 ... p90 ... p99 ... max ... us      the handler's copy and the hand-off
 perf:   down (vCPU->task)  ...                                                     the release to the handler's wake
 perf:   kernel: syscall    ...      the kernel's work after a trap of that kind, to this vCPU's next thread_run, idle out
@@ -555,7 +586,9 @@ timer interrupts taken inside a running computation with integer and floating-po
 by `CNTV_*`; a second CPU by `cpu_start` with an SGI back; a third by PSCI `CPU_ON` (entered with the vector and its `xh_cpu`); a RAM page mapped into the kernel's address space; the GIC and a virtio
 disk by trapped loads and stores, with a sector read through a virtqueue; `text_fixup`, `ram_discard`; and a
 task: a mapped code page, a fault on an unmapped page, the kernel mapping it, the store retried and visible
-in the kernel's view, a breakpoint, a looping thread preempted by the timer.
+in the kernel's view, a breakpoint, a looping thread preempted by the timer; the deferred maps and unmaps (in the
+queue's order, more unmaps than the queue holds, and two threads of one task released on vCPUs 0 and 1 while one of
+them, or an order, carries a queued unmap: 200 rounds, 2026-11-12; under qemu on the PC, 5 runs in a row passed).
 
 **Not covered anywhere**: qemu-user has no seccomp and no `process_vm_writev`, so the `svc #0x80` trap and
 `task_read/write` have run nowhere (the test prints SKIP). The filter's logic is tested in the interpreter
