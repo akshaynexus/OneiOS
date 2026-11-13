@@ -427,7 +427,7 @@ $T cycle --only return,collect --name NAME                 # end a session that 
 | `watch` | Reads `session/xnuhost.log`'s new lines every 2 s, and after a switch only once the file changed at or after the phone's second of the switch (until the switch replaces it, about 40 s in, it is the last session's: its first-frame line made the watch say "ready after 0 s", 2026-11-12) and prints each marker once with its time: xnuhost, kernel, darwin, bsd-root, init, launchd, backboardd, SpringBoard, ready (the first frame), PANIC, end. On a panic, when the session ends by itself, or after `--ready-timeout` (300 s) without the first frame: straight to the return, and the cycle's status is 1 |
 | `hold` | `--hold S` seconds, else until Ctrl-C. Ctrl-C returns, unless `--stay`, which leaves the session open (end it with `phone return` or `cycle --only return,collect`). A panic or the session's own end during the hold returns |
 | `return` | `session/return.request`, then waits (180 s) for `One UI restored` in what `return.log` gained |
-| `collect` | `out/session-logs/DATE/NAME/`: `xnuhost.log`, the last 2000 lines of `switch.log` and `return.log`, `return.outcome`, `sums.txt`, and `summary.md` (versions, hashes, each step's time and result, the markers with their times, the panics, the way back). `--pull-data` adds the Data store's copy and `ioslog` |
+| `collect` | `out/session-logs/DATE/NAME/`: `xnuhost.log`, the last 2000 lines of `switch.log` and `return.log`, `return.outcome`, `sums.txt`, and `summary.md` (versions, hashes, each step's time and result, the markers with their times, the panics, the way back). `--pull-data` adds the Data store's copy and `ioslog`. The summary's result line names every step its Steps table has as failed (`every step that ran ended well` only when none did), and a failed `collect` ends the cycle with status 1. A run that did not watch (`--only return,collect` after `--only stage,switch,watch` with the same `--name`) reads the markers from the saved `xnuhost.log` (this folder's copy, else the phone's `session/xnuhost.log`) and says so |
 
 A cycle takes one phone lock (`out/phone.lock` of the main checkout, also from a worktree) and refuses when
 another cycle holds it. That lock is this tool's own: **the coordinator's `phone-lock.sh` is still the lock between
@@ -722,10 +722,16 @@ oneios-tool ioslog boots data.img                                   # which boot
 oneios-tool ioslog show data.img --boot last --proc backboardd      # text; -f csv|jsonl -o FILE for a file
 oneios-tool ioslog checks data.img                                  # counts of the known problems' lines, last boot
 oneios-tool ioslog save data.img out/session.logarchive             # the .logarchive the manual steps made
+oneios-tool image apfs-checkpoints data.img                         # the store's checkpoints: which pass the checks, and why the others do not
 ```
 
-Tested on stand-in images and on Mandiant's test archives (CSV byte for byte what `unifiedlog_iterator` writes);
-**not yet run on a Data store from the phone** (README "ioslog": what was compared and what was not).
+Every `ioslog` command says on stderr which checkpoint of the store it read (`... is read at checkpoint xid N ...`)
+and which newer ones it skipped and why: a store copied from the phone ends with a killed kernel, so its block 0
+is old and its newest checkpoint may be half written. `--checkpoint XID` reads one checkpoint, `--block0` block
+0's state. Tested on stand-in images (among them stores whose newest checkpoint is cut off), on Mandiant's test
+archives (CSV byte for byte what `unifiedlog_iterator` writes) and on a Data store that iOS's own APFS wrote on
+the PC. The first run on the phone's store (2026-11-13) failed with `short read at 1152903912689233920`: fixed
+(README "The APFS reader"); **the phone's own store has not been read again since** (it stays on the Mac).
 
 A kernel panic of a session (`panic(cpu N caller 0x...)`, the fault's pc and lr, the `frame 0x...` lines), named in
 the `kernel.kc` that ran and the `xnu.macho` it was prelinked from: member and segment, function + offset,

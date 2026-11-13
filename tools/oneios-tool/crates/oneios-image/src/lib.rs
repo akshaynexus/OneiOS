@@ -4,7 +4,8 @@
 //! In Rust: `profile`, `apfs-info`, `apfs-owners`, `hashes`, `tree-copy`, `seed-pack`, `manifest`, `im4p` (LZFSE by
 //! the lzfse_rust crate: no `lzfse` program) and `verify` of a set folder. The others (`check-ipsw`, `fetch`,
 //! `record-plain`, `aea-info`, `pack`, and `verify` of a `.tar.zst`) are run by the Python tool: this one starts
-//! `python3 -I scripts/image/imagetool.py ...` for them. Only here: `apfs-ls`, `apfs-copy` (apfs/files.rs).
+//! `python3 -I scripts/image/imagetool.py ...` for them. Only here: `apfs-ls`, `apfs-copy` (apfs/files.rs) and
+//! `apfs-checkpoints` (apfs/check.rs: the checkpoints of a store copied after use, and the checks before a read).
 //!
 //! What differs from Python, on purpose:
 //! - where Python ends with a traceback (a file that is not there, a damaged image), this prints one line
@@ -76,8 +77,11 @@ The OneiOS image set: profile, inputs, hash lists, Data seed, manifest, archive.
 Only in this tool (imagetool.py has no such command): read a volume without mounting it
     oneios-tool image apfs-ls IMAGE [PATH] [--volume N|NAME] [--newest]      a folder's entries: mode, owner, size, name
     oneios-tool image apfs-copy IMAGE SRC DST [--volume N|NAME] [--newest]   copy a file or a folder out of the image
-                                                                 (--newest: the newest checkpoint, for a store copied
-                                                                 after use; files kept compressed are decoded)
+                                                                 (--newest: the newest checkpoint that passes the
+                                                                 checks, for a store copied after use; --checkpoint XID:
+                                                                 that one; files kept compressed are decoded)
+    oneios-tool image apfs-checkpoints IMAGE                     every checkpoint of a store, and whether the container
+                                                                 and each volume pass the checks at it
 
 Run by scripts/image/imagetool.py (python3, found beside this tool's repository or through IMAGETOOL_PY):
     oneios-tool image check-ipsw PROFILE [--source URL|FILE]     compare the profile with the IPSW's directory and BuildManifest
@@ -198,9 +202,12 @@ pub enum Command {
         path: Option<String>,
         #[arg(long, value_name = "N|NAME")]
         volume: Option<String>,
-        /// The newest checkpoint, for a store copied after use
+        /// The newest checkpoint that passes the checks, for a store copied after use
         #[arg(long)]
         newest: bool,
+        /// The checkpoint of this transaction (see `apfs-checkpoints`)
+        #[arg(long, value_name = "XID", conflicts_with = "newest")]
+        checkpoint: Option<u64>,
         /// The reader: ours, apfs-fuse (Linux), or ours and apfs-fuse when ours refuses
         #[arg(long, value_enum, default_value = "auto")]
         apfs: apfs::fuse::Backend,
@@ -212,13 +219,19 @@ pub enum Command {
         dst: String,
         #[arg(long, value_name = "N|NAME")]
         volume: Option<String>,
-        /// The newest checkpoint, for a store copied after use
+        /// The newest checkpoint that passes the checks, for a store copied after use
         #[arg(long)]
         newest: bool,
+        /// The checkpoint of this transaction (see `apfs-checkpoints`)
+        #[arg(long, value_name = "XID", conflicts_with = "newest")]
+        checkpoint: Option<u64>,
         /// The reader: ours, apfs-fuse (Linux), or ours and apfs-fuse when ours refuses
         #[arg(long, value_enum, default_value = "auto")]
         apfs: apfs::fuse::Backend,
     },
+    /// Only in this tool: every checkpoint of a store copied after use, and whether the container and each
+    /// volume pass the checks at it
+    ApfsCheckpoints { image: String },
     /// (Python tool) compare the profile with the IPSW's directory and BuildManifest
     CheckIpsw(Raw),
     /// (Python tool) fetch the IPSW's members a profile names
@@ -384,8 +397,9 @@ fn dispatch(command: Command) -> Result<(), Fail> {
             python(&argv)
         }
         Command::Im4p { input, out, .. } => say(&im4p::cmd(&input, &out)?),
-        Command::ApfsLs { image, path, volume, newest, apfs } => apfs_tools::ls(&image, path.as_deref().unwrap_or(""), volume.as_deref(), newest, apfs),
-        Command::ApfsCopy { image, src, dst, volume, newest, apfs } => apfs_tools::copy(&image, &src, &dst, volume.as_deref(), newest, apfs),
+        Command::ApfsLs { image, path, volume, newest, checkpoint, apfs } => apfs_tools::ls(&image, path.as_deref().unwrap_or(""), volume.as_deref(), apfs_tools::pick(newest, checkpoint), apfs),
+        Command::ApfsCopy { image, src, dst, volume, newest, checkpoint, apfs } => apfs_tools::copy(&image, &src, &dst, volume.as_deref(), apfs_tools::pick(newest, checkpoint), apfs),
+        Command::ApfsCheckpoints { image } => say(apfs::Container::open(&image, apfs::Pick::Newest)?.report().trim_end()),
         Command::CheckIpsw(raw) => python_command("check-ipsw", raw),
         Command::Fetch(raw) => python_command("fetch", raw),
         Command::RecordPlain(raw) => python_command("record-plain", raw),
