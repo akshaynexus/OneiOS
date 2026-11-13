@@ -8,7 +8,7 @@ script before it may replace it; the commands and the results are below. What is
 | `sym` | `scripts/debug/dsc.py` (**retired 2026-11-12**: deleted, its output frozen in `tests/sym/golden/`) | done | yes: byte for byte on 18 of 18 address sets (Linux, 2026-11-12; the Mac's run: 18 of 18) |
 | `sym kernel`, `log panic` | naming a kernel panic's frames by hand (`atos -o xnu.macho` on the Mac, with each segment's move subtracted) | done; **not run on the Mac's log and kernel of the 2026-11-12 panic** (not on the Linux box) | compared with `llvm-symbolizer --inlining` on three Linux-built pairs: the stand-in panic's 19 addresses and 31,605 more per pair (311,605 on one) name the same function, file:line and inlined frames |
 | `log` | nothing (new) | done | not applicable; 33 commands end with status 0, two runs equal |
-| `image` | `scripts/image/imagetool.py` | 9 subcommands in Rust, the rest run the Python tool | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds, byte for byte (the 36th: the Linux set has no `kernel.kc`) |
+| `image`, `remotezip` | `scripts/image/imagetool.py`, `scripts/fetch/remotezip.py` (**both left in place, unused: the owner decides**) | all 15 subcommands in Rust since 2026-11-13, and the image scripts run them | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds, byte for byte (the 36th: the Linux set has no `kernel.kc`); the six last subcommands and `remotezip`: 25 of 25 side by side, the archive byte for byte, the real IPSW over HTTP (the section at the end) |
 | `ioslog` | the manual steps of `docs/newtodo.md` "How to resume" step 2 (mount, copy, `unifiedlog_iterator`) | done; not run on the phone's Data store yet | yes on 7 archives: CSV byte for byte from a `.logarchive`, from a Data-store image and from a mounted volume |
 | `prelink` | the steps of `kernel/prelink/build.sh` | all 12 steps (`PRELINK_IMPL=rust`) | yes: every step's files and stdout byte for byte on two Linux-built kernels, `kernel.kc` `ffbe95f7...` and `cdd98e7e...` |
 | `kernel` | the board archive generators of the kernel build (`build-oneios-*.py`, nine), `kernel/build-record.py`, the two `layout.py` and `port-legacy-display.py` | all ported, and the scripts **retired 2026-11-13** (deleted, their outputs frozen in `tests/kernelgen/golden/`): the kernel builds run the commands | yes: every file of the nine archives byte for byte (261 files, one line of two `objects.json` aside), the build record, the three kernelcache records, and `kernel/build-hosted.sh` gives the same kernel either way but for the build time it carries (2,074 bytes of time stamps and the UUID; Linux, 2026-11-13) |
@@ -19,12 +19,12 @@ script before it may replace it; the commands and the results are below. What is
 | `app` | the app lines of `docs/building.md` section 7 (new) | written; **the app was not built or installed with it** (the owner's decision for this box) | not applicable; 65 checks pass with a stand-in checkout, gradlew, gh and phone (`tests/app/run.sh`); `app version` runs on the real clone |
 | `cycle`, `phone log` | the test cycle of `docs/building.md` section 6 by hand (new) | written; **not run on the phone or with real builds** | not applicable; 90 checks pass with a stand-in checkout and phone (`tests/cycle/run.sh`) |
 
-**The image build still uses the Python tool by default.** No image script calls `oneios-tool` unless it is asked to
-(`IMAGETOOL_IMPL=rust` for `scripts/image/build.sh` and `verify.sh`), but for the retired tools (`kernel/prelink/build.sh`
+**The image scripts, the kernel builds, the prelink and the runtime package run no Python tool of this repository any more** (2026-11-13; still Python: `scripts/ios/`, `scripts/serve/rangeserve.py`, the root tweaks). The image scripts call `oneios-tool image`
+(`IMAGETOOL_IMPL` is gone; `scripts/image/imagetool.py` is left in the tree, unused), as do the retired tools' callers (`kernel/prelink/build.sh`
 and, since 2026-11-13, the kernel builds, `runtime/package.sh` and the kernel's and the prelink's hand tools: "kernel",
-"package" and the group 2 section, below), and with one exception that changes no output:
+"package" and the group 2 section, below). (Before, one script used the Rust tool without being asked:
 `scripts/image/kernel-inputs.sh` decodes the kernelcache with `oneios-tool image im4p` when the `lzfse` program is
-not installed, and checks the result against the SHA-256 the kernel profile pins.
+not installed, and checks the result against the SHA-256 the kernel profile pins. It always does now.)
 
 ## Build and tests
 
@@ -1386,3 +1386,60 @@ command line: clap's message and status 2 (the script: its docstring, status 1).
 only; nothing Linux-only is used (`std::os::unix` for modes and links, as macOS has them). On macOS
 `runtime/package.sh` takes `package archive` instead of GNU tar: that path was compared with `pack.py archive` here
 (the 4 archive cases), not run on a Mac.
+
+## image and remotezip: the IPSW, the AEA header and the archive (group 3, 2026-11-13)
+
+The six subcommands that `oneios-tool image` still handed to `scripts/image/imagetool.py` are its own now, and
+`scripts/fetch/remotezip.py` is `oneios-tool remotezip`. **No script calls `imagetool.py` any more**:
+`scripts/image/build.sh`, `verify.sh`, `kernel-inputs.sh`, `seed-apfs-macos.sh` and `scripts/fetch/fetch.sh` run
+the CLI (they find or build the binary, `scripts/lib/oneios-tool.sh`; `IMAGETOOL_IMPL` is gone). **`imagetool.py`
+is left in place, unused, on purpose: the owner decides when it goes**; `remotezip.py` (which it imports) and
+`scripts/image/tests/` (its own tests) stay with it.
+
+| Command | Was | Module (`crates/oneios-image/src`) | Same output |
+|---|---|---|---|
+| `remotezip ls\|cat\|get\|head SOURCE ...` | `scripts/fetch/remotezip.py` | `remotezip.rs` | yes: 9 cases on a stand-in IPSW; 3 unit tests (the list and the fetch, a resumed fetch, a chunk marked done that is not: `test_image.py`'s `RemoteZipTest`) |
+| `image check-ipsw PROFILE [--source S]` | `imagetool.py check-ipsw` | `ipsw.rs` | yes: 7 cases; **the real IPSW over HTTP** (12.7 GB, a ZIP64 directory): the same 16 lines |
+| `image fetch PROFILE INDIR [-j N] [--only ROLES] [--source S]` | `imagetool.py fetch` | `ipsw.rs` | yes: 6 cases (`inputs.json` and every fetched file the same); four small members of the real IPSW over HTTP: the same output, files and `inputs.json` |
+| `image record-plain INDIR ROLE PLAIN` | `imagetool.py record-plain` | `ipsw.rs` | yes: 1 case |
+| `image aea-info FILE` | `imagetool.py aea-info` | `aea.rs` | yes: 2 cases |
+| `image pack SETDIR OUT.tar.zst` | `imagetool.py pack` | `archive.rs` | yes: the archive of a stand-in set is the Python tool's byte for byte (and its `.sha256`) |
+| `image verify SET.tar.zst` | `imagetool.py verify` of an archive | `archive.rs` | yes: the good archive, and 8 refusals with imagetool.py's message each |
+
+```sh
+tools/oneios-tool/tests/imagepy/compare-python.sh     # 25 cases, both tools side by side on one stand-in IPSW
+cargo test -p oneios-image                            # 33 tests; archive_tests.rs runs imagetool.py beside the port
+python3 tools/oneios-tool/tests/image/parity.py       # the nine older subcommands: 138 cases
+scripts/image/tests/run.sh                            # imagetool.py's own tests (23), build.sh among them
+```
+
+Result on Linux x86_64, 2026-11-13: `compare-python.sh` **25 of 25** (stdout, the last line of stderr, the status and
+every file left, per case); `cargo test -p oneios-image` 33 pass, where the port's archive and each of `verify`'s
+refusals (a sidecar hash of another archive, a first file that is not the manifest, a file twice, files missing, a
+file that is not listed, a changed file, an empty tar, a file that is no zstd stream) are compared with
+`imagetool.py`'s on the same files; `parity.py` 138 of 138; `scripts/image/tests/run.sh` 23 of 23 with `build.sh`
+on the CLI; `scripts/image/kernel-inputs.sh` on the real members: the same `kernelcache.macho` (`349c4692...`),
+`devicetree.bin` and `SHA256SUMS` as before. **Not rerun: a full `scripts/image/build.sh` on the real inputs** (the
+nine subcommands it uses were compared byte for byte on the real set and in two full builds in the earlier rounds,
+"image" above; `pack` of the real 17 GB set was not run with either tool here).
+
+`remotezip`'s connection rule is the script's: each address of the host gets at most 5 s, and an address family
+that failed is tried last from then on (ureq's resolver hook tries the addresses and hands over the one that
+answered). On this box (no IPv6 route; Apple's CDN answers AAAA first) the first request waits 10 s on two IPv6
+addresses, as the script does, and every later one goes to IPv4 at once: `check-ipsw` 10 s (Python 12 s). The
+script gave the last address the whole request timeout; here it gets 5 s too.
+
+Differences that are on purpose: where the scripts ended with a traceback (a file that is no ZIP, `record-plain`
+of a role that was not fetched, a wrong command line of `remotezip`), the commands end with one line and status 1.
+The ZIP directory is read by 70 lines of our own (the end record, its ZIP64 form, the entries: two range
+requests), not by the `zip` crate: the members' own headers are read only for the members that are fetched.
+Libraries: `ureq`, `flate2`, `crc32fast`, `regex`, `plist` (the BuildManifest), `tar` (reading the archive), the
+`zstd` program for the archive as in the script. `HTTP(S)_PROXY` is not read (urllib did).
+
+Checked on Linux only. Not run on a Mac: these modules, `scripts/fetch/fetch.sh` and `scripts/image/build.sh` with
+the CLI (`seed-apfs-macos.sh` now takes the profile from `oneios-tool image profile`).
+
+**Not ported in this round** (group 3's rest): `scripts/serve/rangeserve.py` (the local range server of
+`scripts/serve/serve-image.sh`) and `scripts/ios/{ios-sign,macho-check,make-tbds}.py` (the iOS-side signing, the
+import check and the stub maker, called by `scripts/setup/ios-toolchain.sh` and `userland/*/build.sh`). They are
+unchanged and still Python.

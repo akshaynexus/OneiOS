@@ -500,12 +500,17 @@ docs. README has each group's comparison and result.
 | the tests' helpers | `tests/ksym/{compare,kcmap,make-log}.py`, `tests/kernelgen/{kernel-diff,drivers-command}.py`, `tests/phone/mkstream.py` | **replaced** 2026-11-13 (`debug`, crate `oneios-testkit`; `drivers-command.py` went with `drivers/build.py`) |
 | 2: the kernel's and the prelink's small scripts | `kernel/hosted-fixup.py`, `kernel/kdk-headers.py`, `kernel/linux/iig-fix.py`, `kernel/tests/series-check.py`, `drivers/build.py`; `kernel/prelink/{classes,stubs-check,unmapped,port-fixture}.py`, `kernel/prelink/lead/{between,imports}.py` | **retired** 2026-11-13 (`kernel hosted-fixup\|kdk-headers\|iig-fix\|series-check\|drivers`, `prelink classes\|stubs-check\|unmapped\|port-fixture\|lead-between\|lead-imports`) |
 | 3: image, package, iOS-side helpers | `runtime/package/pack.py` | **retired** 2026-11-13 (`package`) |
-| 3 | `scripts/image/imagetool.py`: `check-ipsw`, `fetch`, `record-plain`, `aea-info`, `pack`, `verify` of an archive; `scripts/fetch/remotezip.py`; `scripts/serve/rangeserve.py`; `scripts/ios/{ios-sign,macho-check,make-tbds}.py`; `scripts/image/tests/*.py` | GROUP3STATE |
+| 3 | `scripts/image/imagetool.py`: `check-ipsw`, `fetch`, `record-plain`, `aea-info`, `pack`, `verify` of an archive; `scripts/fetch/remotezip.py`; `scripts/serve/rangeserve.py`; `scripts/ios/{ios-sign,macho-check,make-tbds}.py`; `scripts/image/tests/*.py` | **ported 2026-11-13, not deleted**: `image check-ipsw\|fetch\|record-plain\|aea-info\|pack\|verify` and `remotezip` are Rust and the image scripts call them; `imagetool.py`, `remotezip.py` (it imports it) and `scripts/image/tests/` are left in place, unused: **the owner decides**. **Not ported**: `scripts/serve/rangeserve.py`, `scripts/ios/{ios-sign,macho-check,make-tbds}.py` |
 | 4: the root tweaks | `userland/roottweak`, `userland/tweak`, `userland/tests/*.py` | **not started: the owner has not agreed** |
 
 Python that is left, and why:
-- `scripts/image/imagetool.py` and `scripts/image/tests/`: **the owner decides** when the image build's default
-  becomes Rust and the tool goes (it is the reference of `tests/image/parity.py` and `compare-python.sh`).
+- `scripts/image/imagetool.py`, `scripts/fetch/remotezip.py` and `scripts/image/tests/`: unused by every script since
+  2026-11-13; **the owner decides** when they go
+  (they are the reference of `tests/image/parity.py`, `tests/image/compare-python.sh`, `tests/imagepy/compare-python.sh`
+  and of two tests of `oneios-image`, which skip their Python half when the script is gone).
+- `scripts/serve/rangeserve.py`, `scripts/ios/{ios-sign,macho-check,make-tbds}.py`: group 3's rest, **not ported yet**
+  (`ios-sign.py` writes Apple's ad-hoc signature byte for byte and `macho-check.py` reads `.tbd` stubs with PyYAML:
+  each needs its own comparison on a Mac and on Linux).
 - Group 4 (above).
 - `kernel/patches/oneios-hosted/display/display-capture.py`: a viewer for a PC boot, Linux only (section 8).
 - `tests/phone/sparsewrite.py`: the frozen original `phone sparse-write` is compared against.

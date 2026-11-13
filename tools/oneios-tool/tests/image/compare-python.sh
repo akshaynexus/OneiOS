@@ -4,7 +4,9 @@
 #   tools/oneios-tool/tests/image/compare-python.sh            everything (about 6 minutes; Python's part is most of it)
 #   SKIP_SLOW=1 tools/oneios-tool/tests/image/compare-python.sh    without apfs-owners of the whole OS volume (Python: 2 minutes)
 #   FULL_BUILD=1 ...                                           also scripts/image/build.sh --no-pack with each tool
-#                                                              (IMAGETOOL_IMPL=python, then rust), and the two sets compared;
+#                                                              (it was IMAGETOOL_IMPL=python, then rust: since 2026-11-13
+#                                                              build.sh runs the CLI either way, so the two builds
+#                                                              are the same tool twice), and the two sets compared;
 #                                                              BUILD_ARGS: more options for build.sh (--no-hook, or
 #                                                              --systemos-root DIR when the image is attached elsewhere)
 #

@@ -44,7 +44,8 @@ scripts/image/kernel-inputs.sh "$P"                 # Apple's kernelcache and de
                                                     # (without inputs/24A446/ it fetches only those, 24 MB)
 ```
 
-`kernel-inputs.sh` decodes the two IM4P members (the kernelcache's payload is LZFSE) with `imagetool.py im4p` when the
+`kernel-inputs.sh` decodes the two IM4P members (the kernelcache's payload is LZFSE) with `oneios-tool image im4p` (since
+2026-11-13 always; before, `imagetool.py im4p` when the
 `lzfse` program is on `PATH`, and otherwise with `oneios-tool image im4p` (LZFSE by the `lzfse_rust` crate, no other
 program; build it with `cargo build --release --manifest-path tools/oneios-tool/Cargo.toml`, section 10).
 `IM4P_TOOL=PATH` names a `oneios-tool` binary and makes it the decoder in either case. Whichever ran, the script then
@@ -524,7 +525,7 @@ Each tool's README has its exact commands and what a pass looks like. **None of 
 
 **Getting the image set onto the phone:** it is about 11 GB and never published. Serve it from the PC privately
 over several Cloudflare quick tunnels at once, so a download manager fetches it in parallel parts from all of them
-(the server, `scripts/serve/rangeserve.py`, binds 127.0.0.1 and answers byte ranges; Python's `http.server` does not):
+(the server, `scripts/serve/rangeserve.py` (Python still), binds 127.0.0.1 and answers byte ranges; Python's `http.server` does not):
 
 ```sh
 scripts/serve/serve-image.sh out/image/OneiOS_iOS27.0.1_24A446_iPhone18-2.tar.zst 4   # 4 tunnels; prints the URLs
@@ -702,12 +703,12 @@ Rust 1.95 or newer (apk-info-zip 1.1.1 needs 1.95; built with 1.98.0 and 1.99.1)
 (macos-unifiedlogs, pinned by commit in `Cargo.lock`). Linux x86_64 and macOS arm64. `oneios-tool --help` and
 `oneios-tool TOOL --help` list every command and option (one clap layout for all tools).
 
-**The image build still uses the Python tool by default**; the kernel builds, the prelink and the runtime package
+**The image scripts, the kernel builds, the prelink and the runtime package run no Python tool of this repository any more** (still Python: `scripts/ios/`, `scripts/serve/rangeserve.py`, the root tweaks):
 run the Rust tool only:
 
 | Script | Switch | Effect |
 |---|---|---|
-| `scripts/image/build.sh`, `scripts/image/verify.sh` | `IMAGETOOL_IMPL=rust` (default `python`), `ONEIOS_TOOL=PATH` | `oneios-tool image` runs profile, apfs-info, apfs-owners, hashes, tree-copy, seed-pack, manifest and the set folder's verify; pack and the archive's verify stay with the Python tool. Same files, byte for byte (README "image") |
+| `scripts/image/build.sh`, `verify.sh`, `kernel-inputs.sh`, `scripts/fetch/fetch.sh` | none: Rust only since 2026-11-13 (`ONEIOS_TOOL=PATH` for another binary; `IMAGETOOL_IMPL` is gone; `scripts/image/imagetool.py` stays in the tree, unused, until the owner decides) | `oneios-tool image` runs every subcommand, `check-ipsw`, `fetch`, `record-plain`, `aea-info`, `pack` and the archive's `verify` too. Before that day: `oneios-tool image` runs profile, apfs-info, apfs-owners, hashes, tree-copy, seed-pack, manifest and the set folder's verify; pack and the archive's verify stay with the Python tool. Same files, byte for byte (README "image") |
 | `scripts/image/kernel-inputs.sh` | none needed; `IM4P_TOOL=PATH` forces it | without the `lzfse` program the kernelcache is decoded by `oneios-tool image im4p`; the result is checked against the pinned SHA-256 either way (section 1) |
 | `kernel/build-hosted.sh`, `kernel/build-linux.sh`, `kernel/build-macos.sh` | none: Rust only since 2026-11-13 (`ONEIOS_TOOL=PATH` for another binary) | the board archives (`storage`, `board`, `aes`, `keystore`, `net`, `hid`, `audio`, `gpu`, `display`) are built by `oneios-tool kernel gen NAME`, which UniXNU's driver runs from `board.toml`, and the VM kernel's build record by `oneios-tool kernel build-record`; the Python generators were deleted after every file they write was compared byte for byte, and their outputs are frozen in `tests/kernelgen/golden/` (README "kernel") |
 | `kernel/prelink/build.sh` | none: Rust only since 2026-11-12 (`ONEIOS_TOOL=PATH` for another binary) | `oneios-tool prelink` runs all twelve steps; the Python steps were deleted after every step's output was compared byte for byte, and their outputs are frozen as hashes (`tests/prelink/compare-golden.sh`). 14 s instead of two minutes |

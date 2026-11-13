@@ -51,6 +51,11 @@ enum Tool {
     App(oneios_phone::AppCli),
     /// One test cycle on the phone: build, tests, stage, switch, watch, hold, return, collect
     Cycle(oneios_phone::cycle::Args),
+    /// Single members of a ZIP (an IPSW) without downloading it: ls, cat, get, head (scripts/fetch/remotezip.py)
+    Remotezip {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// The runtime package (runtime/package.sh): check (no Apple file may go in), manifest, archive
     Package {
         #[command(subcommand)]
@@ -82,6 +87,7 @@ fn main() {
             Tool::Phone(cli) => oneios_phone::main(cli),
             Tool::App(cli) => oneios_phone::app_main(cli),
             Tool::Cycle(args) => oneios_phone::cycle::main(args),
+            Tool::Remotezip { args } => oneios_image::remotezip::main(&args),
             Tool::Package { command } => oneios_package::main(command),
             Tool::Debug { command } => oneios_testkit::main(command),
         },
