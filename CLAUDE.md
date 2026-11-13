@@ -62,4 +62,9 @@ The board (`docs/agents.md`) is for coordination between agents; it is **not** a
 - **Phone and app work goes through `oneios-tool`** (`phone` status/switch/return/stage/sums/log/pull-data, `app`,
   `cycle`). Use adb, the shell scripts or other tools directly only when the CLI fails or lacks the command, then
   say so and fix or extend the CLI.
+- **No new Python.** Use `oneios-tool` (Rust) for every job it covers: `sym`, `sym kernel`, `log`, `ioslog`, `image`,
+  `prelink`, `kernel`, `phone`, `app`, `cycle`. A new tool, helper or test tool goes into `oneios-tool` (a command, or a
+  test in its crates) or plain POSIX shell. Python stays only as the frozen original that a Rust port is compared
+  against until it is retired (`tools/oneios-tool/todo_rust.md` section 7 lists what is left), and an existing Python
+  script runs only where no `oneios-tool` command does its job yet: say which one you ran.
 - Do not send the owner's email address to any service.
