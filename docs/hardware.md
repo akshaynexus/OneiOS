@@ -668,8 +668,10 @@ registry path, and that nothing after the naming (wifid's own start, its prefere
   the controller's own reports. Here the kernel answers the vendor commands bluetoothd sends (the table of
   `oneios_bt_h4.c`, made for iOS 16) and `/defaults/vmm-present` makes bluetoothd skip its chip initialisation. The
   first boot's `ONEIOS BT: bluetoothd: command 0x....` lines say which command it stops at.
-- Expected lines, in order, when Bluetooth is turned on in iOS: `ONEIOS BT: dev: bluetoothd[N] opens /dev/btwake:
-  0`, `sk: bluetoothd[N] connects to com.apple.uart.sk.bluetooth: 0`, `ios: client Skywalk pipe connected`, xnuhost
+- Expected lines, in order, when Bluetooth is turned on in iOS (since 2026-11-13 after `ONEIOS BT: transport up N ms
+  after the start: ...` at the root mount, and bluetoothd's `oneios-iokit:` lookups of 0062): `ONEIOS BT: dev:
+  bluetoothd[N] opens /dev/btwake: 0`, `oneios-iokit: bluetoothd[N] kernel control "com.apple.uart.sk.bluetooth" -> id
+  N`, `sk: bluetoothd[N] connects to com.apple.uart.sk.bluetooth: 0`, `ios: client Skywalk pipe connected`, xnuhost
   `bluetooth: HAL 1.1 found, initialising`, `bluetooth: HAL initialisation complete`, `ONEIOS BT: host: controller
   ready, address ..`, `sk: channel of 2048-byte buffers, N/N slots for pid N: 0`, `sk: bluetoothd's channel is
   connected`, `bluetoothd: command 0x0c03` (HCI Reset), `controller: Command Complete for 0x0c03, status 0x00`, and
@@ -677,6 +679,38 @@ registry path, and that nothing after the naming (wifid's own start, its prefere
 - The driver now logs who opens which node and how it went (`ONEIOS BT: dev: NAME[PID] opens /dev/...: error`), the
   first 40 commands of a client with the ones it answers itself (`bluetoothd: command 0x....`), and the controller's
   first 40 events (`controller: Command Complete for 0x...., status ..`).
+
+### bluetoothd finds our transport and never powers the stack (fixbt, 2026-11-13)
+
+- **The phone (2026-11-12 23:45, main ea06d46, and the Mac session of 2026-11-13 10:5x, main c1223f8):** only the
+  `on` lines of xnuhost and the guest; no `ONEIOS BT: dev:`, `sk:` or `ios:` line, so bluetoothd never opened even
+  `/dev/btwake`, the first step of its UART transport's open; Settings' Bluetooth switch does not turn on.
+- **On the PC with a stand-in controller (`bluetooth=sim`, hosted 0062, 2026-11-13, proven):** bluetoothd finds
+  our node and picks our transport. Kernel (`oneios-iokit:`): `match {IONameMatch=bluetooth ...} -> IOPlatformDevice
+  "bluetooth"`, `property "local-mac-address" (IODeviceTree, recursive) ... -> found`, later `property
+  "transport-encoding" (IODeviceTree, recursive) of IOPlatformDevice "bluetooth" -> found`, the key store and
+  `IOPMrootDomain` opened, `/product` read (`boot-ios-diagnostics`, `product-id`: not found). iOS's log
+  (`oneios-tool ioslog show data.img --proc bluetoothd`): `marconi-bt: Unable to match bluetooth service in device
+  tree` (it asks for `marconi-bt` first, then `bluetooth`), `Bluetooth is running inside a Virtual Machine, so
+  skipping check for Bluetooth available`, `DeviceTree transport = 0x00000001`, `HCI Transport is set to H4`,
+  `Warning: BT driver=0x...`. So the device-tree side is right: H4 is the transport whose driver ("POSIX" in its
+  strings) opens `/dev/btwake` and `com.apple.uart.sk.bluetooth` (`oneios_bt_sk.c`).
+- **What does not happen (PC, proven; phone, the same lines missing):** bluetoothd opens its transport only when it
+  starts its stack at power on; its log lines for that are `Beginning asynchronous power init`, `Default power state
+  : N`, `Beginning asynchronous power on`, `Bluetooth is running inside a Virtual Machine, so skipping chip
+  initialization`, `Starting up StackManager`, `Starting bluetooth core stack`. None of them came in 13 minutes of
+  bluetoothd on the PC (nor in the PC boot of 2026-11-12, Bluetooth off), and its own line says `fStackStarted:0`
+  (and on a fresh Data store `BuddyHasNotCompleted:1`). [I] bluetoothd's power manager is never started, so nothing
+  reaches the transport; what starts it is not known yet. Not the transport, the node or the HAL: those are found or
+  never asked for.
+- iPhone18,2's own device tree (`devicetree.bin` of the kernel inputs): `/arm-io/bluetooth` with
+  `transport-encoding` 9 (APPLE PCIE) and `local-mac-address` from syscfg; ours is `/bluetooth`, encoding 1, which
+  bluetoothd reads as above.
+- **PC stall, fixed in the driver:** with the transport core, the kernel controls and the device nodes started at the
+  board's probe (before the root mount), three qemu boots of 2026-11-13 out of three never got their root device
+  (APFS's start waited for `IOBSD` while `IOResources` stayed busy; `hosted_dump_threads=1`); with `oneios_bt=0` or no
+  bridge two out of two booted. They now start after the root mount (`ONEIOS BT: transport up N ms after the start:
+  ...`); the next qemu boot found its root at once and bluetoothd ran. The phone never showed the stall.
 
 ### Missing, unknown
 

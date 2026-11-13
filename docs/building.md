@@ -339,6 +339,14 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   late"). On that 4-CPU PC under other agents' load configd reached the naming 13-26 minutes into the boot, so give
   such a boot `timeout` 4000 s or more; iOS's own log can be read from the running boot's `data.img`
   (`oneios-tool ioslog show ... --proc configd`), not always after a `timeout` kill.
+- Bluetooth on the PC: add `--set bluetooth=sim`: a stand-in controller (`runtime/bridges/bt/hci_sim.c`) behind the
+  bridge channel, with the bridges off; `/bluetooth` gets transport-encoding 1 as with the phone's HAL. xnuhost logs
+  `bluetooth: on: a stand-in controller (bluetooth=sim)`, then `bluetooth: sim: the stand-in controller is on` when
+  bluetoothd connects, and with `-v` each command (`bluetooth: sim: command 0x0c03, ...`). The guest's lines start
+  with `ONEIOS BT:`; the IOKit lookups of bluetoothd and BlueTool are `oneios-iokit:` lines (hosted 0062, on by default
+  for those two; `oneios-iokit=NAME,...` for others). bluetoothd's own lines are in iOS's log after the run:
+  `oneios-tool ioslog show out/run/data/data.img --proc bluetoothd` (section 10). A first boot on the 4-CPU PC
+  reached bluetoothd about 30 minutes in (2026-11-13).
 - Touch and keys on the PC: add `--input-script runtime/xnuhost/tools/input-demo.script` (keep `--no-input`: the
   evdev reader would open the PC's own devices). The script gives xnuhost's input device a panel's axes and, once
   the guest's driver runs it, repeats a tap, a swipe up from the bottom edge and the three side keys
