@@ -513,3 +513,34 @@ fn malformed_lines_never_panic() {
     assert!(run_inner(&args(&["what", &path]), f.loc(), &mut Vec::new()).is_err());
     assert!(run_inner(&args(&["gpu", &path, "--nope"]), f.loc(), &mut Vec::new()).is_err());
 }
+
+/// `log panic`, and `log stacks` on a log with a kernel panic. The naming itself is oneios-ksym's and tested there
+/// (with a collection made in the test); here the collection is not there, so the addresses are listed unnamed.
+#[test]
+fn kernel_panics_of_a_log() {
+    let f = Fixture::new("panic");
+    let text = "\
+[    0.011] xnuhost I kernel: k, collection arm64e, link base 0xfffffff007004000, 9 segments, 135 members
+[    0.019] xnuhost I memory: 9728 MiB at 0x2000004000, physical = virtual (slide 0x2ff9000000); I/O aperture 0x8000000
+[ 4120.731] guest     panic(cpu 4 caller 0xfffffff00b4d5210): Unexpected fault in kernel physical aperture at pc 0x000000200454c094, lr 0x0000002003ff1038
+[ 4120.731] guest       frame 0xfffffff00b54c094
+[ 4120.731] guest       frame 0xfffffff00b496984
+[ 4120.740] xnuhost I stopping: the guest panicked
+";
+    let path = f.log("p.log", text);
+    let none = f.root.join("none/kernel.kc").display().to_string();
+    let out = f.run(&["panic", &path, "--kc", &none]);
+    assert!(out.starts_with("kernel addresses are not named: "), "{out}");
+    assert!(out.contains("p.log line 3: Unexpected fault in kernel physical aperture at pc 0x000000200454c094"), "{out}");
+    let rows: Vec<&str> = out.lines().filter(|l| l.starts_with("  ")).collect();
+    assert_eq!(rows, ["  caller 0xfffffff00b4d5210", "  pc     0x200454c094", "  lr     0x2003ff1038", "  frame  0xfffffff00b54c094", "  frame  0xfffffff00b496984"]);
+    // `stacks` ends with the same part; --no-sym leaves it out.
+    let stacks = f.run(&["stacks", &path, "--kc", &none]);
+    assert!(stacks.contains("\n== kernel panics (oneios-tool sym kernel) ==\nkernel addresses are not named: "), "{stacks}");
+    assert!(stacks.ends_with("  frame  0xfffffff00b496984\n"), "{stacks}");
+    assert!(!f.run(&["stacks", &path, "--kc", &none, "--no-sym"]).contains("kernel panics"));
+    // A log without a panic: `panic` says so, `stacks` has no such part.
+    let quiet = f.log("q.log", "[    1.000] guest     Darwin Kernel Version 25.5.0\n");
+    assert!(f.run(&["panic", &quiet]).ends_with("no kernel panic (no `panic(cpu N caller 0x...)` line)\n"));
+    assert!(!f.run(&["stacks", &quiet]).contains("kernel panics"));
+}

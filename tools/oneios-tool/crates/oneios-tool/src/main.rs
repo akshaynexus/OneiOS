@@ -17,7 +17,8 @@ struct Top {
 
 #[derive(Subcommand)]
 enum Tool {
-    /// Name user addresses of a boot log in the image's dyld shared cache (scripts/debug/dsc.py)
+    /// Name user addresses of a boot log in the image's dyld shared cache (scripts/debug/dsc.py); `sym kernel`
+    /// names the kernel addresses of a panic in kernel.kc and xnu.macho (`oneios-tool sym kernel --help`)
     Sym(oneios_sym::Cli),
     /// Read an xnuhost session log: stacks, timeline, diff, gpu, cpu, display, perf
     Log {
@@ -49,6 +50,11 @@ enum Tool {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // `sym kernel` has its own command line (oneios-ksym): `sym`'s words may start with a hyphen (an address may be
+    // negative, as in dsc.py), so clap would hand every option after `kernel` over as a word.
+    if args.get(1).map(String::as_str) == Some("sym") && args.get(2).map(String::as_str) == Some("kernel") {
+        std::process::exit(oneios_ksym::run(&args[3..]));
+    }
     let status = match Top::try_parse_from(&args) {
         Ok(top) => match top.tool {
             Tool::Sym(cli) => oneios_sym::main(cli),

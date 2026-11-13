@@ -33,6 +33,7 @@ switch.
 | `image` | 9 subcommands, plus `apfs-ls` and `apfs-copy` (compressed files too; apfs-fuse as a second backend) | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds (the 36th: no `kernel.kc` in the Linux set, README); the APFS reader: every file of the SystemOS and AppOS images as apfs-fuse gives it | `IMAGETOOL_IMPL=rust` as the default is the owner's call |
 | `ioslog` | done | yes on 7 archives (CSV byte for byte, from an archive, an image and a mounted volume) | **a run on the phone's real Data store**; the Mac's `ios3-log.csv`; `checks` on a real log; `pull` |
 | `prelink` | `roots`, `hosted` (2 of 12 steps) | yes for the two, byte for byte on the real kernelcache | **the other ten steps**, the pairing and the emitter first (section 4) |
+| `sym kernel`, `log panic` (2026-11-13, branch `ksym`, crate `oneios-ksym`) | done (new: a kernel panic's caller, pc, lr and frames named in `kernel.kc` and `xnu.macho`; no Python original) | compared with `llvm-symbolizer --inlining` on three Linux-built pairs: 19 of 19 addresses of a stand-in panic and 31,605 of 31,605 more per pair (311,605 on one) name the same function, file:line and inlined frames (README "sym kernel") | **the Mac's log and kernel of the 2026-11-12 panic** (`tests/ksym/compare.sh KC KERNEL LOG`, with `DSYM=`); a real panic log from the phone; names for kext frames (the collection keeps no kext symbols: the prelink's pairing records could give them); a run on a Mac |
 
 ## Build and unit tests
 
