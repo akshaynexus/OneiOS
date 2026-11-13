@@ -228,8 +228,25 @@ static void test_haptic(void)
   CHECK(motor.uploads == 2);
   br_haptic_vib(h, 100, 300, 0);
   br_haptic_flush(h);
+  // The counter line's figures (fix-haptics): 4 vibrate requests (one of intensity 0), 3 stops asked, 3 effects
+  // played, 1 stop that reached the device, nothing failed.
+  br_haptic_stats st;
+  br_haptic_stats_get(h, &st);
+  CHECK(st.vib == 4 && st.stop == 2 && st.played == 3 && st.stopped == 1 && st.failed == 0);
+  br_haptic_stats_get(NULL, &st);
+  CHECK(st.vib == 0 && st.played == 0);
   br_haptic_close(h);                              // close stops a running effect
   CHECK(motor.stops == 2);
+
+  // haptics=sim: the stand-in takes every request, plays it, and counts it; a stop of a playing effect counts too.
+  br_haptic *sim = br_haptic_open_sim();
+  CHECK(sim != NULL);
+  for (unsigned i = 0; i < 20; i++) { br_haptic_vib(sim, 20, 600, 170); br_haptic_flush(sim); }
+  br_haptic_stop(sim);
+  br_haptic_flush(sim);
+  br_haptic_stats_get(sim, &st);
+  CHECK(st.vib == 20 && st.played == 20 && st.stop == 1 && st.stopped == 1 && st.failed == 0 && st.replaced == 0);
+  br_haptic_close(sim);
 }
 
 // ---- network -------------------------------------------------------------------------------------
@@ -487,6 +504,9 @@ static void test_bridge_device(const char *tmp)
   send_message(&g, OB_CH_HAPTIC, OB_HAPTIC_STOP, NULL, 0);
   br_haptic_flush(haptic);
   CHECK(motor.stops == 1);
+  br_haptic_stats hs;                                 // the guest's two messages (and the device start's stops), as counted
+  br_haptic_stats_get(haptic, &hs);
+  CHECK(hs.vib == 1 && hs.stop >= 1 && hs.played == 1 && hs.stopped == 1 && hs.failed == 0);
 
   // Bluetooth: open, the HAL becomes ready, a command goes out, its event comes back.
   static const uint8_t reset[] = { 0x03, 0x0c, 0x00 }, complete[] = { 0x0e, 0x04, 0x01, 0x03, 0x0c, 0x00 };

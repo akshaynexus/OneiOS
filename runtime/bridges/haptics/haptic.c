@@ -56,6 +56,8 @@ struct br_haptic {
   int effect;                 // -1 until the first upload
   bool playing;
   unsigned failures;
+  br_haptic_stats stats;      // the counter line (br_haptic_report)
+  char name[300];             // what plays: the device node, or "the stand-in actuator"
 };
 
 static void *worker(void *arg)
@@ -74,8 +76,9 @@ static void *worker(void *arg)
     unsigned period, magnitude;
     br_haptic_map(intensity, frequency, &period, &magnitude);
     int rc = 0;
+    bool played = false, stopped = false;
     if (!on_ms || !magnitude) {
-      if (h->playing && h->effect >= 0) rc = h->backend->play(h->ctx, h->effect, false);
+      if (h->playing && h->effect >= 0) { rc = h->backend->play(h->ctx, h->effect, false); stopped = rc == 0; }
       h->playing = false;
     } else {
       int id = h->backend->upload(h->ctx, h->effect, on_ms > LENGTH_MAX_MS ? LENGTH_MAX_MS : on_ms, period, magnitude);
@@ -83,10 +86,21 @@ static void *worker(void *arg)
       else {
         h->effect = id;
         rc = h->backend->play(h->ctx, id, true);
-        h->playing = rc == 0;
+        h->playing = played = rc == 0;
       }
     }
     if (rc < 0 && h->failures++ < 8) br_log(0, "haptics: request (%u ms, intensity %u) failed: %s", on_ms, intensity, strerror(-rc));
+    pthread_mutex_lock(&h->lock);
+    if (played) h->stats.played++;
+    if (stopped) h->stats.stopped++;
+    if (rc < 0) h->stats.failed++;
+    uint64_t n = h->stats.played;
+    pthread_mutex_unlock(&h->lock);
+    // The first effects one by one, then at 16, 32, 64, ...: what reached the force-feedback device.
+    if (played && (n <= 8 || !(n & (n - 1))))
+      br_log(1, "haptics: effect %llu played on %s: %u ms, period %u ms, level %u (intensity %u, %u Hz asked)", (unsigned long long)n, h->name,
+             on_ms > LENGTH_MAX_MS ? LENGTH_MAX_MS : on_ms, period, magnitude, intensity, frequency);
+    if (played && n > 8 && !(n & (n - 1))) br_haptic_report(h);
     pthread_mutex_lock(&h->lock);
   }
   h->busy = false;
@@ -102,6 +116,7 @@ br_haptic *br_haptic_open_backend(const br_haptic_backend *backend, void *ctx)
   h->backend = backend;
   h->ctx = ctx;
   h->effect = -1;
+  snprintf(h->name, sizeof h->name, "the back end");
   pthread_mutex_init(&h->lock, NULL);
   pthread_cond_init(&h->wake, NULL);
   pthread_cond_init(&h->idle, NULL);
@@ -110,10 +125,53 @@ br_haptic *br_haptic_open_backend(const br_haptic_backend *backend, void *ctx)
   return h;
 }
 
+void br_haptic_stats_get(br_haptic *h, br_haptic_stats *out)
+{
+  memset(out, 0, sizeof *out);
+  if (!h) return;
+  pthread_mutex_lock(&h->lock);
+  *out = h->stats;
+  pthread_mutex_unlock(&h->lock);
+}
+
+void br_haptic_report(br_haptic *h)
+{
+  br_haptic_stats s;
+  if (!h) return;
+  br_haptic_stats_get(h, &s);
+  br_log(1, "haptics: counters: %llu requests from the guest (%llu vibrate, %llu stop; %llu replaced before they started), "
+         "%llu effects played, %llu stopped, %llu failed on %s", (unsigned long long)(s.vib + s.stop), (unsigned long long)s.vib,
+         (unsigned long long)s.stop, (unsigned long long)s.replaced, (unsigned long long)s.played, (unsigned long long)s.stopped,
+         (unsigned long long)s.failed, h->name);
+}
+
+// ---- the stand-in actuator (haptics=sim: a PC boot, which has no vibrator) --------------------------------
+// It takes every upload and play like the evdev device and keeps nothing but the counters, so the guest's whole
+// path (its Actuator device, oneios_haptic.c, the bridge channel) runs and the log shows what would have played.
+static int sim_upload(void *ctx, int id, unsigned length_ms, unsigned period_ms, unsigned magnitude)
+{
+  (void)ctx; (void)length_ms; (void)period_ms; (void)magnitude;
+  return id < 0 ? 0 : id;
+}
+static int sim_play(void *ctx, int id, bool on) { (void)ctx; (void)id; (void)on; return 0; }
+static const br_haptic_backend sim_backend = { .upload = sim_upload, .play = sim_play };
+
+br_haptic *br_haptic_open_sim(void)
+{
+  br_haptic *h = br_haptic_open_backend(&sim_backend, NULL);
+  if (!h) return NULL;
+  snprintf(h->name, sizeof h->name, "the stand-in actuator");
+  br_log(1, "haptics: on: a stand-in actuator (haptics=sim): requests are counted and logged, nothing vibrates");
+  return h;
+}
+
 void br_haptic_vib(br_haptic *h, uint32_t on_ms, unsigned intensity, unsigned frequency_hz)
 {
   if (!h) return;
   pthread_mutex_lock(&h->lock);
+  if (h->pending) h->stats.replaced++;     // the newest wins: the one not started is never played
+  if (on_ms) h->stats.vib++;
+  else h->stats.stop++;
   h->on_ms = on_ms; h->intensity = intensity; h->frequency_hz = frequency_hz;
   h->pending = true;
   pthread_cond_signal(&h->wake);
@@ -133,6 +191,7 @@ void br_haptic_flush(br_haptic *h)
 void br_haptic_close(br_haptic *h)
 {
   if (!h) return;
+  br_haptic_report(h);                     // the session's figures, before the closing stop counts as one
   br_haptic_stop(h);                       // the motor never outlives the bridge
   pthread_mutex_lock(&h->lock);
   h->quit = true;
@@ -220,6 +279,7 @@ br_haptic *br_haptic_open(const char *dev_dir)
   if (fd < 0) { br_log(0, "haptics: off: %s: %s", node, strerror(errno)); return NULL; }
   br_haptic *h = br_haptic_open_backend(&evdev_backend, (void *)(intptr_t)fd);
   if (!h) { close(fd); return NULL; }
+  snprintf(h->name, sizeof h->name, "%s", node);
   br_log(1, "haptics: on: %s (sine effects, period %u..%u ms, level %u..%u)", node, PERIOD_MIN_MS, PERIOD_MAX_MS, LEVEL_FLOOR, LEVEL_MAX);
   return h;
 }

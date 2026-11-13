@@ -14,3 +14,9 @@ backed by the AAudio helper `oneios-audio`. Everything else (boot arguments, log
 Since 2026-11-12 (media) the archive also stages a third device, UID "Actuator" (Core Haptics, UI and keyboard
 taps): mono, the speaker's engine, its periods to `../haptics/oneios_haptic.c` (`oneios_haptic_actuator_play`), not to
 virtio-snd. `docs/hardware.md` section 5.
+
+Since 2026-11-13 (fix-haptics) the Actuator's user clients also report to `drivers/haptics`
+(`oneios_haptic_actuator_event`, kinds `OH_EV_*` of `drivers/bridge/oneios_bridge.h`): an open and a close, each
+selector, a refused selector (also a `SetStreamCurrentFormat` of the wrong size), the format asked (channels and rate),
+each mapping. Log: `ONEIOS HAPTIC: Actuator: user client N opened by ...` and the `ONEIOS HAPTIC: counters:` line.
+The Speaker and Mic are not changed.

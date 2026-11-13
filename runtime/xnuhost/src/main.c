@@ -471,7 +471,9 @@ static int boot(void)
     bool hidl = !strcmp(config.bluetooth, "hidl"), sim = !strcmp(config.bluetooth, "sim");
     int hal = 0;
     if (!strcmp(config.bluetooth, "auto")) { hal = br_hci_hidl_probe(); hidl = hal > 0; }
-    haptic = br_haptic_open(NULL);
+    // Haptics: the phone's force-feedback device (auto), none (off), or the stand-in actuator (sim).
+    haptic = !strcmp(config.haptics, "sim") ? br_haptic_open_sim() : !strcmp(config.haptics, "off") ? NULL : br_haptic_open(NULL);
+    if (!haptic && !strcmp(config.haptics, "off")) LOGI("haptics: off (haptics=off): iOS gets no actuator");
     if (!config.touch_sleep) setenv("ONEIOS_TSP_OFF", "0", 1);   // touch-sleep=0: the bridge reads this
     brightness = br_bright_open(NULL);
     battery = br_battery_open(NULL);
@@ -545,14 +547,16 @@ static int boot(void)
       kinds[ndev++] = XL_DEV_NET;
   }
 
-  // bluetooth=sim with the bridges off (a PC boot): a bridge device that serves only the stand-in controller.
-  if (!config.bridges && !strcmp(config.bluetooth, "sim") && ndev < XL_MAX_DEVICES) {
+  // bluetooth=sim and/or haptics=sim with the bridges off (a PC boot): a bridge device that serves only the stand-ins.
+  bool bt_sim = !strcmp(config.bluetooth, "sim"), haptic_sim = !strcmp(config.haptics, "sim");
+  if (!config.bridges && (bt_sim || haptic_sim) && ndev < XL_MAX_DEVICES) {
     br_log_sink = bridge_log;
-    br_bridge_config bridge = { .hci_factory = br_hci_open_sim };
+    if (haptic_sim) haptic = br_haptic_open_sim();
+    br_bridge_config bridge = { .haptic = haptic, .hci_factory = bt_sim ? br_hci_open_sim : NULL };
     if (br_bridge_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &bridge)) {
       kinds[ndev++] = XL_DEV_BRIDGE;
-      bt_sim_on(&machine);
-    } else LOGI("bluetooth: off: no bridge device for the stand-in controller's packets");
+      if (bt_sim) bt_sim_on(&machine);
+    } else LOGI("%s: off: no bridge device for the stand-in's messages", bt_sim ? "bluetooth" : "haptics");
   }
 
   // clusters=EEPPPPPP: the cluster types by hand (a bench run with no host topology to plan from).

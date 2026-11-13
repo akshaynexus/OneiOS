@@ -37,6 +37,7 @@ void xh_config_defaults(xh_config *c)
   c->setway_skip = -1;
   c->perf_log = c->spin_host = c->spin_task = c->map_defer = c->cpu_pin = -1;
   strcpy(c->bluetooth, "auto");
+  strcpy(c->haptics, "auto");
   strcpy(c->wifi, "auto");
 }
 
@@ -137,6 +138,7 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
   else if (!strcmp(key, "clusters")) { ok = strlen(value) <= XH_MAX_CPUS && strspn(value, "EP") == strlen(value); if (ok) strcpy(c->clusters, value); }
   else if (!strcmp(key, "wifi")) { ok = !strcmp(value, "auto") || !strcmp(value, "off") || !strcmp(value, "tap") || !strcmp(value, "sim"); if (ok) strcpy(c->wifi, value); }
   else if (!strcmp(key, "bluetooth")) { ok = !strcmp(value, "auto") || !strcmp(value, "virtual") || !strcmp(value, "hidl") || !strcmp(value, "sim"); if (ok) strcpy(c->bluetooth, value); }
+  else if (!strcmp(key, "haptics")) { ok = !strcmp(value, "auto") || !strcmp(value, "off") || !strcmp(value, "sim"); if (ok) strcpy(c->haptics, value); }
   else if (!strcmp(key, "legacy-boot-args")) return flag(value, &c->legacy_boot_args);
   else if (!strcmp(key, "setway-skip")) { bool on; if (flag(value, &on)) return -1; c->setway_skip = on; }
   else if (!strcmp(key, "perf-log")) { ok = number(value, 0, 86400, &c->perf_log); }

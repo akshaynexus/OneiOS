@@ -24,4 +24,18 @@ extern kmod_info_t g_kernel_kmod_info;
     bool mic = publishDevice(resources, true, "Mic", "droidvm-audio-in");
 // (before anchor 11)
     IOLog("DroidVMAudio: published Speaker=%d Mic=%d as IOAudio2Devices\n", speaker, mic);
+// (before anchor 12)
+    droidvm_audio_clients = droidvm_audio_clients + 1;
+// (before anchor 13)
+    droidvm_audio_clients = droidvm_audio_clients - 1;
+// (before anchor 14)
+    droidvm_audio_selectors = droidvm_audio_selectors + 1;
+// (before anchor 15)
+        droidvm_audio_bad_selectors = droidvm_audio_bad_selectors + 1;
+// (before anchor 16)
+        if (a->scalarInputCount < 1 || a->structureInputSize != sizeof f) return kIOReturnBadArgument;
+// (before anchor 17)
+        memcpy(&f, a->structureInput, sizeof f);
+// (before anchor 18)
+    droidvm_audio_maps = droidvm_audio_maps + 1;
 // (the end)

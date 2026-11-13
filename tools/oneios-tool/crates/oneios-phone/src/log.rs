@@ -77,7 +77,7 @@ pub const NAMED: [(&str, &str); 6] = [
     ("display", r"oneios-display|sheng-vsync|ONEIOS BACKLIGHT|oneios-swap|ONEIOS ALS|displayctl|brightctl"),
     ("gpu", r"oneios-gpu|sheng-gpu|oneios-adreno|kgsl"),
     ("wifi", r"ONEIOS WIFI|oneios-wifi|sheng-wifi|oneios-net|wifictl"),
-    ("hid", r"oneios-hid|ONEIOS HAPTIC|oneios-haptic|ONEIOS VIBRATOR|oneios-actuator"),
+    ("hid", r"oneios-hid|ONEIOS HAPTIC|oneios-haptic|ONEIOS VIBRATOR|oneios-actuator|xnuhost . haptics: |DroidVMAudio: "),
     ("mem", r"oneios-swap|oneios-fault-around|oneios-gpu-memory|memorystatus|jetsam|vm_pageout|low swap|Too many corpses"),
 ];
 

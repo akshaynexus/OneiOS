@@ -983,7 +983,9 @@ backboardd's `BKButtonHapticsController` and its "click states" [F, backboardd s
 haptics of a button through the ButtonHaptics framework and the HID haptic interface (`BKSButtonHapticsDefinition
 homeButtonDefinition`, `clickStatesPending`, `clickStatesConfigured`, `BKHIDHapticFeedbackInterface`), the path of a
 haptic Home button or a touch-sensitive button, not of the Actuator audio device. The device above does not satisfy it;
-on this identity (`home-button-type 2`, no haptic Home button) its pending state is harmless [I].
+on this identity (`home-button-type 2`, no haptic Home button) its pending state is harmless [I]. Corrected
+2026-11-13 (fix-haptics, read in backboardd): not harmless for a caller of `playHapticForClickState:clickSpeed:`,
+which then blocks until ButtonResolver is ready ("Haptics do nothing" below).
 
 Next boot's log (kernel lines):
 ```
@@ -1034,6 +1036,79 @@ no haptics: an answer for ButtonResolver's haptics query that says "none" (a use
 the Metal plug-in as `BacklightMode.inc` is) so that the AOP interface is ready without the loader; which call to
 answer is the first `HasHaptic` / loader line of the log above. Nothing of this is built yet.
 
+### Haptics do nothing (23:45 boot; fix-haptics, 2026-11-13)
+
+On the phone every layer said "on" (`haptics: on: /dev/input/event5`, `ONEIOS HAPTIC: on`, the Actuator device and
+`/product/haptics closed-loop = 1` published) and no line showed a request reaching any of them: no `Actuator: I/O
+started`, no `play N`, and the `vibrator` service got nothing (with closed-loop on it is not used). Spotlight's log
+had `AVHapticClient ... Got error during transaction` (subsystem `com.apple.corehaptics`).
+
+**What iOS 27 reads, in 24A446** [V: llvm-objdump and ipsw on the 24A446 binaries, `oneios-tool image apfs-copy` for
+the OS volume's files; the MobileGestalt table read from `libMobileGestalt.dylib`'s `__AUTH_CONST`]:
+
+- MobileGestalt's two haptics answers come from our node only: **`DeviceSupportsHaptics`** (`cBy4BcYs5YWtFHbBpt4C6A`)
+  is "`IODeviceTree:/product` has a child `haptics`", **`DeviceSupportsClosedLoopHaptics`** (`gqDnklGQnpv5ilgh5uHckw`)
+  is that node's `closed-loop`. `supports-3rd-party-haptics`, `power-control-features` (`HapticsPowerControlFeatures`)
+  and `pre-warm-disabled` are other keys of the same node. Before the Actuator change both answers were NO; since
+  the 15:35 boot both are YES.
+- There is no `hapticsd` in 24A446: no launchd job names one. Core Haptics' client (`AVHapticClient`, CoreHaptics)
+  talks to the Mach service `com.apple.audio.hapticd`, which **audiomxd** publishes (`com.apple.audiomxd.plist`);
+  VirtualAudio.plugin runs in audiomxd too. So `--proc audiomxd` holds the haptic server, VirtualAudio and the
+  Actuator VAD.
+- `Got error during transaction: %@` is logged by ten `AVHapticClient` calls (`loadHapticEvent:reply:`,
+  `prepareHapticSequence:error:`, `loadAndPrepareHapticSequenceFromVibePattern:reply:`,
+  `loadAndPrepareHapticSequenceFromEvents:reply:`, `createCustomAudioEvent:...`, `copyCustomAudioEvent:...`,
+  `referenceCustomAudioEvent:`, `releaseCustomAudioEvent:`, `setChannelEventBehavior:`, `setSequenceEventBehavior:`)
+  with the method's name before it and the server's NSError after it: the whole line says which transaction and which
+  error. [I] A server whose haptic engine has no actuator port answers every transaction with an error.
+- VirtualAudio, at its plug-in's creation (`New_VirtualAudio_PlugIn`), asks `MGGetBoolAnswer("DeviceSupportsHaptics")`
+  and then waits up to 8 s for the actuator port: `Beginning loop to wait for actuator port`, then `Found actuator
+  port!` or `Could not find actuator port after 8 seconds of waiting`. The port is made by `Device_Actuator_Aspen`
+  (`Creating Actuator Port`) for the physical device whose UID is `Actuator`; its settings come from
+  `ActuatorSettingsFactory_Aspen` by product type (exceptions `Invalid Product Type`, `Invalid ActuatorDatabaseType in
+  platform attributes`). Earlier sessions logged `Cannot find strips file oneios,xnuhost/VAD/d42_actuator_general`;
+  the OS volume's `/System/Library/Audio/Tunings` has only `AID8022`, `Generic` and `IRs`, so [U] whether a missing
+  strips file stops the VAD or only its DSP tuning.
+- The V54 ADT's own Actuator is `arm-io/iop-audio-controller/audio-haptic` (`uid "Actuator"`, `model-name "leap"`,
+  `identifier "chpa"`, `input-latency 8`, `output-latency 8`, `thermal-budget-range`, `peak-power-range`,
+  functions `hpsc`/`pkpw`/`ther` on `arm-io/haptics-support-interface`), with `audio-hpdbg` ("Haptic Debug") and
+  `audio-haptic-leap` (`AppleHapticsAudioInterface`). Our device publishes the UID and the stream; [U] whether
+  `Device_Actuator_Aspen` reads any of the others (the CPMS lines `CPMS-Actuator: Get ThermalBudgetRange` suggest the
+  thermal budget).
+
+**Where it stops is not known yet: the 23:45 log has no line between the "on" lines and the motor.** So every layer
+now counts (2026-11-13: host-tested; the hosted kernel built on the Linux PC (`HOSTED_OUT=fixhap`) and prelinked, audit 0 failures, `stubs-check` 666 good; no PC boot, not on the phone):
+
+| Layer | Line | Says |
+|---|---|---|
+| Actuator's user clients (DroidVMAudio.cpp as staged) | `ONEIOS HAPTIC: Actuator: user client N opened by audiomxd`, `... asks for N channels at R Hz (the device: 1 at 48000 Hz: the same\|differs, refused ...)`, `... selector N refused`, `... maps memory type 0x...` (the first 24) | whether VirtualAudio opened the device at all, and whether it refused our format |
+| The device's I/O | `ONEIOS HAPTIC: Actuator: I/O started by audiomxd (start N)` and `I/O stopped: ...` (as before) | whether a VAD ran I/O |
+| The samples | `ONEIOS HAPTIC: counters: Actuator N opens (N closed, last by X), N selectors (N StartIO, N StopIO, N refused, N formats asked, last S), N maps; N periods (N ms), N with samples, N loud, peak P of 32768; N requests to the motor \| vibrator service N requests \| /dev/oneios-haptic N frames \| bridge N vib + N stop sent, N failed, N with no host actuator` (every 30 s while a figure moved; `oneios_haptic_report=0` leaves it out) | whether samples reached the ring (`with samples`), were loud enough (`loud`, above 256), became requests and went over the bridge |
+| xnuhost's bridge | `haptics: effect N played on /dev/input/eventN: N ms, period N ms, level N (intensity N, N Hz asked)` (the first 8, then 16, 32, 64, ...), `haptics: counters: N requests from the guest (N vibrate, N stop; N replaced before they started), N effects played, N stopped, N failed on ...` (at 16, 32, ... and at the end) | whether the requests arrived and the force-feedback device took them |
+
+**The power key (fault 2) and this fault** [V for what is read; I where marked]: backboardd's
+`BKButtonHapticsController` is made in every boot, by backboardd's start-up step `ButtonHaptics` right after `HID
+event processing`, independent of our node. Its init enters a dispatch group that only
+`-[BRButtonResolverController scheduleReadyNotificationOnDispatchQueue:withBlock:]` leaves (log `_BRController ready:
+device haptic asset slot count:%d`); with `home-button-type` 2 it queues `_configureAsyncWithBlock:`, whose block
+waits on that group with no time limit on the serial queue `com.apple.backboardd.buttonHaptics`. Every later
+`playHapticForClickState:clickSpeed:` goes through `_configureSyncWithBlock:` (`dispatch_sync` on that queue): until
+ButtonResolver is ready, its caller blocks for good. Its caller is backboardd's MIG routine `_BKHIDXXPlayHaptic`
+(clients with the entitlements `BKFastHapticPlayEntitlement` / `BKBackBoardClientEntitlement`). ButtonResolver
+itself asks MobileGestalt only `HomeButtonType` (`JwLB44/jEB8aFDpXQ16Tuw`) and `MGIsDeviceOneOfType`; Haptics.framework's
+`HAButtonHapticsLoader` waits for an IOKit service by property match (`IOServiceAddMatchingNotification`). **Neither
+reads `/product/haptics`**, so the node does not change whether ButtonResolver gets ready. So the same missing piece
+does not explain both by this reading: [I] what the node can change is who asks backboardd for a button haptic, or a
+lock path that waits on audiomxd's haptic server (the transactions above). Not proven either way; the first test
+decides:
+
+- `oneios-actuator=0` (no Actuator device, so no `/product/haptics`: both MobileGestalt answers NO, as before 15:35).
+  If the side key locks and wakes again, the node is the switch: then the `oneios-ubt=SpringBoard,backboardd` lines
+  after a press name the wait (`_dispatch_sync_f_slow` under `playHapticForClickState:clickSpeed:` and
+  `_BKHIDXXPlayHaptic` in backboardd; `dispatch_group_wait` in the `com.apple.backboardd.buttonHaptics` block; or a
+  SpringBoard thread in an `AVHapticClient`/`AudioServicesPlaySystemSound` call). If it still does not lock, the node
+  is not the cause of fault 2, and the haptics fault is a separate one.
+
 ### The bridge (`runtime/bridges/haptics/haptic.c`)
 
 - Finds the device by its EV_FF bits (`sec_vibrator_inputff` first), sets `FF_GAIN` 10000 once.
@@ -1043,6 +1118,14 @@ answer is the first `HasHaptic` / loader line of the log above. Nothing of this 
   traffic), the newest request wins.
 - The motor is stopped when the guest resets the device, when the bridge closes, and by the kernel when the file
   closes (xnuhost exits).
+- Counters (2026-11-13): requests from the guest (vibrate, stop, replaced before the worker started them), effects
+  played, stops, failures; the first 8 effects and every power of two after are logged (`haptics: effect N played on
+  ...`), and `haptics: counters: ...` at 16, 32, ... effects and when the bridge closes.
+- `haptics=` in `xnuhost.conf` (or `--set`): `auto` (the device above, with the bridges on), `off`, `sim`: **a
+  stand-in actuator** for a boot with no vibrator (the PC), with the bridges on or off; it takes every request,
+  counts and logs it, and makes the guest's whole path run (the hello names the haptic channel, so `drivers/haptics`
+  publishes the Actuator device and `/product/haptics`). Host test: `runtime/bridges/tests/test_bridges.c`
+  (`test_haptic`: the counters of the fake motor and of the stand-in, and the bridge channel's).
 
 | iOS | Reaches the phone as |
 |---|---|

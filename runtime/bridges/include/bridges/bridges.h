@@ -116,7 +116,16 @@ void br_haptic_vib(br_haptic *h, uint32_t on_ms, unsigned intensity, unsigned fr
 void br_haptic_stop(br_haptic *h);
 // Waits until the worker has carried out everything asked so far (tests, shutdown).
 void br_haptic_flush(br_haptic *h);
+// Logs the counter line and stops the motor.
 void br_haptic_close(br_haptic *h);
+// The stand-in actuator (haptics=sim, a PC boot): every request is taken and counted, nothing vibrates.
+br_haptic *br_haptic_open_sim(void);
+// What reached this side: requests from the guest (vibrate, stop, and those a newer one replaced before the worker
+// started them) and what the device then did. br_haptic_report logs them as one "haptics: counters:" line; the
+// worker also logs the first 8 effects and every power of two after that.
+typedef struct { uint64_t vib, stop, replaced, played, stopped, failed; } br_haptic_stats;
+void br_haptic_stats_get(br_haptic *h, br_haptic_stats *out);
+void br_haptic_report(br_haptic *h);
 // The mapping, exposed for tests: iOS intensity/frequency to the effect's parameters.
 void br_haptic_map(unsigned intensity, unsigned frequency_hz, unsigned *period_ms, unsigned *magnitude);
 // The evdev back end's device search: writes the node path of the first device whose EV_FF bits

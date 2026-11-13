@@ -358,6 +358,13 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   for those two; `oneios-iokit=NAME,...` for others). bluetoothd's own lines are in iOS's log after the run:
   `oneios-tool ioslog show out/run/data/data.img --proc bluetoothd` (section 10). A first boot on the 4-CPU PC
   reached bluetoothd about 30 minutes in (2026-11-13).
+- Haptics on the PC: add `--set haptics=sim`: a stand-in actuator behind the bridge channel (the PC has no
+  vibrator), with the bridges off. The guest then publishes the Actuator audio device and `/product/haptics`
+  (`ONEIOS HAPTIC: on: host actuator ...`, `DroidVMAudio: published ... Actuator=1`), and logs who opens it
+  (`ONEIOS HAPTIC: Actuator: user client N opened by audiomxd`) and `ONEIOS HAPTIC: counters: ...` every 30 s while
+  a figure moves; xnuhost logs what came over the bridge (`haptics: effect N played on the stand-in actuator`,
+  `haptics: counters: ...`). VirtualAudio's own lines: `oneios-tool ioslog show out/run/data/data.img --proc
+  audiomxd` (`actuator port`, `Actuator`). [hardware.md](hardware.md) section 5, "Haptics do nothing".
 - Touch and keys on the PC: add `--input-script runtime/xnuhost/tools/input-demo.script` (keep `--no-input`: the
   evdev reader would open the PC's own devices). The script gives xnuhost's input device a panel's axes and, once
   the guest's driver runs it, repeats a tap, a swipe up from the bottom edge and the three side keys

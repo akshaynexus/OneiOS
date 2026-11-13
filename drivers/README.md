@@ -40,7 +40,7 @@ command of its universe (Mach, BSD, IOKit) plus `-Wall -Wextra -Werror`. No Appl
    (`cpu/README.md`).
 5. No KernelConfigTables entry, no patch to XNU's `conf/files`: the vibrator service is made by hand.
 
-Boot arguments: `oneios-bridge=0`, `oneios_haptic=0`, `oneios_haptic_ui=0`, `oneios_vib_cap=0`, `oneios_bt=0`, `oneios_bl=0`,
+Boot arguments: `oneios-bridge=0`, `oneios_haptic=0`, `oneios_haptic_ui=0`, `oneios_haptic_report=0` (no `ONEIOS HAPTIC: counters:` line), `oneios_vib_cap=0`, `oneios_bt=0`, `oneios_bl=0`,
 `oneios_bl_conform=0`, `oneios_battery=0`; `oneios-hid=0` (the HID archive: no touch, buttons or light sensor device).
 
 ## Device tree (drivers -> booter)
