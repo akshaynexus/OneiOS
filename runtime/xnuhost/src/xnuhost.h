@@ -79,7 +79,9 @@ typedef struct {
   int   bridges;            // runtime/bridges devices (network, sound, haptics, Bluetooth, CPU placement): 1, 0, -1 = by mode
   char  clusters[XH_MAX_CPUS + 1]; // "EEPPPPPP": the cluster type of each vCPU, overriding the bridges' plan ("" = the plan, else all P)
   char  bluetooth[16];      // "auto" (hidl when the bridges are on and the phone's HAL is registered, else virtual),
-                            // "virtual" (no controller, transport 10) or "hidl" (the phone's controller, transport 3)
+                            // "virtual" (no controller, transport 10), "hidl" (the phone's controller, transport 1, H4)
+                            // or "sim" (a stand-in controller, bridges/bt/hci_sim.c, transport 1: a boot with no phone;
+                            // works with the bridges off)
   char  wifi[8];            // "auto" (the phone's wlan0 for iOS's en0 when the bridges are on), "off" (no network
                             // device), "tap" (the old route: a tap and bin/oneios-net.sh's NAT), "sim" (a made-up
                             // radio with two networks, for a boot with no phone; works with the bridges off)
