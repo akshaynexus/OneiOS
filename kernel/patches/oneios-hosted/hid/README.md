@@ -122,6 +122,21 @@ sessions where touch "worked only after a power-key wake" were the times the cou
 transport now gives each new finger the next free identifier of 1..28 (rotating, so the next finger of a slot gets
 another one), and 29 to the pointer (`oneios-tool kernel gen hid`: the edit list `staged/hid_transport.rs`).
 
+**backboardd's event queue: 16 KiB, and a setting for 256 KiB (keyboard, 2026-11-13).** Apple's `IOHIDEventServiceUserClient`
+(backboardd's connection to each event service) sizes its event queue from the service's `QueueSize` property
+(`kIOHIDEventServiceQueueSize`, bytes) when it opens, else 16 KiB, and drops an event that does not fit: the `N dropped`
+of the state line (the phone, 2026-11-12 23:15: `5105 HID events queued ... 6 dropped`). 16 KiB is a few dozen
+digitizer events, so a backboardd that stalls for half a second while fingers move overflows it, and a dropped event can
+be a finger's lift: backboardd then keeps that touch down. A touch that never ends plus the next finger is two fingers
+on the keyboard, which iOS takes for its trackpad mode, where keys type nothing [hypothesis for the keyboard that stops
+after three or four characters, 2026-11-13; not reproduced]. The iPhone's own touch path raises its queue the same way
+(the kernelcache has AppleSPUHIDDriver's `set %s kIOHIDEventServiceQueueSize to %d KB`). `OneiOSHidInput.cpp`
+`setQueueSize` can set `QueueSize` on the touch screen's and the buttons' event drivers as they attach, before
+backboardd opens them: `oneios-hid-queue-kib=N` (at most 4096; **default 0, off**: compiled on the PC, never booted, so it waits for a boot with `oneios-hid-queue-kib=256`); Apple's own boot
+argument `hidq_size=BYTES` still wins over the property. Log, once per service: `oneios-hid: touch screen: event queue
+256 KiB for its user clients (QueueSize)`, with `; already open: theirs stays 16 KiB until they open again` if
+backboardd was first. On the phone: the `N dropped` of the state line should stay 0 through a stall.
+
 ## Which event driver (lead, 2026-11-11)
 
 The collection would give an `IOHIDInterface` of a Consumer or Digitizer device to the DriverKit event driver

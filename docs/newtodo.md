@@ -228,6 +228,47 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
       `docs/gpu.md` 5.1 "The next phone boot (hang)".
 12. **The keyboard often does not come up or does not answer** (23:45 and 23:15 boots: kbd 24-40 %, Spotlight 96-102 %,
     `5105 HID events queued ... 6 dropped`). Not read past fault 11's load; the same samples and searches decide.
+    **2026-11-13, main `c2d281a`: in Settings > Wi-Fi's password field the keys stop after the 3rd or 4th character.**
+    Read on branch `fix-keyboard` (iOS's log of the `c1223f8` hang session, the 24A446 images and shared cache, a PC
+    boot's Data store and iOS log):
+    - **Changed (ours):** backboardd's HID event queue was Apple's 16 KiB default and drops events that do not fit; a
+      dropped lift leaves a touch down for good, and a stuck touch plus the next finger is the keyboard's two-finger
+      trackpad mode, where keys type nothing [hypothesis, not reproduced]. The touch screen and buttons can now get a
+      256 KiB queue with `oneios-hid-queue-kib=256`, off by default until a boot has run it (`kernel/patches/oneios-hosted/hid/README.md`, "backboardd's event queue").
+    - **The MobileAsset lock error is not a symlink fault** (read in the cache): `SYMLINK` is MobileAsset's name for
+      opening an asset set's lock through its `latest` link under `/private/var/MobileAsset/AssetsV2/locks`;
+      `com.apple.linguisticdata` is a UAF auto-asset that is only downloaded from Apple. This Data store has never been
+      online (Wi-Fi was being joined) and the PC's store has no `AssetsV2/locks` at all. The keyboard's base data
+      (`/System/Library/LinguisticData`, `TextInput`) is in the OS image. The line's `errno:N` decides: 2 is "not
+      downloaded" (expected offline); 1, 13 or 62 would be ours (sandbox, permissions, a link loop). No seed change.
+    - **`volume does not support data protection` is by design** (sqlite, every process, the PC too): the Data
+      volume is mounted without `MNT_CPROTECT` (no Secure Enclave; keybagd says `mount is with NO CPROTECT`), sqlite
+      drops its protection flags and opens the store; per-file classes are kept as an attribute (hosted 0022
+      `owner-dataprotect`). A real iPhone mounts with `MNT_CPROTECT`. Not changed.
+    - **InputUI's arbiter error** is `runOperations: %s Failed to access %@ remote service: %@` (UIKitCore): its XPC
+      proxy to the focused client (Preferences) failed. The error after it (connection interrupted, invalidated, or a
+      sandbox refusal) decides; not readable from the summary.
+    - **PSGInputSuggester** is kbd's ProactiveInputPredictions: the "triggering endpoint" is a local FST language model
+      and lexicon, the "serving endpoint" suggestd's `com.apple.proactive.input.suggester` (suggestd is enabled).
+    - **AttentionAwareness's `AWDigitizerButtonKeyboardAttentionEvent` is one class for digitizer, button and keyboard
+      events** (its `validateMask` in the cache): one event per touch is iOS's design, not our digitizer looking like a
+      keyboard. About 900 events times 6 clients is little load.
+    - **Disabled jobs the keyboard's processes may reach** (their entitlements' service names against the daemon
+      policy): kbd: coreduetd (`coreduetd.knowledge`), aned, assistantd, maild; InputUI: modelmanagerd, modelcatalogd,
+      siriknowledged (`com.apple.siri.uaf.service`, one of the two UAF endpoints), assistantd; Spotlight: coreduetd,
+      duetexpertd, routined, watchlistd, familycircled. With coreduetd off nobody makes `/var/mobile/Library/CoreDuet`
+      (PC: `Non-priveleged client unable to find knowledge directory, calling out for help`, then errno 2). Not changed
+      without evidence: the A/B for the next boot is the existing `oneios-enable-jobs=` (hosted 0044).
+    - **Next phone boot** (after the `c2d281a` session's lines are read): add `oneios-hid-queue-kib=256` and add
+      `Preferences,InputUI` to `oneios-ubt=`; type in the password field and note whether the whole UI or only the keys
+      stop. Read: `oneios-hid: touch screen: event queue 256 KiB` (with no `already open`), the state line's
+      `N dropped` (0 expected), `input: touch:`; in iOS's log (`oneios-tool ioslog show data.img --boot last ...`):
+      `--grep 'Unable to obtain shared lock'` (its `errno:`), `--proc InputUI --grep 'Failed to access'` (the error
+      after it), `--grep 'KeyboardInputScene'`, `--proc kbd --grep 'warmUp|ICPredictionManager|timeout'`,
+      `--grep '[Tt]rackpad|two.finger|UIKeyboardTrackpad'` (trackpad mode), `--proc backboardd --grep 'TouchEvents|path'`.
+      A second boot as the A/B of the disabled jobs: `oneios-enable-jobs=com.apple.analyticsd,com.apple.coreduetd,
+      com.apple.siriknowledged,com.apple.modelmanagerd,com.apple.modelcatalogd,com.apple.intelligenceplatformd`
+      (the kernel's buffer is 256 characters; analyticsd must stay in the list).
 
 ## Later
 
