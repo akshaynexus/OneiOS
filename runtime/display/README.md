@@ -5,7 +5,7 @@ serves it on `session/display.sock` (`docs/booter.md` 2.8); One UI's surfaceflin
 hold the panel. `oneios-display` runs on One UI's side, as root, outside xnuhost's mount namespace: it takes the
 frame from the socket and shows it on a surfaceflinger layer above everything else.
 
-**Never run on a phone so far.** It builds, and the host tests pass; the first run is `displayctl test` below.
+**On the phone since the sessions of 2026-11-11** (backboardd's frames on the panel, `README.md` "Status"; the 2026-11-12 23:45 boot logged `1440x3120 buffer, stride 1472, format 5`). The colour handling of 2026-11-13 (dataspaces, half floats) has not run there; its first test is `displayctl test --format rgba16f` below.
 
 What the guest shows comes from its framebuffer driver (`kernel/patches/oneios-hosted/display/`): the kernel
 console until `backboardd`'s first frame, then iOS. On the PC, `display-capture.py` in that folder is a client of
@@ -74,17 +74,34 @@ NDK's `ANativeWindow` on that `Surface`, from the mapped memfd straight into the
   Whether One UI's resolution setting is a panel mode or only a logical size on this phone is not known; the
   helper's `panel modes: active ..., native ...` line of the first run says.
 - **Frames.** One copy per frame, of the damaged rectangle only: the window copies back what the last buffer had
-  and hands out the rectangle to draw. `B,G,R,A` buffers take the guest's bytes as they are (`memcpy`; the layer
-  is marked opaque); if the phone gives no such buffer the helper falls back to `R,G,B,X` and swaps while it
-  copies. Pacing is the buffer queue's: the next buffer is handed out when surfaceflinger has taken the last, so
-  the loop runs at the panel's vsync and every flush that came meanwhile is one post.
+  and hands out the rectangle to draw. The layer's buffers are in the guest frame's own layout, so the copy is a
+  `memcpy`: an 8-bit frame (hello format 1) goes into `BGRA_8888` buffers (format 5; the layer is marked opaque), a
+  half-float frame (format 2, xnuhost's `display-format=rgba16f`) into `RGBA_FP16` buffers (format 22). If the phone
+  gives no `BGRA_8888` buffer the helper falls back to `R,G,B,X` and swaps while it copies; with no `RGBA_FP16` one
+  it falls back to `BGRA_8888` and encodes the half floats to sRGB, clamped (what is outside sRGB is lost). Pacing is
+  the buffer queue's: the next buffer is handed out when surfaceflinger has taken the last, so the loop runs at the
+  panel's vsync and every flush that came meanwhile is one post.
+- **Colour.** The buffers are tagged with a dataspace (`ANativeWindow_setBuffersDataSpace`), which says what their
+  numbers mean, so that surfaceflinger turns them into the panel's colours: `SRGB` (`0x8810000`) for an 8-bit frame
+  (iOS composites this display in sRGB: QuartzCore's `IOMFBDisplay::compositing_color_space` is `kCGColorSpaceSRGB`,
+  `kernel/patches/oneios-hosted/display/README.md` "What iOS renders into"), `SCRGB_LINEAR` (`0x18410000`) for half
+  floats (linear light, sRGB primaries, extended range: Display P3's colours are components below 0 and above 1). Before
+  2026-11-13 the buffers had no dataspace (`UNKNOWN`: surfaceflinger's legacy handling). `--dataspace` overrides it for
+  a test (`auto`, `unknown`, `srgb`, `p3`, `scrgb`, `scrgb-linear`). The helper sets no colour mode, no brightness
+  and no HDR ratio of its own; a wide dataspace on screen may make surfaceflinger pick another colour mode of the
+  panel while the layer is shown (its own choice, undone when the layer goes; the return restarts surfaceflinger).
+  It logs what it found and what it set: `panel colour mode N (of ...); HDR types [...], luminance max ... nits, max
+  average ..., min ...` (read only), `buffers tagged srgb (dataspace 0x8810000)`, and in `first frame posted` the
+  buffer's format and dataspace and the guest frame's pixels.
 - **Leaving.** On SIGTERM, SIGINT or SIGHUP, and when the socket closes (xnuhost ended, or a newer helper
   connected), it removes its layers and exits 0. Killed with SIGKILL, surfaceflinger drops a dead client's layers.
 
 ```
 oneios-display (--session DIR | --socket PATH) [--takeover] [--wait SECONDS] [--logical WxH]
-               [--hz N] [--format bgra|rgbx] [--no-projection]
+               [--hz N] [--format bgra|rgbx] [--dataspace auto|unknown|srgb|p3|scrgb|scrgb-linear] [--no-projection]
 ```
+
+`--format` chooses among the 8-bit layouts only; a half-float frame always gets `RGBA_FP16` buffers first.
 
 Exit codes: 0 the session ended or it was asked to stop, 2 usage or a missing file, 3 no socket or no usable
 hello, 4 the layer's buffers failed, 5 an exception (the framework's classes changed; the trace is on stderr).
@@ -136,9 +153,12 @@ Variants:
 ```sh
 # longer, or another frame size (a mismatch: scaled, with bars)
 adb shell su -c '/data/local/tmp/oneios-display-test/displayctl test --seconds 20 --size 1320x2868'
-# options after -- go to the helper: the swapping copy, a fixed refresh rate
+# options after -- go to the helper: the swapping copy, a fixed refresh rate, another dataspace
 adb shell su -c '/data/local/tmp/oneios-display-test/displayctl test -- --format rgbx'
 adb shell su -c '/data/local/tmp/oneios-display-test/displayctl test -- --hz 60'
+adb shell su -c '/data/local/tmp/oneios-display-test/displayctl test -- --dataspace unknown'
+# wide colour: a half-float frame (what xnuhost's display-format=rgba16f serves), see below
+adb shell su -c '/data/local/tmp/oneios-display-test/displayctl test --seconds 20 --format rgba16f'
 # what surfaceflinger has while it runs (second shell)
 adb shell su -c 'dumpsys SurfaceFlinger --list' | grep OneiOS
 # clean up
@@ -148,9 +168,28 @@ adb shell su -c 'rm -rf /data/local/tmp/oneios-display-test'
 If the helper hangs, `displayctl` ends it 3 s after the test; if `displayctl` itself is killed,
 `adb shell su -c 'pkill -f OneiOSDisplay'` removes the layer.
 
+**Wide colour (`--format rgba16f`).** The same bars in half floats, and in the lowest quarter of the screen eight
+patches from the left: sRGB's red, Display P3's red, sRGB's green, P3's green, sRGB's blue, P3's blue (P3's as linear
+extended sRGB: components below 0 and above 1), white at 1.0, white at 2.0. What to look for:
+- the helper's lines `buffers tagged scrgb-linear (dataspace 0x18410000)` and `first frame posted (... format 22
+  RGBA_FP16, dataspace 0x18410000 scrgb-linear ...)`. `no buffer in format 22 RGBA_FP16 (...), using BGRA_8888` means
+  this phone's gralloc or surfaceflinger refused half floats: then the band shows each pair the same.
+- each P3 patch visibly more saturated than the sRGB patch on its left (red and green most; blue barely). The same
+  colour in a pair means the layer was clipped to sRGB. Compare in One UI's Settings > Display > Screen mode both
+  "Natural" (colour-managed) and "Vivid" (Samsung stretches every layer to the panel's gamut; say which mode the
+  phone was in). A photo of the band and the command's output are what to send back.
+- the 2.0 white the same as the 1.0 white is expected: the helper asks for no HDR headroom (no
+  `setExtendedRangeBrightness`), so surfaceflinger shows extended range at SDR white.
+- the line `panel colour mode ...; HDR types ..., luminance max ...`: the panel's own numbers (what the guest's EDR
+  headroom and nits should be set from, `drivers/brightness`).
+- after it, One UI's colours, brightness and resolution as before (nothing of the display was changed).
+
 ## Not done
 
-- No run on the phone yet, so every framework call is unproven on Android 17: the hidden methods used are all
+- The dataspaces, `RGBA_FP16` buffers and the half-float path (2026-11-13) are host-tested only (`make test`: 110 +
+  10 checks): whether this phone's surfaceflinger takes an `RGBA_FP16` BLAST layer, and how One UI's screen modes
+  show `SRGB` and `SCRGB_LINEAR` layers, is the wide-colour test above. No HDR headroom is asked for.
+- Not every framework call has been seen working on Android 17 (the native-mode request and the projection, `--takeover`, have no log of a run here): the hidden methods used are all
   in `java/OneiOSDisplay.java`, and each has a fallback or a logged failure.
 - The copy is not zero-copy. For that xnuhost would have to keep the guest's frame in a gralloc buffer
   (`AHardwareBuffer`) instead of a memfd and pass that; `virtio_gpu.c` and the socket's hello would change.

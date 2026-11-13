@@ -964,3 +964,15 @@ vtable slots, every discriminator); 159 original functions are bound through `.o
 non-virtual. `net/README.md` has the files, the check, the boot argument (`oneios-wifi=0`) and the log lines;
 `docs/hardware.md` section 3 the design, the host's side and what ran. Built on the Mac (`HOSTED_OUT=radio`) and
 prelinked: the import audit passes (0 failures) and `oneios-tool prelink stubs-check` finds 666 good stubs, 0 bad.
+
+## display/: colour, depth and the panel (fix-display-colour, 2026-11-13)
+
+No numbered patch: the display archive (`oneios-tool kernel gen display`) only. What iOS's render server renders
+into here (8-bit sRGB `BGRA`, or `RGhA` half floats narrowed to 8 bits by the CPU; a real iPhone's 10-bit `w40a` is
+refused by this display), what QuartzCore and MobileGestalt read about the panel, and the real iPhone18,2 tree's EDR
+and nits values: `display/README.md`, "Colour, depth and the panel". In the archive: with `oneios-display-wide=1`
+(xnuhost's `display-format=rgba16f`) half-float frames go to the virtio scanout as they are (LegacyDisplayProbe.cpp's
+offer and DroidVMVirtioGpuDisplay.cpp's resources carry the scanout format: `staged/display.rs` `DISPLAY`, `SCANOUT`);
+`OneiOSDisplay.cpp` logs `oneios-display: half-float frames: ...`, the display service's properties once
+(`oneios-display: properties: ...`) and each surface format the compositor swaps (`oneios-display: the compositor
+swaps format 'BGRA' ...: taken`). Without the boot argument the frames take the path they took before.

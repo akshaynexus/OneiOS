@@ -27,9 +27,14 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
+#include <libkern/c++/OSBoolean.h>
+#include <libkern/c++/OSCollectionIterator.h>
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSMetaClass.h>
 #include <libkern/c++/OSNumber.h>
+#include <libkern/c++/OSString.h>
+#include <libkern/c++/OSSymbol.h>
+#include <libkern/libkern.h>
 #include <pexpert/pexpert.h>
 #include <sys/proc.h>
 
@@ -66,10 +71,12 @@ bool oneios_display_parent_bound(void);
 void oneios_display_parent_slide(void);
 void oneios_display_client_seen(IOReturn status, int pid, uint32_t type, IOUserClient *client);
 void oneios_display_frame_seen(unsigned kind, uint64_t width, uint64_t height);
-void oneios_display_swap_seen(bool accepted, unsigned reason);
+void oneios_display_swap_seen(bool accepted, unsigned reason, const void *surface);
+bool oneios_display_wide(void);
 }
 
 static void oneios_display_power_on(void);
+static void oneios_display_properties(IOService *display);
 
 static bool displayEnabled()
 {
@@ -164,7 +171,12 @@ void native_legacy_display_late_probe(void)
     IOLog("oneios-display: panel %ux%u at %#llx (%llu bytes); virtio scanout state %u (2 = presenting), %s resources\n",
           native_legacy_gop_width, native_legacy_gop_height, native_legacy_gop_physical, native_legacy_gop_bytes,
           droidvm_virtio_display_state, droidvm_virtio_display_blob ? "blob" : "2D");
+    IOLog("oneios-display: half-float frames: %s\n", oneios_display_wide()
+              ? "to the virtio scanout as they are, wide colour and EDR kept (oneios-display-wide=1)"
+              : "narrowed to 8-bit sRGB by the CPU (xnuhost's frame is 8-bit; display-format=rgba16f keeps them)");
     oneios_display_power_on();
+    if (native_legacy_stage == 10)
+        oneios_display_properties(reinterpret_cast<IOService *>(static_cast<uintptr_t>(native_legacy_object)));
 }
 
 // The display is on: said to the family the way the power manager says it.
@@ -214,13 +226,83 @@ void oneios_display_client_seen(IOReturn status, int pid, uint32_t type, IOUserC
           client ? client->getMetaClass()->getClassName() : "none");
 }
 
-void oneios_display_swap_seen(bool accepted, unsigned reason)
+// The surface formats the compositor swaps: the first swap of each format (up to 8 formats) is logged with what it is,
+// so a boot says what iOS's render server renders into (QuartzCore's IOMFBDisplay::framebuffer_pixel_format: 'BGRA'
+// 8-bit, 'RGhA' half float, 'w40a'/'b3a8' 10-bit extended range, '&'-spelled compressed forms) and whether this
+// display took it. Only 'BGRA', '&BGA' and 'RGhA' are taken (NativeLegacyDisplay's nativeScanoutFormat).
+extern "C" uint32_t native_legacy_surface_format(OSObject *), native_legacy_surface_planes(OSObject *);
+extern "C" uint64_t native_legacy_surface_width(OSObject *), native_legacy_surface_height(OSObject *), native_legacy_surface_stride(OSObject *);
+static void oneios_display_format_seen(bool accepted, unsigned reason, OSObject *surface)
+{
+    static uint32_t seen[8];
+    static unsigned count;
+    if (!surface || !surface->metaCast("IOSurface")) return;
+    const uint32_t format = native_legacy_surface_format(surface);
+    for (unsigned i = 0; i < count; i++) if (seen[i] == format) return;
+    if (count >= 8) return;
+    seen[count++] = format;
+    char code[5] = {char(format >> 24), char(format >> 16), char(format >> 8), char(format), 0};
+    for (char &c : code) if (c && (c < 32 || c > 126)) c = '?';
+    const char *what = format == 0x42475241 || format == 0x26424741 ? "8-bit B,G,R,A, sRGB"
+                     : format == 0x52476841 ? (oneios_display_wide() ? "half float, linear extended sRGB: to the scanout as it is (oneios-display-wide=1)"
+                                                                     : "half float, linear extended sRGB: narrowed to 8-bit sRGB by the CPU")
+                     : format == 0x77343061 || format == 0x26773461 || format == 0x62336138 || format == 0x26623338 ? "10-bit extended range (XR), wide colour"
+                     : "other";
+    IOLog("oneios-display: the compositor swaps format '%s' (%#x, %u planes, %llux%llu, stride %llu): %s; %s (reason %u)\n", code, format,
+          native_legacy_surface_planes(surface), native_legacy_surface_width(surface), native_legacy_surface_height(surface),
+          native_legacy_surface_stride(surface), what, accepted ? "taken" : "REFUSED", reason);
+}
+
+void oneios_display_swap_seen(bool accepted, unsigned reason, const void *surface)
 {
     const uint32_t n = oneios_display_swaps[accepted ? 0 : 1];
     oneios_display_swaps[accepted ? 0 : 1] = n + 1;
     // Reasons (NativeLegacyDisplay::validateSwap): 0 a full-frame surface, 5 a blank frame; refused: 1 the display is
     // not ready, 2 not one surface on one layer, 3 not the whole panel, 4 the surface's format or memory.
     if (n < 4) IOLog("oneios-display: swap %u %s (reason %u)\n", n + 1, accepted ? "accepted" : "refused", reason);
+    if (reason == 0 || reason == 4) oneios_display_format_seen(accepted, reason, const_cast<OSObject *>(static_cast<const OSObject *>(surface)));
+}
+
+// Half-float frames ('RGhA') to the virtio scanout as they are: xnuhost passes oneios-display-wide=1 when its frame
+// keeps half floats (display-format=rgba16f; runtime/xnuhost/include/xnuhost/pixels.h). Without it they are narrowed
+// to 8-bit sRGB by the CPU into the boot video, as before. LegacyDisplayProbe.cpp's offer asks (staged/display.rs).
+bool oneios_display_wide(void)
+{
+    uint32_t wide = 0;
+    PE_parse_boot_argn("oneios-display-wide", &wide, sizeof wide);
+    return wide != 0;
+}
+
+// What the display tells iOS about the panel: the service's property names (and the values of the plain ones), once,
+// after the late probe. QuartzCore reads these through IOMobileFramebufferCopyProperty when it makes its display
+// (AppleDisplay's constructor, update_display_limits, update_framebuffer_locked: kernel/patches/oneios-hosted/display/
+// README.md, "What iOS reads about the panel"); a key a real iPhone has and this list lacks is answered by its default.
+static void oneios_display_properties(IOService *display)
+{
+    OSDictionary *properties = display ? display->dictionaryWithProperties() : nullptr;
+    OSCollectionIterator *keys = properties ? OSCollectionIterator::withCollection(properties) : nullptr;
+    if (!keys) { OSSafeReleaseNULL(properties); return; }
+    char line[240];
+    unsigned used = 0, total = 0;
+    while (const OSSymbol *key = OSDynamicCast(OSSymbol, keys->getNextObject())) {
+        OSObject *value = properties->getObject(key);
+        char item[96];
+        if (OSNumber *number = OSDynamicCast(OSNumber, value)) snprintf(item, sizeof item, "%s=%llu", key->getCStringNoCopy(), number->unsigned64BitValue());
+        else if (OSBoolean *flag = OSDynamicCast(OSBoolean, value)) snprintf(item, sizeof item, "%s=%s", key->getCStringNoCopy(), flag->isTrue() ? "true" : "false");
+        else if (OSString *text = OSDynamicCast(OSString, value)) snprintf(item, sizeof item, "%s=%s", key->getCStringNoCopy(), text->getCStringNoCopy());
+        else snprintf(item, sizeof item, "%s=(%s)", key->getCStringNoCopy(), value ? value->getMetaClass()->getClassName() : "none");
+        const unsigned length = (unsigned)strlen(item);
+        if (used && used + length + 2 >= sizeof line) {
+            IOLog("oneios-display: properties: %s\n", line);
+            used = 0;
+        }
+        used += (unsigned)snprintf(line + used, sizeof line - used, "%s%s", used ? ", " : "", item);
+        total++;
+    }
+    if (used) IOLog("oneios-display: properties: %s\n", line);
+    IOLog("oneios-display: properties: %u on the display service (%s)\n", total, display->getMetaClass()->getClassName());
+    keys->release();
+    properties->release();
 }
 
 void oneios_display_frame_seen(unsigned kind, uint64_t width, uint64_t height)

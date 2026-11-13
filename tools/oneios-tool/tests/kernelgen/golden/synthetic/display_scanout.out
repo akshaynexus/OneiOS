@@ -1,0 +1,42 @@
+// A made-up source for the edit list "display" SCANOUT: every anchor once, between lines of its own.
+// (before anchor 0)
+    uint32_t width, height, id;
+    bool prepared, usable;
+    uint32_t format;   // OneiOS: 0 B,G,R,X; OneiOSHalf: half floats (oneios-display-wide=1)
+};
+// (before anchor 1)
+struct Frame { IOService *display; IOMemoryDescriptor *memory; uint64_t stride; uint32_t width, height; uint64_t work, holds; int pid;
+               uint32_t format; };
+// OneiOS: xnuhost's scanout format for half floats, IOSurface's 'RGhA' (virtio-gpu has none of its own).
+constexpr uint32_t OneiOSHalf = 0x52476841;
+uint32_t scanoutFormat(const Resource &r) { return r.format == OneiOSHalf ? OneiOSHalf : 2; }
+uint64_t scanoutBpp(const Resource &r) { return r.format == OneiOSHalf ? 8 : 4; }
+// (before anchor 2)
+        struct { Header h; uint32_t id, format, width, height; } cmd = {{0x101, 0, 0, 0, 0, {}}, r.id, scanoutFormat(r), uint32_t(stride / scanoutBpp(r)), height};
+// (before anchor 3)
+                scanout = {{0x10d, 0, 0, 0, 0, {}}, {0, 0, r.width, r.height}, 0, r.id, r.width, r.height, scanoutFormat(r), 0, {uint32_t(r.stride)}, {}};
+            status = DroidVMVirtioGpu::post(&scanout, sizeof scanout, nullptr, 0, sizeof(Header), true, &posted->tickets[posted->count]);
+// (before anchor 4)
+                scanout = {{0x10d, 0, 0, 0, 0, {}}, {0, 0, r.width, r.height}, 0, r.id, r.width, r.height, scanoutFormat(r), 0, {uint32_t(r.stride)}, {}};
+            status = send(scanout);
+// (before anchor 5)
+    for (auto &r : resources) if (r.memory == frame.memory && r.usable && r.id && r.stride == frame.stride &&
+        r.width == frame.width && r.height == frame.height && r.format == frame.format) { r.used = ++useClock; return &r; }
+// (before anchor 6)
+    slot->format = frame.format;
+    IOReturn status = create(*slot, frame.memory, frame.stride, frame.width, frame.height, true);
+// (before anchor 7)
+static bool oneiosOffer(void *display, IOMemoryDescriptor *memory, uint64_t stride, uint32_t width, uint32_t height, uint32_t format);
+extern "C" bool droidvm_virtio_gpu_offer(void *display, IOMemoryDescriptor *memory, uint64_t stride, uint32_t width, uint32_t height) {
+    return oneiosOffer(display, memory, stride, width, height, 1);
+}
+// OneiOS: the offer with the frame's NGP format (1 B,G,R,X; 2 half floats of linear light, LegacyDisplayProbe.cpp).
+extern "C" bool oneios_virtio_gpu_offer_format(void *display, IOMemoryDescriptor *memory, uint64_t stride, uint32_t width,
+                                                uint32_t height, uint32_t format) {
+    return (format == 1 || format == 2) && oneiosOffer(display, memory, stride, width, height, format);
+}
+static bool oneiosOffer(void *display, IOMemoryDescriptor *memory, uint64_t stride, uint32_t width, uint32_t height, uint32_t format) {
+// (before anchor 8)
+        pending = {service, memory, stride, width, height, droidvm_virtgpu_submitted(), droidvm_virtgpu_holds(), pid,
+                   format == 2 ? OneiOSHalf : 0};
+// (the end)

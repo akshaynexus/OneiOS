@@ -30,7 +30,8 @@ xh_display *xh_display_get(void) { return display.pixels ? &display : NULL; }
 
 // ---- shm ----------------------------------------------------------------------------------------
 // Wire format, little-endian, one SOCK_SEQPACKET message each:
-//   hello  { "XHD1", u32 width, u32 height, u32 stride, u32 format = 1 (B,G,R,X bytes) } + the memfd (SCM_RIGHTS)
+//   hello  { "XHD1", u32 width, u32 height, u32 stride, u32 format } + the memfd (SCM_RIGHTS); format 1: B,G,R,X 8-bit
+//          sRGB, 2: R,G,B,A half floats, linear extended sRGB (include/xnuhost/pixels.h, display-format=)
 //   flush  { "XHDF", u32 x, u32 y, u32 w, u32 h }
 // and from the helper, once, straight after it connects, whatever xnuhost does with it:
 //   panel  { "XHDP", u32 width, u32 height, u32 hz, u32 0 }   the mode surfaceflinger runs the panel in
@@ -41,7 +42,7 @@ static char socket_path[600];
 
 static void helper_attach(int fd)
 {
-  struct shm_message hello = { { 'X', 'H', 'D', '1' }, display.width, display.height, display.stride, 1 };
+  struct shm_message hello = { { 'X', 'H', 'D', '1' }, display.width, display.height, display.stride, display.format };
   char control[CMSG_SPACE(sizeof(int))];
   struct iovec iov = { &hello, sizeof hello };
   struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1, .msg_control = control, .msg_controllen = sizeof control };
@@ -245,7 +246,9 @@ int xh_display_init(const xh_config *c, unsigned *width, unsigned *height, unsig
   display.width = mode.width;
   display.height = mode.height;
   *hz = mode.hz;
-  display.stride = display.width * 4;
+  display.format = c->display_format ? c->display_format : XH_PIXELS_BGRX8;
+  display.bpp = xh_pixels_bpp(display.format);
+  display.stride = display.width * display.bpp;
   if (backend == BACK_SHM) {
     if (shm_frame()) { LOGE("display: shared frame: %s", strerror(errno)); return -1; }
   } else {
@@ -260,6 +263,8 @@ int xh_display_init(const xh_config *c, unsigned *width, unsigned *height, unsig
   else LOGI("display: the panel's modes were not read (%s): %ux%u at %u Hz assumed", session ? "no helper's report and no connected built-in panel in /dev/dri/card0" : "a bench run", XH_PANEL_WIDTH, XH_PANEL_HEIGHT, XH_PANEL_HZ);
   LOGI("display: %s, guest frame %ux%u at %u Hz, @%ux (%ux%u points)", c->display, display.width, display.height, mode.hz, c->scale,
        c->scale ? display.width / c->scale : 0, c->scale ? display.height / c->scale : 0);
+  LOGI("display: the frame's pixels: %s, %u bytes a pixel, stride %u (display-format=%s)", xh_pixels_name(display.format), display.bpp,
+       display.stride, display.format == XH_PIXELS_RGBA16F ? "rgba16f" : "bgrx");
   return 0;
 }
 

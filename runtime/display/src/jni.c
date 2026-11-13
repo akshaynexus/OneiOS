@@ -15,9 +15,11 @@
 #include <string.h>
 #include <unistd.h>
 
-#define FORMAT_BGRA_8888 5              // HAL_PIXEL_FORMAT_BGRA_8888: the guest's bytes as they are
-#define FORMAT_RGBX_8888 2
+#define FORMAT_BGRA_8888 XHD_BUFFER_BGRA_8888    // HAL_PIXEL_FORMAT_BGRA_8888: the guest's 8-bit bytes as they are
+#define FORMAT_RGBX_8888 XHD_BUFFER_RGBX_8888
+#define FORMAT_RGBA_FP16 XHD_BUFFER_RGBA_FP16    // the guest's half floats as they are
 
+// ANativeWindow_setBuffersDataSpace and _get are API 28; the library is built for 30, so they are there.
 struct context { int fd; struct xhd_frame frame; };
 
 // SIGTERM, SIGINT and SIGHUP end the run loop through a pipe, so the Java half removes the layers.
@@ -90,7 +92,34 @@ JNIEXPORT jintArray JNICALL Java_OneiOSDisplay_nFit(JNIEnv *env, jclass type, ji
 // Posts frames until the socket closes (0) or a signal asks to stop (1); negative on an error.
 // Pacing: the next buffer is only handed out when surfaceflinger has taken the last one, so
 // ANativeWindow_lock blocks to the panel's vsync, and every flush that came meanwhile is one post.
-JNIEXPORT jint JNICALL Java_OneiOSDisplay_nRun(JNIEnv *env, jclass type, jlong handle, jobject surface, jint format)
+// The buffer layout and dataspace a frame format gets (xhd_buffer_for): {buffer, dataspace}.
+JNIEXPORT jintArray JNICALL Java_OneiOSDisplay_nBuffer(JNIEnv *env, jclass type, jint format)
+{
+  (void)type;
+  int dataspace = 0;
+  jint values[2] = { (jint)xhd_buffer_for((uint32_t)format, &dataspace), (jint)dataspace };
+  jintArray array = (*env)->NewIntArray(env, 2);
+  if (array) (*env)->SetIntArrayRegion(env, array, 0, 2, values);
+  return array;
+}
+
+// Tags the window's buffers with the dataspace: what the numbers in them mean, so that surfaceflinger turns them into
+// the panel's colours (One UI's colour mode decides how; nothing of it is changed here). Logs what the window has.
+static void set_dataspace(ANativeWindow *window, int dataspace)
+{
+  int error = ANativeWindow_setBuffersDataSpace(window, dataspace);
+  int now = ANativeWindow_getBuffersDataSpace(window);
+  if (error) fprintf(stderr, "oneios-display: the dataspace %s (%#x) was refused (%d); the buffers say %s (%#x)\n",
+                     xhd_dataspace_name(dataspace), (unsigned)dataspace, error, xhd_dataspace_name(now), (unsigned)now);
+  else fprintf(stderr, "oneios-display: buffers tagged %s (dataspace %#x)\n", xhd_dataspace_name(now), (unsigned)now);
+}
+
+static const char *format_name(int format)
+{
+  return format == FORMAT_BGRA_8888 ? "BGRA_8888" : format == FORMAT_RGBX_8888 ? "RGBX_8888" : format == FORMAT_RGBA_FP16 ? "RGBA_FP16" : "other";
+}
+
+JNIEXPORT jint JNICALL Java_OneiOSDisplay_nRun(JNIEnv *env, jclass type, jlong handle, jobject surface, jint format, jint dataspace)
 {
   (void)type;
   struct context *c = (struct context *)(intptr_t)handle;
@@ -98,6 +127,7 @@ JNIEXPORT jint JNICALL Java_OneiOSDisplay_nRun(JNIEnv *env, jclass type, jlong h
   ANativeWindow *window = ANativeWindow_fromSurface(env, surface);
   if (!window) { fprintf(stderr, "oneios-display: no native window for the layer\n"); return -1; }
   ANativeWindow_setBuffersGeometry(window, (int32_t)f->width, (int32_t)f->height, format);
+  set_dataspace(window, dataspace);
   struct xhd_rect pending = { 0, 0, f->width, f->height };
   unsigned long frames = 0;
   int result;
@@ -115,10 +145,14 @@ JNIEXPORT jint JNICALL Java_OneiOSDisplay_nRun(JNIEnv *env, jclass type, jlong h
     ANativeWindow_Buffer buffer;
     int error = ANativeWindow_lock(window, &buffer, &dirty);
     if (error) {
-      if (frames == 0 && format != FORMAT_RGBX_8888) {         // no B,G,R,A buffers here: R,G,B,X and a swap
-        fprintf(stderr, "oneios-display: no buffer in format %d (%d), using R,G,B,X\n", format, error);
-        format = FORMAT_RGBX_8888;
+      if (frames == 0 && format != FORMAT_RGBX_8888) {
+        // No B,G,R,A buffers here: R,G,B,X and a swap. No RGBA_FP16 ones: B,G,R,A, the half floats encoded to sRGB
+        // and clamped (what is outside sRGB is lost), tagged sRGB.
+        int next = format == FORMAT_RGBA_FP16 ? FORMAT_BGRA_8888 : FORMAT_RGBX_8888;
+        fprintf(stderr, "oneios-display: no buffer in format %d %s (%d), using %s\n", format, format_name(format), error, format_name(next));
+        format = next;
         ANativeWindow_setBuffersGeometry(window, (int32_t)f->width, (int32_t)f->height, format);
+        if (dataspace == XHD_DATASPACE_SCRGB_LINEAR || dataspace == XHD_DATASPACE_SCRGB) set_dataspace(window, dataspace = XHD_DATASPACE_SRGB);
         continue;
       }
       fprintf(stderr, "oneios-display: the layer's buffer could not be locked (%d)\n", error);
@@ -132,12 +166,17 @@ JNIEXPORT jint JNICALL Java_OneiOSDisplay_nRun(JNIEnv *env, jclass type, jlong h
       r = (struct xhd_rect){ (uint32_t)dirty.left, (uint32_t)dirty.top, (uint32_t)(dirty.right - dirty.left), (uint32_t)(dirty.bottom - dirty.top) };
       uint32_t width = (uint32_t)buffer.width < f->width ? (uint32_t)buffer.width : f->width;
       uint32_t height = (uint32_t)buffer.height < f->height ? (uint32_t)buffer.height : f->height;
+      // The buffer's own format decides the copy (RGBA_8888 and RGBX_8888 are both R,G,B bytes).
+      int layout = buffer.format == FORMAT_BGRA_8888 || buffer.format == FORMAT_RGBA_FP16 ? buffer.format : FORMAT_RGBX_8888;
+      size_t bytes = layout == FORMAT_RGBA_FP16 ? 8 : 4;
       if (buffer.width > 0 && buffer.height > 0 && buffer.stride >= buffer.width && xhd_rect_clip(&r, width, height))
-        xhd_copy(buffer.bits, (size_t)buffer.stride * 4, f->pixels, f->stride, r, buffer.format != FORMAT_BGRA_8888);
+        xhd_copy(buffer.bits, (size_t)buffer.stride * bytes, layout, f->pixels, f->stride, f->format, r);
     }
     ANativeWindow_unlockAndPost(window);
     if (frames++ == 0)
-      fprintf(stderr, "oneios-display: first frame posted (%dx%d buffer, stride %d, format %d)\n", buffer.width, buffer.height, buffer.stride, buffer.format);
+      fprintf(stderr, "oneios-display: first frame posted (%dx%d buffer, stride %d, format %d %s, dataspace %#x %s; the guest's frame: %s)\n",
+              buffer.width, buffer.height, buffer.stride, buffer.format, format_name(buffer.format), (unsigned)ANativeWindow_getBuffersDataSpace(window),
+              xhd_dataspace_name(ANativeWindow_getBuffersDataSpace(window)), xh_pixels_name(f->format));
     pending = (struct xhd_rect){ 0, 0, 0, 0 };
   }
   ANativeWindow_release(window);

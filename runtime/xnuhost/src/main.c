@@ -777,7 +777,7 @@ int main(int argc, char **argv)
   }
   if (xh_display_init(&config, &fb_width, &fb_height, &fb_hz)) return EXIT_SETUP;
   // The display driver's scale and refresh rate go on the kernel's command line (a value given there stays).
-  if (xh_display_boot_args(config.boot_args, sizeof config.boot_args, config.scale, fb_hz)) { LOGE("no room in the boot arguments for the display's switches"); return EXIT_SETUP; }
+  if (xh_display_boot_args(config.boot_args, sizeof config.boot_args, config.scale, fb_hz, config.display_format)) { LOGE("no room in the boot arguments for the display's switches"); return EXIT_SETUP; }
   xh_perf_init(&config);
   if (boot()) { xh_tasks_shutdown(); return EXIT_SETUP; }
 
@@ -798,9 +798,21 @@ int main(int argc, char **argv)
     // Until the guest's display driver presents, show what its kernel console draws.
     xh_display *d = xh_display_get();
     uint8_t *fb = xh_ram(boot_fb_pa, (uint64_t)fb_width * fb_height * 4);
-    if (!guest_ready && d && fb && memcmp(d->pixels, fb, (size_t)d->stride * d->height)) {
+    if (!guest_ready && d && fb && d->format == XH_PIXELS_BGRX8 && memcmp(d->pixels, fb, (size_t)d->stride * d->height)) {
       memcpy(d->pixels, fb, (size_t)d->stride * d->height);
       xh_display_flush(0, 0, d->width, d->height);
+    } else if (!guest_ready && d && fb && d->format == XH_PIXELS_RGBA16F && d->width == fb_width && d->height == fb_height) {
+      // A half-float frame (display-format=rgba16f): the console's B,G,R,X bytes are compared with the last ones seen
+      // and decoded to linear light when they changed.
+      static uint8_t *seen;
+      size_t bytes = (size_t)fb_width * fb_height * 4;
+      if (!seen) seen = calloc(1, bytes);
+      if (seen && memcmp(seen, fb, bytes)) {
+        memcpy(seen, fb, bytes);
+        for (unsigned y = 0; y < d->height; y++)
+          xh_pixels_bgrx8_to_rgba16f(d->pixels + (size_t)y * d->stride, seen + (size_t)y * fb_width * 4, d->width);
+        xh_display_flush(0, 0, d->width, d->height);
+      }
     }
   }
 

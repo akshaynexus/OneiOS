@@ -17,8 +17,8 @@ iPhone18,2 kernelcache and to xnuhost:
 | Piece | From | What |
 |---|---|---|
 | `NativeLegacyDisplay.cpp`, `NativeGOPPresenter.cpp` | `external/NativeMobileDisplay` (UniXNU), unchanged | A subclass of the original `IOMobileFramebufferLegacy` of `com.apple.iokit.IOMobileGraphicsFamily`. Apple's class keeps everything `backboardd` talks to (the user client, the swap queue, power state, vsync clients, properties); the subclass supplies the 24 slots a panel driver must: the mode, swap validation, the transfer of a frame, completion, the refresh attributes |
-| `LegacyDisplayProbe.cpp` | `external/UniXNU-droidvm/package`, staged with five lines added | Registers the class, makes the service on a nub that carries the boot video as device memory, attaches the nub under `/arm-io` as `gop-display` (`device_type` `display-subsystem`), publishes the scale, hands frames to the virtio scanout |
-| `DroidVMVirtioGpuDisplay.cpp` | `external/UniXNU-droidvm/package`, unchanged | The scanout client of the virtio GPU: a resource per IOSurface (up to 32, by its guest pages), `SET_SCANOUT` and `RESOURCE_FLUSH` per frame from its own thread; the boot video as a resource too |
+| `LegacyDisplayProbe.cpp` | `external/UniXNU-droidvm/package`, staged with the edits of `staged/display.rs` `DISPLAY` (the log hooks, the parent class, the half-float offer) | Registers the class, makes the service on a nub that carries the boot video as device memory, attaches the nub under `/arm-io` as `gop-display` (`device_type` `display-subsystem`), publishes the scale, hands frames to the virtio scanout |
+| `DroidVMVirtioGpuDisplay.cpp` | `external/UniXNU-droidvm/package`, staged with `staged/display.rs` `SCANOUT` (each resource carries its scanout format: half floats with `oneios-display-wide=1`) | The scanout client of the virtio GPU: a resource per IOSurface (up to 32, by its guest pages), `SET_SCANOUT` and `RESOURCE_FLUSH` per frame from its own thread; the boot video as a resource too |
 | `OneiOSDisplay.cpp` | here | The kernel's two entries, the parent class under xnuhost's slide, the display's switches as defaults, the log lines, Droid-VM's default-surface factory |
 | `legacy-display-24A446-v54.json` | `oneios-tool kernel port-legacy-display` (was `port-legacy-display.py` here) | The original class in this kernelcache: 379 slots with their diversities, the fields and functions the backend uses |
 | `oneios-tool kernel gen display` | `tools/oneios-tool/crates/oneios-kernel/src/build_oneios_display.rs` (was `build-oneios-display.py` here) | The archive (below) |
@@ -114,14 +114,136 @@ so those archives keep their own names.
   spelling, or half-float `RGhA`), or a blank frame. An accepted B,G,R,A frame is offered to the virtio scanout,
   which presents the surface's own pages (no copy in the guest) and completes the swap; a half-float frame, or one
   the scanout refused, is converted or copied into the boot video by the CPU and that is presented. The family
-  retires the swap and wakes the client either way.
+  retires the swap and wakes the client either way. With `oneios-display-wide=1` (xnuhost's `display-format=rgba16f`)
+  a half-float frame is offered to the virtio scanout as it is too, in xnuhost's format `0x52476841` ('RGhA', 8
+  bytes a pixel): "Colour, depth and the panel" below.
 
 Switches (boot arguments; an absent one has the value shown while the display is on):
-`oneios-display=1` (0: no display at all, the console only), `offline-legacy-unit-scale=3`, `sheng-vsync=60` (xnuhost
+`oneios-display=1` (0: no display at all, the console only), `oneios-display-wide=0` (1: half-float frames to the
+scanout as they are; xnuhost passes it with `display-format=rgba16f`), `offline-legacy-unit-scale=3`, `sheng-vsync=60` (xnuhost
 always passes these two, from its `scale` and the panel's rate, unless the command line already has them), and
 Droid-VM's stages, which there is no reason to change: `offline-mobile-graphics-load`, `offline-legacy-register`,
 `offline-legacy-gop`, `offline-legacy-phase=4`, `offline-legacy-pm`, `offline-legacy-validate`,
 `offline-legacy-transfer`, `offline-legacy-cpu-present`.
+
+## Colour, depth and the panel (fix-display-colour, 2026-11-13)
+
+The fault (phone, 2026-11-12 23:45): HDR and colour depth look off, and the blurs do not look like iOS's. Read in
+24A446's QuartzCore, CoreMaterial, UIKitCore and libMobileGestalt (the guest's dyld cache, `out/ios27-cache`, with
+`ipsw dyld disass`/`symaddr`/`str` and `llvm-objdump` on the extracted images; addresses are the cache's) and in the
+real iPhone18,2 device tree (`out/kernel-inputs/24A446/devicetree.bin`, `ipsw dtree --json`). [F] read in the code or
+tree; [I] inferred; [U] not known.
+
+### What iOS renders into
+
+`CA::WindowServer::IOMFBDisplay::framebuffer_pixel_format` (0x184461838), asked on every update [F]:
+
+1. `'RGhA'` (64-bit half float) when the display's EDR headroom (`Display::edr_headroom`: `CA_DISPLAY_EDR_HEADROOM`,
+   else the brightness capabilities') is above `CA_FP16_MIN_HEADROOM` and the panel's own headroom above 8, or when
+   `CA_FORCE_FP16_FRAMEBUFFER` or `CA_ALLOW_EDR_MIRRORING` is set, or the display's own flag (+0x6840), or a few
+   compression cases, or **`CADeviceIsVirtualized`** (MobileGestalt `IsVirtualDevice`, which is `/defaults vmm-present`
+   = 1 here).
+2. Else, when the display supports ICC colour management (`IOMFBDisplay::supports_icc_color_management`, display
+   +0x7580) and `CADeviceSupportsUniversalCompression`: **`'b3a8'`**, which becomes **`'w40a'`** unless the display
+   takes `b3a8` (+0xd0c): 10-bit extended-range ("XR") wide-colour formats, sRGB-encoded with values outside 0..1, or
+   their compressed `&b38`/`&w4a`. **This is a real iPhone 17 Pro Max's framebuffer** [I: the branch a device with
+   ICC and universal compression takes].
+3. Else **`'BGRA'`**: 8 bits a channel.
+
+`supports_icc_color_management` is set in `AppleDisplay::update_display_limits` from the IOMFB property
+`IOMFBSupportsICC`, and where the display has none, from `CADeviceDisplaySupportsICC` (`MGIsDeviceOneOfType` over a
+list of product hashes, or the default `CAEnableDisplayICC`), and only for a display type with
+`(+0x2c8 & 0x1c00) == 0` [F]. This display's own code publishes no `IOMFBSupportsICC` (NativeLegacyDisplay sets
+`IOMFBNumLayers` and the refresh properties) [F]; whether Apple's family class publishes one is what the new
+`oneios-display: properties:` lines say [U]. The Metal plug-in holds the headroom at 1, the FP16 threshold at 1e30, the mirroring option
+off and QuartzCore's virtualized byte at 0 in backboardd (`docs/gpu.md` 7), so the render server takes branch 2 or 3.
+This display takes only `BGRA`, `&BGA` and `RGhA` (NativeLegacyDisplay's `nativeScanoutFormat`); a `w40a` swap is
+refused (reason 4). The phone shows frames, so the render server there chose `BGRA` or `RGhA` [I]; **which one, and
+whether any swap was refused for its format, is what the new line `oneios-display: the compositor swaps format ...`
+says** (below).
+
+The colour space: QuartzCore composites this display in **sRGB**: `IOMFBDisplay::compositing_color_space` is
+`CAGetColorSpace(36)`, and `get_cg_name`'s table gives `kCGColorSpaceSRGB` for 36 [F]. On a real iPhone that is
+extended-range sRGB (the XR formats carry Display P3's colours as components below 0 and above 1) and the panel's
+own gamut is applied by the display hardware (ICC matrices, `IOMFBDisplay::set_icc_matrix_and_trc`) [F, I]. Here:
+
+| Step | What is kept |
+|---|---|
+| `BGRA` framebuffer | 8 bits, sRGB-encoded; Display P3's colours and EDR clipped to sRGB in the render server |
+| `RGhA` framebuffer, default path | half floats; then `convertHalfRows` (NativeLegacyDisplay, `sheng-fb-half=1`: linear light encoded to sRGB) into the 8-bit boot video by the CPU: negative and above-1 components clipped, so the same as `BGRA`, at the cost of a CPU conversion of each frame |
+| virtio scanout, xnuhost's `display.sock` | `B,G,R,X` 8 bits (hello format 1) |
+| display helper (before 2026-11-13) | `BGRA_8888` (format 5) with **no dataspace** (`UNKNOWN`) |
+
+So the guest's picture is 8-bit sRGB everywhere, and P3 colours (wallpapers, photos, the vibrant tints of the
+materials) are clipped before they leave the guest. One UI's compositor then saw an untagged buffer.
+
+### What iOS reads about the panel
+
+The IOMFB properties QuartzCore reads (`IOMobileFramebufferCopyProperty`/`copy_display_property`) [F]:
+`AppleDisplay`'s constructor: `IOMFBLTPOFlashMitigationNeeded`, `primary`, `SupportsAOTPowerSaving`,
+`IOMFBSupportsGPLite`, `IOMFBSupportsSecureIndicator`, `IOMFBSupportHWSecureAnimation`, `IOMFBSupportsLFC`,
+`CursorPlane`, and MobileGestalt `DisplayExtendedProperties`, `main-screen-scale`; `update_display_limits`:
+`DisplayPipeStrideRequirements`, `DisplayPipePlaneBaseAlignment`, `IOMFBMaxSrcPixels`, `IOMFBMaxCompressedSizeInBytes`,
+`IOMFBCompressionSupport`, `IOMFBNumLayers`, the bandwidth limits, `PCCCabalEnable`, `IOMFBRGBMultiPlaneSupportKey`,
+`IOMFBYUVSupportKey`, `IOMFBYUVPackedUnSupported`, `IOMFBYUV420UnSupported`, `W40a_Blending_OK`, **`IOMFBSupportsICC`**,
+`IOMFBDisplayRefresh`, `IOMFBSupportsRotation`, `IOMFBDisableFlip`, `IOMFBBlendDisabledKey`,
+`IOMFBCompressedSourceSurfaceWidth`, `IOMFBSwapAppleLookSupported`, `IdleCachingMethod`; `update_framebuffer_locked`:
+`DisplayAttributes` (`Luminance`, `Chromaticity`, `DefaultColorSpaceIsSRGB`: read for virtual and external displays),
+`Transport`, `IOMFBUUID`, `DisplayContainerID`, `VirtualDisplayMode`, `edrScaleinGP`; `begin_update`: `Brightness_Scale`.
+The EDR headroom and nits come from the brightness capabilities (`update_brightness_capabilities`: `MaxNits`,
+`MinNits`, `MaxNitsEDR`, `EDRPotentialHeadroom`), i.e. CoreBrightness and the backlight service (`drivers/brightness`;
+`capabilities = {MaxNits = 0 ...}` was seen before, `docs/hardware.md` 7a).
+
+MobileGestalt answers QuartzCore asks [F]: `IsVirtualDevice` (40 places: the framebuffer format, compression, EDR,
+modes, and `MetalContext::capture_backdrop_surface_compute`, which gives up the compute blur for the render
+fallback on a virtual device), `OLEDDisplay` (`CADeviceHasLCDPanel`), `HasExtendedColorDisplay` (`CADeviceUseCIF10`),
+`IOSurfaceFormatDictionary` (universal compression), `DeviceSupportsDCP`, `ChipID` (many `CADevice*` answers),
+`DeviceClassNumber`, `DeviceSupportsASTC`.
+
+The materials [F]: UIKit's `-[UIDevice _graphicsQuality]` is the constant 100 (high) in 24A446 (0x184a02540,
+`mov w0, #0x64; ret`): no MobileGestalt answer lowers UIKit's backdrops. CoreMaterial's low-quality list for the
+dynamic blur radius names iPad5,x and iPad7,x only. MaterialKit honours Reduce Transparency (an accessibility
+setting). MobileGestalt's `UIBackgroundQuality` (`/product ui-background-quality`) is asked by no image of the cache
+by name or by its obfuscated key (`ipsw dyld str`). So nothing found in the IOMFB or MobileGestalt answers turns the
+materials off; what differs from an iPhone is the 8-bit sRGB output (materials' vibrancy and P3 tints clipped, banding
+in wide blurs) [I], QuartzCore's virtualized answer in processes that do not load the Metal plug-in [F], and the
+GPU translation of CoreAnimation's blur kernels (metal2vulkan on Turnip, `docs/gpu.md`) [U].
+
+**The guest's `/product` is not the iPhone's** [F]: xnuhost copies `/product` from `<image>/identity.adt`, which no
+script makes, so the guest's `/product` has `product-name "OneiOS guest"`, `artwork-scale-factor` and `model` only.
+The iPhone's own (the real tree) has, among about 200 more: `artwork-display-gamut P3`, `oled-display 1`,
+`graphics-featureset-class APPLE10`, `ui-background-quality 100`, `ui-weather-quality 100`, `island-notch-location
+144`, `display-corner-radius`, `supports-burnin-mitigation 1`, `primary-calibration-matrix syscfg/DPCl`. A run with
+`--set identity=out/kernel-inputs/24A446/devicetree.bin` gives them; not made the default here (it changes many
+MobileGestalt answers at once; the userland profile's `artwork-display-gamut "sRGB"` and xnuhost's `P3` default with
+an identity disagree, `docs/userland.md` 5).
+
+The real iPhone18,2 tree's panel and brightness values [F, 16.16 numbers divided out]: `/backlight`
+`EDRPotentialHeadroom` 8.0, `EDRReferenceHeadroom` 12.0, `edr-max-nits` 1600, `user-accessible-max-nits` 1060,
+`override-boot-brightness-nits` 80, `panel-gamma` 2200 (2.2); `/exbright` `LmaxProduct` 3000, `LminProduct` 10,
+`DBVMin` 117, `DBVMax` 2047; `/arm-io/disp0` `display-default-color` 0, `max-avg-bpp`/`max-peak-bpp` 891290
+(13.6 bits a pixel, DCP's compressed budget). The S24 Ultra's panel's own numbers are what the display helper's
+`panel colour mode ...; HDR types ..., luminance max ...` line reports.
+
+### The fix (ours), and what it does not do yet
+
+- **The display helper** tags its buffers: `SRGB` for 8-bit frames, which is what they are (`runtime/display/README.md`
+  "Colour"); `SCRGB_LINEAR` and `RGBA_FP16` buffers for half-float frames.
+- **A wide path, opt-in** (xnuhost `display-format=rgba16f`, `docs/booter.md` 2.8): xnuhost keeps half floats in its
+  frame and passes `oneios-display-wide=1`; this archive then offers `RGhA` frames to the virtio scanout as they are
+  (LegacyDisplayProbe's offer and DroidVMVirtioGpuDisplay's resources carry the format: `staged/display.rs` `DISPLAY`
+  and `SCANOUT`; a 2D resource is `RESOURCE_CREATE_2D` in `0x52476841` with the stride / 8 as its width, a blob's
+  `SET_SCANOUT_BLOB` names that format), with no CPU conversion in the guest; the Metal plug-in asks the render
+  server for half floats when the boot argument is there (`userland/metal/DisplayWide.inc`, `CA_FORCE_FP16_FRAMEBUFFER`;
+  built on the Mac). The default stays 8-bit `BGRA`, as before.
+- **Measured at each boot** (new log lines): `oneios-display: half-float frames: ...` (which path),
+  `oneios-display: properties: ...` (every property of the display service, once, after the start: what QuartzCore
+  can read), and `oneios-display: the compositor swaps format 'BGRA' (0x42475241, 0 planes, 1440x3120, stride 5760):
+  8-bit B,G,R,A, sRGB; taken (reason 0)` once per surface format the render server swaps (`REFUSED` and reason 4 for
+  a format this display does not take, such as `w40a`).
+- Not done: `w40a`/`b3a8` (10-bit XR) are not taken; no `IOMFBSupportsICC` is published (publishing `true` would
+  select `w40a`, which is refused); the EDR headroom stays 1 (the plug-in, and no `MaxNitsEDR` from the backlight);
+  the helper asks surfaceflinger for no HDR ratio; the identity tree is not in the image sets.
 
 ## The kernel patch (`0020-display.patch`)
 

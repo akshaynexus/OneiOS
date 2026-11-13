@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <pthread.h>
 #include "xnuhost/hostcall.h"
+#include "xnuhost/pixels.h"
 
 #define XH_MAX_CPUS 8
 
@@ -54,6 +55,8 @@ typedef struct {
   xh_disk_config disk[XH_MAX_DISKS];
   unsigned ndisk;
   char  display[16];        // "shm", "drm", "none"
+  unsigned display_format;  // display-format=: the frame's pixels, XH_PIXELS_BGRX8 ("bgrx", the default) or XH_PIXELS_RGBA16F
+                            // ("rgba16f": half floats, wide colour and EDR kept; the guest is told oneios-display-wide=1)
   char  gpu[8];             // "auto" (3D when the host has KGSL, udmabuf and a dma heap), "3d" (or do not start), "2d"
   unsigned width, height;   // guest framebuffer; 0 = the panel's native (largest) mode, 1440x3120 where it cannot be read
   unsigned hz;              // the guest display's refresh rate; 0 = the panel's highest at that mode, 120 where unknown
@@ -123,7 +126,7 @@ xh_panel_mode xh_display_mode(const xh_config *c, const xh_panel_mode *panel);
 // Adds the display driver's two switches to the kernel's command line unless it already has them:
 // offline-legacy-unit-scale=SCALE (/chosen display-scale) and sheng-vsync=HZ (the vsync tick and, above 60 Hz,
 // the refresh properties). -1: no room.
-int  xh_display_boot_args(char *args, size_t size, unsigned scale, unsigned hz);
+int  xh_display_boot_args(char *args, size_t size, unsigned scale, unsigned hz, unsigned format);
 // Appends the text fixups a UI scale needs on this build's dyld shared cache to a NUL-separated list
 // (/chosen text-fixups). Returns the list's new length; unknown builds and a scale of 2 add nothing.
 unsigned xh_scale_fixups(const char *build, unsigned scale, char *list, unsigned length, unsigned size);
@@ -381,7 +384,8 @@ xh_virtio *xh_virtio_gpu_create(uint64_t base, unsigned spi, unsigned width, uns
 
 // Display (display.c): the scanout the guest draws.
 typedef struct {
-  unsigned width, height, stride;       // pixels, pixels, bytes; XRGB8888 (BGRA in memory)
+  unsigned width, height, stride;       // pixels, pixels, bytes
+  unsigned format, bpp;                 // XH_PIXELS_BGRX8 (4 bytes a pixel) or XH_PIXELS_RGBA16F (8): include/xnuhost/pixels.h
   uint8_t *pixels;                      // xnuhost's shadow of the visible frame
 } xh_display;
 int   xh_display_init(const xh_config *c, unsigned *width, unsigned *height, unsigned *hz);

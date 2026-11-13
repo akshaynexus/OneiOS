@@ -88,6 +88,10 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
   else if (!strcmp(key, "identity")) return copy(c->identity, sizeof c->identity, value);
   else if (!strcmp(key, "boot-args")) return copy(c->boot_args, sizeof c->boot_args, value);
   else if (!strcmp(key, "display")) return copy(c->display, sizeof c->display, value);
+  else if (!strcmp(key, "display-format")) {
+    ok = !strcmp(value, "bgrx") || !strcmp(value, "rgba16f");
+    if (ok) c->display_format = !strcmp(value, "bgrx") ? XH_PIXELS_BGRX8 : XH_PIXELS_RGBA16F;
+  }
   else if (!strcmp(key, "gpu")) { ok = !strcmp(value, "auto") || !strcmp(value, "3d") || !strcmp(value, "2d"); if (ok) return copy(c->gpu, sizeof c->gpu, value); }
   else if (!strcmp(key, "cpus")) { c->ncpu = (unsigned)atoi(value); ok = c->ncpu >= 1 && c->ncpu <= XH_MAX_CPUS; }
   else if (!strcmp(key, "ram")) {
@@ -175,7 +179,7 @@ static void usage(void)
   fputs("usage: xnuhost --image DIR [--kernel FILE] [--data DIR] [--session DIR] [--runtime DIR]\n"
         "               [--session-abi 1] [--mode takeover|bench] [--cpus N] [--ram SIZE|auto]\n"
         "               [--boot-args TEXT] [--display shm|drm|none] [--gpu auto|3d|2d] [--width W --height H]\n"
-        "               [--hz N] [--scale 2|3]\n"
+        "               [--hz N] [--scale 2|3] [--display-format bgrx|rgba16f]\n"
         "               [--no-input] [--input-script FILE] [--no-tasks] [--config FILE] [--set KEY=VALUE] [-v]\n"
         "       xnuhost --selftest      checks of this host (trap layer, PAC, memory), no kernel\n"
         "docs/booter.md describes the image set's files, the session files and the exit codes.\n", stderr);
@@ -252,6 +256,9 @@ int xh_config_finish(xh_config *c)
   if (c->map_defer < 0) c->map_defer = 1;
   if (!c->height) c->height = from_image.height;
   if (!c->hz) c->hz = from_image.hz;
+  if (!c->display_format) c->display_format = from_image.display_format ? from_image.display_format : XH_PIXELS_BGRX8;
+  // The KMS back end scans out 32-bit pixels: half floats only go to a display helper (shm) or nowhere.
+  if (c->display_format == XH_PIXELS_RGBA16F && !strcmp(c->display, "drm")) { fprintf(stderr, "xnuhost: display-format=rgba16f needs --display shm\n"); return -1; }
   if (!c->scale) c->scale = from_image.scale ? from_image.scale : 3;
   if (c->scale_fixup < 0) c->scale_fixup = from_image.scale_fixup < 0 ? 1 : from_image.scale_fixup;
   if (!c->text_fixups_length) { memcpy(c->text_fixups, from_image.text_fixups, sizeof c->text_fixups); c->text_fixups_length = from_image.text_fixups_length; }
@@ -398,9 +405,17 @@ static bool has_switch(const char *args, const char *name)
   return false;
 }
 
-int xh_display_boot_args(char *args, size_t size, unsigned scale, unsigned hz)
+// The display's switches the guest needs, unless the command line has them: its UI scale, the panel's rate, and
+// with a half-float frame (display-format=rgba16f) oneios-display-wide=1, which tells the guest's display to hand
+// half-float surfaces to the scanout as they are (XH_VIRTIO_GPU_FORMAT_RGBA16F) instead of narrowing them to 8 bits.
+int xh_display_boot_args(char *args, size_t size, unsigned scale, unsigned hz, unsigned format)
 {
   char add[80];
+  if (format == XH_PIXELS_RGBA16F && !has_switch(args, "oneios-display-wide")) {
+    snprintf(add, sizeof add, "%soneios-display-wide=1", *args ? " " : "");
+    if (strlen(args) + strlen(add) >= size) return -1;
+    strcat(args, add);
+  }
   if (!has_switch(args, "offline-legacy-unit-scale")) {
     snprintf(add, sizeof add, "%soffline-legacy-unit-scale=%u", *args ? " " : "", scale);
     if (strlen(args) + strlen(add) >= size) return -1;

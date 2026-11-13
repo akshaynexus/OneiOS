@@ -365,6 +365,12 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   frame that is not the boot console's. Boot argument `oneios-display=0` leaves the display out. The frame is
   1440x3120 at 120 Hz and @3x unless told otherwise: `--width W --height H`, `--hz N`, `--set scale=2`
   ([booter.md](booter.md) 2.8); the log's `display: shm, guest frame ...` line and the capture's `hello` say what it is.
+  The frame's pixels: `display: the frame's pixels: B,G,R,X 8-bit sRGB, 4 bytes a pixel` (the default);
+  `--set display-format=rgba16f` makes them half floats and passes the guest `oneios-display-wide=1`, which
+  `display-capture.py` cannot read (it takes format 1 only). What iOS's render server swapped and what the display
+  service publishes: the kernel's `oneios-display: the compositor swaps format ...` and `oneios-display: properties:`
+  lines (`kernel/patches/oneios-hosted/display/README.md`, "Colour, depth and the panel"). `--set
+  identity=out/kernel-inputs/24A446/devicetree.bin` gives the guest the iPhone's own `/product` ([booter.md](booter.md) 1).
 - Metal's kernel side: add `oneios-gpu-metal=1 oneios-adreno-selftest=1` to the boot arguments (the accelerator is
   not published on a host without 3D unless asked). About ten seconds in: `droidvm-gpu: Metal accelerator stage 5
   status 0` and two `oneios-adreno: selftest:` lines (IOKit's match, the plug-in's open and one call;

@@ -356,6 +356,33 @@ static void test_virtio_gpu(void)
   cmd[0] = 0x102; cmd[6] = 1;                                                  // RESOURCE_UNREF
   CHECK(SEND(8, 24) == 24 && resp[0] == 0x1100);
   {
+    // A half-float 2D resource ('RGhA', 8 bytes a pixel in the backing) onto a half-float display: the rows as they are.
+    uint8_t *eight = fake_display.pixels;
+    fake_display = (xh_display){ .width = 8, .height = 4, .stride = 64, .format = XH_PIXELS_RGBA16F, .bpp = 8, .pixels = calloc(4, 64) };
+    uint16_t *halves = xh_ram(GUEST_PA + 0x40000, 8 * 4 * 8);
+    for (int i = 0; i < 8 * 4 * 4; i++) halves[i] = (uint16_t)(0x3400 + i);
+    memset(cmd, 0, 4096);
+    cmd[0] = 0x101; cmd[6] = 5; cmd[7] = XH_VIRTIO_GPU_FORMAT_RGBA16F; cmd[8] = 8; cmd[9] = 4;
+    CHECK(SEND(10, 24) == 24 && resp[0] == 0x1100);
+    cmd[0] = 0x106; cmd[6] = 5; cmd[7] = 1; cmd[8] = (uint32_t)(GUEST_PA + 0x40000); cmd[9] = (uint32_t)((GUEST_PA + 0x40000) >> 32); cmd[10] = 8 * 4 * 8; cmd[11] = 0;
+    CHECK(SEND(12, 24) == 24 && resp[0] == 0x1100);
+    memset(cmd, 0, 4096);
+    cmd[0] = 0x105; cmd[8] = 8; cmd[9] = 4; cmd[12] = 5;                       // TRANSFER_TO_HOST_2D, all of it
+    CHECK(SEND(14, 24) == 24 && resp[0] == 0x1100);
+    memset(cmd, 0, 4096);
+    cmd[0] = 0x103; cmd[8] = 8; cmd[9] = 4; cmd[11] = 5;                       // SET_SCANOUT
+    CHECK(SEND(12, 24) == 24 && resp[0] == 0x1100);
+    memset(cmd, 0, 4096);
+    cmd[0] = 0x104; cmd[6] = 1; cmd[7] = 2; cmd[8] = 2; cmd[9] = 1; cmd[10] = 5;   // RESOURCE_FLUSH (1,2) 2x1
+    CHECK(SEND(12, 24) == 24 && resp[0] == 0x1100);
+    CHECK(!memcmp(fake_display.pixels + 2 * 64 + 1 * 8, halves + (2 * 8 + 1) * 4, 16) && fake_display.pixels[0] == 0);
+    cmd[0] = 0x102; cmd[6] = 5;
+    CHECK(SEND(8, 24) == 24 && resp[0] == 0x1100);
+    free(fake_display.pixels);
+    fake_display = (xh_display){ .width = 8, .height = 4, .stride = 32, .pixels = eight };
+    memset(cmd, 0, 4096);
+  }
+  {
     // The boot framebuffer scanned out by the guest's display driver (the console) is shown but is not the guest's
     // first frame; the first surface of its own is.
     xh_virtio *boot_dev = xh_virtio_gpu_create(0x1000, 43, 8, 4);
@@ -634,6 +661,70 @@ static void test_virtio_gpu3d(void)
   CHECK(flush_rect[0] == 1 && flush_rect[1] == 2 && flush_rect[2] == 3 && flush_rect[3] == 2);
   const uint8_t *px = fake_display.pixels + 2 * 32 + 1 * 4;
   CHECK(px[0] == 21 && px[1] == 0x20 && px[2] == 0x10 && fake_display.pixels[3 * 32 + 3 * 4] == 33 && fake_display.pixels[0] == 0 && fake_display.pixels[2 * 32 + 4 * 4] == 0);
+  {
+    // Half floats (display-format=rgba16f, oneios-display-wide=1): a 'RGhA' scanout's rows go to a half-float display as
+    // they are, and a B,G,R,X one is decoded to linear light; onto the 8-bit display half floats are encoded and clamped.
+    uint8_t *eight = fake_display.pixels;
+    fake_display = (xh_display){ .width = 8, .height = 4, .stride = 64, .format = XH_PIXELS_RGBA16F, .bpp = 8, .pixels = calloc(4, 64) };
+    uint16_t *halves = xh_ram(GUEST_PA + 0x40000, 0x1000);
+    for (int i = 0; i < 8 * 4 * 4; i++) halves[i] = (uint16_t)(0x3000 + i);
+    halves[(1 * 8 + 2) * 4] = xh_half_from_float(1.2249f);             // pixel (2,1): Display P3's red, outside sRGB
+    halves[(1 * 8 + 2) * 4 + 1] = xh_half_from_float(-0.042f);
+    CLEAR(); cmd[0] = 0x10d; cmd[8] = 8; cmd[9] = 4; cmd[10] = 0; cmd[11] = 20; cmd[12] = 8; cmd[13] = 4; cmd[14] = XH_VIRTIO_GPU_FORMAT_RGBA16F; cmd[16] = 64;
+    CHECK(G(24, 24) == 1 && resp[0] == 0x1100);
+    cmd[16] = 60;
+    CHECK(G(24, 24) == 1 && resp[0] == 0x1205);                                                           // not whole half-float pixels
+    cmd[16] = 32;
+    CHECK(G(24, 24) == 1 && resp[0] == 0x1205);                                                           // an 8-bit stride: a row does not fit
+    cmd[16] = 64; cmd[14] = 99;
+    CHECK(G(24, 24) == 1 && resp[0] == 0x1205);                                                           // an unknown format
+    cmd[14] = XH_VIRTIO_GPU_FORMAT_RGBA16F;
+    CHECK(G(24, 24) == 1 && resp[0] == 0x1100);
+    CLEAR(); cmd[0] = 0x104; cmd[6] = 1; cmd[7] = 1; cmd[8] = 3; cmd[9] = 2; cmd[10] = 20;                 // flush (1,1) 3x2
+    CHECK(G(12, 24) == 1 && resp[0] == 0x1100 && flush_rect[0] == 1 && flush_rect[2] == 3);
+    const uint16_t *got = (const uint16_t *)(fake_display.pixels + 1 * 64 + 2 * 8);
+    CHECK(got[0] == xh_half_from_float(1.2249f) && got[1] == xh_half_from_float(-0.042f) && got[2] == halves[(1 * 8 + 2) * 4 + 2]);
+    CHECK(!memcmp(fake_display.pixels + 2 * 64 + 3 * 8, halves + (2 * 8 + 3) * 4, 8) && fake_display.pixels[0] == 0);
+    // a B,G,R,X scanout onto the half-float display: decoded
+    uint32_t *bgrx = xh_ram(GUEST_PA + 0x40000, 0x1000);
+    for (int i = 0; i < 4 * 10; i++) bgrx[i] = 0x00ff8000u;                                               // B 0, G 128, R 255
+    CLEAR(); cmd[0] = 0x10d; cmd[8] = 8; cmd[9] = 4; cmd[10] = 0; cmd[11] = 20; cmd[12] = 8; cmd[13] = 4; cmd[14] = 2; cmd[16] = 40;
+    CHECK(G(24, 24) == 1 && resp[0] == 0x1100);
+    CLEAR(); cmd[0] = 0x104; cmd[6] = 0; cmd[7] = 0; cmd[8] = 1; cmd[9] = 1; cmd[10] = 20;
+    CHECK(G(12, 24) == 1 && resp[0] == 0x1100);
+    got = (const uint16_t *)fake_display.pixels;
+    CHECK(got[0] == 0x3c00 && got[1] == xh_half_from_float(0.21586050f) && got[2] == 0 && got[3] == 0x3c00);
+    // a pixel split between two segments of a blob: rows at offset 4060 put pixel 4 across the page boundary
+    CLEAR(); cmd[0] = 0x10c; cmd[6] = 30; cmd[7] = 1; cmd[8] = 8; cmd[9] = 2; cmd[12] = 0x2000;
+    uint64_t two[4] = { GUEST_PA + 0x42000, 0x1000, GUEST_PA + 0x44000, 0x1000 };
+    memcpy(extra, two, sizeof two);
+    CHECK(GX(14, 32, 24) == 1 && resp[0] == 0x1100);
+    uint16_t want[8][4];
+    for (int p = 0; p < 8; p++) for (int c = 0; c < 4; c++) want[p][c] = (uint16_t)(0x3800 + p * 4 + c);
+    for (int b = 0; b < 64; b++) {
+      unsigned at = 4060 + b;
+      uint8_t *dst = xh_ram(at < 4096 ? GUEST_PA + 0x42000 + at : GUEST_PA + 0x44000 + (at - 4096), 1);
+      *dst = ((const uint8_t *)want)[b];
+    }
+    CLEAR(); cmd[0] = 0x10d; cmd[8] = 8; cmd[9] = 1; cmd[10] = 0; cmd[11] = 30; cmd[12] = 8; cmd[13] = 1; cmd[14] = XH_VIRTIO_GPU_FORMAT_RGBA16F; cmd[16] = 64; cmd[20] = 4060;
+    CHECK(G(24, 24) == 1 && resp[0] == 0x1100);
+    CLEAR(); cmd[0] = 0x104; cmd[6] = 0; cmd[7] = 0; cmd[8] = 8; cmd[9] = 1; cmd[10] = 30;
+    CHECK(G(12, 24) == 1 && resp[0] == 0x1100);
+    CHECK(!memcmp(fake_display.pixels, want, sizeof want));
+    // half floats onto the 8-bit display: encoded to sRGB, clamped
+    free(fake_display.pixels);
+    fake_display = (xh_display){ .width = 8, .height = 4, .stride = 32, .format = XH_PIXELS_BGRX8, .bpp = 4, .pixels = eight };
+    memset(eight, 0, 4 * 32);
+    CHECK(G(12, 24) == 1 && resp[0] == 0x1100);                                                           // the same flush
+    CHECK(eight[0] == 188 && eight[3] == 255);                                                            // 0.5 is sRGB 188; X opaque
+    for (int p = 0; p < 8; p++) {
+      const uint8_t *t = xh_half_to_srgb8();
+      if (eight[p * 4] != t[want[p][2]] || eight[p * 4 + 1] != t[want[p][1]] || eight[p * 4 + 2] != t[want[p][0]]) { CHECK(!"half floats encoded to B,G,R,X"); break; }
+    }
+    CLEAR(); cmd[0] = 0x10d; cmd[8] = 8; cmd[9] = 4; cmd[10] = 0; cmd[11] = 20; cmd[12] = 8; cmd[13] = 4; cmd[14] = 2; cmd[16] = 40;
+    CHECK(G(24, 24) == 1 && resp[0] == 0x1100);                                                           // back to the B,G,R,X scanout
+    for (int i = 0; i < 4 * 10; i++) bgrx[i] = 0x00102000u | (uint32_t)i;
+  }
   // the 2D commands stay
   CLEAR(); cmd[0] = 0x100;
   CHECK(G(6, 24 + 16 * 24) == 1 && resp[0] == 0x1101 && resp[8] == 8 && resp[9] == 4);
@@ -1198,15 +1289,28 @@ static void test_config(const char *dir)
   CHECK(!xh_panel_report(&report, sizeof report, &native));
   // the display driver's switches on the kernel's command line: added once, a given value stays
   char args[128] = "-v debug=0x8";
-  CHECK(xh_display_boot_args(args, sizeof args, 3, 120) == 0 && !strcmp(args, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120"));
-  CHECK(xh_display_boot_args(args, sizeof args, 2, 60) == 0 && !strcmp(args, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120"));
+  CHECK(xh_display_boot_args(args, sizeof args, 3, 120, XH_PIXELS_BGRX8) == 0 && !strcmp(args, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120"));
+  CHECK(xh_display_boot_args(args, sizeof args, 2, 60, XH_PIXELS_BGRX8) == 0 && !strcmp(args, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120"));
   strcpy(args, "sheng-vsync=90 not-sheng-vsync=1");
-  CHECK(xh_display_boot_args(args, sizeof args, 2, 120) == 0 && !strcmp(args, "sheng-vsync=90 not-sheng-vsync=1 offline-legacy-unit-scale=2"));
+  CHECK(xh_display_boot_args(args, sizeof args, 2, 120, XH_PIXELS_BGRX8) == 0 && !strcmp(args, "sheng-vsync=90 not-sheng-vsync=1 offline-legacy-unit-scale=2"));
   args[0] = 0;
-  CHECK(xh_display_boot_args(args, sizeof args, 2, 120) == 0 && !strcmp(args, "offline-legacy-unit-scale=2 sheng-vsync=120"));
-  CHECK(xh_display_boot_args(args, 44, 2, 120) == 0);
+  CHECK(xh_display_boot_args(args, sizeof args, 2, 120, XH_PIXELS_BGRX8) == 0 && !strcmp(args, "offline-legacy-unit-scale=2 sheng-vsync=120"));
+  CHECK(xh_display_boot_args(args, 44, 2, 120, XH_PIXELS_BGRX8) == 0);
   args[0] = 0;
-  CHECK(xh_display_boot_args(args, 40, 2, 120) == -1);                                               // no room
+  CHECK(xh_display_boot_args(args, 40, 2, 120, XH_PIXELS_BGRX8) == -1);                                               // no room
+  // a half-float frame: the guest is told to hand its half-float surfaces over as they are; a given value stays
+  args[0] = 0;
+  CHECK(xh_display_boot_args(args, sizeof args, 3, 120, XH_PIXELS_RGBA16F) == 0 && !strcmp(args, "oneios-display-wide=1 offline-legacy-unit-scale=3 sheng-vsync=120"));
+  strcpy(args, "oneios-display-wide=0");
+  CHECK(xh_display_boot_args(args, sizeof args, 3, 120, XH_PIXELS_RGBA16F) == 0 && !strcmp(args, "oneios-display-wide=0 offline-legacy-unit-scale=3 sheng-vsync=120"));
+  // display-format: the two names, nothing else; half floats need the shm back end
+  {
+    xh_config f;
+    xh_config_defaults(&f);
+    CHECK(xh_config_set(&f, "display-format", "rgba16f") == 0 && f.display_format == XH_PIXELS_RGBA16F);
+    CHECK(xh_config_set(&f, "display-format", "bgrx") == 0 && f.display_format == XH_PIXELS_BGRX8);
+    CHECK(xh_config_set(&f, "display-format", "rgb565") == -1);
+  }
   // the scale in the image set (the userland hook's file), under the command line's
   char overlay[400];
   snprintf(overlay, sizeof overlay, "%s/overlay", image); mkdir(overlay, 0700);

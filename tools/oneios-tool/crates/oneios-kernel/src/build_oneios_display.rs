@@ -8,8 +8,9 @@
 //!                                                         IOMobileFramebufferLegacy
 //!       LegacyDisplayProbe.cpp                            Droid-VM's board probe (UniXNU-droidvm package/), staged with
 //!                                                         five lines added (staged/display.rs)
-//!       DroidVMVirtioGpuDisplay.cpp                       Droid-VM's scanout client of the virtio GPU, unchanged; the
-//!                                                         transport and the 3D half are in liboneiosgpu.a
+//!       DroidVMVirtioGpuDisplay.cpp                       Droid-VM's scanout client of the virtio GPU, staged with each
+//!                                                         surface's scanout format (half floats, staged/display.rs
+//!                                                         SCANOUT); the transport and the 3D half are in liboneiosgpu.a
 //!       OneiOSDisplay.cpp                                 the patch folder: the kernel's two entries, the parent class
 //!                                                         under the slide, the display's switches, the panel's scale
 //!       the generated bindings of the parent class
@@ -39,7 +40,7 @@
 
 use crate::gen::{self, fail, Compile, Ctx, Stubs};
 use crate::macho_object::Object;
-use crate::staged::{display::DISPLAY, display_header};
+use crate::staged::{display::{DISPLAY, SCANOUT}, display_header};
 use anyhow::{anyhow, Result};
 use oneios_common::pyjson::Value;
 use siphasher::sip::SipHasher24;
@@ -282,6 +283,13 @@ pub fn staged_text(text: String) -> Result<String> {
     gen::replace_once(text, DISPLAY, |anchor| format!("build-oneios-display: LegacyDisplayProbe.cpp no longer has exactly one {}", anchor.trim()))
 }
 
+/// DroidVMVirtioGpuDisplay.cpp with the lines of staged/display.rs's SCANOUT: half-float surfaces scanned out as such.
+pub fn staged_scanout(text: String) -> Result<String> {
+    gen::replace_once(text, SCANOUT, |anchor| {
+        format!("build-oneios-display: DroidVMVirtioGpuDisplay.cpp no longer has exactly one {}", anchor.trim())
+    })
+}
+
 fn list<T: Into<Value>>(items: impl IntoIterator<Item = T>) -> Value {
     let mut value = Value::list();
     items.into_iter().for_each(|item| value.push(item));
@@ -330,9 +338,11 @@ pub fn main() -> Result<()> {
     let mut objects = vec![late(native)?, late(compile_cpp(&display.join("NativeGOPPresenter.cpp"), &flags(&["-I", &display_s]))?)?];
     gen::write_text(&staged, &staged_text(gen::read_text(&package.join("LegacyDisplayProbe.cpp"))?)?)?;
     objects.push(compile_cpp(&staged, &flags(&["-I", &package_s]).into_iter().chain(probe_defines()).collect::<Vec<_>>())?);
-    // DYNAMIC as the transport in liboneiosgpu.a: its scratch entries are allocated when the display starts.
-    objects.push(compile_cpp(&package.join("DroidVMVirtioGpuDisplay.cpp"),
-                             &flags(&["-I", &package_s, "-I", &gen::s(&adreno), "-DDROIDVM_VIRTIO_GPU_DYNAMIC=1"]))?);
+    // DYNAMIC as the transport in liboneiosgpu.a: its scratch entries are allocated when the display starts. Staged with
+    // the scanout format of each surface (staged/display.rs SCANOUT).
+    let scanout = out.join("DroidVMVirtioGpuDisplay.cpp");
+    gen::write_text(&scanout, &staged_scanout(gen::read_text(&package.join("DroidVMVirtioGpuDisplay.cpp"))?)?)?;
+    objects.push(compile_cpp(&scanout, &flags(&["-I", &package_s, "-I", &gen::s(&adreno), "-DDROIDVM_VIRTIO_GPU_DYNAMIC=1"]))?);
     objects.push(compile_cpp(&here.join("OneiOSDisplay.cpp"), &[])?);
     let (stubs, targets) = assembly(&abi, &bound)?;
     objects.extend(gen::assemble(&record, &out, &[(&format!("{CLASS}-bindings"), &stubs), (&format!("{CLASS}-originals"), &targets)])?);

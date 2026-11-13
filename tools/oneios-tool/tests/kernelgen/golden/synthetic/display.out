@@ -5,7 +5,9 @@ extern "C" bool oneios_display_parent_bound(void);
 extern "C" void oneios_display_parent_slide(void);
 extern "C" void oneios_display_client_seen(IOReturn,int,uint32_t,IOUserClient *);
 extern "C" void oneios_display_frame_seen(unsigned,uint64_t,uint64_t);
-extern "C" void oneios_display_swap_seen(bool,unsigned);
+extern "C" void oneios_display_swap_seen(bool,unsigned,const void *);
+extern "C" bool oneios_display_wide(void);
+extern "C" bool oneios_virtio_gpu_offer_format(void *,IOMemoryDescriptor *,uint64_t,uint32_t,uint32_t,uint32_t);
 // (before anchor 1)
     native_legacy_stage=1;if(!oneios_display_parent_bound()){native_legacy_display_checkpoint();return;}
     void *handle=OSMetaClass::preModLoad(g_kernel_kmod_info.name);
@@ -19,5 +21,8 @@ native_legacy_display_static_init();native_gop_presenter_static_init();oneios_di
     oneios_display_frame_seen(kind,maxx,maxy);
 // (before anchor 5)
     if(accepted)native_legacy_swap_stage(0);
-    oneios_display_swap_seen(accepted,reason);
+    oneios_display_swap_seen(accepted,reason,surface);
+// (before anchor 6)
+    offeredToVirtioDisplay=(format==1 || (format==2 && oneios_display_wide())) &&
+        oneios_virtio_gpu_offer_format(display,memory,stride,width,height,format);
 // (the end)

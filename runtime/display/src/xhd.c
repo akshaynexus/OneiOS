@@ -25,8 +25,9 @@ int xhd_check_hello(const struct xhd_message *m, size_t length, off_t memfd_size
   if (length != sizeof *m || memcmp(m->magic, "XHD1", 4)) return -EPROTO;
   uint32_t width = m->a, height = m->b, stride = m->c, format = m->d;
   if (!width || !height || width > XHD_MAX_SIDE || height > XHD_MAX_SIDE) return -EINVAL;
-  if (format != XHD_FORMAT_BGRX) return -EINVAL;
-  if (stride < width * 4 || stride > XHD_MAX_SIDE * 8 || stride % 4) return -EINVAL;
+  unsigned bpp = xh_pixels_bpp(format);
+  if (!bpp) return -EINVAL;
+  if (stride < width * bpp || stride > XHD_MAX_SIDE * 8 || stride % bpp) return -EINVAL;
   if (memfd_size < 0 || (uint64_t)stride * height > (uint64_t)memfd_size) return -EINVAL;
   return 0;
 }
@@ -168,14 +169,47 @@ void xhd_fit(uint32_t sw, uint32_t sh, uint32_t dw, uint32_t dh, struct xhd_fit 
   fit->x = (dw - fit->w) / 2; fit->y = (dh - fit->h) / 2;
 }
 
-void xhd_copy(uint8_t *dst, size_t dst_stride, const uint8_t *src, size_t src_stride, struct xhd_rect r, int swap)
+int xhd_copy(uint8_t *dst, size_t dst_stride, int buffer, const uint8_t *src, size_t src_stride, uint32_t format, struct xhd_rect r)
 {
+  unsigned in = xh_pixels_bpp(format), out = buffer == XHD_BUFFER_RGBA_FP16 ? 8 : buffer == XHD_BUFFER_BGRA_8888 || buffer == XHD_BUFFER_RGBX_8888 ? 4 : 0;
+  if (!in || !out) return -EINVAL;
   for (uint32_t row = r.y; row < r.y + r.h; row++) {
-    const uint8_t *s = src + (size_t)row * src_stride + (size_t)r.x * 4;
-    uint8_t *d = dst + (size_t)row * dst_stride + (size_t)r.x * 4;
-    if (!swap) { memcpy(d, s, (size_t)r.w * 4); continue; }
-    for (uint32_t i = 0; i < r.w; i++, s += 4, d += 4) { d[0] = s[2]; d[1] = s[1]; d[2] = s[0]; d[3] = 0xff; }
+    const uint8_t *s = src + (size_t)row * src_stride + (size_t)r.x * in;
+    uint8_t *d = dst + (size_t)row * dst_stride + (size_t)r.x * out;
+    if (format == XHD_FORMAT_RGBA16F) {
+      if (buffer == XHD_BUFFER_RGBA_FP16) memcpy(d, s, (size_t)r.w * 8);
+      else xh_pixels_rgba16f_to_8(d, s, r.w, buffer == XHD_BUFFER_RGBX_8888);
+    } else if (buffer == XHD_BUFFER_BGRA_8888) memcpy(d, s, (size_t)r.w * 4);
+    else if (buffer == XHD_BUFFER_RGBA_FP16) xh_pixels_bgrx8_to_rgba16f(d, s, r.w);
+    else for (uint32_t i = 0; i < r.w; i++, s += 4, d += 4) { d[0] = s[2]; d[1] = s[1]; d[2] = s[0]; d[3] = 0xff; }
   }
+  return 0;
+}
+
+int xhd_buffer_for(uint32_t format, int *dataspace)
+{
+  if (format == XHD_FORMAT_BGRX) { *dataspace = XHD_DATASPACE_SRGB; return XHD_BUFFER_BGRA_8888; }
+  if (format == XHD_FORMAT_RGBA16F) { *dataspace = XHD_DATASPACE_SCRGB_LINEAR; return XHD_BUFFER_RGBA_FP16; }
+  *dataspace = XHD_DATASPACE_UNKNOWN;
+  return 0;
+}
+
+static const struct { const char *name; int value; } dataspaces[] = {
+  { "unknown", XHD_DATASPACE_UNKNOWN }, { "srgb", XHD_DATASPACE_SRGB }, { "p3", XHD_DATASPACE_DISPLAY_P3 },
+  { "scrgb", XHD_DATASPACE_SCRGB }, { "scrgb-linear", XHD_DATASPACE_SCRGB_LINEAR },
+};
+
+const char *xhd_dataspace_name(int dataspace)
+{
+  for (size_t i = 0; i < sizeof dataspaces / sizeof *dataspaces; i++) if (dataspaces[i].value == dataspace) return dataspaces[i].name;
+  return "other";
+}
+
+int xhd_dataspace_parse(const char *name)
+{
+  if (!strcmp(name, "auto")) return -1;
+  for (size_t i = 0; i < sizeof dataspaces / sizeof *dataspaces; i++) if (!strcmp(dataspaces[i].name, name)) return dataspaces[i].value;
+  return -2;
 }
 
 int xhd_listen(const char *path)
@@ -190,9 +224,9 @@ int xhd_listen(const char *path)
   return fd;
 }
 
-int xhd_send_hello(int fd, uint32_t width, uint32_t height, uint32_t stride, int memfd)
+int xhd_send_hello(int fd, uint32_t width, uint32_t height, uint32_t stride, uint32_t format, int memfd)
 {
-  struct xhd_message hello = { { 'X', 'H', 'D', '1' }, width, height, stride, XHD_FORMAT_BGRX };
+  struct xhd_message hello = { { 'X', 'H', 'D', '1' }, width, height, stride, format };
   char control[CMSG_SPACE(sizeof(int))];
   struct iovec iov = { &hello, sizeof hello };
   struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1, .msg_control = control, .msg_controllen = sizeof control };
