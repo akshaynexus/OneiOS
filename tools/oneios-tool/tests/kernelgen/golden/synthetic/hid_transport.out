@@ -1,0 +1,41 @@
+// A made-up source for the edit list "hid_transport": every anchor once, between lines of its own.
+// (before anchor 0)
+// OneiOS (build-oneios-hid.py): a side key's event, OneiOSSideKeys.inc at the end of this file; a touch
+// frame's scan time, OneiOSTouchTime.inc after it.
+static bool oneios_side_key(unsigned code, int32_t value);
+static void oneios_touch_scan(int32_t value);
+static void oneios_touch_frame_begin(void);
+static void oneios_touch_frame_end(void);
+struct droidvm_input_desc { uint64_t address;
+// (before anchor 1)
+                // OneiOS: backboardd takes identifiers below 30 only (MAX_PATH_COUNT); the next free one of 1..28.
+                uint8_t id = 29;
+                if (s < DROIDVM_INPUT_SLOTS) {
+                    static uint8_t oneios_next_id = 1;
+                    for (unsigned tries = 0; tries < 28; ++tries) {
+                        uint8_t c = oneios_next_id;
+                        oneios_next_id = c >= 28 ? 1 : (uint8_t)(c + 1);
+                        bool used = false;
+                        for (unsigned j = 0; j < n && !used; ++j) used = next[j].id == c;
+                        if (!used) { id = c; break; }
+                    }
+                }
+// (before anchor 2)
+    if (e->type == EV_SYN) return e->code == SYN_REPORT;
+    if (e->type == EV_KEY && oneios_side_key(e->code, e->value)) return false;   // OneiOS: any device's side keys
+    if (e->type == 4 && e->code == 5) { oneios_touch_scan(e->value); return false; }   // OneiOS: EV_MSC / MSC_TIMESTAMP
+// (before anchor 3)
+                else { oneios_touch_frame_begin(); touch_frame(); oneios_touch_frame_end(); }   // OneiOS: the scan time
+// (before anchor 4)
+        input_bit(abs, nabs, ABS_Z))
+        return KIND_MOTION;
+    if (oneios_has_side_keys(keys, nkeys)) return KIND_KEYBOARD;   // OneiOS
+    return KIND_NONE;
+// (before anchor 5)
+static bool oneios_has_side_keys(const uint8_t *keys, unsigned size);
+static bool input_bit(const uint8_t *bits, unsigned size, unsigned bit) {
+// (the end)
+
+// made-up side keys
+
+// made-up touch time

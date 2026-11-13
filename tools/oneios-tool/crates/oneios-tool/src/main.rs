@@ -30,6 +30,11 @@ enum Tool {
         #[command(subcommand)]
         command: oneios_prelink::Command,
     },
+    /// The kernel build's own steps: gen (the board archives), build-record
+    Kernel {
+        #[command(subcommand)]
+        command: oneios_kernel::Command,
+    },
     /// The image tool (scripts/image/imagetool.py), and apfs-ls, apfs-copy
     Image {
         #[command(subcommand)]
@@ -60,6 +65,7 @@ fn main() {
             Tool::Sym(cli) => oneios_sym::main(cli),
             Tool::Log { command } => oneios_log::main(command),
             Tool::Prelink { command } => oneios_prelink::main(command),
+            Tool::Kernel { command } => oneios_kernel::main(command),
             Tool::Image { command } => oneios_image::main(command),
             Tool::Ioslog { command } => oneios_ioslog::main(command),
             Tool::Phone(cli) => oneios_phone::main(cli),

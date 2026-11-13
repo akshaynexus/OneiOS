@@ -1,0 +1,23 @@
+// A made-up source for the edit list "display": every anchor once, between lines of its own.
+// (before anchor 0)
+#include "DroidVMVirtioGpu.h"
+extern "C" bool oneios_display_parent_bound(void);
+extern "C" void oneios_display_parent_slide(void);
+extern "C" void oneios_display_client_seen(IOReturn,int,uint32_t,IOUserClient *);
+extern "C" void oneios_display_frame_seen(unsigned,uint64_t,uint64_t);
+extern "C" void oneios_display_swap_seen(bool,unsigned);
+// (before anchor 1)
+    native_legacy_stage=1;if(!oneios_display_parent_bound()){native_legacy_display_checkpoint();return;}
+    void *handle=OSMetaClass::preModLoad(g_kernel_kmod_info.name);
+// (before anchor 2)
+native_legacy_display_static_init();native_gop_presenter_static_init();oneios_display_parent_slide();native_legacy_meta_status=OSMetaClass::postModLoad(handle);
+// (before anchor 3)
+    native_legacy_client_status=status;native_legacy_client_object=(uintptr_t)client;
+    oneios_display_client_seen(status,native_legacy_client_pid,native_legacy_client_type,client);
+// (before anchor 4)
+    if(kind<2)droidvm_virtio_gpu_boot_dirty();
+    oneios_display_frame_seen(kind,maxx,maxy);
+// (before anchor 5)
+    if(accepted)native_legacy_swap_stage(0);
+    oneios_display_swap_seen(accepted,reason);
+// (the end)

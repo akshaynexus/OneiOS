@@ -28,6 +28,7 @@ archives = [
   "component:ArmDTPlatform",
   "component:ArmCpu",
   "build-libpthread-kernel.py",
-  # The board's own archives (scripts/build-oneios-board.py): drivers/ of this repository and Droid-VM's cpufreq.
-  "build-oneios-board.py",
+  # The board's own archives: drivers/ of this repository and Droid-VM's cpufreq. A command, not a script of
+  # scripts/: the kernel scripts put oneios-tool on PATH (kernel/lib/stage.sh, stage_tool).
+  "oneios-tool kernel gen board",
 ]

@@ -1,0 +1,4 @@
+// A made-up source for the edit list "net_transport": every anchor once, between lines of its own.
+// (before anchor 0)
+            if (broadcast || ours || (dst[0] & 1)) {   // OneiOS (build-oneios-net.py): multicast too
+// (the end)

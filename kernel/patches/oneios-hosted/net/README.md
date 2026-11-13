@@ -20,9 +20,9 @@ was tested: `docs/hardware.md` section 3.
 |---|---|
 | `OneiOSWifi.cpp` | The classes, the Apple80211 requests and events, the station (scan, join, leave: messages to the host), frames in and out, `oneios_net_start` |
 | `OneiOSWifiLayout.cpp` | `IONetworkInterface::setInterfaceSubType`'s store (the Wi-Fi subfamily). That function is not virtual, so it has no slot to bind it by; this file does what it does with the family's own member layout (the header with its private members visible; the classes' sizes are asserted) |
-| `layout.py` | Reads the two original classes from the kernelcache into `IONetworking-24A446-v54.json` (run by hand; needs `out/kernel-inputs/24A446/kernelcache.macho` and a `kernel.kc.prelink.json`) |
+| `oneios-tool kernel layout net` (was `layout.py` here) | Reads the two original classes from the kernelcache into `IONetworking-24A446-v54.json` (run by hand; needs `out/kernel-inputs/24A446/kernelcache.macho` and a `kernel.kc.prelink.json`) |
 | `IONetworking-24A446-v54.json` | What the kernelcache says of `IOEthernetController` (0x118 bytes, 250 slots) and `IOEthernetInterface` (0x148 bytes, 221 slots): metaclass, vtable, each slot's target, pointer-authentication discriminator and whether the target is the family's code, the constructor, the base destructor. Addresses and numbers only: no Apple code, so it is committed |
-| `build-oneios-net.py` | Fetches IONetworkingFamily-188's headers, checks them against the record, compiles the sources, generates the bindings, makes the archive |
+| `oneios-tool kernel gen net` | Fetches IONetworkingFamily-188's headers, checks them against the record, compiles the sources, generates the bindings, makes the archive |
 | `drivers/net/oneios_wifi_proto.h` | The station's messages (shared with `runtime/bridges/wifi`) |
 
 ## Why the original classes, and how they are checked

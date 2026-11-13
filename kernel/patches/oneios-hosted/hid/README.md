@@ -22,9 +22,9 @@ start is called from `oneios_drivers_start` (`drivers/bridge/OneiOSBridge.c`, a 
 |---|---|
 | `OriginalHidDeviceABI.h` | **The layout of the original `IOHIDDevice`** of the 24A446 iPhone18,2 collection ("v54"): members, every virtual in vtable order, the types their names mangle with. Its head lists each slot with its pointer-authentication discriminator and says where each fact was read. Any driver that subclasses `IOHIDDevice` includes it |
 | `include/IOKit/hid/IOHIDDevice.h` | The same header under the public header's name, for sources written against IOHIDFamily (NativeHidInput's arm64e build) |
-| `layout.py` | Reads the class from the kernelcache into `IOHIDDevice-24A446-v54.json` (run by hand; needs `out/kernel-inputs/24A446/kernelcache.macho` and a `kernel.kc.prelink.json`) |
+| `oneios-tool kernel layout hid` (was `layout.py` here) | Reads the class from the kernelcache into `IOHIDDevice-24A446-v54.json` (run by hand; needs `out/kernel-inputs/24A446/kernelcache.macho` and a `kernel.kc.prelink.json`) |
 | `IOHIDDevice-24A446-v54.json` | What the kernelcache says: size, metaclass, vtable, the 207 slots (target, discriminator, whether the target is the family's code), constructor, base destructor. Addresses and numbers only |
-| `build-oneios-hid.py` | Checks the header against the record, stages and compiles the sources, generates the bindings, makes the archive |
+| `oneios-tool kernel gen hid` | Checks the header against the record, stages and compiles the sources, generates the bindings, makes the archive |
 | `OneiOSHidInput.cpp` | `oneios_hid_input_start`: loads IOHIDFamily and IOHIDEventDriver, registers the classes below the live `IOHIDDevice`, starts the transport, publishes the two devices under `IOHIDResource`, starts the light sensor's device; the log lines |
 | `OneiOSSideKeys.inc` | The side keys of the transport: evdev key codes to the buttons device's report bits |
 | `OneiOSTouchTime.inc` | Each touch frame's scan time (xnuhost's `EV_MSC` / `MSC_TIMESTAMP`): kept while the frame is reported, so the touch report goes to the family with `handleReportWithTime(scan time)`; the latency counts of the log line |
@@ -38,7 +38,7 @@ keys and no touch screen; the transport keeps each touch frame's scan time and t
 
 ## The layout header: evidence
 
-A kext in the kernelcache has no symbols. `layout.py` reads, for `IOHIDDevice` in `com.apple.iokit.IOHIDFamily`:
+A kext in the kernelcache has no symbols. `oneios-tool kernel layout hid` reads, for `IOHIDDevice` in `com.apple.iokit.IOHIDFamily`:
 
 | Fact | Read from | Value |
 |---|---|---|
@@ -56,7 +56,7 @@ A kext in the kernelcache has no symbols. `layout.py` reads, for `IOHIDDevice` i
 The names come from Apple's public `IOHIDDevice.h` at the tag `IOHIDFamily-2238.120.5` (the OS profile's pin;
 `external/IOHIDFamily`, `scripts/setup/get-references.sh IOHIDFamily`). A slot's discriminator is a hash of the
 mangled name of the function that introduced it, so the header is right about a slot exactly when the compiler,
-given the header, signs that slot as the kernelcache does. **`build-oneios-hid.py` checks this at every build**: it
+given the header, signs that slot as the kernelcache does. **`oneios-tool kernel gen hid` checks this at every build**: it
 compiles a class that overrides only `newReportDescriptor`, and requires 207 slots, the record's discriminator in
 each, an `IOHIDDevice` function exactly in the family's slots, and `sizeof(IOHIDDevice) == 0xd0` (0x88 of this
 kernel's IOService + the 0x48 of the members). It also checks the header's comment table against the record.
@@ -120,7 +120,7 @@ of every session since 2026-11-11 is 30. The transport gave `1 + tracking id % 1
 with every contact for as long as the phone runs, so most touches were dropped, and at times every one: the
 sessions where touch "worked only after a power-key wake" were the times the counter sat below 30. The staged
 transport now gives each new finger the next free identifier of 1..28 (rotating, so the next finger of a slot gets
-another one), and 29 to the pointer (`build-oneios-hid.py`, `stage_transport`).
+another one), and 29 to the pointer (`oneios-tool kernel gen hid`: the edit list `staged/hid_transport.rs`).
 
 ## Which event driver (lead, 2026-11-11)
 

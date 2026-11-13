@@ -11,12 +11,14 @@ script before it may replace it; the commands and the results are below. What is
 | `image` | `scripts/image/imagetool.py` | 9 subcommands in Rust, the rest run the Python tool | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds, byte for byte (the 36th: the Linux set has no `kernel.kc`) |
 | `ioslog` | the manual steps of `docs/newtodo.md` "How to resume" step 2 (mount, copy, `unifiedlog_iterator`) | done; not run on the phone's Data store yet | yes on 7 archives: CSV byte for byte from a `.logarchive`, from a Data-store image and from a mounted volume |
 | `prelink` | the steps of `kernel/prelink/build.sh` | all 12 steps (`PRELINK_IMPL=rust`) | yes: every step's files and stdout byte for byte on two Linux-built kernels, `kernel.kc` `ffbe95f7...` and `cdd98e7e...` |
+| `kernel` | the board archive generators of the kernel build (`build-oneios-*.py`, nine), `kernel/build-record.py`, the two `layout.py` and `port-legacy-display.py` | all ported, and the scripts **retired 2026-11-13** (deleted, their outputs frozen in `tests/kernelgen/golden/`): the kernel builds run the commands | yes: every file of the nine archives byte for byte (261 files, one line of two `objects.json` aside), the build record, the three kernelcache records, and `kernel/build-hosted.sh` gives the same kernel either way but for the build time it carries (2,074 bytes of time stamps and the UUID; Linux, 2026-11-13) |
 | `phone` | `scripts/phone/stage.sh`, the adb lines of `docs/building.md` section 6, the Mac's `sparsewrite.py` | written; **not run on the phone** (none on the box) | `stage` and `sums`: the same output and the same stage as `stage.sh` on a stand-in phone; 76 checks pass (`tests/phone/run.sh`); `sparse-write`: the bytes and length of `sparsewrite.py` on 7 streams and a 32 GiB one, not more blocks, a quarter of the CPU (`tests/phone/sparse-compare.sh`) |
 | `app` | the app lines of `docs/building.md` section 7 (new) | written; **the app was not built or installed with it** (the owner's decision for this box) | not applicable; 65 checks pass with a stand-in checkout, gradlew, gh and phone (`tests/app/run.sh`); `app version` runs on the real clone |
 | `cycle`, `phone log` | the test cycle of `docs/building.md` section 6 by hand (new) | written; **not run on the phone or with real builds** | not applicable; 90 checks pass with a stand-in checkout and phone (`tests/cycle/run.sh`) |
 
 **Python stays the default.** No build script calls `oneios-tool` unless it is asked to
-(`IMAGETOOL_IMPL=rust` for `scripts/image/build.sh` and `verify.sh`), with one exception that changes no output:
+(`IMAGETOOL_IMPL=rust` for `scripts/image/build.sh` and `verify.sh`), but for the retired tools (`kernel/prelink/build.sh`
+and, since 2026-11-13, the kernel builds: `kernel`, below), and with one exception that changes no output:
 `scripts/image/kernel-inputs.sh` decodes the kernelcache with `oneios-tool image im4p` when the `lzfse` program is
 not installed, and checks the result against the SHA-256 the kernel profile pins.
 
@@ -1063,3 +1065,151 @@ Not compared: `hosted --x18` (minutes in Python), `align --explain` (a debugging
 The rules now live in the Rust modules only (`roots.rs`: the hardware provider classes and the kexts left out by
 hand; `matcher.rs`, `emit.rs`, `layout.rs`: XnuPrelink's at pin `9b950f2`). A change of a rule changes the outputs
 and so the goldens: regenerate them with `UPDATE=1` in the same commit and say why.
+
+## kernel
+
+`oneios-tool kernel`: the kernel build's own steps (crate `crates/oneios-kernel`). Each was a Python script,
+**retired on 2026-11-13** after the comparison below; each module has its script's name and description, takes what
+the script took and writes the same files. `kernel/build-hosted.sh`, `kernel/build-linux.sh` and
+`kernel/build-macos.sh` run nothing else for these steps: they need Rust, and build the binary when it is missing or
+stale (`stage_tool` in `kernel/lib/stage.sh`; `ONEIOS_TOOL=PATH` for another binary).
+
+| Command | Was (Python) | Module | State |
+|---|---|---|---|
+| `kernel gen board` | `kernel/device/scripts/build-oneios-board.py` | `build_oneios_board.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen storage` | `kernel/patches/oneios-hosted/storage/build-oneios-hosted-storage.py` | `build_oneios_hosted_storage.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen aes` | `.../aes/build-oneios-aes.py` | `build_oneios_aes.rs`, `class_record.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen keystore` | `.../keystore/build-oneios-keystore.py` | `build_oneios_keystore.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen net` | `.../net/build-oneios-net.py` | `build_oneios_net.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen hid` | `.../hid/build-oneios-hid.py` | `build_oneios_hid.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen audio` | `.../audio/build-oneios-audio.py` | `build_oneios_audio.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen gpu` | `.../gpu/build-oneios-gpu.py` | `build_oneios_gpu.rs`, `class_record.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen display` | `.../display/build-oneios-display.py` | `build_oneios_display.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel build-record finish --host linux\|macos --work DIR --config NAME --out OUT [--repo CHECKOUT]`, `kernel build-record --self-test` | `kernel/build-record.py` | `build_record.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel layout hid\|net [--kernelcache KC] [--prelink-report JSON] [--out FILE] [--repo CHECKOUT]` | `.../hid/layout.py`, `.../net/layout.py` | `hid_layout.rs`, `net_layout.rs`, `layout.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel port-legacy-display [--kernelcache KC] [--fixture JSON] [--classes JSON] [--out FILE] [--repo CHECKOUT]` | `.../display/port-legacy-display.py` | `port_legacy_display.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel compile-command RECORD SOURCE OBJECT [--repo CHECKOUT]` | new | `drivers_build.rs` | the check that this crate's copy of `drivers/build.py`'s compile command is the script's |
+
+Shared: `gen.rs` (where a generator runs, Python's file and process calls as the scripts used them, the steps every
+script repeated), `drivers_build.rs` (`drivers/build.py`'s `record` and `command`), `macho_object.rs` (a compiled
+object's symbols and the signed entries of a vtable), `staged/` (the edit lists of the staged sources).
+
+**`kernel gen NAME`** builds one board archive. UniXNU's driver runs it between the two kernel passes, in the build
+tree, with `UNIXNU_DEVICE` set (and `ONEIOS_REPO`, which `kernel/build-hosted.sh` exports): an entry of
+`board.toml`'s `[kernel] archives` that is not a `.py` or `.sh` script is run as a command, so the entries read
+`"oneios-tool kernel gen aes"` and the build scripts put the binary on `PATH` under that name
+(`$KERNEL_OUT/bin/oneios-tool`, a link to `ONEIOS_TOOL`; built first when missing or stale,
+`scripts/lib/oneios-tool.sh`). The step's log is `logs/archive-NN-oneios-tool.log` (was
+`archive-NN-build-oneios-NAME.log`). A failure ends as the scripts' did: the message on stderr, status 1.
+
+What still runs Python, and why:
+- `drivers/build.py` (not one of the retired scripts: it builds `drivers/` on its own, `--check` included).
+  `kernel gen board` runs it as the script did, and the generators carry a copy of its two functions (`record`,
+  `command`) in `drivers_build.rs`. `tests/kernelgen/compare-python.sh ... compile-command` and the unit test
+  compare the copy with the script; a change of the script's rule must be made in both.
+- Other projects' own scripts, run as they are: UniXNU's `scripts/prepare-storage-headers.py` (`gen storage`; the
+  script imported it and called `prepare`, the command runs it as a program and reads the `headers.json` it writes,
+  the same report) and Droid-VM's `build-droidvm-gpu.py`, cut before its accelerator step (`gen gpu`).
+- `kernel/prelink/classes.py` (`kernel layout`: the class reader, as the two scripts ran it).
+- `kernel/patches/oneios-hosted/display/display-capture.py` is kept as it is: it is no generator but a viewer for a
+  PC boot ([docs/building.md](../../docs/building.md) section 5), Linux only (a `SOCK_SEQPACKET` socket with the
+  frame's memfd passed over it), and the tool is to build and run on the Mac too.
+
+Kept from the scripts on purpose: the generated files still say "Generated by build-oneios-NAME.py" (the bytes are
+the scripts'; the module of that name is `build_oneios_NAME.rs`), and so do the comments in the patch folders'
+sources and in three patches, which were not touched (a changed source or patch changes the build's inputs).
+One line is not the scripts': `objects.json` of `audio` and of `net` listed the script itself (its copy in the build
+tree) as the last source, so that a changed edit list changed the record; the command lists the staged source
+there (`DroidVMAudio.cpp`, `DroidVMVirtioNet.c`: the upstream file with the edit list applied).
+
+### The comparison
+
+`tests/kernelgen/compare-python.sh WORK ENVFILE [NAME...]` (at commit `a5b2d95`, the last with every script; since
+the retirement it can still run `compile-command`, whose Python side stays): in the tree of a finished hosted build, each generator runs twice in the same place, the Python
+script and then the command, in the environment UniXNU's driver gave the archive step (`tests/kernelgen/save-env.sh`
+saves it from `/proc/PID/environ` while a build runs) and under the same `/usr/bin` shims. Every file either one
+writes is compared (`diff -r`: objects, archives, staged sources, generated sources, logs, JSON records, links), and
+so are stdout, stderr and the exit status. Result on Linux x86_64, 2026-11-13, clang 23.1.4, the tree of
+`HOSTED_OUT=kgen` at `ea06d46` (a loaded box: the times are the compiler's, not the generators'):
+
+| Generator | Same | Files | Python | Rust |
+|---|---|---|---|---|
+| `board` (`liboneiosdrivers.a`, `liboneiosboard.a`) | yes | 21 | 5.2 s | 3.6 s |
+| `storage` | yes | 32 | 1.8 s | 1.4 s |
+| `aes` | yes | 12 | 3.4 s | 0.7 s |
+| `keystore` | yes | 8 | 0.9 s | 0.8 s |
+| `net` | yes, but the one line of `objects.json` above | 40 | 2.4 s | 1.9 s |
+| `hid` | yes | 22 | 2.3 s | 3.1 s |
+| `audio` | yes, but the one line of `objects.json` above | 10 | 1.0 s | 0.8 s |
+| `gpu` | yes | 95 | 3.9 s | 4.0 s |
+| `display` | yes | 21 | 4.1 s | 3.4 s |
+| `build-record` (`--self-test`; `finish` on that build: the record of 147 patches and 59 board sources, `series.txt`, the kernel, the link, stdout) | yes | 8 | - | - |
+| `compile-command` (6 commands: a C and a C++ source with each of the three records) | yes | - | - | - |
+| `layout hid`, `layout net`, `port-legacy-display` (on the kernelcache `349c4692...`) | yes, and each record is the committed one | 1 each | 4.2 s, 1.9 s, 0.7 s | 2.9 s, 2.8 s, 0.4 s |
+
+The files of every rerun are also the ones the build itself had written (261 files), so the reruns stand for the
+build.
+
+**The kernel.** `kernel/build-hosted.sh` (`HOSTED_OUT=kgen XNU_FILESET_REFERENCE=1`, from an empty tree, the same
+tree each time, the box loaded) with the Python generators, with the commands beside the scripts, and after the
+retirement:
+
+| | `xnu.macho` (24,728,008 bytes) | `reference.macho` | Time |
+|---|---|---|---|
+| Python generators (`ea06d46`) | `5da980a23d26cf14f30272b100533fbf8441c6222211db0f8c610ed41b24d771` | `815ca46e986a5661...` | 1253 s |
+| `oneios-tool kernel gen` (`KERNELGEN_IMPL=rust` at `a5b2d95`) | `effea0af3597279d01be685e93bc7a6b50a37d6713fe444754ad8e00737c21a6` | `a51d90d1f28c63ba...` | 1011 s |
+| The retired state (the scripts deleted, `stage_tool` builds the binary) | `4a5b8868df0776a77520bb2514e62c19e319faa878091c8420fcb17a4fff1c8b` | `a84207f4a13cd9c1...` | 1032 s (the tool's own build included) |
+
+**The SHA-256 are not equal, and no two builds of this kernel are**: the file carries the time of its build.
+`tests/kernelgen/kernel-diff.py A B` names the place of every differing byte. Of the 2,074 that differ between the
+first two kernels, 20 are the time in XNU's version string (`Thu Nov 12 23:53:46 IST 2026` and `Fri Nov 13 00:31:02 IST
+2026`, twice in `__TEXT,__const`), 16 are the link's `LC_UUID`, and 2,038 are the values of the symbol table's
+`N_OSO` entries (each object file's modification time); **nothing else differs**: every byte of code and data is the
+same. The RELEASE reference, which has no board archive in it, differs between the two builds in the same three
+ways (76 bytes), so this is the build, not the generators. And what the generators hand to the link is the same:
+the ten archive folders of the build with the commands are, file for file, the ones of the Python build (261 files;
+the one line of the two `objects.json` aside). The third build, of the retired state, differs from the Python build
+in the same three ways and nothing else (2,074 bytes), and its archive folders are the same files again.
+
+The Linux build in the main checkout (`out/kernel/current-hosted-pc`, `13ed0b70...`) is from an older source and
+another tree, so it is no reference for this.
+
+**The VM kernel.** `kernel/build-linux.sh` in the retired state (Linux, 482 s from an empty tree with UniXNU's source
+cache): the committed `board.toml`'s entry ran as the command (`logs/archive-06-oneios-tool.log`; the repository
+found from the device directory, as the script did without `ONEIOS_REPO`), and the record `kernel build-record`
+wrote at the end (build id `xnu-12377.121.6-ios-27.0.1-24A446-0196b7c45972`, 94 patches, 17 board sources) is, with
+`series.txt`, the kernel and the link, byte for byte what the retired `build-record.py` (put back for this check)
+writes for the same build.
+
+### The goldens
+
+`tests/kernelgen/golden/` is the Python scripts' output, frozen before they were deleted:
+
+| What | Frozen as | Checked by |
+|---|---|---|
+| The generated files that are this project's own text (17: the bindings `*.S` of aes, gpu, display, hid and net, `OriginalLegacyFramebufferABI.h`, the two probe sources, the crumbs header, hid's and net's `report.json`, the GPU's `status.json`), from the Python build above | whole, `golden/build/` | `tests/kernelgen/compare-golden.sh WORK` after a build; the ones made from a record alone (aes, gpu, the display's header, the probes) also by `cargo test` |
+| The staged copies of other projects' sources and of Apple's `IOBlockStorageDevice.cpp` (10) | SHA-256, size and name, `golden/staged.sha256` | `compare-golden.sh WORK` |
+| What the nine generators print | `golden/stdout.txt`, the tree's and the checkout's paths taken out | `compare-golden.sh WORK` |
+| Each edit list applied to a made-up source by the script's own staging function (8 lists; the Contact Identifier change of 2026-11-12 is in `hid_transport`) | `golden/synthetic/NAME.in` and `NAME.out` | `cargo test` |
+| `drivers/build.py`'s command for a made-up record, C and C++ | `golden/synthetic/command.*.json` | `cargo test` |
+| `build-record.py`'s record of a made-up build (run from a made-up checkout; without the machine's part and the checkouts' commits) | `golden/synthetic/build-record.json`, `.series.txt` | `cargo test` |
+
+No file of Apple's and no source of another project is in the goldens. Not frozen: objects and archives (they carry
+the tree's path and the compiler's version), compiler logs, `objects.json` and `build-report.json` (the SHA-256 of
+every source). `cargo test -p oneios-kernel -p oneios-tool`: 12 tests pass (Linux). `compare-golden.sh` on the tree
+built with the commands: 17 of 17 generated files, the 10 hashes and the output the same.
+
+The goldens follow the sources: a change of a record, of a header, of an edit list, of `OneiOSSideKeys.inc` or
+`OneiOSTouchTime.inc`, of a call of an original function, or of an external pin changes them. Then run
+`UPDATE=1 tests/kernelgen/compare-golden.sh WORK` after a build, in the same commit, and say why. The three
+kernelcache records have no golden of their own: each command writes the committed record (the comparison above).
+
+### The Mac
+
+The commands use nothing of Linux alone (`std`, the `object`, `which` and `wait-timeout` crates; links are made
+with `std::os::unix`), and take the same tools the scripts took (`llvm-ar`, `llvm-nm`, `llvm-objcopy`,
+`llvm-objdump` from `PATH`, the storage generator's `/opt/homebrew/opt/llvm/bin/llvm-objcopy` when there is none,
+`xcrun` for the SDK's `TargetConditionals.h`). **Checked on Linux only**: the comparison, the kernel builds with the
+commands (`build-hosted.sh` three times, `build-linux.sh` once), `compare-golden.sh`, `cargo test`. Not run on a Mac: the build of this crate, `kernel/build-hosted.sh` with
+the commands (Xcode 27.2), `kernel/build-macos.sh` with `kernel build-record`. `compare-python.sh` and `save-env.sh`
+are Linux scripts (`/proc`, `bwrap`).

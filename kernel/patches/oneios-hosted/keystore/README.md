@@ -26,7 +26,7 @@ in the prelink.
 |---|---|---|
 | `AppleKeyStore` (IOService on IOResources) and `AppleKeyStoreUserClient` | UniXNU's **AppleKeyStoreState**, `NativeKeyStoreEvents.cpp`, BSD-2-Clause-Patent, at the kernel base's submodule commit (`external/Droid-VM-UniXNU/drivers/AppleKeyStoreState`, 42ff83e), compiled with two lines added | The matching class MobileKeyBag's event registration looks for, and the answers to libaks's state queries |
 | `OneiOSKeyStore.cpp` | here, after Droid-VM's `package/KeyStoreProbe.cpp` and `KeyStoreWrap.inc` | the start, the class keys, wrap and unwrap, the hooks the component calls, the log lines |
-| `build-oneios-keystore.py` | here, after `aes/build-oneios-aes.py` | `build/oneios-keystore/liboneioskeystore.a` in the kernel build tree |
+| `oneios-tool kernel gen keystore` | `tools/oneios-tool/crates/oneios-kernel/src/build_oneios_keystore.rs` (was `build-oneios-keystore.py` here), after `kernel gen aes` | `build/oneios-keystore/liboneioskeystore.a` in the kernel build tree |
 | `0022-keystore.patch` | here | `oneios_keystore_start()` called from `oneios_board_late_start` (`osfmk/arm64/oneios_host.c`); `owner-dataprotect` on by default (`bsd/vfs/kpi_vfs.c`) |
 
 Unlike the software AES, the two classes subclass `IOService` and `IOUserClient` of the kernel itself: no binding to
@@ -66,8 +66,8 @@ caller of the original kext's exported functions (none is in the collection's cl
 
 ## Build
 
-`kernel/build-hosted.sh` copies `build-oneios-keystore.py` into the build's device repository, adds it to the
-board's archives before the GPU's, and adds `-Wl,-force_load,{tree}/build/oneios-keystore/liboneioskeystore.a` to the
+`kernel/build-hosted.sh` adds `oneios-tool kernel gen keystore` to the board's archives of the build's device
+repository, before the GPU's, and adds `-Wl,-force_load,{tree}/build/oneios-keystore/liboneioskeystore.a` to the
 hosted defconfig's `CONFIG_XNU_EXTRA_LD_ARCHIVES`. `kernel/lib/stage.sh` checks out the component's submodule. The
 component's static initializer is taken out of `__mod_init_func` and run by `oneios_keystore_start` inside a module
 load, as for NativeAES. `oneios_keystore_start` is weak in `oneios_host.c`: a kernel linked without the archive

@@ -1,0 +1,35 @@
+// A made-up source for the edit list "hid": every anchor once, between lines of its own.
+// (before anchor 0)
+    0x75,0x01,0x95,0x04,0x81,0x02,
+    0x75,0x04,0x95,0x01,0x81,0x03,0xc0
+};
+// (before anchor 1)
+        self->buttons=static_cast<uint8_t>(uintptr_t(mask)&0xe);
+// (before anchor 2)
+static const int32_t kEdgeX=48*65536/3048,kEdgeY=48*65536/2032;
+// (before anchor 3)
+        native_touch_edge_stats[1]=native_touch_edge_stats[1]+1;
+// (before anchor 4)
+    if(!touch && (mask&kMaskTouch))fromEdge[index]=false;
+// (before anchor 5)
+    uint32_t lastSeq=0;
+// (before anchor 6)
+        IOReturn result=buffer?self->submitReport(buffer):kIOReturnNoMemory;
+        OSSafeReleaseNULL(buffer);
+        native_hid_input_observed(6,result);
+// (before anchor 7)
+extern "C" void native_touch_set_sink(void (*)(void *), void *) __attribute__((weak_import));
+// (before anchor 8)
+return OSString::withCString(touchOnly?"Offline touch digitizer":"Offline HID input probe");
+// (before anchor 9)
+    bool eventDriverFound=false;
+// (before anchor 10)
+        if(!eventDriverFound) {
+            IORegistryEntry *driver=eventDriver(this,4);
+            eventDriverFound=driver!=nullptr;
+            if(driver && (touchEnabled || touchOnly))edge::install(driver);
+        }
+// (before anchor 11)
+    if(originalDispatch || !driver)return;
+    if(kSlotDiversity[kDispatch]!=kDivDispatch)return;
+// (the end)
