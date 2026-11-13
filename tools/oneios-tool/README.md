@@ -9,7 +9,7 @@ script before it may replace it; the commands and the results are below. What is
 | `sym kernel`, `log panic` | naming a kernel panic's frames by hand (`atos -o xnu.macho` on the Mac, with each segment's move subtracted) | done; **not run on the Mac's log and kernel of the 2026-11-12 panic** (not on the Linux box) | compared with `llvm-symbolizer --inlining` on three Linux-built pairs: the stand-in panic's 19 addresses and 31,605 more per pair (311,605 on one) name the same function, file:line and inlined frames |
 | `log` | nothing (new) | done | not applicable; 33 commands end with status 0, two runs equal |
 | `image` | `scripts/image/imagetool.py` | 9 subcommands in Rust, the rest run the Python tool | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds, byte for byte (the 36th: the Linux set has no `kernel.kc`) |
-| `ioslog` | the manual steps of `docs/newtodo.md` "How to resume" step 2 (mount, copy, `unifiedlog_iterator`) | done; not run on the phone's Data store yet | yes on 7 archives: CSV byte for byte from a `.logarchive`, from a Data-store image and from a mounted volume |
+| `ioslog` | the manual steps of `docs/newtodo.md` "How to resume" step 2 (mount, copy, `unifiedlog_iterator`) | done; its first run on the phone's Data store (2026-11-13) failed in the APFS reader, fixed ("The APFS reader": checkpoints); not run on that store again yet | yes on 7 archives: CSV byte for byte from a `.logarchive`, from a Data-store image and from a mounted volume; stores with a cut-off newest checkpoint give the checkpoint before's log |
 | `prelink` | the steps of `kernel/prelink/build.sh` | all 12 steps (`PRELINK_IMPL=rust`) | yes: every step's files and stdout byte for byte on two Linux-built kernels, `kernel.kc` `ffbe95f7...` and `cdd98e7e...` |
 | `kernel` | the board archive generators of the kernel build (`build-oneios-*.py`, nine), `kernel/build-record.py`, the two `layout.py` and `port-legacy-display.py` | all ported, and the scripts **retired 2026-11-13** (deleted, their outputs frozen in `tests/kernelgen/golden/`): the kernel builds run the commands | yes: every file of the nine archives byte for byte (261 files, one line of two `objects.json` aside), the build record, the three kernelcache records, and `kernel/build-hosted.sh` gives the same kernel either way but for the build time it carries (2,074 bytes of time stamps and the UUID; Linux, 2026-11-13) |
 | `phone` | `scripts/phone/stage.sh`, the adb lines of `docs/building.md` section 6, the Mac's `sparsewrite.py` | written; **not run on the phone** (none on the box) | `stage` and `sums`: the same output and the same stage as `stage.sh` on a stand-in phone; 76 checks pass (`tests/phone/run.sh`); `sparse-write`: the bytes and length of `sparsewrite.py` on 7 streams and a 32 GiB one, not more blocks, a quarter of the CPU (`tests/phone/sparse-compare.sh`) |
@@ -111,16 +111,23 @@ oneios-tool ioslog show SOURCE [-f text|csv|jsonl] [-o OUT] [filters] [--sort]
 oneios-tool ioslog boots SOURCE                       # the boots: UUID, start, first and last entry, entries
 oneios-tool ioslog checks SOURCE [--boot last|all|UUID] [--examples N]
 oneios-tool ioslog save SOURCE NAME.logarchive        # the copy the manual steps made, for other tools
-# every subcommand: [--volume N|NAME] [--block0] [--apfs own|fuse|auto] [-v]
+# every subcommand: [--volume N|NAME] [--block0 | --checkpoint XID] [--apfs own|fuse|auto] [-v]
 ```
 
 - `SOURCE`: a raw image of the Data store; or a `.logarchive` folder; or a folder that holds `db/diagnostics` and
   `db/uuidtext` (a mounted Data volume; also `private/var/db/...`, `var/db/...`, or `diagnostics` + `uuidtext`).
 - The image: every volume of the container is tried in order and the first that holds `db/diagnostics` is read (the
-  phone's Data volume is the third, named `Data`, with no role). `--volume 2` or `--volume Data` names one. The
-  container is read as its **newest valid checkpoint** has it (the superblock with the highest transaction and a
-  good checksum in the checkpoint descriptor area), not as block 0 has it: block 0 holds the state of the last clean
-  unmount only. `--block0` reads block 0's state.
+  phone's Data volume is the third, named `Data`, with no role). `--volume 2` or `--volume Data` names one: a
+  volume's number is its place in the container superblock's list (`nx_fs_oid`), as apfs-fuse's `vol=N` counts,
+  and a place may be empty (the Data store iOS made on the PC has one volume, `Data`, in place 2). The
+  container is read at its **newest checkpoint that passes the checks**, not as block 0 has it: block 0 holds the
+  state of the last clean unmount only, every session ends with the kernel killed, and the newest checkpoint may
+  be cut off in the middle of a write ("The APFS reader": the checks, the fall back to an older checkpoint).
+  **Every command says on stderr which transaction it read**, how many newer checkpoints it skipped and why:
+  `data.img: volume 2 (Data) is read at checkpoint xid 198 (superblock at block 20, volume superblock xid 198): the
+  newest of 95; block 0 has xid 14; 1746 tree nodes checked`. `--checkpoint XID` reads that checkpoint (if it
+  passes), `--block0` block 0's state (if what it names is still there); `oneios-tool image apfs-checkpoints
+  data.img` lists every checkpoint with what passes and what is refused at it.
 - Filters of `show` (all optional, combined with "and"): `--boot last|UUID-start`, `--since T`, `--until T`
   (`2026-11-12T14:12:00Z` or `"2026-11-12 14:12:00"`; the guest's clock, UTC), `--proc NAME` (the last part of the
   process path; repeatable), `--pid N`, `--subsystem PREFIX`, `--category NAME`, `--type error,fault,...` (the CSV's
@@ -187,9 +194,13 @@ the details and what upstream would have to open).
 
 **What this does not show**, because neither the phone's Data store nor the Mac's files are on the Linux box:
 
-1. `ioslog` on a real `data.img` from the phone (an image written by iOS's own APFS, after a session). The reader's
-   paths for it are tested on stand-ins only: `mkapfs.py`'s image (checked against apfs-fuse) and, for images
-   written by Apple's APFS, the three below.
+1. `ioslog` on the phone's own `data.img`. Its first run there (2026-11-13, on the Mac) failed with `short read
+   at 1152903912689233920`; the cause and the fix are in "The APFS reader" below. The fixed reader was run on a
+   Data store that iOS 27's own APFS wrote on the PC (the same failure before, `ioslog boots` after), on stand-ins
+   with a cut-off newest checkpoint, and on the images below; **the phone's store itself has not been read again**
+   (it stays on the Mac). To run there: `oneios-tool ioslog boots data.img`, `ioslog checks data.img`, and if
+   either refuses, `oneios-tool image apfs-checkpoints data.img` (it prints no file name and no file contents:
+   transactions, block numbers, object types, volume names).
 2. `ioslog show` against the Mac's `out/session-logs/2026-11-12/ios3-log.csv` (made from `ios3.logarchive`). To
    run it there: `tests/ioslog/compare.sh out/session-logs/2026-11-12/ios3.logarchive`, and
    `oneios-tool ioslog show ios3.logarchive -f csv -o X && cmp X ios3-log.csv` (the same only if `ios3-log.csv` was
@@ -198,8 +209,119 @@ the details and what upstream would have to open).
 
 ### The APFS reader
 
-Our reader (`crates/oneios-image/src/apfs.rs`, `apfs/files.rs`) is the default everywhere; apfs-fuse is the
+Our reader (`crates/oneios-image/src/apfs.rs`, `apfs/files.rs`, `apfs/check.rs`) is the default everywhere; apfs-fuse is the
 independent reader it is checked against, and since the third Linux round also an optional second backend.
+
+**Checkpoints: checks before every read, and the fall back** (`apfs/check.rs`, 2026-11-13). The first run on the
+phone's real Data store failed: `ioslog boots` and `ioslog checks` ended with `short read at 1152903912689233920`.
+That number is 0x0ffff0000ffff000, block 0xffff0000ffff. **The cause**, found again on a Data store that iOS 27's
+own APFS wrote on the PC (`image apfs-info` of it gave the same number to the digit): before `ioslog` looked at
+any checkpoint it counted the volumes with imagetool.py's reader, which reads **block 0's** superblock. On a used
+store that superblock is old (transaction 14 on the PC's store, whose newest checkpoint is 198), and the block it
+names as the container's object map has long been written again: it was a node of the extent reference tree by
+then (`type 0x40000003/0xf, oid 8257812, xid 191`). A tree node's two empty free lists (`ff ff 00 00 ff ff 00 00`)
+lie at offset 48, where an object map has its tree's address: read as that address they are block 0xffff0000ffff,
+and the read of it was the "short read". The copy was good, the reader was wrong: nothing checked what a block
+was before a field of it was used. Now:
+
+- **Before a block is read**, its address is checked against the container's block count and against the file's
+  length: the address of an object, a tree node's child, an object map's value, and a file extent's start and
+  length. **Before a field of an object is used**, its header is checked: the Fletcher-64 checksum (`o_cksum`), the
+  type (`o_type`), the object id (`o_oid`: a physical object's is its own address, a virtual one's the id it was
+  looked up by, the container superblock's is 1), and a transaction (`o_xid`) that is **not newer than the
+  checkpoint's**: a newer one means the block was freed and written again after that checkpoint. A tree node must
+  also be the root or a child as its parent says, on the level below its parent, with its table and every key and
+  value inside the node. What fails is **refused by name**: `refused the container's object map at block 8257812
+  (0x7e0114) [type 0x40000003/0xf: a tree node, oid 8257812, xid 191], named by block 0: it is a tree node, not the
+  container's object map`. No command ends with a bare short read any more.
+- **The checkpoint.** Block 0 is taken only for where the checkpoint descriptor area is (`nx_xp_desc_base`,
+  `nx_xp_desc_blocks`) and for the container's UUID. Every container superblock of the area is a candidate, tried
+  from the highest transaction down (block 0's own superblock too, when the area has no good one of its
+  transaction). A candidate passes when its superblock (checksum, type, oid 1, magic, block size, the same
+  container UUID, the last block of its own run in the area), its checkpoint map blocks (each: checksum, type, its
+  superblock's transaction, the last one marked last, every address inside the container) and the container's
+  object map with **every node of its tree** pass. This is the order of Apple's "Mounting an Apple File System
+  Partition" ("the container superblock that has the largest transaction identifier and isn't malformed").
+  apfs-fuse (`ApfsContainer::Init`) takes the superblock with the highest transaction and a good checksum and
+  goes no further back; this reader does, when an object below that superblock is refused. What fsck_apfs does was
+  not looked at (no Mac on the box).
+- **The volume.** For the volume asked for, at the newest candidate that passes: its superblock, its object map
+  with every node of its tree, **every node of its file-system tree** (each child reached through the volume's
+  object map, as a lookup reaches it), a sealed volume's file extent tree, and the roots of the extent reference
+  tree and of the snapshot metadata tree. If one is refused, an older mapping of the volume in the same
+  checkpoint's object map is tried when there is one (the format allows it; a real container's object map is
+  `OMAP_MANUALLY_MANAGED`, has no snapshots and keeps one mapping per volume), then the next older checkpoint. So
+  one volume can be read at an older checkpoint than the others. The used transaction and every candidate that was
+  skipped, with its reason, are in the reader's result and on stderr; when none passes, the error lists each
+  candidate with its reason.
+- **Not checked:** file contents (APFS has no checksum of them; an extent is checked against the container when it
+  is read), the ephemeral objects a checkpoint map names (the space manager, the reaper: never read here), the
+  nodes of a sealed volume's hashed tree against their hashes (they carry no header: 32 zero bytes and
+  `BTNODE_NOHEADER`, the root too; their shape is checked), the extent reference and snapshot metadata trees
+  below their roots.
+- **Which commands.** `ioslog` (every command), `image apfs-ls` and `apfs-copy` with `--newest`, and
+  `image apfs-checkpoints` choose a checkpoint this way; `--checkpoint XID` takes one (and refuses it by name if it
+  does not pass). `--block0` and `apfs-ls`/`apfs-copy` without `--newest` read block 0's state with the same
+  checks, each object when a read reaches it (one candidate: nothing to choose). `image apfs-info`, `apfs-owners`,
+  `tree-copy --owners-from` and `manifest` stay imagetool.py's reader, without these checks: they read the set's
+  read-only images, which are written once, and must print what the Python tool prints.
+
+```sh
+oneios-tool image apfs-checkpoints data.img     # every checkpoint: does the container pass, does each volume, and why not
+```
+
+**The tests of it** (2026-11-13, Linux x86_64; no Apple file and no owner data in them). The stores:
+`tests/support/apfs_store.rs` (Rust, for `cargo test`) takes two stores of `mkapfs.py`, an older and a newer
+state of the same three volumes (Preboot, xART, Data), and grafts them into one container with two checkpoints:
+the older one stays where it is as transaction 5 (and block 0), the newer one's blocks follow it with every
+address moved (object ids of physical objects, object map values and child addresses, the volumes' object map
+addresses, file extents) and every checksum written again, and its superblock and checkpoint map become
+transaction 6 in the second place of the descriptor area. Where the objects of each checkpoint are is read by a
+walk of its own (not the reader's), so a test damages an object by name. apfs-fuse reads the grafted store as its
+newer state (`ONEIOS_TEST_FUSE=1`, below). `crates/oneios-image/tests/apfs_checkpoints.rs` (5 tests, the reader)
+and `crates/oneios-tool/tests/ioslog_checkpoints.rs` (1 test: the binary's `ioslog show -f csv`, `boots`, `checks`
+and `save` on each store against the same four commands on the folder of the state that must come out, and what
+stderr says):
+
+| Case | The damage to the newest checkpoint (transaction 6) | Result |
+|---|---|---|
+| good | none | transaction 6 is read; `--checkpoint 5` and `--block0` give the older state |
+| a | the superblock: one bit changed, or zeros from byte 64 on; its checkpoint map: a pattern from byte 512 on | transaction 5 is read; `1 newer of 2 skipped: xid 6 at block 4: refused the container superblock ... its checksum is wrong` |
+| b | the superblock whole (checksum written again), its object map address 0xffff0000ffff; the object map whole, its tree's address 0xffff0000ffff; a tree node copied over the object map (the phone's case: its free lists are that address); address 0 | transaction 5; `refused the container's object map at block 281470681808895 (0xffff0000ffff), named by block 4: the address is past the container's end`, or `it is a tree node, not the container's object map` |
+| c | half written, zeros or the pattern `ff ff 00 00` from an offset on (0, 64, 100, 600, 1024, 2000, 2048, 3000, the last 16 bytes): a node of the container's object map tree, the Data volume's superblock, its object map, a node of its object map tree, the root and a leaf of its file-system tree | transaction 5 for the Data volume, each refused by name with its type, oid and xid. When only the Data volume's objects are damaged, Preboot and xART are still read at transaction 6 |
+| whole, and wrong | a leaf with a later transaction (9), another object id, a wrong level, an entry outside the node; an object map value past the container; a superblock with another container's UUID; one that is not the last block of its checkpoint; the file cut off inside the newer checkpoint's blocks | transaction 5, each with its reason (`its transaction 9 is newer than the checkpoint's (6)`, `the block is past the file's end`, ...) |
+| history | a second mapping of the Data volume in transaction 6's object map (to transaction 5's volume superblock), and its newest tree damaged | checkpoint 6 is read with the volume's older state: `a newer state of the volume in this checkpoint was skipped` |
+| d | every candidate: transaction 6's superblock, and transaction 5's object map (which block 0 names too) | status 1, one error: `none of the 3 container superblocks can be read:` and a line per candidate with its reason. With the Data volume damaged in both checkpoints only: `volume 2 cannot be read at any of the 2 checkpoints:`, the other volumes are read |
+| at a read | a file extent whose block is 0xffff0000ffff (the node whole); a damaged leaf in block 0's state read with `--block0` | the store opens; the read is refused by name (`refused an extent of data stream N: ... it runs past the container's end`, `refused the node of the file-system tree ...`) |
+
+No message of any case holds "short read". `cargo test` makes the log files as stand-ins (header chunks: no
+entries), so there it is the files of `save` and the equal answers of the commands that are compared. With a real
+archive the log itself is: `ONEIOS_TEST_LOGARCHIVE=system_logs_high_sierra.logarchive ONEIOS_TEST_FUSE=1
+ONEIOS_TOOL=target/release/oneios-tool cargo test -p oneios-tool --test ioslog_checkpoints` (Mandiant's macOS 10.13
+archive; the older state lacks the last of `Persist`'s three files): the nine stores of the cases above give the
+CSV of the state that must come out to the byte (84,856,013 bytes for the older state, 116,141,721 for the newer),
+the same `boots` and `checks`, the same 446 or 447 saved files, each command says the transaction it read; and
+apfs-fuse reads the good store as its newer state.
+
+**On stores and images written by Apple's APFS** (2026-11-13):
+
+| Image | Result |
+|---|---|
+| A Data store that iOS 27's own APFS wrote on the PC, its kernel killed (32 GiB, 1.5 GB written; one volume, `Data`, in place 2; 94 checkpoints, transactions 105 to 198; block 0 at transaction 14) | The binary from before: `image apfs-info`, `ioslog boots`: `short read at 1152903912689233920`, the phone's number. Now: `ioslog boots` reads transaction 198 (`the newest of 95`), 1,746 tree nodes checked, one boot of 97,417 entries, 0.4 s of CPU. `apfs-checkpoints`: the ten newest checkpoints pass; at four older ones the container passes and the block named as the volume's object map is a tree node now; the other 80 and block 0 fail at the container (78: the block named as its object map is a tree node now; 3: that block is of a later transaction). `NEWEST=1 tests/image/apfs-read.sh data.img 2`: **7,213 files and links the same as apfs-fuse's (7,211 files, 1,490,636,746 bytes), 0 differ**. `--block0` is refused by name there (what block 0 names is gone) |
+| 24A446 OS image (sealed, 10.4 GB) | `apfs-checkpoints`: both checkpoints pass, 56,870 tree nodes checked, 1.3 s. `apfs-info` and `apfs-owners private/var` (imagetool.py's reader) print what the binary from before prints (332 and 2,765,028 bytes) |
+| 24A446 SystemOS image (sealed) | `apfs-read.sh` without and with `NEWEST=1`: 2,194 the same (2,192 files, 7,462,414,742 bytes), 0 differ, none skipped, as before; 7,233 nodes checked with `--newest`; `apfs-fuse.sh` with `ioslog` on a two-checkpoint store: 16 checks ok |
+| 24A446 AppOS image (sealed) | `apfs-read.sh` without and with `NEWEST=1`: 1,155 the same, 0 differ, as before; `apfs-fuse.sh` ok |
+| dfvfs's `apfs.raw` | 8 the same, without and with `NEWEST=1`, as before |
+
+`tests/image/parity.py` (the image tool against imagetool.py on stand-ins): 138 cases, all the same.
+`cargo test` of the workspace: 92 pass, among them `oneios-image` 31 + 1 (`apfs_files.rs`) + 5
+(`apfs_checkpoints.rs`) and `oneios-tool` 1 (`ioslog_checkpoints.rs`); 4 of `oneios-kernel`'s `tests/golden.rs`
+fail on this box with and without this change (their files under `tests/kernelgen/golden/build/` are not in a
+fresh checkout: `.gitignore` has `build/`). The seven archives of "The comparison" above were run again with this
+reader: every step the same, 140 checks.
+**Not done:** the phone's own store (on the Mac); `tests/image/compare-python.sh` on the real set (the Linux box's
+set is not where the script looks; `apfs-info` and `apfs-owners` of its three images were compared with the
+binary from before instead, six outputs the same to the byte); macOS (no Mac on the box).
 
 **Compressed files (decmpfs)** are read since the third Linux round (`apfs/decmpfs.rs`): the inline kinds and the
 resource-fork kinds of zlib (3, 4; `flate2`), LZVN (7, 8), stored (9, 10), LZFSE (11, 12; `lzfse_rust`) and
@@ -256,6 +378,8 @@ mounted and the mount's folder is gone. 16 checks, all ok.
 oneios-tool image apfs-ls IMAGE [PATH] [--volume N|NAME] [--newest] [--apfs own|fuse|auto]      # a folder's entries: mode, owner, size, name
 oneios-tool image apfs-copy IMAGE SRC DST [--volume N|NAME] [--newest] [--apfs own|fuse|auto]   # a file or a folder out of the image, no mount;
                                                                                                 # compressed files come out plain
+# both: --newest reads the newest checkpoint that passes the checks, --checkpoint XID that one (a used store; said on stderr)
+oneios-tool image apfs-checkpoints IMAGE     # a used store's checkpoints: at each, does the container pass, does each volume ("The APFS reader")
 ```
 
 `im4p IN OUT` decodes the LZFSE payload with `lzfse_rust` (imagetool.py starts the `lzfse` program). On
@@ -896,9 +1020,19 @@ oneios-tool cycle --only return,collect --name NAME
   waited for, unless `--stay` was given and Ctrl-C came in the hold. A failed build, a failed audit, stubs that
   are not all good or failing host tests end the cycle before the phone is touched.
 - The exit status is 0 only when every step that ran ended well and the boot reached its first frame (when
-  `watch` ran).
-- `summary.md` is written by `collect` also for a cycle that failed: the reason, each step's time and result, the
-  markers, the panics, the way back.
+  `watch` ran). A `collect` that failed (a log that could not be copied, `--pull-data`'s copy or its `ioslog`)
+  fails the cycle too: status 1, `oneios-tool cycle: collect: ...`.
+- `summary.md` is written by `collect` also for a cycle that failed: the result, each step's time and result, the
+  markers, the panics, the way back. **The result line is made from the same step results as the Steps table**:
+  `every step that ran ended well` only when no step of the table failed; otherwise `**stopped**: REASON` (what
+  ended the phone steps) and `**failed step**: STEP (REASON)` for each failed step. A boot that did not reach its
+  first frame is a failed `watch` in the table.
+- **The markers of a run that did not watch.** The times of the Markers section (seconds after the switch) are
+  the watch step's. A run without it (`--only return,collect` after an earlier `--only stage,switch,watch` of the
+  same `--name`) reads the markers from the session's saved log instead: `xnuhost.log` in the session's folder
+  (the collect step's copy), else the phone's `session/xnuhost.log` by its name. The section then says that the
+  watch did not run in this run and which of the two it read, and lists each marker with the log's own stamp; the
+  panics are taken from the same log.
 
 Result of `tests/cycle/run.sh`, Linux x86_64, 2026-11-12: 90 checks, all ok, three runs. Among them: a whole
 cycle (the stand-in kernel built with `XNU_FILESET_REFERENCE=1`, the collection with the reference, the stubs
@@ -918,6 +1052,24 @@ that comes back to a new file with the same first line (`FAKE_DROP_NEW`) reads i
 binary from before the fix, on the same suite: 1 to 3 fail as on the phone (the last session's log printed,
 then after the drop "is a new file" and 15 lines printed twice); 4 passes there too (that new file had fewer
 lines than were read). Results by mode below (`modes.sh`).
+
+`summary.md` (2026-11-13; two faults of a cycle on the phone): its head said "every step that ran ended well"
+while its Steps table had `collect | failed: ioslog boots ended with status 1`, and the summary of
+`cycle --only return,collect` said "Markers: none seen" after the boot had been watched by an earlier
+`cycle --only stage,switch,watch` of the same `--name`. The head took the phone steps' result and never looked at
+`collect`'s; the markers were the ones this run's own watch had seen. Both are fixed as the two bullets above
+say. The suite has 103 checks now, eight for this: a cycle with `--pull-data` on the stand-in phone, whose
+`data.img` is no APFS store, so `ioslog boots` ends with status 1 (the cycle ends with status 1 after the return;
+the head is `**failed step**: collect (ioslog boots ended with status 1)` and has no "ended well"; the steps
+before it are ok and the logs and the store's copy are in the folder); the panic case's `watch` is failed in the
+table and named in the head; and a split run, `--only stage,switch,watch` then `--only return,collect` with the
+same name (the first leaves the session open and writes no summary; the second's summary says that the watch did
+not run in this run, that the markers were read from the folder's `xnuhost.log`, and lists the markers `phone log
+--markers` prints for that log, each stage once). The binary from before the fix fails five of the eight (the
+three it passes: the cycle's first half of the split run, the folder's files, the return of the second half).
+`modes.sh phone cycle`, Linux x86_64, 2026-11-13: `host` mode phone 76 and cycle 103 checks, `stand-in` mode the
+same counts, all ok, no stand-in session left. The reading of the phone's own `session/xnuhost.log` when the
+folder has no copy is not covered by a check (the stand-in's collect always copies one).
 
 ## app
 

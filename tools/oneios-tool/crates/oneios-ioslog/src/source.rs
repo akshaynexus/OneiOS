@@ -11,7 +11,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use macos_unifiedlogs::chunks::{ChunkPreamble, ChunkTag, PREAMBLE_SIZE};
 use macos_unifiedlogs::header::{RawHeaderChunk, RAW_HEADER_CHUNK_SIZE};
 use macos_unifiedlogs::traits::{FileProvider, SourceFile};
-use oneios_image::apfs::{ApfsTree, DT_DIR, DT_REG};
+use oneios_image::apfs::{ApfsTree, Container, Pick, DT_DIR, DT_REG};
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind, Read};
 use std::path::{Path, PathBuf};
@@ -39,7 +39,9 @@ pub struct Entry {
 /// What holds the files.
 pub enum Store {
     Folder,
-    Image(Box<ApfsTree>),
+    /// A volume of an image, and the first listing of a folder that failed (a record the reader refused): a
+    /// listing has no way to say so, and a folder that could not be read must not pass for an empty one.
+    Image(Box<ApfsTree>, std::sync::Mutex<Option<String>>),
 }
 
 fn other(e: impl std::fmt::Display) -> Error {
@@ -59,15 +61,28 @@ impl Store {
                     out.push(Entry { name, dir: path.is_dir(), file: path.is_file(), node: Node::Path(path) });
                 }
             }
-            (Store::Image(tree), Node::Object(oid)) => {
-                for e in tree.list(*oid).unwrap_or_default() {
-                    out.push(Entry { name: e.name, node: Node::Object(e.id), dir: e.kind == DT_DIR, file: e.kind == DT_REG });
+            (Store::Image(tree, problem), Node::Object(oid)) => match tree.list(*oid) {
+                Ok(entries) => {
+                    for e in entries {
+                        out.push(Entry { name: e.name, node: Node::Object(e.id), dir: e.kind == DT_DIR, file: e.kind == DT_REG });
+                    }
                 }
-            }
+                Err(e) => {
+                    problem.lock().expect("no panic holds it").get_or_insert(e.to_string());
+                }
+            },
             _ => {}
         }
         out.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
         out
+    }
+
+    /// The first listing that failed (`None`: every folder asked for was read).
+    fn problem(&self) -> Option<String> {
+        match self {
+            Store::Image(_, problem) => problem.lock().expect("no panic holds it").clone(),
+            Store::Folder => None,
+        }
     }
 
     fn child(&self, dir: &Node, name: &str) -> Option<Entry> {
@@ -90,7 +105,7 @@ impl Store {
     pub fn read(&self, node: &Node) -> std::io::Result<Vec<u8>> {
         match (self, node) {
             (Store::Folder, Node::Path(path)) => std::fs::read(path),
-            (Store::Image(tree), Node::Object(oid)) => tree.read_file(*oid).map_err(other),
+            (Store::Image(tree, _), Node::Object(oid)) => tree.read_file(*oid).map_err(other),
             _ => Err(other("a node of another store")),
         }
     }
@@ -157,20 +172,24 @@ impl Source {
     /// Open `what`: a raw image (its volume chosen by `volume`: a number or a name; default: the first volume
     /// that has the log folders), or a folder. An image is read by our APFS reader, by apfs-fuse (`Backend::Fuse`,
     /// Linux), or by ours and then apfs-fuse when ours finds no log (`Backend::Auto`).
-    pub fn open(what: &str, volume: Option<&str>, block0: bool, backend: Backend) -> Result<Source> {
+    ///
+    /// `pick`: the state of the image our reader reads: its newest checkpoint that passes the checks (the default),
+    /// one checkpoint, or block 0's. Which one was read, and what was skipped, is said on stderr.
+    pub fn open(what: &str, volume: Option<&str>, pick: Pick, backend: Backend) -> Result<Source> {
         let meta = std::fs::metadata(what).with_context(|| what.to_string())?;
         if meta.is_dir() {
             let root = Node::Path(PathBuf::from(what));
             return Source::layout(Store::Folder, root, what, what.to_string());
         }
         match backend {
-            Backend::Own => Source::open_image(what, volume, block0).map_err(|(e, _)| e),
+            Backend::Own => Source::open_image(what, volume, pick).map_err(|(e, _)| e),
             Backend::Fuse => Source::open_mounted(what, volume),
             // the other reader only when ours could not read the container or any volume of it: a volume that
-            // ours reads and that holds no log (also block 0's older state, --block0) is an answer, not a refusal
-            Backend::Auto => match Source::open_image(what, volume, block0) {
+            // ours reads and that holds no log (also block 0's older state, --block0, and one checkpoint,
+            // --checkpoint) is an answer, not a refusal
+            Backend::Auto => match Source::open_image(what, volume, pick) {
                 Ok(source) => Ok(source),
-                Err((e, true)) if !block0 && fuse::available() => {
+                Err((e, true)) if pick == Pick::Newest && fuse::available() => {
                     eprintln!("{e:#}\nour APFS reader refused the image; reading through apfs-fuse instead");
                     Source::open_mounted(what, volume)
                 }
@@ -208,13 +227,20 @@ impl Source {
 
     /// The image through our reader. The error says whether the reader refused (the container or every volume
     /// could not be read) or read it and found no log.
-    fn open_image(what: &str, volume: Option<&str>, block0: bool) -> std::result::Result<Source, (anyhow::Error, bool)> {
-        let count = ApfsTree::volume_count(what).map_err(|e| (anyhow!("{e}"), true))?;
-        let open = |index: usize| ApfsTree::open_volume(what, index, !block0).map_err(|e| anyhow!("{e}"));
+    fn open_image(what: &str, volume: Option<&str>, pick: Pick) -> std::result::Result<Source, (anyhow::Error, bool)> {
+        let mut container = Container::open(what, pick).map_err(|e| (anyhow!("{e}"), true))?;
+        let volumes = container.volumes().map_err(|e| (anyhow!("{e}"), true))?;
         let mut tried = Vec::new();
         let mut read_one = false;
-        for index in 0..count {
-            let tree = match open(index) {
+        if let Some(n) = volume.and_then(|v| v.parse::<usize>().ok()).filter(|n| !volumes.contains(n)) {
+            tried.push(format!("volume {n}: the container has no such volume"));
+        }
+        for index in volumes {
+            if volume.and_then(|v| v.parse::<usize>().ok()).is_some_and(|n| n != index) {
+                tried.push(format!("volume {index}: not asked for"));
+                continue;
+            }
+            let tree = match container.volume(index) {
                 Ok(tree) => tree,
                 Err(e) => {
                     tried.push(format!("volume {index}: {e}"));
@@ -222,18 +248,20 @@ impl Source {
                 }
             };
             read_one = true;
-            let wanted = match volume {
-                None => true,
-                Some(v) => v.parse::<usize>().map(|n| n == index).unwrap_or(v == tree.name),
-            };
-            if !wanted {
+            if volume.is_some_and(|v| v.parse::<usize>().is_err() && v != tree.name) {
                 tried.push(format!("volume {index} ({}): not asked for", tree.name));
                 continue;
             }
             let name = tree.name.clone();
             let label = format!("{what}:");
-            match Source::layout(Store::Image(Box::new(tree)), Node::Object(2), &label, format!("{what} (volume {index}, {name})")) {
-                Ok(source) => return Ok(source),
+            let opened = tree.opened().map(|o| o.text(what, index, &name));
+            match Source::layout(Store::Image(Box::new(tree), Default::default()), Node::Object(2), &label, format!("{what} (volume {index}, {name})")) {
+                Ok(source) => {
+                    if let Some(text) = opened {
+                        eprintln!("{text}");
+                    }
+                    return Ok(source);
+                }
                 Err(e) => tried.push(format!("volume {index} ({name}): {e}")),
             }
         }
@@ -257,13 +285,17 @@ impl Source {
                     }
                 }
             }
-            found.ok_or_else(|| anyhow!("no log folders (db/diagnostics, or a .logarchive's Persist, Special, ...)"))?
+            match (found, store.problem()) {
+                (Some(found), _) => found,
+                (None, Some(problem)) => bail!("a folder could not be read: {problem}"),
+                (None, None) => bail!("no log folders (db/diagnostics, or a .logarchive's Persist, Special, ...)"),
+            }
         };
         // The labels: the file's path as the library's providers would name it (a folder), or IMAGE:/path.
         let join = |dir: &str, name: &str| -> String {
             let mut p = match &store {
                 Store::Folder => PathBuf::from(label),
-                Store::Image(_) => PathBuf::from("/"),
+                Store::Image(..) => PathBuf::from("/"),
             };
             for part in dir.split('/').filter(|s| !s.is_empty()) {
                 p.push(part);
@@ -271,7 +303,7 @@ impl Source {
             p.push(name);
             match &store {
                 Store::Folder => p.to_string_lossy().into_owned(),
-                Store::Image(_) => format!("{label}{}", p.to_string_lossy()),
+                Store::Image(..) => format!("{label}{}", p.to_string_lossy()),
             }
         };
         let diag_dir = if archive { String::new() } else { format!("{prefix}/diagnostics") };
@@ -324,6 +356,9 @@ impl Source {
                     }
                 }
             }
+        }
+        if let Some(problem) = store.problem() {
+            bail!("a folder of the log could not be read: {problem}");
         }
         Ok(Source { store, what, diagnostics, uuidtext, archive, tracev3, timesync, uuidtext_index, dsc_index, mount: None })
     }
