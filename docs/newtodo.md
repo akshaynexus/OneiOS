@@ -126,7 +126,17 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
    `H9ISP.mediacapture`, `oneios-camera-addon: ... stage 5, status 0` in the kernel's log), open Camera, and read
    cameracaptured's lines in iOS's log (`fcc_probeCameraDriverService` finding AppleH9CamIn, the plug-in's
    `H9ISPCaptureDeviceCreate`, its first frame).
-6. **Audio latency** stays ~130-140 ms (AAudio's fast/MMAP paths need a realtime thread, which is forbidden).
+6. **Audio latency** was ~130-140 ms on the host path (AAudio's fast/MMAP paths need a realtime thread, which is
+   forbidden). **Built and host-tested 2026-11-13 (fix-audio-latency), not on the phone:** the stage shares and the
+   changes are in `docs/hardware.md` section 6, "Latency per stage". The helper's level now follows the server's
+   pulls (the burst of 1600 is the mixer's 33 ms period [I, AOSP's sizing rules]), its target comes back down after
+   underruns, a backlog's silence is cut, AAudio's buffer is a burst plus the target plus 5 ms; LOW_LATENCY was
+   studied (a blocking writer gets no FAST track and no realtime thread: AOSP source). In the host test's harness the
+   guest-send-to-server-read time went 73 -> 33 ms (the phone's shape) and 268 -> 22 ms after a 200 ms start stall;
+   predicted host path about 98-106 ms (Android's mixer and HAL after the read, 65-73 ms, are unchanged). The
+   reported latency is unchanged (6480; 5040 predicted, set by boot argument after the phone measures; the kernel build of
+   that default was stopped at the hand-off), LOW_LATENCY is opt-in (`ONEIOS_AUDIO_PERF=low`). On the phone: read the lines that section lists (`the server
+   pulls N frames every M ms`, `margin`, `latency about N ms`) and time a key click against a recording.
 7. **Bluetooth:** the uart.sk transport (e73c11d) has not been tried in iOS. Waits for the phone. Steps: a session,
    Settings > Bluetooth on, then the expected lines of `docs/hardware.md` 4 ("Expected lines, in order"), from
    `ONEIOS BT: dev: bluetoothd[N] opens /dev/btwake` to `bluetooth: the controller hears devices`; if they stop, the

@@ -781,6 +781,23 @@ static void test_snd_device(void)
   bool writable[3] = { false, false, true };
   post(&g, 2, bufs, lens, writable, 3);
   CHECK(reap(&g, 2) == 8 && status[0] == 0x8000 && sound.frames == 240 && sound.first == 1);
+  // Periods in flight: the device takes each period inside the guest's notify (a vCPU's MMIO write), so it is used
+  // and with the back end before the notify returns: none waits in the queue (the guest's 16 slots are only room).
+  // The time of that hop, notify to the back end's write, is printed.
+  double hop_sum = 0, hop_max = 0;
+  for (unsigned i = 0; i < 64; i++) {
+    struct timespec a, b;
+    unsigned before = sound.frames;
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    post(&g, 2, bufs, lens, writable, 3);
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    CHECK(sound.frames == before + 240 && reap(&g, 2) == 8);   // with the back end and used at once: 0 in flight
+    double us = (b.tv_sec - a.tv_sec) * 1e6 + (b.tv_nsec - a.tv_nsec) / 1e3;
+    hop_sum += us;
+    if (us > hop_max) hop_max = us;
+  }
+  printf("virtio-snd: 64 periods, each with the back end before its notify returned (0 in flight): %.1f us on average, %.1f us at most\n",
+         hop_sum / 64, hop_max);
 
   // Capture: posted buffers come back holding a period each.
   static uint32_t in_stream = 1, in_status[2][2];
@@ -801,7 +818,7 @@ static void test_snd_device(void)
   CHECK(snd_control(&g, command, sizeof command, reply, 4) == 0x8000 && sound.stops[1] == 1);
   // A period for a stopped stream is acknowledged and not played.
   post(&g, 2, bufs, lens, writable, 3);
-  CHECK(reap(&g, 2) == 8 && sound.frames == 240);
+  CHECK(reap(&g, 2) == 8 && sound.frames == 65 * 240);
 
   void *ctx;
   const br_audio_backend *null = br_audio_null(&ctx);
