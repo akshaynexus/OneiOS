@@ -10,6 +10,8 @@ extern "C" bool oneios_haptic_actuator_ready(void);
 extern "C" void oneios_haptic_actuator_published(bool yes);
 extern "C" void oneios_haptic_actuator_running(bool on);
 extern "C" uint32_t oneios_haptic_actuator_play(const int16_t *frames, uint32_t count, uint32_t channels);
+// OneiOS: what the Actuator's user clients do (the kinds are drivers/bridge/oneios_bridge.h's OH_EV_*).
+extern "C" void oneios_haptic_actuator_event(uint32_t kind, uint32_t a, uint32_t b);
 static uint32_t oneios_actuator_on = 1, oneios_actuator_channels = 1;
 static bool oneios_publishing_actuator;
 extern "C" { volatile uint64_t oneios_actuator_frames; }
@@ -52,4 +54,28 @@ extern "C" { volatile uint64_t oneios_actuator_frames; }
 // (before anchor 11)
     IOLog("DroidVMAudio: published Speaker=%d Mic=%d Actuator=%d as IOAudio2Devices (UIDs %s, %s, Actuator x%u; output latency %u frames)\n", speaker, mic,
           actuator, oneios_out_uid, oneios_in_uid, oneios_actuator_channels, oneios_output_latency);
+// (before anchor 12)
+    droidvm_audio_clients = droidvm_audio_clients + 1;
+    if (device->isActuator) oneios_haptic_actuator_event(0, 0, 0);   // OneiOS: opened
+// (before anchor 13)
+    droidvm_audio_clients = droidvm_audio_clients - 1;
+    if (device && device->isActuator) oneios_haptic_actuator_event(1, 0, 0);   // OneiOS: closed
+// (before anchor 14)
+    droidvm_audio_selectors = droidvm_audio_selectors + 1;
+    if (device && device->isActuator) oneios_haptic_actuator_event(2, selector, 0);   // OneiOS: a selector
+// (before anchor 15)
+        droidvm_audio_bad_selectors = droidvm_audio_bad_selectors + 1;
+        if (device && device->isActuator) oneios_haptic_actuator_event(3, selector, 0);   // OneiOS: refused
+// (before anchor 16)
+        if (a->scalarInputCount < 1 || a->structureInputSize != sizeof f) {
+            if (device->isActuator) oneios_haptic_actuator_event(3, selector, 0);   // OneiOS: refused (its size)
+            return kIOReturnBadArgument;
+        }
+// (before anchor 17)
+        memcpy(&f, a->structureInput, sizeof f);
+        if (device->isActuator)   // OneiOS: the format the HAL asks of the Actuator
+            oneios_haptic_actuator_event(4, f.channels | device->channels() << 16, uint32_t(f.rate >> 32));
+// (before anchor 18)
+    droidvm_audio_maps = droidvm_audio_maps + 1;
+    if (device->isActuator) oneios_haptic_actuator_event(5, type, 0);   // OneiOS: a mapping
 // (the end)

@@ -40,6 +40,12 @@ bool oneios_haptic_actuator_ready(void);
 void oneios_haptic_actuator_published(bool yes);
 void oneios_haptic_actuator_running(bool on);
 uint32_t oneios_haptic_actuator_play(const int16_t *frames, uint32_t count, uint32_t channels);
+// What a user client of the Actuator device did, for its log lines and the counter line: OH_EV_OPEN, OH_EV_CLOSE,
+// OH_EV_SELECTOR (a = the selector), OH_EV_REFUSED (a = the selector), OH_EV_FORMAT (a = the channels asked |
+// the device's << 16, b = the rate asked in Hz), OH_EV_MAP (a = the memory type). The values are DroidVMAudio.cpp's
+// as staged (tools/oneios-tool/crates/oneios-kernel/src/staged/audio.rs), which has no header of ours.
+enum { OH_EV_OPEN = 0, OH_EV_CLOSE = 1, OH_EV_SELECTOR = 2, OH_EV_REFUSED = 3, OH_EV_FORMAT = 4, OH_EV_MAP = 5 };
+void oneios_haptic_actuator_event(uint32_t kind, uint32_t a, uint32_t b);
 void oneios_vibrator_start(void);
 void oneios_vibrator_key(int key, int down);      // 0 power, 1 volume up, 2 volume down
 

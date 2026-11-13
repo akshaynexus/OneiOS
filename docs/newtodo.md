@@ -119,6 +119,19 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
    BKButtonHapticsController (its queue waits forever for button "click states") now sits in the button path. Quick
    test: boot with `oneios-actuator=0`. Fix: satisfy the click-state setup, or tell iOS the side buttons have no
    haptics. Not started.
+   **Read further (fix-haptics, 2026-11-13, `docs/hardware.md` 5, "Haptics do nothing"):** the node sets two
+   MobileGestalt answers, `DeviceSupportsHaptics` (the node exists) and `DeviceSupportsClosedLoopHaptics` (its
+   `closed-loop`); ButtonResolver and Haptics.framework read neither (ButtonResolver: `HomeButtonType` and
+   `MGIsDeviceOneOfType` only), so the node does not change whether ButtonResolver gets ready. backboardd's
+   `BKButtonHapticsController` exists in every boot and blocks any caller of `playHapticForClickState:clickSpeed:`
+   (MIG `_BKHIDXXPlayHaptic`) until ButtonResolver is ready. So the haptics fault and this one are not proven to share
+   a cause; [I] the node may add a caller of that path or a lock path that waits on audiomxd's haptic server. The test
+   is still `oneios-actuator=0`, now with the `oneios-ubt=SpringBoard,backboardd` lines after a press (the stacks to
+   look for are in hardware.md).
+2a. **Haptics and vibration do nothing** (23:45 boot): every layer "on", no request seen anywhere. Counters in every
+   layer, the PC's stand-in actuator (`haptics=sim`) and what 24A446 reads: built 2026-11-13 (fix-haptics),
+   `docs/hardware.md` 5, "Haptics do nothing"; the next boot's `ONEIOS HAPTIC: counters:` and xnuhost's `haptics:
+   counters:` lines show the layer where a tap stops.
 3. **The display helper dropped after 7 frames** (dark panel while iOS drew; restarted by hand). Fixed in `2c7bbb5`
    (xnuhost keeps the socket on transient send errors and logs; the helper logs why its read ended); host tests were
    started, not read; not on the phone.

@@ -469,6 +469,14 @@ a stand-in controller (`runtime/bridges/bt/hci_sim.c`) behind the same bridge ch
 bridge device that serves only it. One log line says which:
 `bluetooth: on: the phone's controller through its HAL 1.1, address ...`, `bluetooth: on: a stand-in controller
 (bluetooth=sim), address ...` or `bluetooth: off (...)` with the reason.
+Haptics (`haptics=` in `xnuhost.conf`, `--set haptics=...`; 2026-11-13): `auto`, the default, opens the phone's
+force-feedback device (`haptics: on: /dev/input/eventN ...`) when the bridges are on; `off` gives iOS no actuator
+(`haptics: off (haptics=off)`: no Actuator audio device, no `/product/haptics`); `sim` (a boot with no vibrator,
+the PC) is a stand-in actuator (`runtime/bridges/haptics/haptic.c`) that takes, counts and logs every request
+(`haptics: on: a stand-in actuator (haptics=sim)`), behind the same bridge channel; with the bridges off xnuhost
+makes a bridge device that serves only the stand-ins (with `bluetooth=sim` one device serves both). Each played
+effect is logged for the first 8, then at 16, 32, ...; `haptics: counters: ...` at those points and at the end
+([hardware.md](hardware.md) section 5).
 The network (`wifi=` in `xnuhost.conf`, `--set wifi=...`): `auto`, the default, makes the phone's wlan0 the guest's
 en0 (`br_wlan_prepare`, [hardware.md](hardware.md) section 3): the `net` window's virtio-net device carries wlan0's
 address in its configuration, its frames go to and from wlan0 by AF_PACKET, and the guest driver's station messages

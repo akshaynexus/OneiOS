@@ -82,6 +82,10 @@ typedef struct {
                             // "virtual" (no controller, transport 10), "hidl" (the phone's controller, transport 1, H4)
                             // or "sim" (a stand-in controller, bridges/bt/hci_sim.c, transport 1: a boot with no phone;
                             // works with the bridges off)
+  char  haptics[8];         // "auto" (the phone's force-feedback device when the bridges are on), "off" (none: the guest
+                            // has no actuator, no Actuator audio device, no /product/haptics) or "sim" (a stand-in
+                            // actuator, bridges/haptics/haptic.c, that counts and logs: a boot with no phone; works
+                            // with the bridges off)
   char  wifi[8];            // "auto" (the phone's wlan0 for iOS's en0 when the bridges are on), "off" (no network
                             // device), "tap" (the old route: a tap and bin/oneios-net.sh's NAT), "sim" (a made-up
                             // radio with two networks, for a boot with no phone; works with the bridges off)

@@ -30,9 +30,13 @@
  *      the two exists (and VirtualAudio.plugin): with closed-loop on and no Actuator device iOS plays
  *      no vibration at all.
  *
- * Log: "ONEIOS HAPTIC: on: ..." or "ONEIOS HAPTIC: off: <why>"; "ONEIOS HAPTIC UI: on|off: <why>".
+ * Log: "ONEIOS HAPTIC: on: ..." or "ONEIOS HAPTIC: off: <why>"; "ONEIOS HAPTIC UI: on|off: <why>"; the
+ * Actuator's user clients ("Actuator: user client N opened by audiomxd", formats asked, selectors refused,
+ * mappings: the first 24 events); "ONEIOS HAPTIC: counters: ..." every 30 s while a figure moved, one line from the
+ * Actuator's user clients through its samples to the bridge, so a log shows the layer where a tap stops (xnuhost's
+ * "haptics: counters:" line is the host's side: what came over the bridge and what the device played).
  * Kill switches: oneios_haptic=0 (all), oneios_haptic_ui=0 (no closed-loop node, no Actuator device);
- * the audio archive's oneios-actuator=0 (no Actuator device).
+ * the audio archive's oneios-actuator=0 (no Actuator device); oneios_haptic_report=0 (no counter line).
  */
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -73,14 +77,24 @@ static uint64_t oh_frames, oh_loud_blocks;
 static uint32_t oh_said, oh_vibs;
 static bool oh_node_made, oh_opened, oh_wrote;
 
+/* The counter line's figures for the bridge (every layer has its own: see oh_report_thread). */
+static volatile uint64_t oh_sent_vib, oh_sent_stop, oh_send_failed, oh_send_no_host;
+
 int
 oneios_haptic_vib(uint32_t ms, uint32_t intensity, uint32_t frequency_hz)
 {
 	if (!oh_ready) {
+		oh_send_no_host++;
 		return -1;
 	}
 	if (ms == 0) {
-		return oneios_bridge_send(OB_CH_HAPTIC, OB_HAPTIC_STOP, NULL, 0);
+		int stop = oneios_bridge_send(OB_CH_HAPTIC, OB_HAPTIC_STOP, NULL, 0);
+		if (stop == 0) {
+			oh_sent_stop++;
+		} else {
+			oh_send_failed++;
+		}
+		return stop;
 	}
 	struct ob_haptic_vib vib = {
 		.on_ms = ms,
@@ -88,6 +102,11 @@ oneios_haptic_vib(uint32_t ms, uint32_t intensity, uint32_t frequency_hz)
 		.frequency_hz = (uint16_t)(frequency_hz > 1000u ? 1000u : frequency_hz),
 	};
 	int rc = oneios_bridge_send(OB_CH_HAPTIC, OB_HAPTIC_VIB, &vib, sizeof(vib));
+	if (rc == 0) {
+		oh_sent_vib++;
+	} else {
+		oh_send_failed++;
+	}
 	if (rc == 0 && oh_vibs++ < OH_LOG) {
 		printf("ONEIOS HAPTIC: play %u: %u ms, intensity %u of 1000, %u Hz%s\n", oh_vibs, ms, vib.intensity,
 		    vib.frequency_hz, vib.frequency_hz ? "" : " (resonance)");
@@ -102,6 +121,13 @@ static struct oa_state oh_act;
 static uint32_t oh_act_decided;                 /* 0: not yet, 1: no Actuator device, 2: published */
 static uint64_t oh_act_periods, oh_act_loud, oh_act_requests;
 static uint32_t oh_act_starts, oh_act_said;
+/* What the device's user clients did (oneios_haptic_actuator_event, from DroidVMAudio.cpp as staged) and what its
+ * samples held: the counter line (oh_report_thread) shows where a tap stops. */
+static volatile uint32_t oh_act_opens, oh_act_closes, oh_act_stops, oh_act_refused, oh_act_maps, oh_act_formats;
+static volatile uint64_t oh_act_selectors, oh_act_sounding, oh_act_frames;
+static volatile uint32_t oh_act_peak, oh_act_last_selector = UINT32_MAX;
+static char oh_act_opener[32];
+static uint32_t oh_act_event_said;
 
 /* The audio archive asks before it publishes the device: only with the host's actuator and UI haptics on. */
 bool
@@ -128,6 +154,9 @@ oneios_haptic_actuator_running(bool on)
 		(void)oneios_haptic_vib(0, 0, 0);
 	}
 	uint32_t starts = on ? ++oh_act_starts : oh_act_starts;
+	if (!on) {
+		oh_act_stops++;
+	}
 	bzero(&oh_act, sizeof(oh_act));
 	lck_mtx_unlock(&oh_alock);
 	if (starts <= 3u || !on) {
@@ -147,9 +176,20 @@ oneios_haptic_actuator_running(bool on)
 uint32_t
 oneios_haptic_actuator_play(const int16_t *frames, uint32_t count, uint32_t channels)
 {
+	/* any sample at all, and the loudest: "samples reach the ring" even when they stay under OA_SILENT */
+	uint32_t peak = 0;
+	for (uint32_t i = 0; i < count * (channels ? channels : 1u); i++) {
+		uint32_t m = frames[i] < 0 ? (uint32_t)(-(int32_t)frames[i]) : (uint32_t)frames[i];
+		peak = m > peak ? m : peak;
+	}
 	lck_mtx_lock(&oh_alock);
 	struct oa_request r = oa_period(&oh_act, frames, count, channels);
 	oh_act_periods++;
+	oh_act_frames += count;
+	if (peak != 0) {
+		oh_act_sounding++;
+		oh_act_peak = peak > oh_act_peak ? peak : oh_act_peak;
+	}
 	if (oh_act.run_us > 0 && oh_act.quiet_us == 0) {
 		oh_act_loud++;
 	}
@@ -163,6 +203,83 @@ oneios_haptic_actuator_play(const int16_t *frames, uint32_t count, uint32_t chan
 		(void)oneios_haptic_vib(0, 0, 0);
 	}
 	return count;
+}
+
+/* What a user client of the Actuator device did (DroidVMAudio.cpp as staged; oneios_bridge.h has the kinds). The
+ * first OH_LOG events are logged with the caller's name; all of them are counted for the counter line. */
+void
+oneios_haptic_actuator_event(uint32_t kind, uint32_t a, uint32_t b)
+{
+	char who[32];
+	proc_selfname(who, sizeof(who));
+	switch (kind) {
+	case OH_EV_OPEN:
+		oh_act_opens++;
+		strlcpy(oh_act_opener, who, sizeof(oh_act_opener));
+		break;
+	case OH_EV_CLOSE:
+		oh_act_closes++;
+		break;
+	case OH_EV_SELECTOR:
+		oh_act_selectors++;
+		oh_act_last_selector = a;
+		break;
+	case OH_EV_REFUSED:
+		oh_act_refused++;
+		break;
+	case OH_EV_FORMAT:
+		oh_act_formats++;
+		break;
+	case OH_EV_MAP:
+		oh_act_maps++;
+		break;
+	default:
+		return;
+	}
+	if (kind == OH_EV_SELECTOR || oh_act_event_said >= OH_LOG) {
+		return;                 /* a selector shows in the counter line; StartIO and StopIO have their own lines */
+	}
+	oh_act_event_said++;
+	if (kind == OH_EV_OPEN) {
+		printf("ONEIOS HAPTIC: Actuator: user client %u opened by %s\n", oh_act_opens, who);
+	} else if (kind == OH_EV_CLOSE) {
+		printf("ONEIOS HAPTIC: Actuator: user client closed by %s (%u of %u)\n", who, oh_act_closes, oh_act_opens);
+	} else if (kind == OH_EV_REFUSED) {
+		printf("ONEIOS HAPTIC: Actuator: selector %u refused (by %s)\n", a, who);
+	} else if (kind == OH_EV_FORMAT) {
+		printf("ONEIOS HAPTIC: Actuator: %s asks for %u channels at %u Hz (the device: %u at 48000 Hz: %s)\n", who, a & 0xffffu, b,
+		    a >> 16, (a & 0xffffu) == a >> 16 && b == 48000u ? "the same" : "differs, refused; oneios-actuator-channels=2 if it asks for 2");
+	} else {
+		printf("ONEIOS HAPTIC: Actuator: %s maps memory type %#x\n", who, a);
+	}
+}
+
+/* Every OH_REPORT_S seconds while a figure moved: one line from the Actuator's user clients to the bridge, so a log
+ * shows the layer where a tap or a vibration stops. The host's side (xnuhost's "haptics:" lines) counts what came
+ * over the bridge and what the force-feedback device played. oneios_haptic_report=0 leaves it out. */
+#define OH_REPORT_S 30u
+extern volatile uint32_t oneios_vibrator_requests;
+static void
+oh_report_thread(__unused void *arg, __unused wait_result_t wr)
+{
+	uint64_t last = UINT64_MAX;
+	for (;;) {
+		delay_for_interval(OH_REPORT_S, NSEC_PER_SEC);
+		uint64_t now = oh_act_opens + oh_act_closes + oh_act_selectors + oh_act_maps + oh_act_periods + oh_sent_vib + oh_sent_stop +
+		    oh_send_failed + oh_send_no_host + oneios_vibrator_requests + oh_frames;
+		if (now == last) {
+			continue;
+		}
+		last = now;
+		printf("ONEIOS HAPTIC: counters: Actuator %u opens (%u closed, last by %s), %llu selectors (%u StartIO, %u StopIO, "
+		    "%u refused, %u formats asked, last %d), %u maps; %llu periods (%llu ms), %llu with samples, %llu loud, peak %u of 32768; "
+		    "%llu requests to the motor | vibrator service %u requests | /dev/oneios-haptic %llu frames | bridge %llu vib + %llu stop sent, "
+		    "%llu failed, %llu with no host actuator\n",
+		    oh_act_opens, oh_act_closes, oh_act_opener[0] ? oh_act_opener : "-", oh_act_selectors, oh_act_starts, oh_act_stops,
+		    oh_act_refused, oh_act_formats, (int)oh_act_last_selector, oh_act_maps, oh_act_periods, oh_act_frames / 48u,
+		    oh_act_sounding, oh_act_loud, oh_act_peak, oh_act_requests, oneios_vibrator_requests, oh_frames, oh_sent_vib,
+		    oh_sent_stop, oh_send_failed, oh_send_no_host);
+	}
 }
 
 /* ---- /dev/oneios-haptic -------------------------------------------------------------------------- */
@@ -365,6 +482,12 @@ oneios_haptic_start(void)
 	if (on == 0) {
 		printf("ONEIOS HAPTIC: off: oneios_haptic=0\n");
 		return -1;
+	}
+	/* the counter line, also without a host actuator (then the vibrator's requests and "no host actuator" move) */
+	uint32_t report = 1;
+	(void)PE_parse_boot_argn("oneios_haptic_report", &report, sizeof(report));
+	if (report != 0 && kernel_thread_start(oh_report_thread, NULL, &th) == KERN_SUCCESS) {
+		thread_deallocate(th);
 	}
 	/* The host's hello says whether it has an actuator; it comes within a few milliseconds of the start. */
 	for (unsigned waited = 0; waited < 2000u && !oneios_bridge_ready(); waited += 10u) {

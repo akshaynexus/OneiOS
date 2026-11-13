@@ -93,6 +93,8 @@ private:
 OSDefineMetaClassAndStructors(OneiOSVibrator, IOService);
 
 static OneiOSVibrator * volatile gOneiOSVibrator;
+/* requests to the service (oneios_haptic.c's counter line reads it) */
+extern "C" { volatile uint32_t oneios_vibrator_requests; }
 
 bool
 OneiOSVibrator::start(IOService *provider)
@@ -256,6 +258,7 @@ IOReturn
 OneiOSVibrator::apply(OSObject *properties)
 {
 	bool log = fCalls++ < LV_LOG;
+	oneios_vibrator_requests = fCalls;
 	logKind(properties);
 	if (OSDynamicCast(OSNumber, properties)) {
 		if (log) {
