@@ -66,7 +66,8 @@ struct br_wlan {
   bool running;
   char state_path[512];
   uint64_t rx_frames, tx_frames, rx_dropped, segmented, tx_refused, control_dropped;
-  unsigned dhcp_said;               // DHCP messages logged since the last join (the first of them)
+  unsigned dhcp_said;               // iOS's DHCP messages logged since the last join (the first of them)
+  unsigned dhcp_others;             // other stations' DHCP messages seen since the last join (the first is logged)
   uint64_t joined_rx, joined_tx;    // the counters at the join, for the report 10 s after it
   bool report_due;
   struct timespec report_at;
@@ -407,6 +408,7 @@ static void control_supplicant(struct br_wlan *w, const struct ct_msg *m)
     w->joined = true;
     w->reason = 0;
     __atomic_store_n(&w->dhcp_said, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&w->dhcp_others, 0, __ATOMIC_RELAXED);
     w->joined_rx = w->rx_frames;
     w->joined_tx = w->tx_frames;
     w->report_due = true;
@@ -471,8 +473,8 @@ static void *control_loop(void *arg)
     if (passed(&poll_at)) { poll_at = after_ms(LINK_POLL_MS); if (w->joined) br_wifi_link_changed(w->station); }   // the signal
     if (w->report_due && passed(&w->report_at)) {   // did iOS's traffic start: its DHCP lines are above this one
       w->report_due = false;
-      if (w->joined) br_log(1, "wifi: 10 s after the join: %llu frames from iOS, %llu to it", (unsigned long long)(w->tx_frames - w->joined_tx),
-                            (unsigned long long)(w->rx_frames - w->joined_rx));
+      if (w->joined) br_log(1, "wifi: 10 s after the join: %llu frames from iOS, %llu to it; %u DHCP messages of other stations", (unsigned long long)(w->tx_frames - w->joined_tx),
+                            (unsigned long long)(w->rx_frames - w->joined_rx), __atomic_load_n(&w->dhcp_others, __ATOMIC_RELAXED));
     }
   }
   if (w->supplicant) br_supplicant_close(w->supplicant);     // leaves the network, drops what it added
@@ -482,15 +484,23 @@ static void *control_loop(void *arg)
 
 // ---- frames -------------------------------------------------------------------------------------
 // iOS's address configuration as it crosses the bridge: each DHCP message of a join's first ones, one line.
+// Only iOS's own exchange is logged and counted against that limit: a message whose client (chaddr) is another
+// station's (its broadcast DISCOVER, INIT-REBOOT or REBINDING REQUEST reaches every station, iOS too) is counted, the
+// first after a join named once. Before 2026-11-13 every one of them was logged as a server's answer with the
+// yiaddr a REQUEST never has ("DHCP: REQUEST of 0.0.0.0 from 0.0.0.0", repeated on a busy hotel network).
 static void say_dhcp(struct br_wlan *w, const uint8_t *frame, size_t length, bool from_guest)
 {
-  static const char *const names[] = { "?", "DISCOVER", "OFFER", "REQUEST", "DECLINE", "ACK", "NAK", "RELEASE", "INFORM" };
-  uint8_t type, address[4], server[4];
-  if (__atomic_load_n(&w->dhcp_said, __ATOMIC_RELAXED) >= 16 || !br_wifi_dhcp(frame, length, &type, address, server)) return;
+  br_wifi_dhcp_msg m;
+  char line[160];
+  if (!br_wifi_dhcp(frame, length, &m)) return;
+  if (br_wifi_dhcp_describe(&m, from_guest, w->mac, line, sizeof line) == BR_WIFI_DHCP_OTHER) {
+    if (__atomic_fetch_add(&w->dhcp_others, 1, __ATOMIC_RELAXED) == 0)
+      br_log(1, "wifi: DHCP: %s (passed to iOS as any broadcast; such messages are counted, not logged)", line);
+    return;
+  }
+  if (__atomic_load_n(&w->dhcp_said, __ATOMIC_RELAXED) >= 16) return;
   __atomic_fetch_add(&w->dhcp_said, 1, __ATOMIC_RELAXED);
-  if (from_guest) br_log(1, "wifi: DHCP: iOS sends %s", type < 9 ? names[type] : "?");
-  else br_log(1, "wifi: DHCP: %s of %u.%u.%u.%u from %u.%u.%u.%u", type < 9 ? names[type] : "?", address[0], address[1], address[2], address[3],
-              server[0], server[1], server[2], server[3]);
+  br_log(1, "wifi: DHCP: %s", line);
 }
 
 static void deliver(void *ctx, const uint8_t *frame, size_t length)

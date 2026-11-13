@@ -181,3 +181,7 @@
 # net/build-oneios-net.py), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and
 # IOEthernetInterface (their layout checked against IONetworking-24A446-v54.json at each build).
+# fix-wifi-late (2026-11-13), in that archive, not a numbered patch (no XNU source changed): the nub reserves en0's
+# unit (network-interface-unit-en = <0>, as the iPhone's Wi-Fi node), so configd's InterfaceNamer names en0 at once
+# instead of waiting for IOKit quiet, which comes only after driverkitd; "first ..." lines time the naming, the enable,
+# the first request, the power on, the first scan and join (net/README.md, "en0's name").

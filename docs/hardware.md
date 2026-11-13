@@ -419,7 +419,8 @@ absent: a reason not to run it on the phone as it is.
 
 ### Tested
 
-- Host (arm64 Linux container, `runtime/host-tests.sh`): `test_wifi` 132 checks (frame rules; the netlink group reader; the DHCP reader; a 4000-byte coalesced
+- Host (arm64 Linux container, `runtime/host-tests.sh`): `test_wifi` 153 checks (frame rules; the netlink group reader; the DHCP reader, with the REQUEST forms
+  SELECTING, INIT-REBOOT, RENEWING and REBINDING, iOS's and another station's, and the log line of each; a 4000-byte coalesced
   IPv4 frame and a 3000-byte IPv6 one cut into three with right lengths, sequence numbers and checksums; the station
   against a fake radio; the AIDL parcels byte for byte; the join's plan for WPA2, WPA3, transition, WPA with TKIP,
   open, OWE and a network not seen; the supplicant's callbacks decoded); `test_aidl_binder` 35 checks: the client
@@ -443,8 +444,22 @@ absent: a reason not to run it on the phone as it is.
     up to 50 ms until the guest has a buffer; and in the guest a state message that says "up" for the network a
     join waits for completes that join, so a lost result costs at most the 2 s to the next state.
   - Whether iOS got an address is not in that log. The bridge now logs iOS's DHCP as it crosses (`wifi: DHCP: iOS
-    sends DISCOVER`, `wifi: DHCP: OFFER of a.b.c.d from e.f.g.h`, `REQUEST`, `ACK`) and, 10 s after a join, `wifi:
-    10 s after the join: N frames from iOS, M to it`.
+    sends DISCOVER for 0.0.0.0`, `wifi: DHCP: OFFER of a.b.c.d from e.f.g.h`, `iOS sends REQUEST SELECTING for
+    a.b.c.d`, `ACK of a.b.c.d from e.f.g.h`; a REQUEST's state as RFC 2131 4.3.2 tells them apart: SELECTING,
+    INIT-REBOOT, RENEWING, REBINDING) and, 10 s after a join, `wifi: 10 s after the join: N frames from iOS, M to it;
+    K DHCP messages of other stations`.
+  - **`DHCP: REQUEST of 0.0.0.0 from 0.0.0.0`, repeated** (the boot before 2026-11-12 23:45, after the join and the
+    ACK of 172.16.235.71): not iOS's renewals and not a wrong offset. The decoder read the BOOTP header right; the line
+    was the one for a message **from the radio** (iOS's own were logged as `iOS sends ...`), and it printed yiaddr and
+    option 54, which a REQUEST never has (yiaddr) or has only in the SELECTING state (option 54). So each such line was
+    an INIT-REBOOT or REBINDING REQUEST broadcast by another station on the network (a RENEWING one is unicast to the
+    server and does not reach iOS): proven for the decoder by `test_wifi`'s DHCP checks (the three forms, built as
+    clients send them, all decode with yiaddr 0.0.0.0 and no server); that they were other stations' is [I] (their
+    client address was not logged). They also used up the 16 lines a join gets, so iOS's own later messages were not
+    logged. Since 2026-11-13 a message whose client (chaddr) is not en0's address is counted, only the first after a
+    join is logged (`wifi: DHCP: another station's REQUEST INIT-REBOOT for a.b.c.d (client 3c:22:fb:..) (passed to iOS
+    as any broadcast; ...)`), and the count is in the 10-second line; iOS's own message back from the radio would say
+    `iOS's own REQUEST ... came back from the radio`.
 - **Second session (the diagnostic session of 2026-11-12 11:53, `kernel.kc` 8eff915f from `bd7c1fb`, with the
   medium fix)**: wifid takes en0 (`the interface is enabled (en0 is up)`, its whole attach: CARD_CAPABILITIES, POWER,
   RSSI_BOUNDS, HW_SUPPORTED_CHANNELS, `sets 564` FILTER_MONITOR_EVENTS with 33 bytes, STATE, PHY_MODE, OP_MODE ...)
@@ -471,6 +486,78 @@ absent: a reason not to run it on the phone as it is.
   manager's lookup, `getStaInterface("wlan0")`, `getMacAddress` (wlan0's own address), `listNetworks` (0) all
   answered by Android 17's servicemanager and the vendor's supplicant; `wifictl scan`: 53 networks with their
   security from nl80211 in 6 s.
+
+### en0 late: two minutes before iOS turns Wi-Fi on (fix-wifi-late, 2026-11-13)
+
+On the phone (boot of 2026-11-12 23:45, main ea06d46, kernel.kc through 0058, the Data store kept) xnuhost had wlan0
+from +0.1 s, but `ONEIOS WIFI: the interface is enabled (en0 is up)` came at +130 s (+162 s the boot before, 261 s
+after the driver's start in prelink's session 2), while the join and DHCP took 2 s. What it waited for, read in 24A446
+and configd's source (configd's `Plugins/InterfaceNamer`, apple-oss-distributions):
+
+1. **configd's InterfaceNamer names a new interface only once IOKit is quiet** (`copyUnitForEstablishedInterface`:
+   `waiting for quiet`). An interface is not new when its naming database (`NetworkInterfaces.plist`) has its prefix
+   and hardware address, or when the IORegistry reserves a unit for it: `network-interface-unit-en` on the interface
+   or a parent. 24A446's `WaitQuietTimeout` is 240 s and `WaitStackTimeout` 300 s (configd's `__data`; the bundle's
+   Info.plist sets neither).
+2. **en0 was always new.** Its address is wlan0's, a random one while One UI is not joined, so it changes between
+   sessions and the database did not match it ([I]: the phone's `NetworkInterfaces.plist` was not read; the
+   database is also written only once IOKit is quiet, so a session that ended earlier left none). The iPhone's own Wi-Fi node reserves the unit (24A446's device tree:
+   `/arm-io/apcie/pci-bridge0/centauri-alpha`, `network-interface-unit-en = <0>`); our nub `oneios-wlan` did not.
+3. **IOKit is quiet only after driverkitd.** The only busy service is the service root, `oneios,xnuhost` (class
+   `IOPlatformExpertDevice`; 0042's `oneios-iobusy:` lines on the PC at 30, 60, 120, 240 s and on the earlier PC boot
+   until between 240 and 480 s): `StartIOKitMatching` holds one busy count on it until the IOKit daemon (driverkitd
+   on iOS) has sent its dexts' personalities (`IOService::iokitDaemonLaunched`; the kernel then logs `KextLog:
+   driverkitd is active`). So en0's name, and with it wifid's attach and the `enable` of en0, waited for driverkitd,
+   which on the phone runs in the first two busy minutes (lsd, backboardd, iconservicesagent). [I] That driverkitd's
+   time is the +130 s: the phone's log of that boot was not read here; the lines to read are below.
+
+**Fix (built, PC-booted, not on the phone):** the nub has `network-interface-unit-en = <0>` (32 bits), as the
+iPhone's node, so InterfaceNamer names en0 as soon as the interface appears (`OneiOSWifi.cpp`, `net/README.md`, "en0's
+name"). InterfaceNamer still refuses the unit when its database has en0 at another registry path (`builtinAvailable`;
+configd then says `has reserved unit 0, but it's not available`). No XNU source changed, so no numbered patch.
+
+**New lines** (the driver): `ONEIOS WIFI: first naming (en0 attached to the network stack): by configd[PID], +S s
+after the driver's start, IOKit busy N`, and the same `first ...` line for `enable (IFF_UP)`, the first `Apple80211
+request`, `power on`, `scan request`, `join request` (who, when, IOKit's busy count).
+
+**On the PC** (qemu-aarch64 under a load of 12-24 on 4 CPUs, `--set wifi=sim`, so every time is many times the
+phone's), the image set `out/image-pc/24A446`, a Data store with no naming database (no earlier boot on it got as
+far as naming):
+- With the fix (`kernel.kc` `ee5a85d7`, from this branch; times after the driver's start): launchd +769 s, configd
+  spawned +834 s, `KextLog: driverkitd is active` +872 s, `first naming ...: by configd[34], +1009.874 s ..., IOKit busy
+  0`, `first Apple80211 request: by configd[34], +1142 s`, `first enable (IFF_UP): by configd[34], +1144.6 s` (so
+  IPConfiguration in configd brings en0 up, not wifid), wifid's first request +1350 s (its attach: 12, 19, 106, 254,
+  207, 103, `sets 564` ...), `first scan request: by wifid[40], +1775 s`, `scan done: 2 networks` (the made-up
+  radio). configd's own log (read from the running boot's `data.img` with `oneios-tool ioslog show ... --proc
+  configd`): `copyUnitForEstablishedInterface: <SCNetworkInterface ... address = 02:d7:36:0c:64:80, builtin = TRUE, path
+  = IOService:/IOResources/oneios-wlan/OneiOSWifiController/IO80211Interface ...> has reserved unit 0`, then `Known
+  interface named unit = 0`, and `*QUIET*` only after that: **the reserved-unit path is taken**. On the PC driverkitd
+  was done before configd's InterfaceNamer started (configd's plugins load slowly under qemu), so this boot cannot show
+  the time the fix saves; the phone's order is the open question (below).
+- Without it (`kernel.kc` `ee88c1b1`: the same `first ...` lines, no reserved unit): the boot was stopped by its
+  4200 s `timeout` with configd running for about 1300 s, driverkitd not yet active, and no naming. Consistent with
+  `waiting for quiet`, not proven: configd's log of that boot was not on the volume after the kill.
+- driverkitd on 24A446 does not ask LaunchServices on this hardware (`Hardware does not support third party
+  drivers`, `Using cached application list`, in its log of both PC boots), so lsd is not what it waits for.
+
+**What to read in the next phone boot's `xnuhost.log`:**
+- `ONEIOS WIFI: first naming (...): by configd[..], +S s ..., IOKit busy 1`: S a few seconds after configd's start and
+  busy 1 (before driverkitd) is the fix working; then `first enable (IFF_UP)`, `first Apple80211 request`, `first
+  power on`, `first scan request` within seconds, and `the interface is enabled (en0 is up)` well before +130 s.
+- `KextLog: driverkitd is active` (and `deferred rematching count N` just before it): when IOKit went quiet; with the
+  fix the naming no longer waits for it. The `oneios-iobusy: N s:` lines say whether the root was still busy.
+- If `first naming` comes with `IOKit busy 0` right after `KextLog: driverkitd is active`, the unit was refused: read
+  configd's log (below) for `has reserved unit 0, but it's not available`.
+- If en0 is named early but `first enable` or `first power on` still comes late, the wait is in wifid, not configd:
+  the `NAME[PID]` of those lines says who.
+
+**In iOS's own log** (`oneios-tool ioslog show data.img --proc configd`, then `--proc driverkitd`, `--proc wifid`):
+configd's `InterfaceNamer` lines `addTimestamp: *START*`, `*STACK*`, `*QUIET*`, `*QUIET&NAMED*`, `waiting for quiet`,
+`has reserved unit 0`, `Assigned unit 0 (from database)`, `timed out waiting for IOKit to quiesce` and `Busy services
+:`; driverkitd's `Starting driverkitd`, `Hardware does not support third party drivers` (then no LaunchServices
+query) or `Retrieving applications from LaunchServices` (then it waits for lsd); wifid's first lines after its start.
+Not checked without the phone: driverkitd's start and send times there, whether the database's en0 entry has our
+registry path, and that nothing after the naming (wifid's own start, its preferences) adds a wait.
 
 ### Missing, unknown
 
