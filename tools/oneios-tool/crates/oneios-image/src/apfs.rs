@@ -10,10 +10,13 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 
+mod check;
 mod decmpfs;
 mod files;
 pub mod fuse;
+pub use check::{Checkpoint, Container, Opened, Pick};
 pub use files::{DirEnt, Stat, DT_DIR, DT_LNK, DT_REG};
+use std::sync::Arc;
 
 /// A read outside a block: Python's struct.error, which ends the tool with a traceback.
 fn outside(path: &str) -> Fail {
@@ -94,28 +97,11 @@ impl Info {
     }
 }
 
-/// `apfs_info(path)`: container offset, block size, UUIDs and volumes of a raw APFS image (plain, or one APFS
-/// partition in a GPT).
-pub fn apfs_info(path: &str) -> Result<Info, Fail> {
+/// Where the container starts in the file (0, or an APFS partition of a GPT) and its block 0.
+fn container_head(path: &str) -> Result<(u64, Vec<u8>), Fail> {
     let f = File::open(path).map_err(|e| crash!("{}", crate::py::os_error(&e, path)))?;
     let size = f.metadata().map_err(|e| crash!("{path}: {e}"))?.len();
-    let at = |offset: u128, count: usize| -> Result<Vec<u8>, Fail> {
-        let offset = u64::try_from(offset).map_err(|_| crash!("{path}: an offset of {offset} is outside any file"))?;
-        let mut data = vec![0u8; count];
-        let mut done = 0;
-        while done < count {
-            match f.read_at(&mut data[done..], offset + done as u64) {
-                Ok(0) => break,
-                Ok(n) => done += n,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(e) => return Err(crash!("{path}: {e}")),
-            }
-        }
-        if done != count {
-            return Err(err!("{path}: short read at {offset}"));
-        }
-        Ok(data)
-    };
+    let at = |offset: u128, count: usize| read_at(&f, path, offset, count);
     let bad = || outside(path);
 
     let mut head = at(0, 4096)?;
@@ -149,7 +135,37 @@ pub fn apfs_info(path: &str) -> Result<Info, Fail> {
         };
         head = at(found as u128, 4096)?;
     }
-    let base = base.unwrap();
+    Ok((base.unwrap(), head))
+}
+
+/// `count` bytes of the file at `offset`.
+fn read_at(f: &File, path: &str, offset: u128, count: usize) -> Result<Vec<u8>, Fail> {
+    let offset = u64::try_from(offset).map_err(|_| crash!("{path}: an offset of {offset} is outside any file"))?;
+    let mut data = vec![0u8; count];
+    let mut done = 0;
+    while done < count {
+        match f.read_at(&mut data[done..], offset + done as u64) {
+            Ok(0) => break,
+            Ok(n) => done += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(crash!("{path}: {e}")),
+        }
+    }
+    if done != count {
+        return Err(err!("{path}: short read at {offset}"));
+    }
+    Ok(data)
+}
+
+/// `apfs_info(path)`: container offset, block size, UUIDs and volumes of a raw APFS image (plain, or one APFS
+/// partition in a GPT), **as block 0's superblock has them and without checks**: imagetool.py's reader, for the
+/// read-only images of the set (written once, block 0 current). A store copied after use is read through
+/// `Container` (`apfs/check.rs`): its block 0 is old, and what it names may have been written over since.
+pub fn apfs_info(path: &str) -> Result<Info, Fail> {
+    let (base, head) = container_head(path)?;
+    let f = File::open(path).map_err(|e| crash!("{}", crate::py::os_error(&e, path)))?;
+    let at = |offset: u128, count: usize| read_at(&f, path, offset, count);
+    let bad = || outside(path);
     let block = u32_at(&head, 36).ok_or_else(bad)?;
     let blocks = u64_at(&head, 40).ok_or_else(bad)?;
     let container_uuid = uuid_text(&head[72..88]);
@@ -262,25 +278,40 @@ struct Node<'a> {
 /// What `entry(oid)` returns: the inode (owner, group, mode), the xattr names, the directory entries.
 type Entry = ((u32, u32, u16), Vec<String>, Vec<(String, u64)>);
 
-/// The owners, modes and xattr names of a volume's files, read from the APFS records of a raw image.
+/// A volume of a raw image: the owners, modes and xattr names of its files (`walk`), its folders and its files'
+/// contents (`apfs/files.rs`), read from the APFS records without a mount.
 ///
-/// For macOS without root: an image a user attaches with `hdiutil attach -owners off` shows every file as the
-/// user's own, so the real owners come from here. Reads the inode, directory and xattr records of the
-/// file-system tree (physical, as on a sealed volume, or virtual through the volume's object map); no file
-/// data. The first volume only, unencrypted. tree_copy checks it against the mounted volume entry by entry.
+/// Opened in one of two ways. `open` is imagetool.py's reader, for macOS without root: an image a user attaches
+/// with `hdiutil attach -owners off` shows every file as the user's own, so the real owners come from here. It
+/// reads the first volume as block 0 has it, unencrypted, with imagetool.py's checks and messages and no others;
+/// tree_copy checks it against the mounted volume entry by entry. `open_volume` and `Container` read any volume
+/// at a checkpoint and check every address and every object before it is used (`apfs/check.rs`).
 pub struct ApfsTree {
     path: String,
-    map: Map,
+    map: Arc<Map>,
     base: u64,
     block: usize,
     vol_omap: u64,
     physical: bool,
     root: u64,
+    /// The object id the root node's header has (its address when the tree is physical).
+    root_oid: u64,
     child_base: u64,
-    /// The newest transaction an object map answer may be of (`open`: no bound).
+    /// The newest transaction an object map answer, or an object, may be of (`open`: no bound).
     xid: u64,
     /// The extent tree of a sealed volume (0: the extents are records of the file-system tree).
     fext_root: u64,
+    /// The container's blocks, and how many of them the file holds (`open`: no bound).
+    blocks: u64,
+    file_blocks: u64,
+    /// Addresses and objects are checked before they are used (`apfs/check.rs`).
+    strict: bool,
+    /// The file-system tree's nodes below the root carry no header (a sealed volume's hashed tree).
+    noheader: bool,
+    /// The blocks whose checksum, and whose entries, were found good.
+    good: Arc<check::Bits>,
+    shaped: Arc<check::Bits>,
+    opened: Option<Opened>,
     /// The volume's name and role, from its superblock.
     pub name: String,
     pub role: String,
@@ -293,16 +324,11 @@ const TYPE_DIR_REC: u64 = 9;
 const ROOT_DIR: u64 = 2;
 
 impl ApfsTree {
+    /// The first volume as block 0 has it, read as imagetool.py reads it: no checks but its own.
     pub fn open(path: &str) -> Result<ApfsTree, Fail> {
-        ApfsTree::open_volume(path, 0, false)
-    }
-
-    /// Volume number `volume` of the container. `newest`: the container as its newest valid checkpoint has it
-    /// (a store copied after use: block 0 holds the superblock of the last clean unmount only); otherwise as
-    /// block 0 has it, which is what imagetool.py reads.
-    pub fn open_volume(path: &str, volume: usize, newest: bool) -> Result<ApfsTree, Fail> {
+        let volume = 0;
         let info = apfs_info(path)?;
-        let map = Map::open(path).map_err(|e| crash!("{e:#}"))?;
+        let map = Arc::new(Map::open(path).map_err(|e| crash!("{e:#}"))?);
         let mut tree = ApfsTree {
             path: path.to_string(),
             map,
@@ -311,18 +337,22 @@ impl ApfsTree {
             vol_omap: 0,
             physical: false,
             root: 0,
+            root_oid: 0,
             child_base: 0,
             xid: u64::MAX,
             fext_root: 0,
+            blocks: u64::MAX,
+            file_blocks: u64::MAX,
+            strict: false,
+            noheader: false,
+            good: Arc::new(check::Bits::new(0)),
+            shaped: Arc::new(check::Bits::new(0)),
+            opened: None,
             name: String::new(),
             role: String::new(),
         };
         let bad = || outside(path);
-        let mut at = 0;
-        if newest {
-            (at, tree.xid) = tree.newest_superblock()?;
-        }
-        let head = tree.read(at)?;
+        let head = tree.read(0)?;
         let omap = tree.read(u64_at(head, 160).ok_or_else(bad)?)?;
         let mut fs_oids = Vec::new();
         for i in 0..100 {
@@ -356,11 +386,19 @@ impl ApfsTree {
         tree.vol_omap = vol_omap;
         tree.physical = physical;
         tree.root = root_block;
+        tree.root_oid = root;
         tree.child_base = if hashed && !physical { root } else { 0 };
         tree.fext_root = fext_root;
         tree.name = name;
         tree.role = role;
         Ok(tree)
+    }
+
+    /// Volume number `volume` of the container, every address and object checked before it is used. `newest`:
+    /// at the newest checkpoint that passes the checks (a store copied after use: block 0 holds an old superblock,
+    /// and what it names may have been written over); otherwise as block 0 has it.
+    pub fn open_volume(path: &str, volume: usize, newest: bool) -> Result<ApfsTree, Fail> {
+        Container::open(path, if newest { Pick::Newest } else { Pick::Block0 })?.volume(volume)
     }
 
     fn bad(&self) -> Fail {
@@ -390,8 +428,9 @@ impl ApfsTree {
     /// The block of the newest mapping of oid in the object map tree rooted at paddr.
     fn omap_lookup(&self, mut paddr: u64, oid: u64) -> Result<u64, Fail> {
         let bad = || self.bad();
-        for _ in 0..64 {
-            let n = self.node(paddr)?;
+        let (mut from, mut level) = (check::NOWHERE, None);
+        for depth in 0..64 {
+            let n = self.node_at(paddr, check::Want { what: check::What::VolumeOmapNode, from, oid: Some(paddr), root: depth == 0, level })?;
             let mut newest: Option<(u64, u64)> = None;
             let mut child: Option<u64> = None;
             for i in 0..n.nkeys {
@@ -402,19 +441,22 @@ impl ApfsTree {
                 let value = n.vals.checked_sub(v).ok_or_else(bad)?;
                 if n.level == 0 {
                     if key_oid == oid && key_xid <= self.xid && newest.is_none_or(|(xid, _)| key_xid > xid) {
-                        newest = Some((key_xid, u64_at(n.data, value + 8).ok_or_else(bad)?));
+                        // checked: a mapping marked deleted (omap_val_t's flags) says the object is gone
+                        let gone = self.strict && u32_at(n.data, value).ok_or_else(bad)? & 1 != 0;
+                        newest = Some((key_xid, if gone { 0 } else { u64_at(n.data, value + 8).ok_or_else(bad)? }));
                     }
                 } else if key_oid <= oid {
                     child = Some(u64_at(n.data, value).ok_or_else(bad)?);
                 }
             }
-            let found = if n.level == 0 { newest.map(|(_, paddr)| paddr) } else { child };
+            let found = if n.level == 0 { newest.map(|(_, paddr)| paddr).filter(|paddr| !self.strict || *paddr != 0) } else { child };
             let Some(found) = found else {
                 return Err(err!("{}: object {oid} is not in the object map", self.path));
             };
             if n.level == 0 {
                 return Ok(found);
             }
+            (from, level) = (paddr, Some(n.level - 1));
             paddr = found;
         }
         Err(crash!("{}: an object map is deeper than 64 levels", self.path))
@@ -432,7 +474,12 @@ impl ApfsTree {
             return Err(crash!("{}: the file-system tree is deeper than 64 levels", self.path));
         }
         let bad = || self.bad();
-        let n = self.node(paddr)?;
+        // (a child was checked when its parent named it, below)
+        let n = if depth == 0 {
+            self.node_at(paddr, check::Want { what: check::What::FsNode, from: check::NOWHERE, oid: Some(self.root_oid), root: true, level: None })?
+        } else {
+            self.node(paddr)?
+        };
         if n.flags & 4 != 0 {
             return Err(err!("{}: a file-system tree node with fixed-size entries", self.path));
         }
@@ -465,8 +512,10 @@ impl ApfsTree {
             if i + 1 < children.len() && children[i + 1].0 < oid {
                 continue;
             }
-            let at = if self.physical { *child } else { self.omap_lookup(self.vol_omap, self.child_base.wrapping_add(*child))? };
-            if u16_at(self.read(at)?, 34).ok_or_else(bad)? != n.level - 1 {
+            let (at, child_oid) = self.fs_child(*child, paddr)?;
+            if self.strict {
+                self.node_at(at, check::Want { what: check::What::FsNode, from: paddr, oid: Some(child_oid), root: false, level: Some(n.level - 1) })?;
+            } else if u16_at(self.read(at)?, 34).ok_or_else(bad)? != n.level - 1 {
                 return Err(err!("{}: the file-system tree's node at block {at} is not on level {}", self.path, n.level - 1));
             }
             self.records(oid, at, depth + 1, each)?;

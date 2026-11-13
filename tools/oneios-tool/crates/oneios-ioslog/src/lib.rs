@@ -1,5 +1,6 @@
 //! oneios-tool ioslog: iOS's own unified log, read from a copy of the phone's Data store (tools/oneios-tool/README.md
-//! "ioslog"). The image is read with our APFS reader (no mount, Linux and macOS alike); the log files are decoded
+//! "ioslog"). The image is read with our APFS reader (no mount, Linux and macOS alike; at its newest checkpoint that
+//! passes the reader's checks, which every command names on stderr); the log files are decoded
 //! by Mandiant's macos-unifiedlogs. CSV and JSONL are what its `unifiedlog_iterator` writes, so the two can be
 //! compared byte for byte (tests/ioslog/compare.sh).
 //!
@@ -16,6 +17,7 @@ use chrono::{DateTime, NaiveDateTime, SecondsFormat, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use macos_unifiedlogs::log_entry::LogEntry;
 use macos_unifiedlogs::logarchive::{load_timesync_data, visit_provider};
+use oneios_image::apfs::Pick;
 use regex::Regex;
 use source::Source;
 use std::collections::HashMap;
@@ -73,9 +75,12 @@ pub struct From {
     /// The image's volume: its number or its name (default: the first volume that holds a log)
     #[arg(long)]
     volume: Option<String>,
-    /// Read the image as its block 0 describes it, not as its newest checkpoint does
+    /// Read the image as its block 0 describes it, not as its newest checkpoint that passes the checks does
     #[arg(long)]
     block0: bool,
+    /// Read the image at the checkpoint of this transaction (`oneios-tool image apfs-checkpoints` lists them)
+    #[arg(long, value_name = "XID", conflicts_with = "block0")]
+    checkpoint: Option<u64>,
     /// The image's reader: ours, apfs-fuse (Linux), or ours and apfs-fuse when ours cannot read the image
     #[arg(long, value_enum, default_value = "auto")]
     apfs: oneios_image::apfs::fuse::Backend,
@@ -172,7 +177,12 @@ fn open(from: &From) -> Result<Source> {
     if from.verbose {
         let _ = tracing_subscriber::fmt().with_writer(std::io::stderr).with_max_level(tracing::Level::WARN).without_time().try_init();
     }
-    let source = Source::open(&from.source, from.volume.as_deref(), from.block0, from.apfs)?;
+    let pick = match from.checkpoint {
+        Some(xid) => Pick::Xid(xid),
+        None if from.block0 => Pick::Block0,
+        None => Pick::Newest,
+    };
+    let source = Source::open(&from.source, from.volume.as_deref(), pick, from.apfs)?;
     if source.tracev3.is_empty() {
         bail!("{}: the log folders hold no tracev3 file", source.what);
     }

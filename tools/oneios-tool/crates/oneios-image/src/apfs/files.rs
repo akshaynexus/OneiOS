@@ -1,7 +1,7 @@
 //! File contents and directory listings of a volume, for tools that read an image without mounting it
 //! (`oneios-tool ioslog`, `image apfs-ls`, `image apfs-copy`). imagetool.py has no such part: its `ApfsTree`
 //! reads owners only. Layouts: Apple's "Apple File System Reference" (j_inode_val_t, j_drec_val_t,
-//! j_file_extent_*, fext_tree_*, nx_superblock_t's checkpoint descriptor area).
+//! j_file_extent_*, fext_tree_*). Which checkpoint is read, and the checks before every read: `check.rs`.
 //!
 //! Hand-written because no maintained Rust crate reads iOS's sealed volumes or any volume but the first
 //! (tools/oneios-tool/README.md "APFS").
@@ -59,33 +59,10 @@ const UF_COMPRESSED: u32 = 0x20;
 const LENGTH_MASK: u64 = 0x00FF_FFFF_FFFF_FFFF;
 
 impl ApfsTree {
-    /// How many volumes the container has (as block 0 lists them).
-    pub fn volume_count(path: &str) -> Result<usize, Fail> {
-        Ok(apfs_info(path)?.volumes.len())
-    }
-
-    /// The block and transaction of the newest container superblock with a good checksum, from the checkpoint
-    /// descriptor area; block 0's own when the area is not a plain run of blocks or holds no newer one.
-    pub(super) fn newest_superblock(&self) -> Result<(u64, u64), Fail> {
-        let bad = || self.bad();
-        let head = self.read(0)?;
-        let mut best = (0u64, u64_at(head, 16).ok_or_else(bad)?);
-        let count = u32_at(head, 104).ok_or_else(bad)?;
-        let first = u64_at(head, 112).ok_or_else(bad)?;
-        if count & 0x8000_0000 != 0 {
-            return Ok(best);
-        }
-        for i in 0..count as u64 {
-            let Ok(block) = self.read(first + i) else { break };
-            if block.get(32..36) != Some(b"NXSB") || u32_at(block, 24).ok_or_else(bad)? & 0xFFFF != 1 {
-                continue;
-            }
-            let xid = u64_at(block, 16).ok_or_else(bad)?;
-            if xid >= best.1 && fletcher64(block) == u64_at(block, 0).ok_or_else(bad)? {
-                best = (first + i, xid);
-            }
-        }
-        Ok(best)
+    /// How many volumes the container has: at its newest checkpoint that passes the checks (`newest`), or as
+    /// block 0 lists them. Checked either way (`check.rs`).
+    pub fn volume_count(path: &str, newest: bool) -> Result<usize, Fail> {
+        Container::open(path, if newest { Pick::Newest } else { Pick::Block0 })?.volume_count()
     }
 
     /// The entries of directory `oid`, in the order of its records (by name hash on a volume with hashed names).
@@ -231,7 +208,12 @@ impl ApfsTree {
             return Err(crash!("{}: the extent tree is deeper than 64 levels", self.path));
         }
         let bad = || self.bad();
-        let n = self.node(paddr)?;
+        // (a child was checked when its parent named it, below)
+        let n = if depth == 0 {
+            self.node_at(paddr, check::Want { what: check::What::ExtentNode, from: check::NOWHERE, oid: Some(paddr), root: true, level: None })?
+        } else {
+            self.node(paddr)?
+        };
         let mut children: Vec<(u64, u64)> = Vec::new();
         for i in 0..n.nkeys {
             let (k, v) = if n.flags & 4 != 0 {
@@ -258,6 +240,9 @@ impl ApfsTree {
             }
             if i + 1 < children.len() && children[i + 1].0 < id {
                 continue;
+            }
+            if self.strict {
+                self.node_at(*child, check::Want { what: check::What::ExtentNode, from: paddr, oid: Some(*child), root: false, level: Some(n.level.wrapping_sub(1)) })?;
             }
             self.fext(id, *child, depth + 1, out)?;
         }
@@ -290,12 +275,7 @@ impl ApfsTree {
                 continue;
             }
             let len = len.min(size - offset) as usize;
-            let start = self.base as u128 + block as u128 * self.block as u128;
-            let end = start + len as u128;
-            if end > self.map.len() as u128 {
-                return Err(err!("{}: short read at block {block}", self.path));
-            }
-            data[offset as usize..offset as usize + len].copy_from_slice(&self.map[start as usize..end as usize]);
+            data[offset as usize..offset as usize + len].copy_from_slice(self.extent_at(id, offset, len, block)?);
         }
         Ok(data)
     }

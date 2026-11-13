@@ -31,7 +31,7 @@ switch.
 | `sym` | done | yes: 18 of 18 address sets byte-identical to `dsc.py`, on the Mac (real logs) and on Linux (stand-in logs from the real cache) | the index's place for the main checkout; a comparison on real logs on Linux |
 | `log` | done (new tool, no Python original) | not applicable; 67 commands on 4 real logs (Mac) and 33 on 2 stand-in logs (Linux) end with status 0 | tables for more line kinds |
 | `image` | 9 subcommands, plus `apfs-ls` and `apfs-copy` (compressed files too; apfs-fuse as a second backend) | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds (the 36th: no `kernel.kc` in the Linux set, README); the APFS reader: every file of the SystemOS and AppOS images as apfs-fuse gives it | `IMAGETOOL_IMPL=rust` as the default is the owner's call |
-| `ioslog` | done | yes on 7 archives (CSV byte for byte, from an archive, an image and a mounted volume) | **a run on the phone's real Data store**; the Mac's `ios3-log.csv`; `checks` on a real log; `pull` |
+| `ioslog` | done; the APFS reader checks every address and object and falls back to an older checkpoint (2026-11-13, after the first run on the phone's store failed) | yes on 7 archives (CSV byte for byte, from an archive, an image and a mounted volume); a used store written by iOS on the PC: every file as apfs-fuse gives it | **the second run on the phone's real Data store** (section 5); the Mac's `ios3-log.csv`; `checks` on a real log |
 | `prelink` | `roots`, `hosted` (2 of 12 steps) | yes for the two, byte for byte on the real kernelcache | **the other ten steps**, the pairing and the emitter first (section 4) |
 | `sym kernel`, `log panic` (2026-11-13, branch `ksym`, crate `oneios-ksym`) | done (new: a kernel panic's caller, pc, lr and frames named in `kernel.kc` and `xnu.macho`; no Python original) | compared with `llvm-symbolizer --inlining` on three Linux-built pairs: 19 of 19 addresses of a stand-in panic and 31,605 of 31,605 more per pair (311,605 on one) name the same function, file:line and inlined frames (README "sym kernel") | **the Mac's log and kernel of the 2026-11-12 panic** (`tests/ksym/compare.sh KC KERNEL LOG`, with `DSYM=`); a real panic log from the phone; names for kext frames (the collection keeps no kext symbols: the prelink's pairing records could give them); a run on a Mac |
 
@@ -386,16 +386,24 @@ other; the comparison shows a drift.
 
 ## 5. `ioslog`: iOS's unified log from the phone's Data store
 
-**Written and compared; not run on the phone's Data store.** `crates/oneios-ioslog` (`lib.rs`: command line,
-filters, outputs, boots; `source.rs`: the files of an image, an archive or a mounted volume as the decoder's
-provider; `checks.rs`). README "ioslog" has the commands, the comparison and its table.
+**Written and compared. Its first run on the phone's Data store (2026-11-13) failed in the APFS reader; fixed,
+not run there again yet.** `crates/oneios-ioslog` (`lib.rs`: command line, filters, outputs, boots; `source.rs`:
+the files of an image, an archive or a mounted volume as the decoder's provider; `checks.rs`). README "ioslog" has
+the commands, the comparison and its table.
+
+The fault and the fix (README "The APFS reader", `crates/oneios-image/src/apfs/check.rs`): `ioslog boots` ended
+with `short read at 1152903912689233920` because the volumes were counted through block 0's old superblock, whose
+object map block had been written again as a tree node. The reader of a used store now checks every address and
+every object's header before it uses them, tries the checkpoints from the newest down and reads the newest that
+passes (per volume), says which one on stderr, and refuses by name. `image apfs-checkpoints` lists a store's
+checkpoints. Volumes are numbered by their place in the superblock's list, as apfs-fuse numbers them.
 
 Decisions:
 - macos-unifiedlogs 0.8.0 from GitHub at commit `3d5b27a` (pinned in `Cargo.lock`), not 0.7.0 from crates.io: 0.8.0
   has the provider that loads string files by UUID and the lazy `message()`, which the filters use. When 0.8.0 is
   on crates.io, name the version instead of the commit.
-- The Data store is read with our APFS reader, at its newest checkpoint; no `.logarchive` copy is made unless
-  `ioslog save` is asked for.
+- The Data store is read with our APFS reader, at its newest checkpoint that passes the checks; no `.logarchive`
+  copy is made unless `ioslog save` is asked for.
 - CSV and JSON lines are `unifiedlog_iterator`'s so that the two can be compared with `cmp`.
 
 **Parallel decoding (`--jobs`) was tried in the third round and is not in the tree.** What stands in the way, in
@@ -420,11 +428,13 @@ macos-unifiedlogs at the pinned commit `3d5b27a`:
 The times of one thread are the README's table (20 s for the 4.7 million entries of the macOS 27 archive).
 
 Open, in order:
-1. **Run it on a real `data.img`** (copy the store after a session, `docs/newtodo.md` "How to resume" step 2; then
-   `oneios-tool ioslog boots data.img`). What a real store may show that the stand-ins do not: an APFS written by
-   iOS's own kernel after many transactions (several levels of object map and file-system tree, snapshots, files
-   with many extents). `image apfs-ls data.img db/diagnostics --volume Data --newest` and
-   `tests/image/apfs-read.sh data.img 2` (Linux, against apfs-fuse, with `NEWEST=1`) check the reader alone.
+1. **Run it again on the phone's `data.img`** (the copy is on the Mac): `oneios-tool ioslog boots data.img`,
+   `ioslog checks data.img`; if one refuses, `oneios-tool image apfs-checkpoints data.img` says which checkpoint
+   fails which check. Done on a Data store that iOS's own APFS wrote on the PC (2026-11-13, 94 checkpoints, block 0
+   at transaction 14): the old binary fails on it exactly as on the phone's, the new one reads transaction 198,
+   and `NEWEST=1 tests/image/apfs-read.sh data.img 2` has every file as apfs-fuse gives it. What the phone's store
+   may still show that this one does not: three volumes, more transactions, a newest checkpoint that really is
+   cut off (the PC store's newest one was whole), snapshots.
 2. On the Mac: `tests/ioslog/compare.sh out/session-logs/2026-11-12/ios3.logarchive`, and `ioslog show` of it
    against `ios3-log.csv` (the same only if that file was made by `unifiedlog_iterator` at commit `3d5b27a`).
 3. `checks`: its patterns are the texts the notes quote; run it on a real log and correct them.
@@ -443,8 +453,14 @@ Open, in order:
 Written; **nothing of it ran on the real phone, and the app was not built or installed with it**. Crate
 `crates/oneios-phone` (`adb.rs`: the one phone and the rules; `phone.rs`; `sparse.rs`; `app.rs`). README "phone" and
 "app" have the commands and what the stand-in tests show (`tests/phone/run.sh` 76 checks, `tests/app/run.sh` 65,
-`tests/cycle/run.sh` 95; `tests/phone/modes.sh` runs them with the host's `/proc` and with the stand-in's own, macOS's
+`tests/cycle/run.sh` 103; `tests/phone/modes.sh` runs them with the host's `/proc` and with the stand-in's own, macOS's
 only mode).
+
+`cycle`'s `summary.md`, two faults the phone showed on 2026-11-13, fixed (`cycle.rs`; README "cycle"): the result
+line said "every step that ran ended well" above a failed `collect` in the Steps table (it is made from the table's
+step results now, and a failed `collect` ends the cycle with status 1), and "Markers: none seen" in the summary of
+`--only return,collect` after `--only stage,switch,watch` with the same name (a run that did not watch reads the
+markers from the saved `xnuhost.log` and says so). Eight checks of `tests/cycle/run.sh` are for these (95 before).
 
 Open, in order:
 1. **The first run on the phone** (the Mac has it): `phone status`, then `phone sums` against
