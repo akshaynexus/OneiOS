@@ -914,6 +914,17 @@ Also seen on the PC, not changed: the guest's wall clock (iOS's log times) ran a
 (`ServiceDiscovery:DiscoveryCache After pruning N records`), logd at 30-80 %; `oneios-tool`'s own APFS reader refuses
 these Data stores (`short read at 1152903912689233920`: it reads block 0's container superblock, an old checkpoint
 whose object map is gone) and falls back to apfs-fuse.
+
+## 0061-ubt-count.patch (fix-wifi-late-2, 2026-11-13)
+
+0026's user backtraces (`oneios-ubt=NAME,...`, `oneios-ubt-at=`, `oneios-ubt-every=`) as a sampler of a boot's first
+minutes: `oneios-ubt-count=N` stops after N reports (default 0: no end, as before), and each report now starts with
+`oneios-ubt: report K at +S s` (seconds after bsd_init's late start, where 0026's thread starts). Why: on the phone
+(2026-11-13, main c1223f8) configd named en0 89 s after launchd with IOKit already quiet, and what its threads did in
+those 89 s is not in xnuhost's log. For the next boot, in the image's `xnuhost.conf`: `oneios-ubt=configd,wifid,logd
+oneios-ubt-at=20 oneios-ubt-every=10 oneios-ubt-count=18` (+20 s to +190 s); give each line's addresses to `oneios-tool
+sym` (`docs/hardware.md` 3, "en0 late"). Compiled in the Linux PC's kernel (`HOSTED_OUT=fixwifi`) and prelinked (`kernel.kc` `84d3304c`: audit 0 failures, `stubs-check.py` 666 good). On the PC (2026-11-13, `oneios-ubt=configd oneios-ubt-at=850 oneios-ubt-every=45 oneios-ubt-count=6`): reports 1 to 6 at +850 to +1075 s, then `oneios-ubt: 6 reports, the last (oneios-ubt-count)`; what they showed is in `docs/hardware.md` 3. Not on the phone.
+
 ## 0062-iokit-hardware-probe-trace.patch (fixbt, 2026-11-13)
 
 A debugging aid for a daemon that runs and never opens its hardware (bluetoothd on the phone, 2026-11-12 23:45: on,

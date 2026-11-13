@@ -1,0 +1,54 @@
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+--- a/osfmk/arm64/hosted/hosted_machine.c
++++ b/osfmk/arm64/hosted/hosted_machine.c
+@@ -599,6 +599,8 @@
+  *   oneios-ubt=NAME[,NAME...]   the processes (as proc_best_name gives them)
+  *   oneios-ubt-at=SECONDS       when, after the kernel's late start (default 420)
+  *   oneios-ubt-every=SECONDS    then again every so often (default: once)
++ *   oneios-ubt-count=N          with oneios-ubt-every, stop after N reports (default 0: no end). 0061: a sampler of
++ *                               a boot's first minutes (configd before it names en0) that does not run all session
+  * For each thread of those processes: its scheduler state (1 wait, 4 runnable), the saved user pc and lr, and the
+  * return addresses up the frame pointers, read from the task's map. scripts/debug/dsc.py names them. Off without
+  * oneios-ubt. The saved state of a thread that is in user mode on another CPU right now is its last entry's.
+@@ -608,6 +610,8 @@
+ struct hosted_ubt { thread_t thread; task_t task; uint64_t pc, lr, fp; };
+ static char hosted_ubt_names[128];
+ static uint32_t hosted_ubt_at = 420, hosted_ubt_every;
++static uint32_t hosted_ubt_count, hosted_ubt_reports;   /* 0061: the limit, and the reports so far */
++static uint64_t hosted_ubt_began;                       /* 0061: the start, for each report's time */
+ static struct hosted_ubt hosted_ubt_found[HOSTED_UBT_THREADS];
+ 
+ static bool
+@@ -648,6 +652,12 @@
+ 			                                         .pc = get_saved_state_pc(state), .lr = get_saved_state_lr(state), .fp = get_saved_state_fp(state) };
+ 	}
+ 	lck_mtx_unlock(&tasks_threads_lock);
++	{       /* 0061: which report, and when: seconds after the start (the guest's counter is the host's, not the boot's) */
++		uint64_t nano = 0;
++		absolutetime_to_nanoseconds(mach_absolute_time() - hosted_ubt_began, &nano);
++		hosted_ubt_reports++;
++		printf("oneios-ubt: report %u at +%llu s\n", hosted_ubt_reports, (unsigned long long)(nano / NSEC_PER_SEC));
++	}
+ 	printf("oneios-ubt: %u thread(s) of %s\n", count, hosted_ubt_names);
+ 	for (unsigned i = 0; i < count; i++) {
+ 		struct hosted_ubt *u = &hosted_ubt_found[i];
+@@ -690,6 +700,10 @@
+ 		if (hosted_ubt_every == 0) {
+ 			break;
+ 		}
++		if (hosted_ubt_count != 0 && hosted_ubt_reports >= hosted_ubt_count) {   /* 0061 */
++			printf("oneios-ubt: %u reports, the last (oneios-ubt-count)\n", hosted_ubt_reports);
++			break;
++		}
+ 		wait = hosted_ubt_every;
+ 	}
+ 	thread_terminate(current_thread());
+@@ -819,6 +833,8 @@
+ 	}
+ 	(void)PE_parse_boot_argn("oneios-ubt-at", &hosted_ubt_at, sizeof(hosted_ubt_at));
+ 	(void)PE_parse_boot_argn("oneios-ubt-every", &hosted_ubt_every, sizeof(hosted_ubt_every));
++	(void)PE_parse_boot_argn("oneios-ubt-count", &hosted_ubt_count, sizeof(hosted_ubt_count));   /* 0061 */
++	hosted_ubt_began = mach_absolute_time();
+ 	if (kernel_thread_start(hosted_ubt_thread, NULL, &thread) == KERN_SUCCESS) {
+ 		thread_deallocate(thread);
+ 	}

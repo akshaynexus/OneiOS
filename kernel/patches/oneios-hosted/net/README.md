@@ -75,13 +75,18 @@ has the interface's prefix and **hardware address**, or the IORegistry reserves 
 sent its dexts' personalities (`IOService::iokitDaemonLaunched`, the kernel's `KextLog: driverkitd is active`); 0042's
 `oneios-iobusy:` lines name that root, `oneios,xnuhost (class IOPlatformExpertDevice)`, as the one busy service.
 
-en0's address is wlan0's, which is a random one while One UI is not joined, so it changes between sessions and the
-database's entry never matched: every session's en0 was new and waited for driverkitd (named +130 s and +162 s after
-xnuhost's start on the phone, 2026-11-12, 261 s in prelink's session 2). The iPhone's own Wi-Fi node reserves the
+en0's address is wlan0's, which is a random one while One UI is not joined, so it changes between sessions and [I]
+the database's entry did not match: en0 was then new and could wait for driverkitd. The iPhone's own Wi-Fi node reserves the
 unit (24A446's device tree: `/arm-io/apcie/pci-bridge0/centauri-alpha` has `network-interface-unit-en = <0>`), so the
 nub `oneios-wlan` has the same property now and InterfaceNamer names the interface en0 as soon as it appears. It still
 refuses the unit when the database holds en0 at another registry path (`builtinAvailable`: then `has reserved unit 0,
 but it's not available` in configd's log, and the wait for quiet as before).
+
+**It did not make Wi-Fi earlier on the phone** (2026-11-13, main c1223f8): configd named en0 89 s after launchd with
+`IOKit busy 0` (driverkitd was long done), `IFF_UP` 20 s later, wifid's first scan 70 s after that: about as late as
+before the property. The PC took the reserved-unit path (`has reserved unit 0` in configd's log). So the quiet wait was
+not what held en0 in that boot; what holds configd is being looked for (`docs/hardware.md` 3, "en0 late", and hosted
+0061's sampler).
 
 ## Boot argument and log lines
 
