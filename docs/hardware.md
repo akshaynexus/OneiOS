@@ -994,7 +994,8 @@ the transport unchanged (`-DDROIDVM_DEVICE_DYNAMIC=1`), `DroidVMAudio.cpp` stage
 `ONEIOS AUDIO: speaker running|idle, ... engine N periods, N late, ...; virtio-snd N tx periods, N dropped ...`.
 Boot arguments: `droidvm-snd=0`, `droidvm-audio=0`, `oneios-audio-out-uid=`, `oneios-audio-in-uid=` (default
 Speaker, Mic; `none`: no microphone), `oneios-audio-latency=FRAMES` (the speaker's "output latency", default 6480 =
-135 ms: the host path below, so iOS keeps video in step), `oneios-audio-report=0`, `oneios-audio-selftest=SECONDS`
+135 ms: the host path before 2026-11-13; with the new helper about 105 ms is predicted, set it with this boot argument once the phone measured it ("Latency per stage" below), so
+iOS keeps video in step), `oneios-audio-report=0`, `oneios-audio-selftest=SECONDS`
 (1..10: 3 s after the start a 1 kHz sine at -30 dBFS straight into the transport, before iOS's audio server: the
 guest kernel to the speaker without iOS; UniXNU-droidvm's `droidvm-snd-selftest` is a full-scale sawtooth, never with
 a speaker).
@@ -1015,40 +1016,80 @@ yet: the audio test cycle adds it (below).
   which closes the socket) ends it and with it the stream: audioserver closes a dead client's track.
   - **No realtime thread, by construction.** AAudio makes a SCHED_FIFO thread for an MMAP stream and for a FAST
     track with a data callback, and asks system_server's `scheduling_policy` service for it; in a session that
-    service is gone [I: AOSP's `requestPriority` waits for the service; not read in source here]. So the helper
-    uses no data callback (a blocking `AAudioStream_write` from its own thread), turns MMAP off for its process
-    (`AAudio_setMMapPolicy(NEVER)`) and asks for performance mode NONE. Measured beside One UI: every thread of the
-    helper SCHED_OTHER (policy 0), `mmap 0`, the threads in the parent's cpuset; AudioTrack sets the starting
-    thread's nice to -16 (`ANDROID_PRIORITY_AUDIO`, not realtime). LOW_LATENCY without MMAP and callback gave the
-    same normal-mixer track on the phone, so it is not offered. A guard checks every thread after each start and
+    service is gone. So the helper uses no data callback (a blocking `AAudioStream_write` from its own thread) and
+    turns MMAP off for its process (`AAudio_setMMapPolicy(NEVER)`). Measured beside One UI (2026-11-12): every thread
+    of the helper SCHED_OTHER (policy 0), `mmap 0`, the threads in the parent's cpuset; AudioTrack sets the starting
+    thread's nice to -16 (`ANDROID_PRIORITY_AUDIO`, not realtime). A guard checks every thread after each start and
     every 10 s and sets one found SCHED_FIFO or SCHED_RR back to SCHED_OTHER (logged).
-  - Output: the guest's periods go into a ring; the writer moves 240-frame chunks into AAudio, whose buffer is cut
-    to 2 bursts (`ONEIOS_AUDIO_BURSTS`). Before the guest's first chunk, silence fills the level (the ring plus
-    what AAudio holds) to one burst plus a target (`ONEIOS_AUDIO_TARGET_MS`, 20 ms): the server takes a whole burst
-    per cycle. An underrun (AAudio about to run dry) plays silence, primes again and raises the target by 5 ms (at
-    most 80). Clock drift: the level averaged over 1 s is held within 5 ms of its value 1 s after the start by
-    playing a chunk from 239 or 241 ring frames (linear interpolation, at most 4166 ppm); a ring above the target
-    plus 10 ms is played faster the same way; above the target plus 60 ms it drops its oldest audio to the target
-    (an overflow). Until the server takes the stream's first frames (a newly opened deep-buffer track takes
-    nothing for about 200 ms) nothing is cut: the ring holds 500 ms, and after the stall its backlog (plus 40 ms)
-    is the limit, shrinking as it plays at up to 1.25 % faster. The guest's STOP keeps the stream open for
-    `ONEIOS_AUDIO_LINGER_S` (60 s since 2026-11-12, 15 s before): what the ring holds plays, then silence; iOS stops
-    and starts its device around each sound, and a reopened track stalls again (the open and about 200 ms before the
-    server takes frames). The price is One UI's speaker path kept on with silence for that minute.
+  - **Performance mode: NONE by default; LOW_LATENCY opt-in since 2026-11-13** (`ONEIOS_AUDIO_PERF=low`, not run on the phone), asked only when the MMAP
+    refusal worked (AAudio tries MMAP only for LOW_LATENCY; a stream that says `AAudioStream_isMMapUsed` anyway is
+    closed and opened again with NONE). What it gives a blocking writer, read in AOSP `main` (2026-11-13; not read
+    in One UI's own build): AAudio's legacy path (`AudioStreamTrack::open`) sets `AUDIO_OUTPUT_FLAG_FAST|RAW` for
+    usage MEDIA with no session, but with `TRANSFER_SYNC` ("Note that TRANSFER_SYNC does not allow FAST track");
+    `AudioTrack::createTrack_l` then takes FAST off itself ("AUDIO_OUTPUT_FLAG_FAST denied by client": a synchronous
+    writer gets FAST only from a Java thread) and sends no client thread for a priority boost (`clientTid` is set only
+    for a FAST callback thread). So there is no FAST mixer track and no SCHED_FIFO request: the track is a normal
+    mixer track, AAudio reports performance mode NONE (the open line says `low latency asked, none given`), its burst
+    is the normal track's notification period. What is left of LOW_LATENCY is `AUDIO_OUTPUT_FLAG_RAW`: the audio
+    policy's `selectOutput` prefers an output whose flags have the most requested performance flags, so if the
+    speaker's `fast` mixPort declares RAW the track goes on that output's normal mixer (20-24 ms periods,
+    AudioFlinger's `kMinNormalSinkBufferSizeMs`) instead of `primary-out`; if not, nothing changes (the earlier phone
+    run of LOW_LATENCY, 2026-11-12, saw "the same normal-mixer track"). Whether One UI's `fast` mixPort has RAW: not
+    known ([U]; `grep -B2 -A6 'name="fast"' /vendor/etc/audio_policy_configuration.xml` on the phone says).
+  - Output (rewritten 2026-11-13, fix-audio-latency): the guest's periods go into a ring; the writer moves 240-frame
+    chunks into AAudio (woken by each period, not on a 2 ms poll). **The level follows the server's pulls**: a
+    normal mixer track is read a whole mixer period at a time and only when it holds one (AudioFlinger's
+    `prepareTracks_l`: `desiredFrames` = `mNormalFrameCount`), so `AAudioStream_getFramesRead` jumps once per
+    period. The writer measures the jumps (steps less than 3 ms apart are one pull; the median of the last 16) and
+    the time of the last one, and holds the level (ring + AAudio's unread frames) at the target
+    (`ONEIOS_AUDIO_TARGET_MS`, 20 ms) above what the next pull takes of what came in since the last one: right
+    after a pull only the target. Before that it was a burst plus the target at every moment, so the level the
+    guest's audio started on was up to a whole period (on average half) higher than needed, and then the writer
+    filled AAudio to its 2-burst buffer. Until the pulls are seen (a new stream's first ~170 ms) the old rule holds.
+    Priming (before the guest's first chunk, while it is stopped, after an underrun) keeps that level with silence.
+    An underrun (the level below what the next pull takes) plays what the ring has, primes again and raises the
+    target by 5 ms (at most 80); **each `ONEIOS_AUDIO_TARGET_DECAY_S` (20 s) without one lowers it by 5 ms back to
+    its floor** (before, it only went up for the stream's life, and the stream lingers). Drift and excess: the level
+    averaged over 1 s is held within 5 ms of its aim by playing a chunk of 240 ring frames as 239 or 241 (237 while
+    10 ms above: 1.25 %; linear interpolation). **Silence is cut, sound is not**: while the level is 10 ms above its
+    aim, a chunk at the ring's head that is digital silence (every sample within ±1) is dropped, so a backlog (a new
+    track's stall, a burst of late periods) goes at the first pause instead of over 16 s at 1.25 %. **AAudio's
+    buffer** (AudioFlinger's start threshold, and the most a blocking write leaves queued) is a burst plus the
+    target plus one chunk, set again when the target moves (`ONEIOS_AUDIO_BURSTS=N` fixes it at N bursts as
+    before). Above the target plus 60 ms the ring drops its oldest audio to the target (an overflow). Until the
+    server takes the stream's first frames (a newly opened track takes nothing for about 200 ms) nothing is cut:
+    the ring holds 500 ms, and after the stall its backlog (plus 40 ms) is the limit. A partial blocking write (a
+    stall over 200 ms) is finished, not dropped. The guest's STOP keeps the stream open for `ONEIOS_AUDIO_LINGER_S`
+    (60 s): what the ring holds plays, then silence; iOS stops and starts its device around each sound, and a
+    reopened track stalls again. The price is One UI's speaker path kept on with silence for that minute.
   - Input: a reader thread, blocking `AAudioStream_read` of 240 frames, input preset VOICE_RECOGNITION, the first
-    channel to xnuhost. `backend.c` drops what an earlier recording left in the socket at each input START.
-  - Log (xnuhost's log): `oneios-audio: speaker open: ... none, sharing shared, mmap 0, burst 1600, buffer 3200 of
-    4800 frames, device 3`; every 10 s and at each stop `speaker running|stopped ...: frames in, played, underruns,
-    overflows, slips +N/-N, ring, AAudio N ms queued, N xruns; latency about N ms`; the same for the microphone.
+    channel to xnuhost, performance mode NONE. `backend.c` drops what an earlier recording left in the socket at
+    each input START.
+  - Log (xnuhost's log): `oneios-audio: ready: performance mode none (a blocking writer: no FAST track, no
+    realtime thread), MMAP off, AAudio buffer a burst + the target + 5 ms, ring 500 ms, target 20 ms (at most 80,
+    down 5 ms per 20 s without an underrun), linger 60 s`; `oneios-audio: speaker open: 48000 Hz, 2 channel(s), none
+    asked, none given (`low latency asked, none given` with `ONEIOS_AUDIO_PERF=low`), sharing shared, mmap 0, burst 1600, buffer 2800 of 4800 frames, device 3, session
+    -1` (the numbers are the host test's); once the server has pulled five times `oneios-audio: speaker: the server pulls N frames every N ms:
+    the level follows its pulls`; `oneios-audio: speaker: target N ms (20 s without an underrun)`; every 10 s and at
+    each stop `speaker running|stopped ...: frames in, played, underruns, overflows, slips +N/-N, N frames of silence
+    cut, ring N ms (min..max, target N, peak N), margin N ms, server pulls N frames every N ms, AAudio N ms queued, N
+    xruns; latency about N ms` (`margin`: the level above what the next pull takes, averaged; it should sit near the
+    target); the same for the microphone.
   - Fixed 2026-11-12: the helper's state reports were blocking sends that xnuhost reads only while the microphone
     runs, so after a few hundred speaker starts the socket would fill and the helper stop for good. They are
     `MSG_DONTWAIT` now.
 - Why AAudio and not tinyalsa: on this SoC a PCM device plays only after the AudioReach graph is set up through the
   AGM plug-ins and PAL, which the audio HAL does; opening the card beside it would also fight audioserver.
-- Tests: `runtime/bridges/tests/test_audio_helper.c` (in `make test`): the helper against a fake AAudio whose DAC
-  takes bursts of 1600 from a buffer of 2 bursts: no underrun or overflow at 0 and ±2000 ppm, the drift steered the
-  right way, latency under 120 ms, the microphone's periods in order, the linger (a quick restart takes the open
-  stream; the stream closes after the silence), a clean stop when the socket closes: 4049 checks.
+- Tests: `runtime/bridges/tests/test_audio_helper.c` (in `make test`, about 50 s of real time): the helper against a
+  fake AAudio whose server thread stands in for AudioFlinger's normal mixer (it starts reading once the track holds
+  its buffer size, then takes a whole period of `pull` frames each period and nothing in a period where the track
+  holds less; burst and pull set apart): no underrun or overflow at 0 and ±2000 ppm, the drift steered the right way
+  over the last 6 s of 9 and the level ending within 10 ms of its aim, latency under 120 ms, the microphone's
+  periods in order, the linger, a 200 ms start stall followed by silence (the backlog cut as silence, a marker 1 s
+  later on time), a guest 40 ms late every 0.5 s (underruns raise the target; it is back at 20 ms 5 s after), the
+  latency per stage at six phases of the pulls (below), MMAP not refused (NONE) and MMAP in use anyway (opened again
+  NONE), LOW_LATENCY only with `ONEIOS_AUDIO_PERF=low`, a clean stop when the socket closes: 11,101 checks (most are the guest's sends; timing checks are skipped, each with a line, when a loaded host runs the test late). `test_bridges.c` checks
+  that virtio-snd takes each output period inside the guest's notify (0 in flight).
 
 ### Measured on the phone (2026-11-12, `bridgectl audio`, One UI running, no session)
 
@@ -1101,7 +1142,9 @@ yet: the audio test cycle adds it (below).
   `speaker open` at the lock click or a keyboard click, `frames in` close to the sound's length.
 - **The host path's latency** (the rest of the delay, after the fix): 131-142 ms in the 14:12 session (`AAudio 131 ms
   queued`), as measured beside One UI. It is AAudio's buffer level (one 1600-frame burst plus a 20 ms target, about
-  53 ms) plus the normal mixer and the HAL (about 78 ms). What was looked at:
+  53 ms) plus the normal mixer and the HAL (about 78 ms). **Superseded on 2026-11-13** by "Latency per stage" below
+  (the helper's level measured in a harness, the burst shown to be the mixer's period, the level, the target, the
+  buffer changed; the reported latency not yet). What was looked at on 2026-11-12:
   - a non-deep-buffer route: the track is on `primary-out` already (above); the `fast` port needs a FAST track,
     which AudioFlinger grants only to a callback or a Java writer and then raises that client's thread to SCHED_FIFO
     through system_server: not allowed (no realtime thread) and not there in a session. MMAP is out the same way.
@@ -1110,8 +1153,107 @@ yet: the audio test cycle adds it (below).
     track's notification period, not the mixer's) and an underrun is worse than 30 ms.
   - the stream kept open in silence: the linger is 60 s now (above). A sound after a longer pause pays the open
     and the new track's first 200 ms once.
-  - the latency iOS is told (`oneios-audio-latency`, 6480 frames = 135 ms): it matches the 131-142 ms measured; kept.
+  - the latency iOS is told (`oneios-audio-latency`, 6480 frames = 135 ms): it matched the 131-142 ms measured (the new helper: about
+    105 ms predicted, below; the default is unchanged until the phone measures it).
   - iOS's own buffer: system sounds use a 3072-frame I/O buffer (64 ms) of iOS's choosing; not changed.
+
+### Latency per stage (fix-audio-latency, 2026-11-13; host-tested, not run on the phone)
+
+The fault (the phone's 23:45 boot of 2026-11-12): `DroidVMAudio: ... output latency 6480 frames`, `oneios-audio:
+ready: performance mode none, MMAP off, AAudio buffer 2 bursts, ring 500 ms, target 20 ms (at most 80), linger 60
+s`, playback about 130-140 ms late.
+
+**What the owner hears.** iOS's HAL adds a device's `output latency` (and its safety offset) to the time stamps it
+gives its clients; AVFoundation's players use them to show a video frame when its sound comes out. So the number
+delays pictures (A/V sync), not the sound: DroidVMAudio's engine plays its ring on its own clock whatever the
+property says. A tap or key click that comes late is the real path below; a reported latency larger than the path
+shows only as video waiting for its sound (sound ahead of the lips), a smaller one as sound behind the lips.
+
+| Stage (the order a sample takes) | Before | After | How it is known |
+|---|---|---|---|
+| iOS's HAL: the I/O buffer it writes ahead (1024-3840 frames, 21-80 ms, iOS's choice per client) plus the safety offset (480 frames, 10 ms) | the same | the same | [F] iOS's logs (`vaemCalculateAndSetDeviceBufferDuration: duration = 0.080`), DroidVMAudio.cpp; iOS's own, as on a device |
+| The guest's engine (hands a period on once it has passed) | 0-5 ms | the same | DroidVMAudio.cpp `run()` |
+| virtio-snd, guest to xnuhost | under 0.01 ms, 0 periods in flight | the same | `test_bridges.c`: each period is with the back end before the guest's notify returns (0.7 us on average, 6 us at most); the guest's 16 slots (`SND_SLOTS`) never fill, so fewer slots would cut nothing |
+| Socket and the helper's ring | 10.5 ms (harness; the writer waited for 244 frames and polled every 2 ms; the phone's reports said 1-5 ms) | 0.1-0.7 ms | harness |
+| AAudio's queue, to the server's read | 62.9 ms (harness: the writer filled AAudio to its 2-burst buffer, 3200 frames) | 32.7 ms (the target plus half a pull) | harness |
+| Android after the read: the normal mixer, the HAL, the DSP | 65-73 ms | the same | [I] the phone's AAudio timestamp latency of 2026-11-12 (128-136 ms written to presented) less the old helper's 63 ms in the harness |
+| **Host path** (the helper's `latency about N ms`) | 131-142 ms (phone) | **about 98-106 ms** [I, predicted] | the two rows above |
+| A new stream's first sound (the open and the new track's ~200 ms before the server reads) | late by the stall, the backlog then played 1.25 % faster for about 16 s | the backlog's silence is cut at the sound's first pause: a marker 1 s after a 200 ms stall went from 268 ms to 22 ms (harness) | harness |
+
+The harness: `test_audio_helper.c`'s latency cases (`stage:` lines), the helper of `origin/main` 3d0644f and the new
+one built against the same fake (pulls of 1600 frames, burst 1600, the guest starting at six phases of the pulls, 60
+markers each), averages:
+
+| Fake server | Helper | Socket + ring | AAudio queue | Guest send to server read (max) |
+|---|---|---|---|---|
+| pulls 1600 (33 ms), burst 1600: the phone's | before | 10.5 ms | 62.9 ms | 73.4 ms (84.3) |
+| | after | 0.1-0.7 ms | 32.7-34.1 ms | 33.4-34.2 ms (44.5-45.0) |
+| pulls 800 (17 ms), burst 1600 | before | 6.4 ms | 55.9 ms | 62.4 ms (72.0) |
+| | after | 0.1 ms | 25.6-27.0 ms | 25.7-27.2 ms (34.4-35.3) |
+| a 200 ms start stall, then 1 s of silence, then markers | before | 201.6 ms | 66.4 ms | 268.0 ms |
+| | after | 0.1-0.2 ms | 21.7-22.0 ms | 21.8-22.1 ms |
+
+(Before, in the harness, also failed 13 of the new test's checks: the drift and level checks and the stall case.)
+
+**The burst is the mixer's period** [I, from AOSP `main`'s sizing, not read in One UI's build]: the phone's track has
+burst 1600 of capacity 4800 (`bridgectl audio`, 2026-11-12). A normal track's notification period (AAudio's burst)
+is its frame count over `nBuffering`, 3 when the frame count is three normal-mixer periods, else 2
+(`PlaybackThread::createTrack_l`), and the frame count is `calculateMinFrameCount` = a whole number of mixer
+periods. 4800 / 1600 = 3 holds only for a mixer period of 1600 frames (33.3 ms), which also means `primary-out` has
+no fast mixer in front (a fast mixer's normal sink is 20-24 ms) and reports a latency of 100-133 ms. The helper now
+measures it (`the server pulls N frames every N ms`).
+
+**What changed, and what each measured** (all in the harness above; the phone has not run any of it):
+1. The level follows the server's pulls (the old one was phase-blind: a burst plus the target at every moment, then
+   AAudio filled to 2 bursts): AAudio's queue 62.9 -> 32.7 ms; with pulls of 800, 55.9 -> 25.6 ms (the burst no
+   longer counts, the pull does).
+2. The writer is woken by each period and plays a chunk as soon as a period is in the ring (slips change the output
+   length instead of waiting for 241 frames): socket + ring 10.5 -> 0.1-0.7 ms.
+3. AAudio's buffer is a burst plus the target plus a chunk (2800 frames on the phone) instead of 2 bursts (3200): it
+   is AudioFlinger's start threshold, so a new stream starts 400 frames (8 ms) lower, and a backlog waits in the
+   ring where its silence can be cut.
+4. Silence in a backlog is cut: after a 200 ms stall the next sound is on time once a pause has come (268 -> 22 ms);
+   continuous sound still loses a backlog only by playing 1.25 % faster (as before).
+5. The target comes back down: 5 ms per 20 s without an underrun (a guest 40 ms late every 0.5 s raised it to
+   25 ms; 5 s on time brought it back to 20). Before, it only went up, for a stream that lingers 60 s after each
+   sound. The floor stays 20 ms: the guest's engine was late by more than a period in 9 of 53 periods on the phone
+   (2026-11-12), and an underrun is a gap.
+6. LOW_LATENCY, opt-in (`ONEIOS_AUDIO_PERF=low`; above, "Performance mode"): no FAST track and no realtime thread for a blocking
+   writer (AOSP source); the RAW flag it carries may move the track to the `fast` output's normal mixer [U]. Nothing
+   to measure on the host: the fake has one output.
+7. The reported latency: NOT changed (6480 = 135 ms, which also leaves the engine's 5 ms out). The new helper predicts 5040
+   frames (105 ms = 5 ms + about 100 ms); a kernel build with that default was stopped at the hand-off of 2026-11-13: set `oneios-audio-latency=5040` (or the measured value) in the boot arguments instead.
+
+**Not done, and why.** A FAST mixer track or MMAP needs a realtime client thread (AAudio's callback path asks
+system_server for SCHED_FIFO), which the way back forbids. [I, AOSP source] AudioFlinger also gives a FAST track
+without any priority request to a `TRANSFER_OBTAIN` client and to a synchronous Java writer (`clientTid` -1): the
+next lever for the 65-73 ms after the read, but only through libaudioclient's private C++ API (no NDK, no stable
+ABI across One UI builds) or a Java writer (app_process) beside xnuhost; not tried. iOS's own I/O buffer and safety
+offset: unchanged (a smaller safety offset would glitch when the guest's audio thread is late).
+
+**On the phone (what waits for it).** A session with this runtime (any `kernel.kc`; the kernel is unchanged):
+- xnuhost's log: `oneios-audio: ready: performance mode none ...`; `speaker open: ... none asked, none given, ...
+  mmap 0, burst B, buffer B+1200 of C frames`; `oneios-audio: speaker: the server pulls N frames every M ms`
+  (expected 1600 every 33.3: then the inference above holds); then a second session (or `bridgectl`, below) with
+  `ONEIOS_AUDIO_PERF=low` in xnuhost's environment: `low latency asked, none given` expected (a `mmap 1` or a `given
+  low latency` would be new: then leave it off), and a smaller N means RAW moved the track to the `fast` output;
+  `speaker running|stopped ...: ... margin N ms` near the target (20); `latency about N ms` (AAudio's timestamp:
+  written to presented, plus the ring): expected about 95-105, was 130-137; `0 underruns`, and if there are some,
+  `target N ms (20 s without an underrun)` lines bringing it back. No `thread N was SCHED_FIFO` line.
+- The reported latency: the kernel still says `output latency 6480 frames`. Set `oneios-audio-latency=` to (N + 5) x
+  48 frames, N the helper's `latency about N ms`, in the `boot-args=` line of `xnuhost.conf` (5040 if N is 100), and
+  then make it the default (`tools/oneios-tool/crates/oneios-kernel/src/staged/mod.rs` `output_latency!`, the goldens
+  `tests/kernelgen/golden/synthetic/audio.out`, `stdout.txt`, `staged.sha256`, and a kernel build + prelink).
+- Beside One UI, without a session (the same as 2026-11-12, so the two compare): `bridgectl audio
+  /data/local/tmp/oneios-audio 12`, then once more with `ONEIOS_AUDIO_PERF=low`; the `latency about` of each says
+  what RAW does. `dumpsys media.audio_flinger` while it plays shows which output thread holds the track (its pid) and
+  the thread's frame count (the mixer's period).
+- The owner's ear, end to end (touch to sound): Settings > Sounds & Haptics > Keyboard Feedback > Sound on; record
+  the phone with another device's microphone while tapping keys with a fingernail (the nail's click on the glass is
+  the first click in the recording, the keyboard's sound the second). The gap, over ten taps, before and after; it
+  includes iOS's own I/O buffer, so it is longer than the host path. A/V: a lip-sync test video (a flash with a
+  beep) in Safari, filmed with sound by another device: the beep before the flash means the reported latency is
+  too large, after it too small.
 
 ### Missing, unknown
 
@@ -1128,8 +1270,8 @@ yet: the audio test cycle adds it (below).
   arguments now, a third device would be a change of the staged source.
 - Volume: iOS's volume keys scale the samples in iOS (VirtualAudio's software volume [I from iOSPlus10]); the
   Android media stream stays at One UI's last volume (14 of 15 on 2026-11-12). Nothing turns it down for a session.
-- Latency 130 ms: AAudio's level plus the normal mixer (the section above). A FAST track would be lower but needs the
-  realtime path above.
+- Latency: 131-142 ms on the phone before 2026-11-13; about 98-106 ms predicted for the new helper ("Latency per
+  stage" above), not measured on the phone. A FAST track would be lower but needs the realtime path above.
 - Routing: One UI's audio policy's default for a media stream (speaker; a wired or Bluetooth headset if connected
   [U]). The earpiece needs a voice-communication stream or AAudio's device id of the earpiece port: not done. Calls
   are out of scope (no baseband in the guest).

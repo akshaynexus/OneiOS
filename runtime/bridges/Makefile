@@ -62,10 +62,11 @@ AIDL_TEST := tests/test_aidl_binder.c wifi/aidl_parcel.c wifi/aidl_binder.c wifi
 $(H)/test_aidl_binder: $(AIDL_TEST) $(HDR)
 	@mkdir -p $(H)
 	$(CC) -std=gnu11 -O1 -g $(WARN) $(INC) -fsanitize=address,undefined $(AIDL_TEST) -lpthread -o $@
-# The AAudio helper against a fake AAudio (tests/fake/aaudio): its ring, drift steering, stop; real time, about 20 s.
+# The AAudio helper against a fake AAudio (tests/fake/aaudio): its ring, drift steering, stop, the latency per stage;
+# real time, about 45 s. -rdynamic: the helper finds the fake AAudio_setMMapPolicy with dlsym.
 $(H)/test_audio_helper: tests/test_audio_helper.c audio/aaudio_helper.c audio/audio_proto.h tests/fake/aaudio/AAudio.h
 	@mkdir -p $(H)
-	$(CC) -std=gnu11 -O1 -g $(WARN) -Itests/fake -Iaudio -fsanitize=address,undefined tests/test_audio_helper.c -ldl -lpthread -lm -o $@
+	$(CC) -std=gnu11 -O1 -g $(WARN) -Itests/fake -Iaudio -fsanitize=address,undefined -rdynamic tests/test_audio_helper.c -ldl -lpthread -lm -o $@
 
 # The binderfs is mounted on build/host/binderfs inside the namespace only; it goes with the namespace.
 test-binder: $(H)/test_hidl_binder $(H)/test_aidl_binder

@@ -191,6 +191,13 @@ below (the same counts):
 | package | 19 tests passed |
 | `scripts/image/tests/run.sh` | 23 tests, OK |
 
+Since 2026-11-13 (fix-audio-latency): bridges 281 checks (with virtio-snd's periods-in-flight check) and the audio
+helper 11,101 checks (about 50 s; it prints `stage:` lines, the latency per stage, `docs/hardware.md`
+section 6). Its timing checks (no underrun, the slips, the level, the latency bounds) need the host to run the test's
+own threads on time: when they ran more than 4 ms late (other builds on the same CPUs) each such check is skipped
+with a line `the host ran this test's threads up to N ms late: ... not checked`, and the count is lower (the run of 11,101 had 9 skipped, at a
+load of 17-22 on the 4-CPU PC: the box was never idle that day).
+
 `make -C runtime/xnuhost bench-arm64` also runs here, under qemu-aarch64 (about 2 s): its times are qemu's (null
 system call 19.8 us mean, `task_unmap` 16.6 us; about ten times the Mac's container) and the task layer has no seccomp
 filter under qemu-user (`svc #0x80` is rewritten by `text_fixup`), so they say only how a change moves a cost on the
