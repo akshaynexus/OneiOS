@@ -135,6 +135,44 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
 9. **CLAUDE.md's side-key rule** names event0/event2/event4, but the numbers move between boots (in the 15:35 boot
    event4 was the vibration motor). Proposed wording, by name: never grab `gpio-keys`, `pmic_pwrkey`, `pmic_resin`.
    Waits for the owner.
+10. **WebKit content processes crash in a loop; Safari hangs** (2026-11-12 23:45 boot). Each `com.apple.WebKit`
+    content process (pids 300-331, ~20 in 20 s) logs, in order, `triggered unnest of range ... of DYLD shared
+    region`, then `CODE SIGNING: ... vm_map_entry_reinit_code_signing_after_copy: curprot cannot be write+execute.
+    removing execute access`, then crashes; after ~20 corpses iOS says `Too many corpses being created`. MobileSafari
+    sits at 70-101 % CPU (spinning on the content process it keeps losing). **Investigated 2026-11-12, not fixed; the
+    host side is proven sound, the cause is phone-specific and needs the crash report.** What was ruled in/out:
+    - The **CODE SIGNING line is benign** and matches a real device: `vm_map_entry_reinit_code_signing_after_copy`
+      strips execute from the **copy** of a `used_for_jit` entry (not the executable one) on every iOS map, because
+      `VM_MAP_POLICY_ALLOW_JIT_COPY` is always false on iOS (`VM_MAP_IS_ALIEN` is unconditionally true). It fires
+      during WebKit's own `mach_vm_remap` of its JIT mirror and during corpse `vm_map_fork`. It is a marker, not the
+      fault.
+    - **a919ff3 reveals, it does not cause.** Before it, a task `brk` (a WebKit `RELEASE_ASSERT`/`__builtin_trap`,
+      e.g. `brk #0xbb08`, or a PAC `brk #0xc471`) reached iOS as a kernel physical-aperture data abort and panicked
+      the whole kernel (the 23:15 tcp_input panic was one such brk). After it, a task's `brk` becomes a clean
+      `EXC_BREAKPOINT`, so each content process now dies on its own and respawns — the loop we see. The same CODE
+      SIGNING line was on the 23:15 boot, i.e. the JIT path was exercised before too.
+    - **SPRR/APRR fast JIT permissions are not used.** WebKit (`JSC::initializeJITPageReservation`) reads a commpage
+      byte (`com.apple`'s fast-permissions version) to choose the inline `msr sprr_uperm_el0` path (which would be an
+      illegal instruction on the S24's standard Arm cores) versus the separated-W^X-heaps path. Our kernel's commpage
+      leaves that byte zero (open-source `commpage.c` never writes it), so WebKit takes separated heaps. The CODE
+      SIGNING line (from the remap in that path) confirms it.
+    - **The host carries separated-heaps JIT.** New test-kernel case `test_jit` (`runtime/xnuhost/tests/testkernel.c`,
+      `make check-arm64`, passed under qemu-aarch64 2026-11-12): a W+X `task_map`, the same physical page mapped
+      read-execute at a second address, a thread writing code through the read-write alias and running it through the
+      read-execute alias with i-cache maintenance. So the hosted pmap/host-mmap W^X aliasing is not the cause.
+    - **Open, phone-only:** (a) whether One UI's kernel (SELinux/KernelSU) permits a W+X mapping of the RAM memfd for
+      a task process — qemu-user has no SELinux, so `test_jit` cannot cover it (`docs/booter.md` 7); if it refuses,
+      `task.c` logs `tasks: pid N: a deferred map (va 0x..., prot 7) failed`. (b) a WebKit JIT assert under 0027's
+      keys-off PAC on a 39-bit user VA (the `jitCagePtr`/arm64e JIT cage, same 39-bit class as the libobjc bug 0027
+      fixed). The next boot needs the WebContent crash report to decide:
+      `oneios-tool ioslog show data.img --proc com.apple.WebKit.WebContent` and `--proc MobileSafari`, plus
+      ReportCrash's `.ips` under `/private/var/mobile/Library/Logs/CrashReporter` for `com.apple.WebKit.WebContent`:
+      read the **exception type** and faulting **pc/address**. `EXC_BAD_INSTRUCTION` at an `msr sprr_uperm_el0`
+      means the commpage byte is non-zero on the phone (force it to 0); `EXC_BAD_ACCESS` at an address with bits
+      39-46 set means the keys-off/39-bit-VA pointer-tagging class; `EXC_BREAKPOINT` at a WebKit `RELEASE_ASSERT`
+      names the failing check (file/line are in the `brk` operands). Also read xnuhost.log for the `deferred map ...
+      prot 7 failed` line. The `IOUC RootDomainUserClient failed MACF in process pid 282, MobileSafari` line is a
+      separate sandbox/entitlement denial for the IOPMrootDomain user client; harmless to JIT, noted for the hang.
 
 ## Later
 
@@ -150,12 +188,19 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
    the xnuhost logs of every session of the day (`combo1`, `diag`, `c2`, `c3`, `c5` = the 15:35 boot), iOS's own
    log of the 14:12 session (`ios3.logarchive`, parsed `ios3-log.csv`), the baseline config and `phone-baseline.txt`.
 2. iOS's own log of a session: copy the Data store after the session (read only, no session running), fast:
-   `adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'" | gunzip -c |
-   python3 -I sparsewrite.py data.img` (writes sparsely: 6 min, 2.2 GB), attach it read-only
+   `oneios-tool phone pull-data data.img` (gzip -1 on the phone, the zero runs as holes here, the length checked
+   against the phone's; `--ioslog` then reads the log out of the copy without a mount). By hand it is
+   `adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'" |
+   oneios-tool phone sparse-write data.img --gunzip`. `sparse-write` replaced `gunzip -c | python3 -I
+   sparsewrite.py data.img` (the script of 2026-11-12, kept as `tools/oneios-tool/tests/phone/sparsewrite.py`:
+   6 min, 2.2 GB of blocks for the 32 GiB store): the same bytes, a quarter of the CPU, and fewer blocks on
+   Linux's file systems; its macOS part (APFS) and `pull-data` on the phone have not run yet
+   (`tools/oneios-tool/README.md` "The sparse copy"). The way of 2026-11-12, by hand on the Mac: attach the copy
+   read-only
    (`hdiutil attach -readonly -noverify -nobrowse -imagekey diskimage-class=CRawDiskImage -nomount`), mount the
    Data volume `mount -t apfs -o rdonly,nobrowse,noowners`, copy `db/diagnostics/{Persist,Special,Signpost,
    HighVolume,timesync}` and `db/uuidtext/*` into a `.logarchive`, and parse it with Mandiant's macos-unifiedlogs
-   (`unifiedlog_iterator -m log-archive -i ARCHIVE -f csv -o OUT`). The planned `oneios-tool ioslog` does this.
+   (`unifiedlog_iterator -m log-archive -i ARCHIVE -f csv -o OUT`).
 3. Build the set from `main` in a clean worktree (`git worktree add --detach out/parent-wt origin/main`, link
    `external/`): `scripts/bg.sh k env HOSTED_OUT=prelink XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`, then
    `env REFERENCE=out/kernel/current-hosted-prelink/reference.macho KERNEL=out/kernel/current-hosted-prelink/xnu.macho

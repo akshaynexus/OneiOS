@@ -7,6 +7,12 @@ host-call ABI (`runtime/xnuhost/include/xnuhost/hostcall.h`). Date: 2026-11-10.
 `arm_init`, the whole VM bootstrap and into the first kernel thread (`kernel_bootstrap_thread`). It stops in
 corecrypto's start-up self-test. No user-mode code path has run. Nothing has run on the phone. Details below.
 
+The archives of this layer (the disks, software AES, the key store, the Wi-Fi, HID, audio, the GPU, the display) are
+each built by `oneios-tool kernel gen NAME` (`tools/oneios-tool/crates/oneios-kernel`, one module per archive), which
+`kernel/build-hosted.sh` adds to the board's archives. Until 2026-11-13 these were Python scripts in the archives'
+folders (`NAME/build-oneios-NAME.py`); where a comment in a source or a patch here still names one, it means the
+module `build_oneios_NAME.rs` (the scripts' outputs are frozen in `tools/oneios-tool/tests/kernelgen/golden`).
+
 ## Build and run
 
 ```sh
@@ -214,7 +220,11 @@ Both built; not run.
   phone boot printed all five at once: the guest's counter is the host's, which runs since the phone booted), the services
   that keep IOKit busy and have no busy child (`oneios-iobusy: 60 s: busy 1: NAME (class CLASS, id 0x...), inactive 0`)
   and the count. configd's InterfaceNamer waits up to 4 minutes for IOKit to go quiet before it names en0 (261 s
-  after the Wi-Fi driver published it in prelink's session 2); these lines name what it waits for.
+  after the Wi-Fi driver published it in prelink's session 2); these lines name what it waits for. **Read on the PC
+  (2026-11-13):** the one busy service is the service root, `oneios,xnuhost (class IOPlatformExpertDevice)`, held by
+  `StartIOKitMatching` until driverkitd sends its dexts' personalities (`KextLog: driverkitd is active`). InterfaceNamer
+  waits for that only for an interface it does not know; the Wi-Fi nub now reserves en0's unit
+  (`network-interface-unit-en`, `net/README.md` "en0's name"), so en0 no longer waits for it.
 - **0043, the LaunchServices database is kept when it holds the apps.** The base's `native_ls_store_drop` deleted
   LaunchServices' database at every boot, on purpose (its comment: the staged apps are registered only by a rebuild,
   and a database saved before they were registered kept them out). So lsd registered every app again at every boot:
@@ -492,7 +502,7 @@ is, what it answers and why it is **not a security boundary**: [keystore/README.
 
 | Where | What |
 |---|---|
-| `keystore/OneiOSKeyStore.cpp`, `keystore/build-oneios-keystore.py` | the archive `liboneioskeystore.a` (the component's service and user client, the start, the class keys, wrap and unwrap), added to the link by `kernel/build-hosted.sh` |
+| `keystore/OneiOSKeyStore.cpp`, `oneios-tool kernel gen keystore` | the archive `liboneioskeystore.a` (the component's service and user client, the start, the class keys, wrap and unwrap), added to the link by `kernel/build-hosted.sh` |
 | `osfmk/arm64/oneios_host.c` | `oneios_keystore_start()` (weak default) called from `oneios_board_late_start`, after the GPU, before the first user process |
 | `bsd/vfs/kpi_vfs.c` `native_dataprotect_emulated` | UniXNU's `owner-dataprotect` (a file's protection class kept in the extended attribute `com.unixnu.dataprotect-class` on a volume without content protection) is on unless `owner-dataprotect=0` |
 
@@ -554,7 +564,7 @@ lines and what is not tested).
 
 ## hid/: touch, buttons and the light sensor's HID device (fable-hid, 2026-11-11)
 
-No numbered patch: an archive (`hid/build-oneios-hid.py`, hooked into `kernel/build-hosted.sh`) whose start,
+No numbered patch: an archive (`oneios-tool kernel gen hid`, hooked into `kernel/build-hosted.sh`) whose start,
 `oneios_hid_input_start`, is the last call of `oneios_drivers_start` (`drivers/bridge/OneiOSBridge.c`).
 `hid/README.md` has the files, the evidence for the layout header, the buttons table and the log lines.
 
@@ -590,7 +600,7 @@ Nothing ran on the phone.
 
 ## audio/: the speaker and the microphone (audio, 2026-11-12)
 
-No numbered patch: an archive (`audio/build-oneios-audio.py`, hooked into `kernel/build-hosted.sh` like `hid/`)
+No numbered patch: an archive (`oneios-tool kernel gen audio`, hooked into `kernel/build-hosted.sh` like `hid/`)
 whose start, `oneios_audio_start` (`audio/OneiOSAudio.c`), is the last call of `oneios_drivers_start` (weak in
 `drivers/bridge/OneiOSBridge.c`). It holds UniXNU-droidvm's virtio-snd transport (`DroidVMVirtioSnd.c`, unchanged,
 `-DDROIDVM_DEVICE_DYNAMIC=1`) and its two IOAudio2Devices (`DroidVMAudio.cpp`, staged with the boot arguments
@@ -906,7 +916,7 @@ ASSOC_DONE: wifid never learned of the join and Settings stayed at "connecting".
 
 ## net/: the Wi-Fi, en0 on the phone's radio (radio, radio2, 2026-11-12)
 
-No numbered patch: an archive (`net/build-oneios-net.py`, hooked into `kernel/build-hosted.sh` like `hid/`) whose
+No numbered patch: an archive (`oneios-tool kernel gen net`, hooked into `kernel/build-hosted.sh` like `hid/`) whose
 start, `oneios_net_start` (`net/OneiOSWifi.cpp`), `oneios_drivers_start` calls before the audio's (weak in
 `drivers/bridge/OneiOSBridge.c`). Before it the hosted kernel had no network driver and iOS no en0. It holds
 `IO80211Controller` and `IO80211Interface` (the class names wifid and configd know) as subclasses of the

@@ -1,0 +1,16 @@
+// A made-up source for the edit list "hid_transport": every anchor once, between lines of its own.
+// (before anchor 0)
+struct droidvm_input_desc { uint64_t address;
+// (before anchor 1)
+                uint8_t id = s < DROIDVM_INPUT_SLOTS ? (uint8_t)(1 + (uint32_t)d->slots[s].id % 120) : 127;
+// (before anchor 2)
+    if (e->type == EV_SYN) return e->code == SYN_REPORT;
+// (before anchor 3)
+                else touch_frame();
+// (before anchor 4)
+        input_bit(abs, nabs, ABS_Z))
+        return KIND_MOTION;
+    return KIND_NONE;
+// (before anchor 5)
+static bool input_bit(const uint8_t *bits, unsigned size, unsigned bit) {
+// (the end)

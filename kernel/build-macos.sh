@@ -33,6 +33,7 @@ echo $$ > "$LOCK/pid"
 trap 'rm -rf "${LOCK:?}"' EXIT
 
 stage_sources
+stage_tool
 [ "${CLEAN:-0}" = 1 ] && rm -rf "${UNIXNU_OUT_DIR:?}/oneios"
 
 # The macOS release this XNU ships in (pins.sh). darwin-xnu-build reads MACOS_VERSION to choose its patch set
@@ -69,5 +70,5 @@ if [ "$rc" != 0 ]; then
   done
   exit 1
 fi
-python3 -I "$ROOT/kernel/build-record.py" finish --host macos --work "$(dirname "$TREE")" --config "$CONFIG_NAME" --out "${KERNEL_OUT:-$ROOT/out/kernel}"
+"$ONEIOS_TOOL" kernel build-record finish --host macos --work "$(dirname "$TREE")" --config "$CONFIG_NAME" --out "${KERNEL_OUT:-$ROOT/out/kernel}" --repo "$ROOT"
 echo "build-macos: done in $(( $(date +%s) - T0 )) s"

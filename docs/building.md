@@ -14,7 +14,7 @@ and `out/`.
 | Tool | For | Notes |
 |---|---|---|
 | python3 3.11+, zstd, tmux, git, curl, patch | everything | `patch`: xnuhost's Makefile applies `runtime/xnuhost/drm2kgsl/patches` to a copy of drm2kgsl |
-| Rust 1.88+ (`cargo`; rustup) | `tools/oneios-tool`: the kernel collection's build (section 3), the image tools and the phone workflow (section 10) | the build scripts run `cargo build --release --manifest-path tools/oneios-tool/Cargo.toml` when the binary is missing or older than its sources (`scripts/lib/oneios-tool.sh`); `ONEIOS_TOOL=PATH` names a built one. Built with 1.98.0; needs a C compiler (`sha2`'s `asm`) |
+| Rust 1.88+ (`cargo`; rustup) | `tools/oneios-tool`: the kernel's board archives and build record (section 2), the kernel collection's build (section 3), the image tools and the phone workflow (section 10) | the build scripts run `cargo build --release --manifest-path tools/oneios-tool/Cargo.toml` when the binary is missing or older than its sources (`scripts/lib/oneios-tool.sh`); `ONEIOS_TOOL=PATH` names a built one. Built with 1.98.0; needs a C compiler (`sha2`'s `asm`) |
 | clang (stock, recent) | the kernel | the kernel build uses stock clang plus xnu-linux-toolchain's ld64 (set up by the kernel scripts, no root) |
 | libdispatch with BlocksRuntime (Linux only) | the kernel's toolchain (cctools' ld64) | Arch: `libdispatch` (6.2.2 on the PC of 2026-11-12: `/usr/include/dispatch`, `/usr/lib/libdispatch.so`, `libBlocksRuntime.so`); Debian/Ubuntu: `libdispatch-dev libblocksruntime-dev`. Without it `kernel/linux/setup-toolchain.sh` stops and no kernel builds. Also git, cmake, make, flex, bison, autoconf, automake, pkg-config ([kernel/README.md](../kernel/README.md)) |
 | Android NDK 28.2 | xnuhost, the helpers, the phone tools | `$HOME/Android/Sdk/ndk/28.2.13676358` (Linux), `$HOME/Library/Android/sdk/ndk/28.2.13676358` (macOS), or `$NDK` / `$ANDROID_NDK_HOME` |
@@ -113,11 +113,12 @@ scripts/bg.sh kernel-hosted env HOSTED_OUT=me kernel/build-hosted.sh
 - The reference for the prelink (optional, worth thousands of paired functions; rebuild only when the source
   changes): `XNU_FILESET_REFERENCE=1` in the build's command. It lands next to the kernel as
   `out/kernel/current-hosted-me/reference.macho` (see [kernel/prelink/README.md](../kernel/prelink/README.md)).
-- The build also makes the hosted board's archives from `kernel/patches/oneios-hosted/`: the disks (`storage`), the
+- The build also makes the hosted board's archives from `kernel/patches/oneios-hosted/`, each by `oneios-tool kernel gen NAME`
+  (section 10; the script builds the tool first when it is missing or stale, so the kernel build needs Rust): the disks (`storage`), the
   virtio GPU (`gpu`), software AES (`aes`), the speaker and microphone (`audio`: UniXNU-droidvm's virtio-snd and
   IOAudio2Devices from `external/UniXNU-droidvm`) and the display (`display`: needs `external/NativeMobileDisplay` and
   `external/UniXNU-droidvm` from `scripts/setup/get-references.sh`; its input for another kernelcache is remade with
-  `display/port-legacy-display.py`).
+  `oneios-tool kernel port-legacy-display`).
 - The VM kernel (UniXNU's own board, not used by xnuhost): `scripts/bg.sh kernel kernel/build-linux.sh`; on a Mac,
   `kernel/build-macos.sh`. See [kernel/README.md](../kernel/README.md).
 
@@ -321,10 +322,9 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
 - `guest` lines in the log are the kernel's console. `kill -QUIT <xnuhost pid>` (the pid in `SESSION/xnuhost.pid`,
   not `pkill`: the task factory has the same command line and dies of the signal) logs every vCPU and every iOS
   thread, with the thread's return addresses up its frame pointers where the host can read the task's memory (on
-  the phone; under qemu-user it cannot, and only pc and lr are shown). **Under qemu-aarch64 the pid in the file is
-  qemu's:** on 2026-11-13 (qemu 11.1.3) a `kill -QUIT` of it ended the run (`qemu: uncaught target signal 3 (Quit) - core
-  dumped`, exit 131, a 470 MB `qemu_xnuhost_*.core` in the working directory), so on the PC use `oneios-ubt=NAME` instead;
-  `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
+  the phone; under qemu-user it cannot, and only pc and lr are shown). Seen on the Linux PC on 2026-11-13 (qemu-aarch64
+  11.1.3, a boot 30 minutes in, the pid from `xnuhost.pid`): `qemu: uncaught target signal 3 (Quit) - core dumped` and the
+  boot ended, so there it costs the boot (cause not looked into; another such boot left a 470 MB `qemu_xnuhost_*.core` in the working directory, exit 131); `oneios-ubt=` is the safe way. `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
 - A user process that dies: the kernel logs its registers and a backtrace (`sheng-exc`, `sheng-ubt` lines) for the
   processes named in the boot argument `sheng-exc-name=SpringBoard,backboardd,...` (default: backboardd, chronod,
   liveactivitiesd; launchd always). `oneios-tool sym ADDR...` names those addresses in the image set's dyld
@@ -332,7 +332,12 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   after the first call the index in `out/dsc-index` is enough: section 10, `tools/oneios-tool/README.md` "sym").
 - Wi-Fi on the PC: add `--set wifi=sim`: a made-up radio with two networks for the guest's Wi-Fi driver and wifid
   (`ONEIOS WIFI:` lines; [hardware.md](hardware.md) section 3). Not possible in the Mac's container: its Linux has no
-  pointer authentication (`xnuhost E an arm64e kernel needs pointer authentication ...; this host has none`).
+  pointer authentication (`xnuhost E an arm64e kernel needs pointer authentication ...; this host has none`). The limit
+  is the container's only: on the Linux PC qemu-aarch64's `-cpu cortex-a710` has it (`host: ... PAC yes`), and
+  `wifi=sim` boots there (2026-11-13: en0 named, enabled by configd, wifid's attach; [hardware.md](hardware.md) 3, "en0
+  late"). On that 4-CPU PC under other agents' load configd reached the naming 13-26 minutes into the boot, so give
+  such a boot `timeout` 4000 s or more; iOS's own log can be read from the running boot's `data.img`
+  (`oneios-tool ioslog show ... --proc configd`), not always after a `timeout` kill.
 - Touch and keys on the PC: add `--input-script runtime/xnuhost/tools/input-demo.script` (keep `--no-input`: the
   evdev reader would open the PC's own devices). The script gives xnuhost's input device a panel's axes and, once
   the guest's driver runs it, repeats a tap, a swipe up from the bottom edge and the three side keys
@@ -401,6 +406,7 @@ $T phone log --list                # the logs by name: xnuhost, switch, return, 
 $T phone status --watch            # the status again every 5 s
 $T phone return                    # session/return.request, then waits for "One UI restored in place"
 $T phone pull-data OUT --ioslog    # the Data store's copy (no session open), then ioslog boots and checks
+#   pull-data by hand: adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'" | $T phone sparse-write OUT --gunzip
 ```
 
 One command for the whole cycle (each step can be left out with `--only` or `--skip`; `--dry-run` says what each
@@ -669,7 +675,8 @@ what was changed for the iPhone's shared cache and what is verified: [gpu.md](gp
 `tools/oneios-tool` is one binary with the project's host tools in Rust: `sym` (the backtrace symbolizer; it replaced
 `scripts/debug/dsc.py`, deleted 2026-11-12), `log` (reads an xnuhost session log), `image` (`scripts/image/imagetool.py`), `ioslog` (iOS's
 own unified log out of a copy of the phone's Data store, without a mount) and `prelink` (all twelve steps of
-`kernel/prelink/build.sh`, behind `PRELINK_IMPL=rust`). Since the third Linux round also `phone` (the adb
+`kernel/prelink/build.sh`, behind `PRELINK_IMPL=rust`), and `kernel` (the kernel build's own steps: the
+board archive generators `kernel gen NAME`, the build record, the records made from the kernelcache). Since the third Linux round also `phone` (the adb
 workflow of section 6: status, stage, sums, switch, return, log, the Data store's copy), `app` (the fork's app of
 section 7: version, doctor, build, install, stage-scripts) and `cycle` (one test cycle: build, tests, stage, switch, watch, hold, return, collect).
 **None of the three has run on the real phone yet**: sections 6 and 7 show the CLI first and, as the fallback, the
@@ -699,6 +706,7 @@ Rust 1.95 or newer (apk-info-zip 1.1.1 needs 1.95; built with 1.98.0 and 1.99.1)
 |---|---|---|
 | `scripts/image/build.sh`, `scripts/image/verify.sh` | `IMAGETOOL_IMPL=rust` (default `python`), `ONEIOS_TOOL=PATH` | `oneios-tool image` runs profile, apfs-info, apfs-owners, hashes, tree-copy, seed-pack, manifest and the set folder's verify; pack and the archive's verify stay with the Python tool. Same files, byte for byte (README "image") |
 | `scripts/image/kernel-inputs.sh` | none needed; `IM4P_TOOL=PATH` forces it | without the `lzfse` program the kernelcache is decoded by `oneios-tool image im4p`; the result is checked against the pinned SHA-256 either way (section 1) |
+| `kernel/build-hosted.sh`, `kernel/build-linux.sh`, `kernel/build-macos.sh` | none: Rust only since 2026-11-13 (`ONEIOS_TOOL=PATH` for another binary) | the board archives (`storage`, `board`, `aes`, `keystore`, `net`, `hid`, `audio`, `gpu`, `display`) are built by `oneios-tool kernel gen NAME`, which UniXNU's driver runs from `board.toml`, and the VM kernel's build record by `oneios-tool kernel build-record`; the Python generators were deleted after every file they write was compared byte for byte, and their outputs are frozen in `tests/kernelgen/golden/` (README "kernel") |
 | `kernel/prelink/build.sh` | none: Rust only since 2026-11-12 (`ONEIOS_TOOL=PATH` for another binary) | `oneios-tool prelink` runs all twelve steps; the Python steps were deleted after every step's output was compared byte for byte, and their outputs are frozen as hashes (`tests/prelink/compare-golden.sh`). 14 s instead of two minutes |
 
 `oneios-tool image seed-pack` writes `data.seed`'s members in parallel, each at its own offset (the same bytes as
@@ -718,3 +726,21 @@ oneios-tool ioslog save data.img out/session.logarchive             # the .logar
 
 Tested on stand-in images and on Mandiant's test archives (CSV byte for byte what `unifiedlog_iterator` writes);
 **not yet run on a Data store from the phone** (README "ioslog": what was compared and what was not).
+
+A kernel panic of a session (`panic(cpu N caller 0x...)`, the fault's pc and lr, the `frame 0x...` lines), named in
+the `kernel.kc` that ran and the `xnu.macho` it was prelinked from: member and segment, function + offset,
+file:line and inlined frames. The first call for a pair of files builds an index under `out/ksym-index/` (2 to 9 s);
+later calls take milliseconds:
+
+```sh
+oneios-tool sym kernel xnuhost.log                                  # or: oneios-tool log panic xnuhost.log
+oneios-tool sym kernel --kc out/kernel/24A446/kernel.kc --kernel out/kernel/current-hosted/xnu.macho xnuhost.log
+oneios-tool sym kernel --slide 0x2ff9000000 0x200454c094            # an address of the running kernel, by hand
+```
+
+Without `--kc` and `--kernel` (or `ONEIOS_KC`, `ONEIOS_KERNEL`) it takes the newest `out/kernel/*/kernel.kc` and
+the `xnu.macho` its prelink record names, says which and their SHA-256, and warns when the two do not belong
+together. File:line needs the kernel's DWARF: the object files of the build tree that `xnu.macho`'s debug map names
+(as `kernel/build-hosted.sh` left them when `xnu.macho` was linked), or a dSYM (`--dsym`). Compared with
+`llvm-symbolizer` on three Linux-built kernels; **not yet run on a panic log from the phone** (README "sym
+kernel": the address rules, the comparison, what was not run).

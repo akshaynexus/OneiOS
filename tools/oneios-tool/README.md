@@ -6,16 +6,19 @@ script before it may replace it; the commands and the results are below. What is
 | Tool | Replaces | State | Same output as the old tool |
 |---|---|---|---|
 | `sym` | `scripts/debug/dsc.py` (**retired 2026-11-12**: deleted, its output frozen in `tests/sym/golden/`) | done | yes: byte for byte on 18 of 18 address sets (Linux, 2026-11-12; the Mac's run: 18 of 18) |
+| `sym kernel`, `log panic` | naming a kernel panic's frames by hand (`atos -o xnu.macho` on the Mac, with each segment's move subtracted) | done; **not run on the Mac's log and kernel of the 2026-11-12 panic** (not on the Linux box) | compared with `llvm-symbolizer --inlining` on three Linux-built pairs: the stand-in panic's 19 addresses and 31,605 more per pair (311,605 on one) name the same function, file:line and inlined frames |
 | `log` | nothing (new) | done | not applicable; 33 commands end with status 0, two runs equal |
 | `image` | `scripts/image/imagetool.py` | 9 subcommands in Rust, the rest run the Python tool | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds, byte for byte (the 36th: the Linux set has no `kernel.kc`) |
 | `ioslog` | the manual steps of `docs/newtodo.md` "How to resume" step 2 (mount, copy, `unifiedlog_iterator`) | done; not run on the phone's Data store yet | yes on 7 archives: CSV byte for byte from a `.logarchive`, from a Data-store image and from a mounted volume |
 | `prelink` | the steps of `kernel/prelink/build.sh` | all 12 steps (`PRELINK_IMPL=rust`) | yes: every step's files and stdout byte for byte on two Linux-built kernels, `kernel.kc` `ffbe95f7...` and `cdd98e7e...` |
-| `phone` | `scripts/phone/stage.sh`, the adb lines of `docs/building.md` section 6, the Mac's `sparsewrite.py` | written; **not run on the phone** (none on the box) | `stage` and `sums`: the same output and the same stage as `stage.sh` on a stand-in phone; 64 checks pass (`tests/phone/run.sh`) |
+| `kernel` | the board archive generators of the kernel build (`build-oneios-*.py`, nine), `kernel/build-record.py`, the two `layout.py` and `port-legacy-display.py` | all ported, and the scripts **retired 2026-11-13** (deleted, their outputs frozen in `tests/kernelgen/golden/`): the kernel builds run the commands | yes: every file of the nine archives byte for byte (261 files, one line of two `objects.json` aside), the build record, the three kernelcache records, and `kernel/build-hosted.sh` gives the same kernel either way but for the build time it carries (2,074 bytes of time stamps and the UUID; Linux, 2026-11-13) |
+| `phone` | `scripts/phone/stage.sh`, the adb lines of `docs/building.md` section 6, the Mac's `sparsewrite.py` | written; **not run on the phone** (none on the box) | `stage` and `sums`: the same output and the same stage as `stage.sh` on a stand-in phone; 76 checks pass (`tests/phone/run.sh`); `sparse-write`: the bytes and length of `sparsewrite.py` on 7 streams and a 32 GiB one, not more blocks, a quarter of the CPU (`tests/phone/sparse-compare.sh`) |
 | `app` | the app lines of `docs/building.md` section 7 (new) | written; **the app was not built or installed with it** (the owner's decision for this box) | not applicable; 65 checks pass with a stand-in checkout, gradlew, gh and phone (`tests/app/run.sh`); `app version` runs on the real clone |
 | `cycle`, `phone log` | the test cycle of `docs/building.md` section 6 by hand (new) | written; **not run on the phone or with real builds** | not applicable; 90 checks pass with a stand-in checkout and phone (`tests/cycle/run.sh`) |
 
 **Python stays the default.** No build script calls `oneios-tool` unless it is asked to
-(`IMAGETOOL_IMPL=rust` for `scripts/image/build.sh` and `verify.sh`), with one exception that changes no output:
+(`IMAGETOOL_IMPL=rust` for `scripts/image/build.sh` and `verify.sh`), but for the retired tools (`kernel/prelink/build.sh`
+and, since 2026-11-13, the kernel builds: `kernel`, below), and with one exception that changes no output:
 `scripts/image/kernel-inputs.sh` decodes the kernelcache with `oneios-tool image im4p` when the `lzfse` program is
 not installed, and checks the result against the SHA-256 the kernel profile pins.
 
@@ -70,10 +73,12 @@ exists or where ours is measured to be faster; each such part says why in its mo
 | `tar` 0.4 (`Header`) | `image seed-pack`: every 512-byte ustar block of `data.seed`, field by field (`crates/oneios-image/src/tar.rs`; what stays ours and why: below) |
 | `serde_json` (`ser::Formatter`), `serde` | every JSON file the tools write: Python's `json.dumps` layout is a `Formatter` (`oneios-common/src/pyjson.rs`) |
 | `base64`, `percent-encoding` | the seed's xattr values and their pax keys (`base64.b64encode`, `urllib.parse.quote`) |
-| `flate2` | `phone pull-data`, `phone sparse-write --gunzip`: the gzip stream of the phone's busybox; the zlib kinds of compressed APFS files |
+| `flate2` (`zlib-rs`) | `phone pull-data`, `phone sparse-write --gunzip`: the gzip stream of the phone's busybox; the zlib kinds of compressed APFS files. The backend is `zlib-rs` (pure Rust), the fastest of the three on the Data store's stream ("The sparse copy") |
 | `zbitmap` 0.1 (MIT, github.com/valentinogrande/zbitmap) | LZBITMAP, the compression of most files of iOS 27's OS volumes (decmpfs kinds 13 and 14). A young crate: its output is checked against apfs-fuse on every compressed file of the two images |
 | `apk-info-zip` 1.1 (Apache-2.0, github.com/delvinru/apk-info) | `app`: an APK's signing certificates (schemes v1 to v3.x) |
 | `sha2` (`asm`), `rayon`, `memmap2`, `libc`, `anyhow` | hashing (the hash lists are `sha2` and `std::io::Write`), parallel work, file maps, `copy_file_range` (`image`, `sym`, `log`) |
+| `object` 0.37 | `sym kernel`: all Mach-O reading. The collection's header and load commands (`LC_FILESET_ENTRY`, each member's `LC_SEGMENT_64`s and `LC_SYMTAB`, read at the member's offset with `MachHeader64::parse` and `load_commands`: the crate has no fileset type of its own), `xnu.macho`'s symbols, sections and UUID, its debug map (`ObjectMap`: the `N_OSO` and `N_FUN` stabs), archives of object files |
+| `addr2line` 0.25 with its `loader` (on `gimli` 0.32; `cpp_demangle`, `rustc-demangle`) | `sym kernel`: all DWARF reading. `Loader::find_frames` gives function, file, line and the inlined frames of an address, from `xnu.macho`'s own DWARF, a dSYM, or the object files of the debug map; C++ names are demangled by `cpp_demangle` |
 
 Hand-written, and why:
 
@@ -87,6 +92,7 @@ Hand-written, and why:
 | `oneios-image/src/hashes.rs` | one read pass feeds the whole-file SHA-256 and the chunk hashes (1.9 to 2.9 times Python on the Mac); the list itself is a 32-byte header and the digests, written with `std::io::Write` |
 | `oneios-sym`'s index | the project's own on-disk index: answers in 3 to 10 ms where `dsc.py` takes 0.03 to 53 s |
 | `oneios-log` | xnuhost's own log format |
+| `oneios-ksym`: the index (`index.rs`), the walk that fills it (`dwarf.rs`: which addresses, in how many threads, the runs of equal answers), the panic block's reader (`panic.rs`), the search for the member and segment of an address | the project's own on-disk index, as `sym`'s: a later call takes 4 to 10 ms and reads none of the 93 MB collection, the kernel or its 1,070 object files, and stays right when a kernel build replaces them. Everything the index holds is read by `object` and `addr2line`. Three things the libraries leave open are done by hand, each in a few lines: an object file's time is compared with its `N_OSO` stab's (`addr2line`'s loader reads a rebuilt file as it is), instruction sections are found by their flags (`object` knows `__TEXT,__text` only), and `_block_invoke` names are demangled as LLVM writes them |
 
 `serde_json`'s `preserve_order` feature must not be enabled by any crate of this workspace: Cargo gives one set of
 features to the whole binary, and with it macos-unifiedlogs writes the keys of a decoded state dump in insertion
@@ -394,10 +400,186 @@ The index: built in 26.4 s (1068.8 MiB; 4,696 images, 11,365,799 symbols kept). 
 (18 of 18 on sets from four real logs; `dsc.py` 0.03-53 s, `sym` 3-170 ms) is in [todo_rust.md](todo_rust.md).
 Not compared on Linux: address sets from real phone logs (none on the box).
 
+## sym kernel
+
+`oneios-tool sym kernel` names the kernel addresses of an xnuhost panic: the member and segment of the kernel
+collection (`kernel.kc`) each one is in, the function + offset, and for the kernel itself file:line and the
+inlined frames from the unprelinked kernel (`xnu.macho`). `sym` names user addresses only (the dyld shared cache);
+the frames of the phone's panic of 2026-11-12 23:15 were named by hand with `atos` on the Mac. Crate
+`crates/oneios-ksym`; added 2026-11-13 on Linux.
+
+```sh
+oneios-tool sym kernel LOG                          # every panic block of an xnuhost session log (`-`: standard input)
+oneios-tool sym kernel 0xfffffff00b54c094 ...       # addresses by hand (hex): of the collection, or running ones with --slide
+oneios-tool sym kernel --symbol tcp_input           # where a function is: in the collection, in xnu.macho, running
+oneios-tool sym kernel --xnu 0xfffffff007789b78     # an address of xnu.macho, as atos and llvm-symbolizer take them
+oneios-tool sym kernel index [--force]              # build the index now; prints every kernel segment's move
+oneios-tool log panic LOG                           # the same panic blocks, from the log tool
+oneios-tool log stacks LOG                          # ends with them when the log has a panic
+#   --kc PATH/kernel.kc  --kernel PATH/xnu.macho  --dsym PATH  --no-kernel  --slide HEX  --index DIR
+#   -f text|json  --full-paths  --return  --no-call-sites  --stdin  --rehash  -j N
+```
+
+**The files.** `--kc` and `--kernel`, else `ONEIOS_KC` and `ONEIOS_KERNEL`, else the newest
+`out/kernel/*/kernel.kc` and the `xnu.macho` that its prelink record names (`kernel.kc.build.json` beside it:
+`inputs.kernel.path` or any `out/kernel/current-hosted*/xnu.macho` with `inputs.kernel.sha256`), else the newest
+`out/kernel/current-hosted*/xnu.macho`. In a git worktree under `.claude/worktrees/` the checkout's own `out/` is
+searched too. The output starts with the two paths and their SHA-256 (kept in `out/ksym-index/hashes.json` with the
+size and time they were taken at, so a later call does not hash 93 MB again; `--rehash` does), where the DWARF came
+from, and whether the two belong together: a `WARNING` when the record names another kernel, when a kernel segment
+has another size in the two files, or when the symbols the collection keeps for the kernel (70,579 here) are not
+all where this kernel's symbols land.
+
+**Addresses.** Four kinds, told apart by where they lie:
+
+| Address | From | Rule |
+|---|---|---|
+| in the collection | `panic(cpu N caller 0x...)`, the `frame 0x...` lines (`hosted_panic` prints them `- vm_kernel_slide`) | the fileset's `LC_FILESET_ENTRY` members and each member's `LC_SEGMENT_64`s are read; the smallest segment that holds the address gives member and segment (every kext lists the shared `__LINKEDIT`: the first member has it) |
+| in `com.apple.kernel` | the same | **xnu.macho address = address - (the segment's vmaddr in the collection - the same segment's vmaddr in xnu.macho), per segment.** The prelink places each segment on its own: here `__TEXT` moves by `0x180000`, `__DATA_CONST` by `0xc24000`, `__TEXT_EXEC` and `__KLD` by `0x386c000`, `__DATA` by `0x3a28000` (`sym kernel index` prints all ten). A symbol moves with the segment of its section (`n_sect`), not of its address: an end label sits on the next segment's first address, and `__LAST` has no size |
+| of the running kernel (the "physical aperture") | the fault's `pc` and `lr`, in the panic's text and in its register dump | **collection address = running address - slide** (modulo 2^64), **slide = RAM - link base**. xnuhost maps the guest's RAM once, at `0x2000000000 + (link base mod 2 MiB)` (`runtime/xnuhost/src/mem.c`, retried 16 GiB higher), copies every segment of the collection to `RAM + (vmaddr - link base)` (`runtime/loader/src/boot.c`; link base = the lowest vmaddr of the collection's own segments, `macho.c`) and runs it there with physical = virtual (`docs/booter.md` 2.2). The log has all three numbers: `kernel: ... link base 0xfffffff007004000` and `memory: N MiB at 0x2000004000, physical = virtual (slide 0x2ff9000000)`. So `pc 0x200454c094` is `0xfffffff00b54c094`, the panic's first `frame` line, and `lr 0x2003ff1038` is `0xfffffff00aff1038`, `0x7138` bytes after the `tcp_input` frame. `--slide HEX` gives the slide for addresses by hand or a log cut before its `memory:` line; the tool warns when the log's slide is not RAM - link base or its link base is not this collection's |
+| anything else | | said in the line (`not in the collection (A to B); as an address of the running kernel (slide S) it is X: not in it either`), never dropped |
+
+**Names.** Function + offset is the nearest symbol at or below the address in the same member and segment: for
+the kernel from `xnu.macho`'s symbol table (C++ demangled; of two names of one address the one the DWARF gives
+the function, else the last external one, so `_start` and not the `LowResetVectorEnd` label before it), for
+another member from its own symbol table in the collection. **This collection keeps no symbols of its 134 kexts**,
+so a kext frame is `member segment  __TEXT_EXEC+0xOFFSET`; kexts are at the kernelcache's addresses, so the
+address is the one a disassembler of `kernelcache.macho` shows. `--no-kernel` (or no `xnu.macho`) names the kernel
+from the symbols the collection keeps for it, without file:line.
+
+**DWARF** is read by `addr2line` (on `gimli`) from where it is, in this order: `--dsym PATH`; `xnu.macho`'s own
+`__DWARF` sections; a `.dSYM` in `xnu.macho`'s folder with its UUID; the kernel's **debug map**. The Linux build
+has the last: `xnu.macho` carries no DWARF and no dSYM (`mach.development.bcm2837.dSYM` in the build tree is
+empty), its 1,070 `N_OSO` stabs name the object files and archive members of the build tree
+(`out/kernel-hosted-*/...`), which hold the DWARF. An object file whose time is not the one its stab recorded was
+rebuilt since the link: its functions get no lines and the head says how many (lines of another build would be
+wrong ones). `llvm-symbolizer` and `llvm-addr2line` do not read a debug map: on `xnu.macho` they give function
+names only.
+
+**The index** (`out/ksym-index/<kernel.kc SHA-256>/<xnu.macho SHA-256>/`, `kc-only` without a kernel;
+`ONEIOS_KSYM_INDEX` or `--index` for another folder) is built by the first call for a pair of files: the members
+and segments, every symbol at its collection address, and file, line and inlined frames of **every instruction of
+the kernel** (2,471,575 addresses asked of `addr2line`, 761,328 runs of equal answers). `index.bin` 23.2 MiB,
+`meta.json` 0.1 MiB. After that a call reads neither the collection nor the kernel nor an object file, so the
+index stays right when the next kernel build replaces the object files. The threads (`-j N`, default: the CPUs)
+each take a share of the addresses; `index.bin` is the same file for 1, 3 and 4 threads. Times on the Linux PC (4
+CPUs; other agents' builds were running, load 3 to 12): **the first call for a pair 2.2 to 4.4 s** (the index
+1.3 to 3.7 s with 4 threads; with `-j2` 1.7 to 2.8 s at load 3 and 6 to 9 s at load 8 to 12; hashing the two files
+once is about 0.7 s), **later calls 4 to 10 ms** for a panic block of 19 addresses, the process from start to end
+(0.18 s in one call; a guess: the index was no longer in memory. Not looked into).
+
+**Output.** One line per address, `ADDRESS  member segment  function+offset  (file:line)`; in a panic block the
+line starts with what the address is (`caller`, `pc`, `lr`, `frame`). The file:line is the place in the function
+itself; the functions inlined there follow, each indented under the one it was inlined into, the last one being
+where the address is. `caller`, `lr` and `frame` are return addresses: when the call (4 bytes before) is on
+another line or in another function, a line `the call, at ADDRESS: ...` says where (`--no-call-sites` leaves it
+out; a call that never returns can be the last instruction of its function, and then the return address is the
+next function's first). `-f json` has every field (the address as given, `space`, `kc_address`,
+`kernel_address`, `member`, `segment`, `symbol`, `raw_symbol`, `offset`, `frames` with whole paths and mangled
+names, `call_site`, `note`). From the stand-in log of this box's kernel:
+
+```
+panic at xnuhost.log line 6 (cpu 4): Unexpected fault in kernel physical aperture at pc 0x00000020044edcd8, lr 0x0000002003ffe0cc (saved state: ...)
+  running address = collection address + slide 0x2ff9000000 (RAM 0x2000004000 - link base 0xfffffff007004000)
+  caller 0xfffffff00b4e80a4  com.apple.kernel __TEXT_EXEC  sleh_synchronous_sp1+0x54  (sleh.c:689)
+             the call, at 0xfffffff00b4e80a0: sleh_synchronous_sp1+0x50  (sleh.c:681)
+  pc     0x20044edcd8 (running; 0xfffffff00b4edcd8 in the collection)  com.apple.kernel __TEXT_EXEC  __ubsan_handle_mul_overflow_minimal+0x0  (ubsan_minimal.c:165)
+  lr     0x2003ffe0cc (running; 0xfffffff00affe0cc in the collection)  com.apple.kernel __TEXT_EXEC  compute_iaj+0x1ec  (tcp_input.c:453)
+               inlined compute_iaj_meat  (tcp_input.c:0)
+             the call, at 0xfffffff00affe0c8: compute_iaj+0x1e8  (tcp_input.c:453)
+                 inlined compute_iaj_meat  (tcp_input.c:439)
+  frame  0xfffffff00adcbc30  com.apple.kernel __TEXT_EXEC  sleh_synchronous+0xc18  (sleh.c:999)
+               inlined handle_abort  (sleh.c:1572)
+                 inlined handle_kernel_abort  (sleh.c:2717)
+  frame  0xfffffff00add05b4  com.apple.kernel __TEXT_EXEC  hosted_exception_upcall_entry+0x18
+  frame  0xfffffff00aff70b4  com.apple.kernel __TEXT_EXEC  tcp_input+0x153c  (tcp_input.c:3723)
+             the call, at 0xfffffff00aff70b0: tcp_input+0x1538  (tcp_input.c:3721)
+```
+
+### The comparison
+
+```sh
+tools/oneios-tool/tests/ksym/compare.sh                    # the pair `sym kernel` finds under out/kernel
+tools/oneios-tool/tests/ksym/compare.sh KC KERNEL [LOG]    # these files; LOG: a real xnuhost session log
+#   DSYM=PATH (the kernel's dSYM, when its object files are not on this machine)  SAMPLE=N  KEEP=1
+```
+
+The reference is `llvm-symbolizer --inlining --no-demangle` (LLVM 23.1.4) on a dSYM that `dsymutil` makes from the
+same `xnu.macho` (5.6 s): LLVM's DWARF linker and reader against `addr2line` reading the object files through the
+debug map. The Mac's log and kernel of the 2026-11-12 panic are not on this box (and a Linux-built kernel has
+other addresses), so without `LOG` the script's log is a stand-in that `tests/ksym/make-log.py` writes from the
+two files: the panic's 17 functions in order, for each a return address after its `bl` to the function above it
+in the backtrace (else after the middle one of its calls), the pc on the first frame, the lr after
+`compute_iaj`'s call of the handler, both as running addresses with slide `0x2ff9000000`. The collection addresses
+come from the test's own reader (`tests/ksym/kcmap.py`: `struct` and `mmap`, no Mach-O library), not from the
+tool. `handle_kernel_abort` is not a symbol of the Linux build (inlined into `sleh_synchronous`): 16 frame lines.
+
+Result on Linux x86_64 (2026-11-13), three pairs: `kernel.kc` `ffbe95f7` with `xnu.macho` `13ed0b70` (`pc`),
+`cdd98e7e` with `399f50fa` (`pc2`), `ff87a7ee` with `be249267` (`fpr2`, the tool's own choice). **Every check the
+same on all three:**
+
+| Check | Result |
+|---|---|
+| the log's 19 addresses (caller, pc, lr, 16 frames): function, file:line and every inlined frame against `llvm-symbolizer` | 19 of 19 the same, per pair (17 with file:line; `hosted_exception_upcall_entry` and `Call_continuation` are assembly: function + offset on both sides) |
+| the running pc and lr: collection address + slide = the log's address; the pc is the first frame's address | the same |
+| the kernel address and the function `make-log.py` wrote each address for | 19 of 19 |
+| each of the 17 functions' collection address three ways: the tool (`--symbol`), `kcmap.py` with the segment's move, the collection's own symbol table | 17 of 17 |
+| every instruction of those 17 functions (11,605) and 20,000 more addresses of `__TEXT_EXEC` | 31,605 of 31,605 the same; 31,062 to 31,065 with file:line, 9,542 to 9,682 of them in inlined code. With `SAMPLE=300000` on `pc`: 311,605 of 311,605 (91,504 in inlined code) |
+| the same again with the tool reading the dSYM (`--dsym`) instead of the debug map | the same numbers |
+| the collection alone (`--no-kernel`): function + offset from the symbols it keeps | 19 of 19 |
+
+At 16 to 21 of the 31,605 addresses (271 of 311,605) the two tools print different names of one address:
+`llvm-symbolizer` takes the outermost function's name from the symbol table and of two names the last
+(`inet_arp_handle_input`), the tool the one the DWARF has (`arp_ip_handle_input`). Both are symbols of that
+address; the script counts these as the same and prints how many. Names are compared mangled, so the two
+demanglers' spellings do not count (`cpp_demangle` writes an inherited constructor
+`OSSharedPtr<OSArray>::intrusive_shared_ptr(...)`, LLVM `OSSharedPtr<OSArray>::OSSharedPtr(...)`).
+
+**`compute_iaj` at `tcp_input.c:3723`** (the Mac's `atos -i` showed no inlined frame there). In this box's
+kernel (the same source line): `compute_iaj` is **not** inlined into `tcp_input`. Of `tcp_input`'s 6,070
+instructions none has `compute_iaj` or `compute_iaj_meat` as an inlined frame; `tcp_input+0x1538` is `bl
+compute_iaj` on line 3721 (`compute_iaj(tp);`) and the instruction after it, the return address, is line 3723 (the
+next statement), which is what the Mac's frame shows. `compute_iaj_meat` **is** inlined into `compute_iaj` (163 of
+its 174 instructions), so the fault's lr in `compute_iaj` names `compute_iaj_meat` as an inlined frame (above).
+For the Mac's kernel itself this is not checked: its `xnu.macho` is not here.
+
+**Not run:** the Mac's log (`out/session-logs/2026-11-12/boot-0.1.7b/xnuhost.log`) and its kernel (`kernel.kc`
+`8e7f4fdc`): not on this box. With them: `compare.sh PATH/kernel.kc PATH/xnu.macho PATH/xnuhost.log`, and
+`DSYM=PATH/xnu.macho.dSYM` (or the Mac's build tree's dSYM) because a Mac-built kernel's debug map names the Mac's
+object files; without any DWARF the script compares function names only and says so. Not run on a Mac at all (the
+script needs `llvm-symbolizer`, which Xcode does not install). A real panic log from the phone: none on the box;
+the block's format is `hosted_panic`'s source and XNU's `panic_with_thread_kernel_state` text.
+
+Unit tests (`crates/oneios-ksym`, no Apple file): 13. A fileset-shaped Mach-O made in the test (two members, the
+kernel's `__TEXT` moved by `0x180000` and `__TEXT_EXEC` by `0x3870000` as in the Mac build, a segment of no size,
+an end label, two names of one address), the physical-aperture rule on the Mac log's numbers, the index with lines
+given by hand, a panic block end to end (text and JSON), the pairing warnings, a debug map whose object files
+changed or are gone, the collection alone, a plain kernel in place of a collection. `oneios-log`: 1 more (8).
+`cargo test --release` for the whole workspace on Linux (2026-11-13): 73 tests pass (`oneios-common` 3,
+`oneios-image` 31 + 1, `oneios-ioslog` 4, `oneios-ksym` 4 + 9, `oneios-log` 8, `oneios-phone` 3, `oneios-prelink`
+3, `oneios-sym` 7). Run again after the change, because `sym`'s command line and `log stacks` were touched:
+`tests/sym/compare-golden.sh` (18 of 18 sets the same as `dsc.py`'s frozen output) and `tests/log/run.sh` on the
+two stand-in logs (33 commands, all status 0, two runs equal). `tests/compare-python.sh` has the part `ksym`.
+
+Limits:
+- Kext frames have no function names (above). The pairing records of the prelink are not used for them.
+- No end of a symbol is checked: an address after the last function of a segment gets that function with a large
+  offset.
+- `hosted_panic` prints at most 24 frames and stops at another stack; the register dump is cut at 1,024 bytes of
+  message. A `frame` line joined with another record (text after the address) is not taken as an address.
+- The index holds what the object files said when it was built. Built while some were stale, it has no lines for
+  their functions until `sym kernel index --force` with the files back (or `--dsym`).
+- `xnu.macho`'s own `__DWARF` sections (source 2) were not met in a real file; a dSYM (sources 1 and 3 share the
+  reader) and the debug map were.
+
 ## log
 
 `oneios-tool log stacks|timeline|diff|gpu|cpu|display|perf LOG...` reads an xnuhost session log
 ([todo_rust.md](todo_rust.md) has each subcommand). No Python original.
+
+`oneios-tool log panic LOG [--kc PATH] [--kernel PATH]` prints the log's kernel panics named through `sym kernel`
+("sym kernel" above), and `log stacks` ends with the same part when the log has a panic (`--no-sym` leaves it
+out). Without a collection (none given, none under `out/kernel`) the addresses are listed unnamed, with the reason.
 
 ```sh
 ONEIOS_LOG_DIR=<folder with *.log> tools/oneios-tool/tests/log/run.sh
@@ -472,9 +654,13 @@ What each does:
   no longer answers: a restart is the return's failsafe).
 - `pull-data` is the adb line of `docs/newtodo.md` "How to resume" step 2 with the Mac's `sparsewrite.py` built in:
   `adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'"`, unpacked
-  with `flate2`, written to `OUT.part` (blocks of 4096 zero bytes are skipped, the length is set at the end) and
-  renamed to `OUT` only when as many bytes came as the phone's `stat -c %s` of that file says, before and after.
-  `--ioslog` then runs `ioslog boots OUT` and `ioslog checks OUT`.
+  with `flate2` (`zlib-rs`), written to `OUT.part` (a block of zeros is not written, the length is set at the
+  end: "The sparse copy" below) and renamed to `OUT` only when as many bytes came as the phone's `stat -c %s` of
+  that file says, before and after. `--ioslog` then runs `ioslog boots OUT` and `ioslog checks OUT`.
+- `sparse-write OUT` is that copy without the phone, and `pull-data` by hand: `adb exec-out "su -c
+  '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'" | oneios-tool phone sparse-write
+  OUT --gunzip`. stdin goes to OUT; `--gunzip` unpacks it first; `--expect-size N` fails when another number of
+  bytes came. It prints `OUT: N bytes, M of them written (S s)`.
 
 - `log` reads one named file of the stage and runs beside a session (it only reads). `--file`: `xnuhost`
   (`session/xnuhost.log`, the default), `switch`, `return`, `outcome`, `display`, `watchdog` (the names of
@@ -517,6 +703,7 @@ tools/oneios-tool/tests/phone/run.sh          # 76 checks against the stand-in p
 tools/oneios-tool/tests/cycle/run.sh          # phone log, status --watch and cycle: 95 checks; ALL OK
 tools/oneios-tool/tests/phone/modes.sh        # phone, app and cycle in each /proc mode this host has (below); ALL OK
 FAKE_PROC=stand-in tools/oneios-tool/tests/phone/run.sh   # one suite with the stand-in's own /proc (macOS's way)
+tools/oneios-tool/tests/phone/sparse-compare.sh   # sparse-write against sparsewrite.py: 35 checks; ALL SAME ("The sparse copy" below)
 ```
 
 The stand-in phone: `fake-adb.sh` runs what the tool sends on this machine, inside a folder that plays the
@@ -567,6 +754,120 @@ suite's process group while a session ran stopped it with none left, in both mod
 5 passed. Before the change, on the same box: the host mode passed (phone 73, cycle 90 checks); the stand-in's
 `/proc` pointed at nothing (the Mac's case) failed 12 and 31 (above). **Linux only**: macOS itself was not run
 here; there, `stand-in` is the only mode, and the GNU tools and perl's setsid are the Mac's.
+
+### The sparse copy (`sparse-write`, `pull-data`)
+
+`crates/oneios-phone/src/sparse.rs` replaces the Mac's `sparsewrite.py` (kept unchanged as
+`tests/phone/sparsewrite.py`, the comparison's reference). The stream is read 256 KiB at a time. A block that
+holds only zeros is not written (`memcmp` against zeros: 10 to 25 GB/s here, a byte loop 1.1 to 1.4); the other
+blocks are written as runs, each at its offset; the length is set at the end. A block is the file system's:
+`statvfs`'s `f_frsize` (4096 on tmpfs, btrfs, ext4, f2fs and APFS), on macOS not less than a page (16 KiB on
+Apple silicon, where a write allocates whole pages). The script's unit is its 4 MiB read.
+
+What the file systems keep of it (Linux 7.3 x86_64, 2026-11-13). The data regions are `lseek`'s `SEEK_DATA` and
+`SEEK_HOLE` after an `fsync`, the blocks `st_blocks`:
+
+| File system | How | What it keeps |
+|---|---|---|
+| tmpfs (`/tmp`) | the unit test | every block that was not written is a hole: the data regions are exactly the blocks that hold data, `st_blocks` is their size |
+| btrfs, `compress=zstd:3` (`/home`) | the unit test, `sparse-compare.sh` | the same. `st_blocks`, `SEEK_DATA` and `btrfs filesystem du` count an extent's size before compression, so zeros that are written (the script's, inside its 4 MiB reads) count as data: they are compressed extents of 128 KiB (`filefrag -v`: `encoded`), not holes. A block that was not written has no extent |
+| ext4 | **not through the kernel** (a mount needs root; `udisksctl loop-setup`: "Not authorized"). `mkfs.ext4 -b 4096 -d` of a folder with the copy, then `debugfs` | `dump_extents`: 14 extents, the copy's 13 data regions (one in two parts); `Blockcount` is the data and one extent block; `dump` gives the stream's bytes. This shows ext4's format holding these holes and e2fsprogs reading them out of the copy (it finds them with `SEEK_DATA`), not the kernel's driver writing them |
+| f2fs | **not tested** (a mount needs root; `sload.f2fs` writes every block of a file, so it shows nothing) | |
+| APFS | **not run** (no Mac on the box) | below |
+
+The `runs` stream of the comparison (154 MB; zero runs from 100 bytes to 70 MiB) on btrfs, the script's copy and
+`sparse-write`'s:
+
+```
+the script   : 50331648 bytes held, 5 data regions   0x0..0x1400000 0x1800000..0x2800000 0x3000000..0x3400000 0x4400000..0x4800000 0x8c00000..0x9000000
+sparse-write : 19181568 bytes held, 13 data regions  0x0..0x9000 0xc000..0x11000 0x14000..0x15000 0x1f000..0x31000 0x130000..0x231000 0x330000..0x331000
+               0x730000..0xb31000 0xf30000..0x1331000 0x1b31000..0x2432000 0x3331000..0x3333000 0x4732000..0x4751000 0x8d50000..0x8d53000 0x8d55000..0x8d56000
+```
+
+**APFS.** Nothing of this ran on a Mac; the macOS branch is written from Apple's manual pages and from what
+others measured, and the two tests below must run there.
+- The format holds a hole of any whole number of its 4096-byte blocks: a file extent record with no block
+  (`j_file_extent_val_t`; the inode's `INODE_IS_SPARSE`). Our reader returns zeros for it
+  (`crates/oneios-image/src/apfs/files.rs`).
+- Apple's driver is not documented and its source is not public. Measured by others (Howard Oakley,
+  eclecticlight.co, "Sparse files are common in APFS", 2021: a threshold of 16 MB on an M1 Mac mini; pull
+  requests of four other projects that corrected tests on macOS 26 and 27 with `SEEK_HOLE` and `st_blocks`,
+  listed in this change's pull request): a write behind a hole shorter than about 16 MiB makes APFS fill the
+  hole with zero blocks it allocates, whatever the order of the writes and whenever the length is set; a hole
+  of 17 MiB or more stays; a 4 KiB write allocates 16 KiB on Apple silicon. That is why the first port's
+  unit test failed on the Mac (a 9 MiB file with zero runs of 4 and 2 MiB: no hole at all, `sparse.rs:92`), and
+  it means the script's copy there kept only the zero runs of 16 MiB and more.
+- `fcntl(F_PUNCHHOLE)` gives blocks back (fcntl(2): "Deallocate a region and replace it with a hole ... Holes
+  must be aligned to file system block boundaries"; `EINVAL` when the offset or the length is not a multiple of
+  the block size). On macOS `sparse.rs` punches the hole in front of each write after the write, and the hole
+  at the end after the length is set (holes of up to 64 MiB; a longer one was never seen filled). A punch that
+  fails is said once on stderr and not tried again: the bytes are right either way. `ONEIOS_SPARSE_PUNCH=0`
+  turns the punch off (the copy then holds what the script's did, or less); `=1` turns it on on Linux, where it
+  is `fallocate`'s punch and changes nothing.
+- **Guesses**, for the Mac to check: that a punched hole shorter than 16 MiB stays a hole while later writes
+  follow it, and that a punch is cheap (the unit test prints the time of 1000; here 1.3 ms on tmpfs, 11 to 19 ms
+  on btrfs).
+
+```sh
+cargo test --manifest-path tools/oneios-tool/Cargo.toml -p oneios-phone sparse -- --nocapture   # 4 tests; prints what the file system kept
+ONEIOS_SPARSE_TEST_DIRS=/tmp:$PWD/out/t cargo test ... sparse -- --nocapture                     # in these folders (one per file system) instead of the temporary folder
+tools/oneios-tool/tests/phone/sparse-compare.sh              # against sparsewrite.py: 35 checks; ALL SAME (MAP=1: every file's data regions)
+SPEED=4096:280 tools/oneios-tool/tests/phone/sparse-compare.sh   # also the times on a 4096 MiB stream with about 280 MiB of data (6 more checks; 32768:2100 is the store's size)
+```
+
+- The unit tests: (1) seven streams (zero runs shorter than a block, of one block, of 3, 15, 18 and 60 MiB; data
+  across the edge of two reads; a tail inside a block, with and without data; only zeros; one zero byte;
+  nothing; no zeros) into a file, with the punch off and on. The file is the stream; the data regions the file
+  system reports are exactly the blocks that hold data; `st_blocks` is at most their size plus 16 blocks and
+  1 %. On macOS without the punch only the holes of more than 32 MiB must have stayed. A file system without
+  holes (a 64 MiB file of only a length is not empty) gets the byte check alone. Each file's regions and blocks
+  are printed. (2) The same streams through the writer against a model of APFS as described above: without the
+  punch the short holes are allocated (23.1 MB for 3.4 MB of data in the first stream), with it exactly the
+  pages that hold data are, and no punch is off a block's edge or past the file's end. (3) The zero check.
+  (4) An error of the stream and one of the file. `cargo test -p oneios-phone` as a whole: 8 passed.
+- `sparse-compare.sh`: seven streams of `tests/phone/mkstream.py` (`runs`: zero runs and data runs shorter than
+  4 KiB, between 4 KiB and 4 MiB, and longer; `tail`: ends inside a block; `zero`; `empty`; `lastbyte`: a data
+  byte at the very end; `dense`; `phone`: 64 MiB shaped like the store) through the script, through
+  `sparse-write`, and through `gzip -1` and `sparse-write --gunzip --expect-size`. Result, Linux x86_64 on btrfs,
+  2026-11-13: 35 checks, `ALL SAME`: the script's copy is the stream, `sparse-write`'s two copies are the
+  script's (`cmp`: bytes and length), both say the stream's length, and `sparse-write`'s copies never hold more
+  blocks than the script's. The same on a stream of 32 GiB with 2.18 GB of data (`SPEED=32768:2100`, 41
+  checks): the script's copy holds 4.52 GB in 459 regions, `sparse-write`'s 2.18 GB in 3648.
+
+Speed (the same machine: i5-7500, 4 cores; other agents' builds ran most of the time, load 1 to 10, so wall times
+of one command moved by a third and more from run to run; CPU times did not). Two streams of `mkstream.py
+phone`: 32 GiB with 2.18 GB of data in 3648 runs (1.22 GB packed with `gzip -1`), and 4 GiB with 302 MiB of data
+(165 MB packed).
+
+| Reader | Fed the packed stream: wall, MB/s of the stream | CPU of the reader | Behind `mkstream.py \| gzip -1 -c`: wall |
+|---|---|---|---|
+| 32 GiB: the source alone (`> /dev/null`) | | | 4 rounds: 49.6, 62.6, 52.6, 53.3 s |
+| 32 GiB: `gunzip -c \| sparsewrite.py` | 39.6 s, 868 MB/s | gunzip 11.5 s + python 10.6 s | 60.0, 72.7, 66.7, 66.3 s |
+| 32 GiB: `sparse-write --gunzip` | 10.7 s, 3218 MB/s | 5.0 s | 52.5, 80.9, 59.0, 60.0 s |
+| 4 GiB: the source alone | | | 5 rounds: 6.7 to 9.4 s, median 7.9 s |
+| 4 GiB: `gunzip -c \| sparsewrite.py` | 2.6 s and 2.9 s, 1633 and 1486 MB/s | gunzip 1.4 s + python 1.3 s | 6.9 to 11.1 s, median 8.1 s |
+| 4 GiB: `sparse-write --gunzip` | 1.1 s and 0.6 s, 3803 and 7469 MB/s | 0.6 s | 7.0 to 8.6 s, median 7.5 s |
+
+Without gzip, from the stream as a sparse file: `sparsewrite.py < FILE` 41.8 s (16.1 s of CPU), `sparse-write <
+FILE` 36.4 s (12.6 s); 4 GiB, two runs: 3.6 and 1.7 s against 2.0 and 1.2 s.
+
+Behind `gzip -1` (the phone's side of the real copy) both readers wait for it, so the pipe is about as fast as
+`gzip -1`. `sparse-write`'s pipe was the faster in three of the four 32 GiB rounds, by 10 to 12 % (the last two,
+the quietest: 59.0 and 60.0 s against 66.7 and 66.3 s, 582 against 517 MB/s of the stream), and in 4 of the 5
+rounds at 4 GiB; in the second round, the one with the most load, it was the slower. Its CPU is a quarter of
+gunzip's and the script's (the whole pipe: 62 s of CPU against 80 s, of which the source is 56 s).
+Fed a packed stream as fast as it can read, it is 2.4 to 4.8 times as
+fast. (Feeding the pipe from the sparse file, `gzip -1 -c FILE |`, was tried first and says nothing about the
+readers: reading 32 GiB of holes fills the page cache with zeros, and `gzip -1 -c FILE > /dev/null` alone took
+68 to 123 s; in five such rounds the script's pipe took 75 to 103 s and `sparse-write`'s 80 to 107 s.) What was
+measured to get there:
+- the unpacker (the 4 GiB stream, `flate2`'s `MultiGzDecoder` into a 1 MiB buffer, CPU): `zlib-rs` 0.48 s,
+  `zlib-ng` 1.48 s (it also needs cmake to build), `miniz_oxide` (flate2's default) 1.74 s; `zlib-rs` without
+  flate2's default features (no choice of AVX2 code at run time) 1.9 s; GNU gzip 1.15's `gunzip -c` 0.9 s;
+- the read: 64 KiB 0.58 s, 256 KiB 0.56 s, 1 MiB 0.58 to 0.63 s, 4 MiB (the first port's) 1.11 s of CPU for the
+  whole copy;
+- a second thread for the scan and the writes: 0.72 to 0.86 s of CPU against 0.54 s, the same wall time. So
+  there is one thread.
 
 ## cycle
 
@@ -764,3 +1065,151 @@ Not compared: `hosted --x18` (minutes in Python), `align --explain` (a debugging
 The rules now live in the Rust modules only (`roots.rs`: the hardware provider classes and the kexts left out by
 hand; `matcher.rs`, `emit.rs`, `layout.rs`: XnuPrelink's at pin `9b950f2`). A change of a rule changes the outputs
 and so the goldens: regenerate them with `UPDATE=1` in the same commit and say why.
+
+## kernel
+
+`oneios-tool kernel`: the kernel build's own steps (crate `crates/oneios-kernel`). Each was a Python script,
+**retired on 2026-11-13** after the comparison below; each module has its script's name and description, takes what
+the script took and writes the same files. `kernel/build-hosted.sh`, `kernel/build-linux.sh` and
+`kernel/build-macos.sh` run nothing else for these steps: they need Rust, and build the binary when it is missing or
+stale (`stage_tool` in `kernel/lib/stage.sh`; `ONEIOS_TOOL=PATH` for another binary).
+
+| Command | Was (Python) | Module | State |
+|---|---|---|---|
+| `kernel gen board` | `kernel/device/scripts/build-oneios-board.py` | `build_oneios_board.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen storage` | `kernel/patches/oneios-hosted/storage/build-oneios-hosted-storage.py` | `build_oneios_hosted_storage.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen aes` | `.../aes/build-oneios-aes.py` | `build_oneios_aes.rs`, `class_record.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen keystore` | `.../keystore/build-oneios-keystore.py` | `build_oneios_keystore.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen net` | `.../net/build-oneios-net.py` | `build_oneios_net.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen hid` | `.../hid/build-oneios-hid.py` | `build_oneios_hid.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen audio` | `.../audio/build-oneios-audio.py` | `build_oneios_audio.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen gpu` | `.../gpu/build-oneios-gpu.py` | `build_oneios_gpu.rs`, `class_record.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel gen display` | `.../display/build-oneios-display.py` | `build_oneios_display.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel build-record finish --host linux\|macos --work DIR --config NAME --out OUT [--repo CHECKOUT]`, `kernel build-record --self-test` | `kernel/build-record.py` | `build_record.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel layout hid\|net [--kernelcache KC] [--prelink-report JSON] [--out FILE] [--repo CHECKOUT]` | `.../hid/layout.py`, `.../net/layout.py` | `hid_layout.rs`, `net_layout.rs`, `layout.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel port-legacy-display [--kernelcache KC] [--fixture JSON] [--classes JSON] [--out FILE] [--repo CHECKOUT]` | `.../display/port-legacy-display.py` | `port_legacy_display.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
+| `kernel compile-command RECORD SOURCE OBJECT [--repo CHECKOUT]` | new | `drivers_build.rs` | the check that this crate's copy of `drivers/build.py`'s compile command is the script's |
+
+Shared: `gen.rs` (where a generator runs, Python's file and process calls as the scripts used them, the steps every
+script repeated), `drivers_build.rs` (`drivers/build.py`'s `record` and `command`), `macho_object.rs` (a compiled
+object's symbols and the signed entries of a vtable), `staged/` (the edit lists of the staged sources).
+
+**`kernel gen NAME`** builds one board archive. UniXNU's driver runs it between the two kernel passes, in the build
+tree, with `UNIXNU_DEVICE` set (and `ONEIOS_REPO`, which `kernel/build-hosted.sh` exports): an entry of
+`board.toml`'s `[kernel] archives` that is not a `.py` or `.sh` script is run as a command, so the entries read
+`"oneios-tool kernel gen aes"` and the build scripts put the binary on `PATH` under that name
+(`$KERNEL_OUT/bin/oneios-tool`, a link to `ONEIOS_TOOL`; built first when missing or stale,
+`scripts/lib/oneios-tool.sh`). The step's log is `logs/archive-NN-oneios-tool.log` (was
+`archive-NN-build-oneios-NAME.log`). A failure ends as the scripts' did: the message on stderr, status 1.
+
+What still runs Python, and why:
+- `drivers/build.py` (not one of the retired scripts: it builds `drivers/` on its own, `--check` included).
+  `kernel gen board` runs it as the script did, and the generators carry a copy of its two functions (`record`,
+  `command`) in `drivers_build.rs`. `tests/kernelgen/compare-python.sh ... compile-command` and the unit test
+  compare the copy with the script; a change of the script's rule must be made in both.
+- Other projects' own scripts, run as they are: UniXNU's `scripts/prepare-storage-headers.py` (`gen storage`; the
+  script imported it and called `prepare`, the command runs it as a program and reads the `headers.json` it writes,
+  the same report) and Droid-VM's `build-droidvm-gpu.py`, cut before its accelerator step (`gen gpu`).
+- `kernel/prelink/classes.py` (`kernel layout`: the class reader, as the two scripts ran it).
+- `kernel/patches/oneios-hosted/display/display-capture.py` is kept as it is: it is no generator but a viewer for a
+  PC boot ([docs/building.md](../../docs/building.md) section 5), Linux only (a `SOCK_SEQPACKET` socket with the
+  frame's memfd passed over it), and the tool is to build and run on the Mac too.
+
+Kept from the scripts on purpose: the generated files still say "Generated by build-oneios-NAME.py" (the bytes are
+the scripts'; the module of that name is `build_oneios_NAME.rs`), and so do the comments in the patch folders'
+sources and in three patches, which were not touched (a changed source or patch changes the build's inputs).
+One line is not the scripts': `objects.json` of `audio` and of `net` listed the script itself (its copy in the build
+tree) as the last source, so that a changed edit list changed the record; the command lists the staged source
+there (`DroidVMAudio.cpp`, `DroidVMVirtioNet.c`: the upstream file with the edit list applied).
+
+### The comparison
+
+`tests/kernelgen/compare-python.sh WORK ENVFILE [NAME...]` (at commit `a5b2d95`, the last with every script; since
+the retirement it can still run `compile-command`, whose Python side stays): in the tree of a finished hosted build, each generator runs twice in the same place, the Python
+script and then the command, in the environment UniXNU's driver gave the archive step (`tests/kernelgen/save-env.sh`
+saves it from `/proc/PID/environ` while a build runs) and under the same `/usr/bin` shims. Every file either one
+writes is compared (`diff -r`: objects, archives, staged sources, generated sources, logs, JSON records, links), and
+so are stdout, stderr and the exit status. Result on Linux x86_64, 2026-11-13, clang 23.1.4, the tree of
+`HOSTED_OUT=kgen` at `ea06d46` (a loaded box: the times are the compiler's, not the generators'):
+
+| Generator | Same | Files | Python | Rust |
+|---|---|---|---|---|
+| `board` (`liboneiosdrivers.a`, `liboneiosboard.a`) | yes | 21 | 5.2 s | 3.6 s |
+| `storage` | yes | 32 | 1.8 s | 1.4 s |
+| `aes` | yes | 12 | 3.4 s | 0.7 s |
+| `keystore` | yes | 8 | 0.9 s | 0.8 s |
+| `net` | yes, but the one line of `objects.json` above | 40 | 2.4 s | 1.9 s |
+| `hid` | yes | 22 | 2.3 s | 3.1 s |
+| `audio` | yes, but the one line of `objects.json` above | 10 | 1.0 s | 0.8 s |
+| `gpu` | yes | 95 | 3.9 s | 4.0 s |
+| `display` | yes | 21 | 4.1 s | 3.4 s |
+| `build-record` (`--self-test`; `finish` on that build: the record of 147 patches and 59 board sources, `series.txt`, the kernel, the link, stdout) | yes | 8 | - | - |
+| `compile-command` (6 commands: a C and a C++ source with each of the three records) | yes | - | - | - |
+| `layout hid`, `layout net`, `port-legacy-display` (on the kernelcache `349c4692...`) | yes, and each record is the committed one | 1 each | 4.2 s, 1.9 s, 0.7 s | 2.9 s, 2.8 s, 0.4 s |
+
+The files of every rerun are also the ones the build itself had written (261 files), so the reruns stand for the
+build.
+
+**The kernel.** `kernel/build-hosted.sh` (`HOSTED_OUT=kgen XNU_FILESET_REFERENCE=1`, from an empty tree, the same
+tree each time, the box loaded) with the Python generators, with the commands beside the scripts, and after the
+retirement:
+
+| | `xnu.macho` (24,728,008 bytes) | `reference.macho` | Time |
+|---|---|---|---|
+| Python generators (`ea06d46`) | `5da980a23d26cf14f30272b100533fbf8441c6222211db0f8c610ed41b24d771` | `815ca46e986a5661...` | 1253 s |
+| `oneios-tool kernel gen` (`KERNELGEN_IMPL=rust` at `a5b2d95`) | `effea0af3597279d01be685e93bc7a6b50a37d6713fe444754ad8e00737c21a6` | `a51d90d1f28c63ba...` | 1011 s |
+| The retired state (the scripts deleted, `stage_tool` builds the binary) | `4a5b8868df0776a77520bb2514e62c19e319faa878091c8420fcb17a4fff1c8b` | `a84207f4a13cd9c1...` | 1032 s (the tool's own build included) |
+
+**The SHA-256 are not equal, and no two builds of this kernel are**: the file carries the time of its build.
+`tests/kernelgen/kernel-diff.py A B` names the place of every differing byte. Of the 2,074 that differ between the
+first two kernels, 20 are the time in XNU's version string (`Thu Nov 12 23:53:46 IST 2026` and `Fri Nov 13 00:31:02 IST
+2026`, twice in `__TEXT,__const`), 16 are the link's `LC_UUID`, and 2,038 are the values of the symbol table's
+`N_OSO` entries (each object file's modification time); **nothing else differs**: every byte of code and data is the
+same. The RELEASE reference, which has no board archive in it, differs between the two builds in the same three
+ways (76 bytes), so this is the build, not the generators. And what the generators hand to the link is the same:
+the ten archive folders of the build with the commands are, file for file, the ones of the Python build (261 files;
+the one line of the two `objects.json` aside). The third build, of the retired state, differs from the Python build
+in the same three ways and nothing else (2,074 bytes), and its archive folders are the same files again.
+
+The Linux build in the main checkout (`out/kernel/current-hosted-pc`, `13ed0b70...`) is from an older source and
+another tree, so it is no reference for this.
+
+**The VM kernel.** `kernel/build-linux.sh` in the retired state (Linux, 482 s from an empty tree with UniXNU's source
+cache): the committed `board.toml`'s entry ran as the command (`logs/archive-06-oneios-tool.log`; the repository
+found from the device directory, as the script did without `ONEIOS_REPO`), and the record `kernel build-record`
+wrote at the end (build id `xnu-12377.121.6-ios-27.0.1-24A446-0196b7c45972`, 94 patches, 17 board sources) is, with
+`series.txt`, the kernel and the link, byte for byte what the retired `build-record.py` (put back for this check)
+writes for the same build.
+
+### The goldens
+
+`tests/kernelgen/golden/` is the Python scripts' output, frozen before they were deleted:
+
+| What | Frozen as | Checked by |
+|---|---|---|
+| The generated files that are this project's own text (17: the bindings `*.S` of aes, gpu, display, hid and net, `OriginalLegacyFramebufferABI.h`, the two probe sources, the crumbs header, hid's and net's `report.json`, the GPU's `status.json`), from the Python build above | whole, `golden/build/` | `tests/kernelgen/compare-golden.sh WORK` after a build; the ones made from a record alone (aes, gpu, the display's header, the probes) also by `cargo test` |
+| The staged copies of other projects' sources and of Apple's `IOBlockStorageDevice.cpp` (10) | SHA-256, size and name, `golden/staged.sha256` | `compare-golden.sh WORK` |
+| What the nine generators print | `golden/stdout.txt`, the tree's and the checkout's paths taken out | `compare-golden.sh WORK` |
+| Each edit list applied to a made-up source by the script's own staging function (8 lists; the Contact Identifier change of 2026-11-12 is in `hid_transport`) | `golden/synthetic/NAME.in` and `NAME.out` | `cargo test` |
+| `drivers/build.py`'s command for a made-up record, C and C++ | `golden/synthetic/command.*.json` | `cargo test` |
+| `build-record.py`'s record of a made-up build (run from a made-up checkout; without the machine's part and the checkouts' commits) | `golden/synthetic/build-record.json`, `.series.txt` | `cargo test` |
+
+No file of Apple's and no source of another project is in the goldens. Not frozen: objects and archives (they carry
+the tree's path and the compiler's version), compiler logs, `objects.json` and `build-report.json` (the SHA-256 of
+every source). `cargo test -p oneios-kernel -p oneios-tool`: 12 tests pass (Linux). `compare-golden.sh` on the tree
+built with the commands: 17 of 17 generated files, the 10 hashes and the output the same.
+
+The goldens follow the sources: a change of a record, of a header, of an edit list, of `OneiOSSideKeys.inc` or
+`OneiOSTouchTime.inc`, of a call of an original function, or of an external pin changes them. Then run
+`UPDATE=1 tests/kernelgen/compare-golden.sh WORK` after a build, in the same commit, and say why. The three
+kernelcache records have no golden of their own: each command writes the committed record (the comparison above).
+
+### The Mac
+
+The commands use nothing of Linux alone (`std`, the `object`, `which` and `wait-timeout` crates; links are made
+with `std::os::unix`), and take the same tools the scripts took (`llvm-ar`, `llvm-nm`, `llvm-objcopy`,
+`llvm-objdump` from `PATH`, the storage generator's `/opt/homebrew/opt/llvm/bin/llvm-objcopy` when there is none,
+`xcrun` for the SDK's `TargetConditionals.h`). **Checked on Linux only**: the comparison, the kernel builds with the
+commands (`build-hosted.sh` three times, `build-linux.sh` once), `compare-golden.sh`, `cargo test`. Not run on a Mac: the build of this crate, `kernel/build-hosted.sh` with
+the commands (Xcode 27.2), `kernel/build-macos.sh` with `kernel build-record`. `compare-python.sh` and `save-env.sh`
+are Linux scripts (`/proc`, `bwrap`).

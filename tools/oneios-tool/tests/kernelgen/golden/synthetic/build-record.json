@@ -1,0 +1,59 @@
+{
+  "builder": "oneios-kernel",
+  "build_id": "xnu-12377.121.6-ios-test-2943666e6a69",
+  "sha256": "07df24b7931689e939de6b246df3e0c689ec73c6d56d458c904adf6ff121dbca",
+  "bytes": 392,
+  "xnu": "xnu-12377.121.6",
+  "xnu_commit": "cccccccccccccccccccccccccccccccccccccccc",
+  "profile": "ios-test",
+  "arch": "arm64e",
+  "machine_config": "BCM2837",
+  "kernel_config": "DEVELOPMENT",
+  "defconfig": "oneios_test_defconfig",
+  "config": {
+    "NAME": "a b",
+    "XNU_ARMCPU": "y",
+    "XNU_SOURCE_CORECRYPTO14": "y"
+  },
+  "macho": {
+    "filetype": "MH_EXECUTE",
+    "entry": "0xfffffff007008000",
+    "chained_fixups": false,
+    "segments": {
+      "__TEXT": {
+        "vmaddr": "0xfffffff007004000",
+        "vmsize": "0x4000"
+      }
+    }
+  },
+  "prelinked": false,
+  "kernelcache_kexts_added": false,
+  "apple_binary_inputs": [],
+  "restricted_sources": [
+    "corecrypto-2023 (github.com/ONLYA/corecrypto-2023: Apple corecrypto, Internal Use License)"
+  ],
+  "releasable": false,
+  "unixnu_patches": [
+    {
+      "path": "kernel/patches/unixnu/0001-made-up.patch",
+      "sha256": "90c02b624ba29588c5e4d5612c8b5438e0677d0abbba160e91147a320fae3624"
+    }
+  ],
+  "board_sources": [
+    {
+      "path": "external/x.c",
+      "sha256": "ab"
+    },
+    {
+      "path": "drivers/a.c",
+      "sha256": "cd"
+    }
+  ],
+  "patches": [
+    {
+      "path": "kernel/patches/a.patch",
+      "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
+    }
+  ],
+  "boot_verified": false
+}

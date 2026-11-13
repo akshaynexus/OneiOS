@@ -5,10 +5,13 @@ The iOS side: `drivers/battery/`. The mapping table: `docs/hardware.md` section 
 iOS's battery UI comes from `powerd`, which reads an `IOPMPowerSource`. This bridge reads Android's `power_supply`
 class and tells the guest what it finds. It writes nothing to the phone.
 
-**Never run on the phone or in a session.** The nodes were read on the phone once by hand (`docs/hardware.md` 7c) and are a test case here. The first run of the code is `batteryctl` below.
+**One phone session** (2026-11-12 23:45, on the charger): `battery: on: /sys/class/power_supply, status "Full", 100%,
+plugged in; read every 3000 ms while iOS listens` at +0.2 s, and iOS played a "plugged in" sound before its lock
+screen (`drivers/battery/README.md`, "The charging chime"). The nodes were also read on the phone by hand
+(`docs/hardware.md` 7c) and are a test case here; `batteryctl` below has not run there.
 
 ```sh
-make test          # 57 checks: the sysfs parse, the mapping, the change test, a session on a fake sysfs
+make test          # 65 checks: the sysfs parse, the mapping, the change test, sessions on a fake sysfs (one on the charger)
 make               # build/android/batteryctl
 ```
 
@@ -28,7 +31,9 @@ Units are normalized, because drivers disagree. On the owner's phone (2026-11-11
 
 ## When it reports
 
-One worker thread, SCHED_OTHER, which sleeps until the guest's first query and every 3 s reads the nodes. A change
+One worker thread, SCHED_OTHER, which sleeps until the guest's first query and every 3 s reads the nodes. The query
+is answered with a fresh reading (the guest publishes it before its service registers) and counts as sent: the same
+state is never reported again, so the start is never a change. A change
 of level, charging state, power or presence goes to the guest at once; temperature, voltage, current and the time
 estimate go at most every 30 s. A failed read logs once and keeps the last value. Only reads, so a killed session
 leaves nothing behind.

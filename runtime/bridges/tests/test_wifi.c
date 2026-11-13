@@ -92,15 +92,135 @@ static void test_frames(void)
   bootp[0] = 2; memcpy(bootp + 16, "\x0a\x00\x01\x37", 4);                   // yiaddr 10.0.1.55
   memcpy(bootp + 236, "\x63\x82\x53\x63", 4);
   memcpy(bootp + 240, "\x35\x01\x02\x36\x04\x0a\x00\x01\x01\xff", 10);       // OFFER, server 10.0.1.1
-  uint8_t dhcp_type = 0, dhcp_address[4], dhcp_server[4];
-  CHECK(br_wifi_dhcp(d, sizeof d, &dhcp_type, dhcp_address, dhcp_server) && dhcp_type == 2 && dhcp_address[3] == 0x37 && dhcp_server[3] == 1);
+  br_wifi_dhcp_msg dm;
+  CHECK(br_wifi_dhcp(d, sizeof d, &dm) && dm.type == 2 && dm.yiaddr[3] == 0x37 && dm.server[3] == 1 && dm.has_server);
   d[35] = 68; d[37] = 67; bootp[242] = 1;
-  CHECK(br_wifi_dhcp(d, sizeof d, &dhcp_type, dhcp_address, dhcp_server) && dhcp_type == 1);
+  CHECK(br_wifi_dhcp(d, sizeof d, &dm) && dm.type == 1);
   d[37] = 53;
-  CHECK(!br_wifi_dhcp(d, sizeof d, &dhcp_type, dhcp_address, dhcp_server));
+  CHECK(!br_wifi_dhcp(d, sizeof d, &dm));
   d[37] = 67;
-  CHECK(!br_wifi_dhcp(d, 14 + 20 + 8 + 240 + 2, &dhcp_type, dhcp_address, dhcp_server) && !br_wifi_dhcp(d, 100, &dhcp_type, dhcp_address, dhcp_server));
+  CHECK(!br_wifi_dhcp(d, 14 + 20 + 8 + 240 + 2, &dm) && !br_wifi_dhcp(d, 100, &dm));
+}
 
+// ---- DHCP: the REQUEST forms of RFC 2131 4.3.2 as clients send them ----
+// An Ethernet frame with a DHCP message: the IPv4 header (checksummed), UDP, the BOOTP header with chaddr, the cookie
+// and the options as iOS's and Android's clients put them (53 first, client id 61, the parameter list 55, 57, the
+// requested address 50 and the server 54 where the state has them, 12 a host name, then the end).
+typedef struct {
+  const uint8_t *eth_dst, *eth_src, *client;
+  const char *ip_src, *ip_dst, *ciaddr, *yiaddr, *requested, *server;   // dotted, NULL: none / 0.0.0.0
+  uint8_t op, type;
+  bool broadcast_flag;
+} dhcp_spec;
+static void ip4(const char *s, uint8_t out[4])
+{
+  unsigned a = 0, b = 0, c = 0, e = 0;
+  if (s) sscanf(s, "%u.%u.%u.%u", &a, &b, &c, &e);
+  out[0] = (uint8_t)a; out[1] = (uint8_t)b; out[2] = (uint8_t)c; out[3] = (uint8_t)e;
+}
+static size_t make_dhcp(uint8_t *f, const dhcp_spec *s)
+{
+  memset(f, 0, 600);
+  memcpy(f, s->eth_dst, 6); memcpy(f + 6, s->eth_src, 6); f[12] = 0x08; f[13] = 0x00;
+  uint8_t *ip = f + 14, *udp = ip + 20, *b = udp + 8, *o = b + 240;
+  memcpy(b + 236, "\x63\x82\x53\x63", 4);
+  b[0] = s->op; b[1] = 1; b[2] = 6; b[4] = 0x5a; b[5] = 0x1e; b[6] = 0x77; b[7] = 0x03;   // xid
+  if (s->broadcast_flag) b[10] = 0x80;
+  ip4(s->ciaddr, b + 12); ip4(s->yiaddr, b + 16); memcpy(b + 28, s->client, 6);
+  *o++ = 53; *o++ = 1; *o++ = s->type;
+  *o++ = 61; *o++ = 7; *o++ = 1; memcpy(o, s->client, 6); o += 6;
+  if (s->op == 1) { static const uint8_t prl[] = { 55, 6, 1, 121, 3, 6, 15, 119 }; memcpy(o, prl, sizeof prl); o += sizeof prl; *o++ = 57; *o++ = 2; *o++ = 5; *o++ = 0xdc; }
+  if (s->requested) { *o++ = 50; *o++ = 4; ip4(s->requested, o); o += 4; }
+  if (s->server) { *o++ = 54; *o++ = 4; ip4(s->server, o); o += 4; }
+  if (s->op == 1) { *o++ = 12; *o++ = 6; memcpy(o, "iPhone", 6); o += 6; }
+  else { *o++ = 51; *o++ = 4; o[2] = 0x0e; o[3] = 0x10; o += 4; *o++ = 1; *o++ = 4; ip4("255.255.0.0", o); o += 4; }
+  *o++ = 255;
+  while ((size_t)(o - b) < 300) *o++ = 0;   // BOOTP's minimum of 300 bytes, as clients pad
+  const size_t bootp = (size_t)(o - b), udp_len = 8 + bootp, ip_len = 20 + udp_len;
+  ip[0] = 0x45; ip[2] = (uint8_t)(ip_len >> 8); ip[3] = (uint8_t)ip_len; ip[8] = 64; ip[9] = 17;
+  ip4(s->ip_src, ip + 12); ip4(s->ip_dst, ip + 16);
+  uint32_t sum = sum16(0, ip, 20);
+  while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+  ip[10] = (uint8_t)(~sum >> 8); ip[11] = (uint8_t)~sum;
+  udp[1] = s->op == 1 ? 68 : 67; udp[3] = s->op == 1 ? 67 : 68; udp[4] = (uint8_t)(udp_len >> 8); udp[5] = (uint8_t)udp_len;
+  return 14 + ip_len;
+}
+
+static void test_dhcp(void)
+{
+  static const uint8_t bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+  static const uint8_t other[6] = { 0x3c, 0x22, 0xfb, 0x10, 0x20, 0x30 };    // another station on the network
+  static const uint8_t router[6] = { 0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e };   // the access point's gateway
+  uint8_t f[600];
+  char line[160];
+  br_wifi_dhcp_msg m;
+  uint8_t a[4];
+
+  // What the log said before 2026-11-13 for a REQUEST: its yiaddr and option 54. Only a SELECTING REQUEST has a
+  // server; no REQUEST has a yiaddr. So "REQUEST of 0.0.0.0 from 0.0.0.0" is every INIT-REBOOT, RENEWING or
+  // REBINDING REQUEST that came in from the radio (frames iOS sent were logged as "iOS sends ...").
+  const dhcp_spec init_reboot = { bcast, other, other, "0.0.0.0", "255.255.255.255", NULL, NULL, "172.16.235.99", NULL, 1, 3, false };
+  const dhcp_spec rebinding = { bcast, other, other, "172.16.235.80", "255.255.255.255", "172.16.235.80", NULL, NULL, NULL, 1, 3, false };
+  const dhcp_spec renewing = { router, mac, mac, "172.16.235.71", "172.16.0.1", "172.16.235.71", NULL, NULL, NULL, 1, 3, false };
+  const dhcp_spec selecting = { bcast, mac, mac, "0.0.0.0", "255.255.255.255", NULL, NULL, "172.16.235.71", "172.16.0.1", 1, 3, false };
+  const dhcp_spec discover = { bcast, other, other, "0.0.0.0", "255.255.255.255", NULL, NULL, NULL, NULL, 1, 1, true };
+  const dhcp_spec ack = { mac, router, mac, "172.16.0.1", "172.16.235.71", NULL, "172.16.235.71", NULL, "172.16.0.1", 2, 5, false };
+  const dhcp_spec *forms[] = { &init_reboot, &rebinding, &renewing };
+  for (unsigned i = 0; i < 3; i++) {
+    const size_t n = make_dhcp(f, forms[i]);
+    CHECK(br_wifi_dhcp(f, n, &m) && m.type == 3 && !(m.yiaddr[0] | m.yiaddr[1] | m.yiaddr[2] | m.yiaddr[3]) && !m.has_server);
+  }
+
+  // INIT-REBOOT of another station (a broadcast every station gets): its own line, counted apart from iOS's.
+  size_t n = make_dhcp(f, &init_reboot);
+  CHECK(br_wifi_dhcp(f, n, &m) && m.ip_broadcast && m.has_requested && !memcmp(m.client, other, 6));
+  CHECK(!strcmp(br_wifi_dhcp_request_kind(&m), "INIT-REBOOT"));
+  br_wifi_dhcp_address(&m, a);
+  CHECK(a[0] == 172 && a[3] == 99);
+  CHECK(br_wifi_dhcp_describe(&m, false, mac, line, sizeof line) == BR_WIFI_DHCP_OTHER &&
+        !strcmp(line, "another station's REQUEST INIT-REBOOT for 172.16.235.99 (client 3c:22:fb:..)"));
+  // REBINDING of another station: ciaddr, to the broadcast address.
+  n = make_dhcp(f, &rebinding);
+  CHECK(br_wifi_dhcp(f, n, &m) && !strcmp(br_wifi_dhcp_request_kind(&m), "REBINDING"));
+  CHECK(br_wifi_dhcp_describe(&m, false, mac, line, sizeof line) == BR_WIFI_DHCP_OTHER &&
+        !strcmp(line, "another station's REQUEST REBINDING for 172.16.235.80 (client 3c:22:fb:..)"));
+  // iOS's own RENEWING REQUEST (unicast to the server) and SELECTING one, as the guest sends them.
+  n = make_dhcp(f, &renewing);
+  CHECK(br_wifi_dhcp(f, n, &m) && !m.ip_broadcast && !strcmp(br_wifi_dhcp_request_kind(&m), "RENEWING"));
+  CHECK(br_wifi_dhcp_describe(&m, true, mac, line, sizeof line) == BR_WIFI_DHCP_IOS && !strcmp(line, "iOS sends REQUEST RENEWING for 172.16.235.71"));
+  n = make_dhcp(f, &selecting);
+  CHECK(br_wifi_dhcp(f, n, &m) && !strcmp(br_wifi_dhcp_request_kind(&m), "SELECTING"));
+  CHECK(br_wifi_dhcp_describe(&m, true, mac, line, sizeof line) == BR_WIFI_DHCP_IOS && !strcmp(line, "iOS sends REQUEST SELECTING for 172.16.235.71"));
+  // The same REQUEST back from the radio (an access point that reflects a station's broadcast to it): iOS's own.
+  CHECK(br_wifi_dhcp_describe(&m, false, mac, line, sizeof line) == BR_WIFI_DHCP_IOS &&
+        !strcmp(line, "iOS's own REQUEST SELECTING for 172.16.235.71 came back from the radio"));
+  // iOS's INIT-REBOOT (a known network's lease asked again after a join) sent by the guest.
+  dhcp_spec own_reboot = init_reboot;
+  own_reboot.eth_src = mac; own_reboot.client = mac; own_reboot.requested = "172.16.235.71";
+  n = make_dhcp(f, &own_reboot);
+  CHECK(br_wifi_dhcp(f, n, &m) && br_wifi_dhcp_describe(&m, true, mac, line, sizeof line) == BR_WIFI_DHCP_IOS &&
+        !strcmp(line, "iOS sends REQUEST INIT-REBOOT for 172.16.235.71"));
+  // Another station's DISCOVER; the server's ACK to iOS.
+  n = make_dhcp(f, &discover);
+  CHECK(br_wifi_dhcp(f, n, &m) && m.type == 1 && br_wifi_dhcp_describe(&m, false, mac, line, sizeof line) == BR_WIFI_DHCP_OTHER &&
+        !strcmp(line, "another station's DISCOVER for 0.0.0.0 (client 3c:22:fb:..)"));
+  n = make_dhcp(f, &ack);
+  CHECK(br_wifi_dhcp(f, n, &m) && m.type == 5 && !strcmp(br_wifi_dhcp_request_kind(&m), ""));
+  CHECK(br_wifi_dhcp_describe(&m, false, mac, line, sizeof line) == BR_WIFI_DHCP_IOS && !strcmp(line, "ACK of 172.16.235.71 from 172.16.0.1"));
+  // An answer to another station (a server that broadcasts its OFFER or ACK): another station's.
+  dhcp_spec other_ack = ack;
+  other_ack.eth_dst = bcast; other_ack.client = other; other_ack.yiaddr = "172.16.235.99";
+  n = make_dhcp(f, &other_ack);
+  CHECK(br_wifi_dhcp(f, n, &m) && br_wifi_dhcp_describe(&m, false, mac, line, sizeof line) == BR_WIFI_DHCP_OTHER &&
+        !strcmp(line, "another station's ACK of 172.16.235.99 (client 3c:22:fb:..)"));
+  // Cut inside the options: the type still read when option 53 came whole; cut in the header: not DHCP.
+  n = make_dhcp(f, &init_reboot);
+  CHECK(br_wifi_dhcp(f, 14 + 20 + 8 + 240 + 3, &m) && m.type == 3 && !m.has_requested);
+  CHECK(!br_wifi_dhcp(f, 14 + 20 + 8 + 239, &m));
+}
+
+static void test_groups_segments(void)   // the netlink groups, the cut of coalesced frames
+{
   // A netlink multicast group as the kernel writes it (the id, then the name) and the other way round; another
   // name; a name that only begins with the wanted one; cut short.
   static const uint8_t scan_group[] = { 8, 0, 2, 0, 3, 0, 0, 0, 9, 0, 1, 0, 's', 'c', 'a', 'n', 0, 0, 0, 0 };
@@ -550,6 +670,8 @@ static void test_callbacks(void)
 int main(void)
 {
   test_frames();
+  test_dhcp();
+  test_groups_segments();
   test_station();
   test_sim();
   test_parcels();

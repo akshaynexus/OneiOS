@@ -34,6 +34,7 @@
 #include <kern/thread_call.h>
 #include <libkern/c++/OSMetaClass.h>
 #include <mach/kmod.h>
+#include <mach/mach_time.h>
 #include <net/ethernet.h>
 #include <net/if_media.h>
 #include <net/kpi_interface.h>
@@ -179,8 +180,28 @@ static uint32_t gLogged[256 / 32];
 
 static void log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void log(const char *fmt, ...) {
-    char line[200]; va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof line, fmt, ap); va_end(ap);
+    char line[240]; va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof line, fmt, ap); va_end(ap);
     IOLog("ONEIOS WIFI: %s\n", line);
+}
+
+// When iOS took en0, for the lines that say so: milliseconds since oneios_net_start (the board's late start, a few
+// seconds after xnuhost's own start; the guest's counter is the host's, which runs since the phone booted, so the
+// driver's start is the zero), and IOKit's busy count at that moment (configd's InterfaceNamer and others wait for
+// IOKit to be quiet: the service root stays busy until the IOKit daemon, driverkitd on iOS, has sent its dexts'
+// personalities; the kernel logs "KextLog: driverkitd is active" then).
+static uint64_t gStartTime;
+static uint32_t since_start_ms() {
+    uint64_t ns = 0; absolutetime_to_nanoseconds(mach_absolute_time() - gStartTime, &ns); return static_cast<uint32_t>(ns / 1000000);
+}
+static unsigned iokit_busy() { IOService *root = IOService::getServiceRoot(); return root ? root->getBusyState() : 0; }
+// The first time each of these happened (one line each, with the time and who did it).
+enum { kSeenNamed, kSeenEnabled, kSeenRequest, kSeenPower, kSeenScan, kSeenJoin, kSeenCount };
+static bool gSeen[kSeenCount];
+static void first_time(unsigned what, const char *text) {
+    if (what >= kSeenCount || __atomic_exchange_n(&gSeen[what], true, __ATOMIC_RELAXED)) return;
+    char who[24] = "?"; proc_selfname(who, sizeof who);
+    const uint32_t ms = since_start_ms();
+    log("first %s: by %s[%d], +%u.%03u s after the driver's start, IOKit busy %u", text, who, proc_selfpid(), ms / 1000, ms % 1000, iokit_busy());
 }
 
 // A message to the host's bridge, as a frame of our own type on the transmit queue.
@@ -494,6 +515,7 @@ static int answer(bool set, apple80211req &rq) {
         case kPower: {
             uint32_t in[6]; if (copy_in(rq, in, sizeof in)) return EFAULT;
             const bool on = in[2] != 0;
+            if (on) first_time(kSeenPower, "power on");
             bool notify = false;
             IOLockLock(gLock);
             gPower = on;
@@ -504,7 +526,7 @@ static int answer(bool set, apple80211req &rq) {
             if (notify) left(false, 0);
             log("power %u", on ? 1u : 0u);
             post_event(kEvPowerChanged, nullptr, 0); return 0; }
-        case kScanReq: case kScanReqMultiple: scan(); return 0;
+        case kScanReq: case kScanReqMultiple: first_time(kSeenScan, "scan request"); scan(); return 0;
         case kAssociate: {
             // Only a layout that was seen: the network is never guessed from the key's bytes.
             if (rq.req_len != sizeof(assoc_request) && rq.req_len != sizeof(assoc_request27)) {
@@ -519,6 +541,7 @@ static int answer(bool set, apple80211req &rq) {
                 modern ? out.assoc27.network.key_length : out.assoc.network.key_length,
                 modern ? out.assoc27.network.key_cipher : out.assoc.network.key_cipher);
             gAssocModern = modern;
+            first_time(kSeenJoin, "join request");
             return join(modern ? out.assoc27.network : out.assoc.network); }
         case kDisassociate: case kDeauth: log("leave"); leave(); return 0;
         // Every other set: refused when it asks for something only another kind of driver does, else accepted with
@@ -585,6 +608,7 @@ static int answer(bool set, apple80211req &rq) {
 // Each request with its answer for the first few hundred, then a type's first one only.
 static int request(bool set, apple80211req &rq) {
     const uint32_t length = rq.req_len; const int32_t value = rq.req_val, type = rq.req_type;
+    first_time(kSeenRequest, "Apple80211 request");
     const int error = answer(set, rq);
     oneios_wifi_requests = oneios_wifi_requests + 1;
     if (error == EOPNOTSUPP) { oneios_wifi_refused = oneios_wifi_refused + 1; oneios_wifi_last_refused = static_cast<uint32_t>(type); }
@@ -623,6 +647,9 @@ public:
         char name[16];   // IFNAMSIZ
         snprintf(name, sizeof name, "%s%u", params->name, params->unit);
         setProperty("IOInterfaceName", name);
+        // configd's InterfaceNamer names it (IONetworkStack's user client attaches it to the network stack): from here
+        // on wifid can find it. The time says whether naming or what comes after it is the wait.
+        oneios_wifi::first_time(oneios_wifi::kSeenNamed, "naming (en0 attached to the network stack)");
         return true;
     }
     SInt32 performCommand(IONetworkController *controller, unsigned long command, void *argument0, void *argument1) override {
@@ -732,6 +759,7 @@ public:
         (void)client;
         enabled = true;
         oneios_wifi::log("the interface is enabled (en0 is up)");
+        oneios_wifi::first_time(oneios_wifi::kSeenEnabled, "enable (IFF_UP)");
         oneios_wifi::gIf = interface->getIfnet();
         IOLockLock(oneios_wifi::gLock);
         const bool up = oneios_wifi::gState == oneios_wifi::kStaUp;
@@ -829,6 +857,16 @@ int droidvm_net_if_attach(const uint8_t mac[6]) {
     if (!nub || !nub->init()) { OSSafeReleaseNULL(nub); return -1; }
     nub->setName("oneios-wlan");
     nub->setProperty("built-in", kOSBooleanTrue);
+    // en0's unit is reserved, as the iPhone's own Wi-Fi node reserves it (24A446's device tree:
+    // /arm-io/apcie/pci-bridge0/centauri-alpha has network-interface-unit-en = <0>). configd's InterfaceNamer
+    // (NetworkInterfaceGetReservedRange: the property on the interface or a parent in the service plane) then names
+    // the interface en0 at once. Without it en0 is an interface the naming database does not know whenever its
+    // address is new (wlan0's address is a random one while One UI is not joined, so it changes between sessions),
+    // and a new interface is named only once IOKit is quiet ("waiting for quiet"): only after driverkitd has sent its
+    // dexts' personalities (on the phone en0 came up at +130 s and +162 s on 2026-11-12, 261 s in an earlier session).
+    // InterfaceNamer still refuses the unit when its database has en0 at another registry path (builtinAvailable).
+    static const uint32_t kUnitEn0 = 0;
+    nub->setProperty("network-interface-unit-en", const_cast<uint32_t *>(&kUnitEn0), sizeof kUnitEn0);
     if (!nub->attach(resources)) { nub->release(); return -1; }
     OneiOSWifiController *controller = OSTypeAlloc(OneiOSWifiController);
     if (!controller || !controller->initWithAddress(mac)) { OSSafeReleaseNULL(controller); return -1; }
@@ -857,6 +895,7 @@ void oneios_net_start(void) {
     uint32_t enabled = 1;
     PE_parse_boot_argn("oneios-wifi", &enabled, sizeof enabled);
     if (!enabled) { IOLog("ONEIOS WIFI: off (oneios-wifi=0)\n"); return; }
+    oneios_wifi::gStartTime = mach_absolute_time();
     if (!oneios_wifi::station_init()) { IOLog("ONEIOS WIFI: off: no memory for the station\n"); return; }
     gRegistered = register_classes();
     if (!gRegistered) return;

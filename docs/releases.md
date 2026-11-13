@@ -35,7 +35,7 @@ builds on their own machine from Apple's restore files (`scripts/image/`), and w
   `BuildManifest.plist` and the rest of `.gitignore`'s firmware names;
 - by content: IMG4/IM4P containers, AEA archives, disk images, dyld caches, and **every Mach-O**;
 - the one Mach-O allowed is our own XNU: an arm64 `MH_EXECUTE` with a build record next to it
-  (`<name>.build.json`) written by `kernel/build-record.py`: `builder` is `oneios-kernel`, `sha256` is the file's,
+  (`<name>.build.json`) written by `oneios-tool kernel build-record`: `builder` is `oneios-kernel`, `sha256` is the file's,
   `prelinked` and `kernelcache_kexts_added` are false, `apple_binary_inputs` is empty. A kernel collection
   (`MH_FILESET`) is refused with or without a record.
 
@@ -71,7 +71,7 @@ placeholder), `kernel` (null without one). `files` lists every file except `runt
 - `session_abi` and `image_formats` are what the fork checks at run time. A package with a new `session_abi` needs a
   new fork: raise `runtime/package/min-oneos-fork` in the same commit.
 - The kernel has its own identity, the **build id** `xnu-<xnu version>-<profile>-<first 12 hex of the series hash>`
-  (`kernel/build-record.py`). The same sources, patches and configuration give the same id on any machine.
+  (`oneios-tool kernel build-record`). The same sources, patches and configuration give the same id on any machine.
 
 ## Building a package on a Mac
 

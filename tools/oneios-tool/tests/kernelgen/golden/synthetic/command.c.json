@@ -1,0 +1,1 @@
+["/usr/bin/clang-23", "-xc", "/s/b.c", "-o", "/o/b.o", "-Wa,-x", "-Xclang", "-keep", "-DX=1", "-target", "arm64e-apple-ios27.0", "-isysroot", "/sdk", "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter", "-I", "/REPO/drivers/bridge", "-I", "/REPO/drivers/bluetooth", "-I", "/REPO/drivers/camera"]

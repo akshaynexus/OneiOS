@@ -3,6 +3,7 @@
 // phone's wlan0, and how a frame that the receive path coalesced (GRO) is cut back into frames of the link's size.
 // Pure functions: unit-tested on any host (tests/test_bridges.c).
 #include "wifi.h"
+#include <stdio.h>
 #include <string.h>
 
 static uint16_t be16(const uint8_t *p) { return (uint16_t)(p[0] << 8 | p[1]); }
@@ -130,9 +131,9 @@ bool br_wifi_nl_group(const uint8_t *attrs, size_t length, const char *name, uin
 }
 
 // A DHCP message in an Ethernet frame (IPv4, UDP between ports 67 and 68, the BOOTP header and the magic cookie):
-// its type (option 53: 1 DISCOVER, 2 OFFER, 3 REQUEST, 5 ACK, 6 NAK ...), the address it gives (yiaddr) and the
-// server's (option 54). For the log only: what the bridge carries is not changed.
-bool br_wifi_dhcp(const uint8_t *frame, size_t length, uint8_t *type, uint8_t address[4], uint8_t server[4])
+// its type (option 53), the client's hardware address (chaddr), ciaddr and yiaddr, the requested address (option 50)
+// and the server's (option 54). For the log only: what the bridge carries is not changed.
+bool br_wifi_dhcp(const uint8_t *frame, size_t length, br_wifi_dhcp_msg *m)
 {
   if (length < 14 + 20 + 8 + 240 || br_wifi_ethertype(frame, length) != 0x0800) return false;
   const uint8_t *ip = frame + 14;
@@ -141,16 +142,62 @@ bool br_wifi_dhcp(const uint8_t *frame, size_t length, uint8_t *type, uint8_t ad
   const uint8_t *udp = ip + ihl, *b = udp + 8;
   const uint16_t sport = be16(udp), dport = be16(udp + 2);
   if (!((sport == 68 && dport == 67) || (sport == 67 && dport == 68)) || be32(b + 236) != 0x63825363u) return false;
-  *type = 0;
-  memcpy(address, b + 16, 4);
-  memset(server, 0, 4);
+  memset(m, 0, sizeof *m);
+  memcpy(m->ciaddr, b + 12, 4);
+  memcpy(m->yiaddr, b + 16, 4);
+  if (b[1] == 1 && b[2] == 6) memcpy(m->client, b + 28, 6);   // Ethernet's hardware type and length
+  m->ip_broadcast = be32(ip + 16) == 0xffffffffu;
   const uint8_t *end = frame + length;
   for (const uint8_t *o = b + 240; o < end && *o != 255;) {
     if (*o == 0) { o++; continue; }
     if (o + 2 > end || o + 2 + o[1] > end) break;
-    if (*o == 53 && o[1] == 1) *type = o[2];
-    if (*o == 54 && o[1] == 4) memcpy(server, o + 2, 4);
+    if (*o == 53 && o[1] == 1) m->type = o[2];
+    if (*o == 50 && o[1] == 4) { memcpy(m->requested, o + 2, 4); m->has_requested = true; }
+    if (*o == 54 && o[1] == 4) { memcpy(m->server, o + 2, 4); m->has_server = true; }
     o += 2u + o[1];
   }
-  return *type != 0;
+  return m->type != 0;
+}
+
+static bool zero4(const uint8_t a[4]) { return !(a[0] | a[1] | a[2] | a[3]); }
+
+const char *br_wifi_dhcp_request_kind(const br_wifi_dhcp_msg *m)
+{
+  if (m->type != 3) return "";
+  if (m->has_server) return "SELECTING";
+  if (zero4(m->ciaddr)) return "INIT-REBOOT";
+  return m->ip_broadcast ? "REBINDING" : "RENEWING";
+}
+
+void br_wifi_dhcp_address(const br_wifi_dhcp_msg *m, uint8_t out[4])
+{
+  if (m->type == 3 || m->type == 4) memcpy(out, m->has_requested ? m->requested : m->ciaddr, 4);   // REQUEST, DECLINE
+  else if (m->type == 7 || m->type == 8) memcpy(out, m->ciaddr, 4);                                 // RELEASE, INFORM
+  else memcpy(out, m->yiaddr, 4);
+}
+
+bool br_wifi_dhcp_from_client(const br_wifi_dhcp_msg *m)
+{
+  return m->type == 1 || m->type == 3 || m->type == 4 || m->type == 7 || m->type == 8;
+}
+
+int br_wifi_dhcp_describe(const br_wifi_dhcp_msg *m, bool from_guest, const uint8_t mac[6], char *out, size_t size)
+{
+  static const char *const names[] = { "?", "DISCOVER", "OFFER", "REQUEST", "DECLINE", "ACK", "NAK", "RELEASE", "INFORM" };
+  const char *name = m->type < 9 ? names[m->type] : "?", *kind = br_wifi_dhcp_request_kind(m), *sp = *kind ? " " : "";
+  uint8_t a[4];
+  br_wifi_dhcp_address(m, a);
+  const bool client = br_wifi_dhcp_from_client(m);
+  if (!from_guest && memcmp(m->client, mac, 6)) {
+    snprintf(out, size, "another station's %s%s%s %s %u.%u.%u.%u (client %02x:%02x:%02x:..)", name, sp, kind, client ? "for" : "of",
+             a[0], a[1], a[2], a[3], m->client[0], m->client[1], m->client[2]);
+    return BR_WIFI_DHCP_OTHER;
+  }
+  if (from_guest)
+    snprintf(out, size, "iOS sends %s%s%s %s %u.%u.%u.%u", name, sp, kind, client ? "for" : "of", a[0], a[1], a[2], a[3]);
+  else if (client)   // iOS's own message, back from the radio (an access point's reflection)
+    snprintf(out, size, "iOS's own %s%s%s for %u.%u.%u.%u came back from the radio", name, sp, kind, a[0], a[1], a[2], a[3]);
+  else
+    snprintf(out, size, "%s of %u.%u.%u.%u from %u.%u.%u.%u", name, a[0], a[1], a[2], a[3], m->server[0], m->server[1], m->server[2], m->server[3]);
+  return BR_WIFI_DHCP_IOS;
 }
