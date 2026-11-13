@@ -177,6 +177,12 @@
 # head, given-back ones at its tail. oneios-free-report=0: off (stock order). An oneios-mem: line every 30 s says what
 # XNU sees of its memory. The decisions: osfmk/arm64/hosted/free_report.h = runtime/xnuhost/include/xnuhost/free_report.h.
 0058-free-page-report.patch
+# boot: LaunchServices' and the icon store's state before launchd (oneios-ls-state:, oneios-icons-state: lines), and a
+# recovery file a killed session left beside lsd's database goes (oneios-ls-recovery=0 keeps it): with it lsd throws the
+# database 0043 kept away and registers every app again, and every drawn icon's validation token changes, so
+# iconservicesagent draws them all again. A guess for the phone's slow Home Screen of 2026-11-12 23:45 (lsd 90% for the
+# first minute, iconservicesagent 115%), not proven: the lines say. oneios-store-report=0: the whole step off.
+0060-ls-boot-state.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # net/build-oneios-net.py), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and

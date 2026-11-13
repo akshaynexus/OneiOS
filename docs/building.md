@@ -321,7 +321,10 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
 - `guest` lines in the log are the kernel's console. `kill -QUIT <xnuhost pid>` (the pid in `SESSION/xnuhost.pid`,
   not `pkill`: the task factory has the same command line and dies of the signal) logs every vCPU and every iOS
   thread, with the thread's return addresses up its frame pointers where the host can read the task's memory (on
-  the phone; under qemu-user it cannot, and only pc and lr are shown); `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
+  the phone; under qemu-user it cannot, and only pc and lr are shown). **Under qemu-aarch64 the pid in the file is
+  qemu's:** on 2026-11-13 (qemu 11.1.3) a `kill -QUIT` of it ended the run (`qemu: uncaught target signal 3 (Quit) - core
+  dumped`, exit 131, a 470 MB `qemu_xnuhost_*.core` in the working directory), so on the PC use `oneios-ubt=NAME` instead;
+  `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
 - A user process that dies: the kernel logs its registers and a backtrace (`sheng-exc`, `sheng-ubt` lines) for the
   processes named in the boot argument `sheng-exc-name=SpringBoard,backboardd,...` (default: backboardd, chronod,
   liveactivitiesd; launchd always). `oneios-tool sym ADDR...` names those addresses in the image set's dyld
