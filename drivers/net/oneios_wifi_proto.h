@@ -39,6 +39,7 @@ enum {
   OW_BSS = 17,                           // struct ow_bss + ies: one network of a scan
   OW_SCAN_DONE = 18,                     // struct ow_scan_done
   OW_JOIN_RESULT = 19,                   // struct ow_join_result
+  OW_CHANNELS = 20,                      // struct ow_channels, then count struct ow_channel: the radio's channels (after OW_HELLO)
 };
 
 struct ow_hello { uint32_t version; };
@@ -91,6 +92,13 @@ struct ow_join {
 enum { OW_JOIN_OK = 0, OW_JOIN_FAILED = 1, OW_JOIN_NO_NETWORK = 2, OW_JOIN_AUTH = 3, OW_JOIN_TIMEOUT = 4, OW_JOIN_NO_RADIO = 5,
        OW_JOIN_REJECTED = 6 };
 struct ow_join_result { uint32_t status; uint32_t code; };   // code: the 802.11 status or reason when there is one
+
+// A channel the radio may use, as the phone's regulatory domain allows it (nl80211's frequency attributes; disabled
+// channels are left out). The guest answers APPLE80211_IOC_CHANNELS_INFO and the supported channel lists from these.
+enum { OW_CH_PASSIVE = 1, OW_CH_RADAR = 2, OW_CH_INDOOR = 4, OW_CH_NO_HT40 = 8, OW_CH_NO_80MHZ = 16 };
+struct ow_channel { uint16_t freq_mhz; uint8_t flags; uint8_t pad; };
+struct ow_channels { uint16_t count; uint16_t pad; };
+#define OW_MAX_CHANNELS 128u
 
 struct ow_power { uint32_t on; };
 struct ow_scan_done { uint32_t count; int32_t error; };

@@ -71,7 +71,21 @@ static int sim_link(void *ctx, br_wifi_link *out)
   return 0;
 }
 
-static const br_wifi_radio sim_radio = { sim_scan, sim_join, sim_leave, sim_link };
+// The made-up radio's channels: 2.4 GHz 1 to 13, 5 GHz 36 to 165 with the DFS ones (52 to 144) passive and radar.
+static int sim_channels(void *ctx, struct ow_channel *out, unsigned max)
+{
+  (void)ctx;
+  unsigned n = 0;
+  for (unsigned c = 1; c <= 13 && n < max; c++) out[n++] = (struct ow_channel){ .freq_mhz = (uint16_t)(2407 + 5 * c) };
+  static const uint8_t five[] = { 36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144,
+                                  149, 153, 157, 161, 165 };
+  for (unsigned i = 0; i < sizeof five && n < max; i++)
+    out[n++] = (struct ow_channel){ .freq_mhz = (uint16_t)(5000 + 5 * five[i]),
+                                    .flags = (uint8_t)(five[i] >= 52 && five[i] <= 144 ? OW_CH_PASSIVE | OW_CH_RADAR : 0) };
+  return (int)n;
+}
+
+static const br_wifi_radio sim_radio = { sim_scan, sim_join, sim_leave, sim_link, sim_channels };
 
 static void sim_deliver(void *ctx, const uint8_t *frame, size_t length)
 {

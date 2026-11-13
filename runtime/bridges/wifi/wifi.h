@@ -60,6 +60,11 @@ int br_wifi_dhcp_describe(const br_wifi_dhcp_msg *m, bool from_guest, const uint
 // true and its id when its name is `name`. The kernel writes the id before the name.
 bool br_wifi_nl_group(const uint8_t *attrs, size_t length, const char *name, uint32_t *id);
 
+// The channels of an NL80211_ATTR_WIPHY_BANDS attribute (its payload: one nested attribute per band, each with
+// NL80211_BAND_ATTR_FREQS), appended to out[count..max): the frequency and the OW_CH_* flags of each channel that is
+// not disabled. Returns the new count. A split wiphy dump spreads the bands over several messages: call it for each.
+unsigned br_wifi_nl_bands(const uint8_t *bands, size_t length, struct ow_channel *out, unsigned count, unsigned max);
+
 // ---- station.c ----
 // What the radio back end reports about the link.
 typedef struct {
@@ -81,6 +86,7 @@ typedef struct {
   int  (*join)(void *ctx, const struct ow_join *join, const br_wifi_bss *bss);   // bss: the last scan's record, or NULL
   int  (*leave)(void *ctx);
   int  (*link)(void *ctx, br_wifi_link *out);    // 0 and *out, or -errno
+  int  (*channels)(void *ctx, struct ow_channel *out, unsigned max);   // the channels it may use: their number, or -errno (NULL: none)
 } br_wifi_radio;
 
 typedef struct br_wifi_station br_wifi_station;

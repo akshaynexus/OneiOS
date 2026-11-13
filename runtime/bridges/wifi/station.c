@@ -200,6 +200,16 @@ void br_wifi_station_message(br_wifi_station *s, const uint8_t *frame, size_t le
   case OW_HELLO:
     br_log(1, "wifi: the guest's driver is up; it gets the radio");
     br_wifi_link_changed(s);
+    if (s->radio->channels) {   // the channels the phone may use: APPLE80211_IOC_CHANNELS_INFO and the channel lists
+      struct { struct ow_channels head; struct ow_channel ch[OW_MAX_CHANNELS]; } list;
+      memset(&list, 0, sizeof list);
+      int n = s->radio->channels(s->radio_ctx, list.ch, OW_MAX_CHANNELS);
+      if (n > 0) {
+        list.head.count = (uint16_t)n;
+        send(s, OW_CHANNELS, &list.head, sizeof list.head, list.ch, (size_t)n * sizeof list.ch[0]);
+        br_log(1, "wifi: %d channels of the radio for the guest (%u MHz to %u MHz)", n, list.ch[0].freq_mhz, list.ch[n - 1].freq_mhz);
+      } else br_log(0, "wifi: the radio's channel list: %s; the guest keeps its own", n == 0 ? "empty" : strerror(-n));
+    }
     break;
   case OW_SCAN: {
     pthread_mutex_lock(&s->lock);
