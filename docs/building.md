@@ -398,6 +398,7 @@ $T phone log --list                # the logs by name: xnuhost, switch, return, 
 $T phone status --watch            # the status again every 5 s
 $T phone return                    # session/return.request, then waits for "One UI restored in place"
 $T phone pull-data OUT --ioslog    # the Data store's copy (no session open), then ioslog boots and checks
+#   pull-data by hand: adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'" | $T phone sparse-write OUT --gunzip
 ```
 
 One command for the whole cycle (each step can be left out with `--only` or `--skip`; `--dry-run` says what each
