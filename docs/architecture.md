@@ -50,14 +50,16 @@ back stay exactly OneOS-shaped.
    manifests and staged as root under `/data/local/tmp/oneios/{runtime,image,data,session,control}`.
 2. **Arm the way back:** the watcher, the Volume Up + Volume Down readers and a wakelock start before anything stops.
 3. **Stop One UI's framework:** zygote (and so system_server). The kernel, vendor HALs, surfaceflinger and the
-   composer keep running.
+   composer keep running. With UsbDeviceManager gone, the fork's USB watcher keeps adb on the USB gadget across
+   unplug and replug ([oneos/interface.md](../oneos/interface.md) 6a; its repairs are off, logged only, until a phone
+   session turns them on with `usb-repair` in the stage).
 4. **Start xnuhost** in a mount namespace with the stage over `/data`, in its own cgroup, then `oneios-display`.
 5. **Boot:** xnuhost loads `kernel.kc`; XNU mounts the OS volume (verified by xnuhost), on first start formats the
    Data volume and unpacks the seed, mounts the cryptexes, starts launchd; backboardd draws on the guest's framebuffer, and at its first frame (not the boot console's)
    xnuhost writes `session/ready`.
 6. **Return:** Volume Up + Volume Down for 3 s, a return request from inside iOS, xnuhost exiting, or no `ready` in
    time. The return ends xnuhost (SIGTERM, then SIGKILL), restores One UI's backlight, restarts the composer and
-   surfaceflinger, restarts zygote; any failed check reboots into One UI instead. Power + Volume Down (Samsung's
+   surfaceflinger, puts the USB gadget back as One UI had it (with `usb-repair`), restarts zygote; any failed check reboots into One UI instead. Power + Volume Down (Samsung's
    forced restart) is the backstop below all software.
 
 ## Why it is fast where it is fast, and slow where it is slow

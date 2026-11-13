@@ -13,6 +13,8 @@
 # end, a failure or Ctrl-C none is left running (lib.sh's traps).
 # With the OneOS fork's checkout at hand (ONEOS_DIR, or ../OneOS beside the main checkout), begin, receive, finish
 # and status are the fork's own root script under its test root; without it those checks are skipped, with a line.
+# With it, usb.sh also runs the fork's switch and return scripts' USB steps (the record, the session's USB watcher
+# across unplug and replug, the return's restore) against a stand-in gadget: oneos/interface.md, "USB and adb".
 # Env: TOOL (the binary), KEEP=1 (keep the scratch folder out/rustport-phone), FAKE_PROC=host|stand-in (the
 # /proc the stand-in's commands read: the host's, or the stand-in's own as on macOS; default: the host's where it
 # has one). tests/phone/modes.sh runs this suite, tests/app and tests/cycle in both.
@@ -192,6 +194,12 @@ else ok "nothing sent to the phone walks a tree, writes /sys/power or restarts (
 gzip -1 -c "$S/data/data.img" | "$TOOL" phone sparse-write "$W/swz.img" --gunzip --expect-size 50331648 > "$W/sw.out" 2>&1 && cmp -s "$W/swz.img" "$S/data/data.img" \
   && ok "sparse-write --gunzip --expect-size" || bad "sparse-write --gunzip" "$(cat "$W/sw.out")"
 check "sparse-write --expect-size that does not match" 1 "50331648 bytes came, 5 were expected" sh -c "'$TOOL' phone sparse-write '$W/sw2.img' --expect-size 5 < '$S/data/data.img'"
+
+# ---- USB and adb during a session: the fork's switch and return scripts (tests/phone/usb.sh)
+if [ -z "$FORK" ]; then echo "skipped usb (no fork checkout: its switch and return scripts)"
+elif ! grep -q -- '--usb-watch)' "$FORK/switcher/assets/oneios_switch.sh"; then
+  echo "skipped usb (the fork checkout $FORK has no USB watcher yet: OneOS branch fix-usb-adb)"
+else . "$HERE/usb.sh"; usb_checks; fi
 
 no_session_left "phone suite"
 [ -n "${KEEP:-}" ] || rm -rf "$W"

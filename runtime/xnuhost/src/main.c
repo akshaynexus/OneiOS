@@ -735,6 +735,20 @@ static void host_memory_tick(bool now)
        (unsigned long long)(tables >> 20));
 }
 
+// Every usb-log seconds (3): the phone's USB gadget, logged at the start and whenever it changed (usb.c). From the
+// main thread, which is not a realtime one: three property serials and one named sysfs file a poll. Read only.
+static xh_usb_watch usb_watch;
+static void usb_tick(bool now, const char *when)
+{
+  static struct timespec last;
+  struct timespec t;
+  if (config.usb_log <= 0) return;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  if (!now && last.tv_sec && t.tv_sec - last.tv_sec < config.usb_log) return;
+  last = t;
+  if (xh_usb_poll(&usb_watch, xh_usb_bionic()) || now) LOGI("%s%s", usb_watch.line, when);
+}
+
 int main(int argc, char **argv)
 {
   start_argv = argv;
@@ -749,6 +763,7 @@ int main(int argc, char **argv)
   LOGI("xnuhost: session ABI %d, mode %s, pid %d", config.session_abi, config.mode, getpid());
   host_facts();
   if (!config.selftest) ram_choice_log();
+  if (!config.selftest) usb_tick(true, "");
   if (config.selftest) {
     // What must hold on a phone before anything else is worth trying.
     bool ok = g_info.host_page_size <= 16384 && g_info.user_va_bits >= 39 && (g_info.features & XH_FEATURE_PAC);
@@ -806,6 +821,7 @@ int main(int argc, char **argv)
     }
     xh_perf_tick();                         // "perf:" lines every perf-log seconds
     host_memory_tick(false);                // "memory: host MemAvailable" every host-mem-log seconds
+    usb_tick(false, "");                    // "usb: state ..." when the USB gadget changed
     // Until the guest's display driver presents, show what its kernel console draws.
     xh_display *d = xh_display_get();
     uint8_t *fb = xh_ram(boot_fb_pa, (uint64_t)fb_width * fb_height * 4);
@@ -817,6 +833,7 @@ int main(int argc, char **argv)
 
   LOGI("stopping: %s (reason %u, code %u)", stop_state.why, stop_state.reason, stop_state.code);
   host_memory_tick(true);
+  usb_tick(true, " (at the stop)");
   for (unsigned i = 0; i < g_ncpu; i++)
     LOGI("cpu%u: %s, %llu interrupts (%llu timer, %llu IPI acknowledged, %llu re-raised), %llu device accesses, %llu emulated instructions, %llu task traps", i,
          g_vcpu[i].started ? "started" : "never started",

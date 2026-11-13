@@ -54,6 +54,7 @@ xnuhost --selftest            # on the phone: page size, address bits, PAC keys 
 | `--set ram-percent=N` | 90 | `ram=auto`'s share of `MemTotal`, 10 to 100 |
 | `--set ram-host-floor=SIZE` | 1.5G | what `ram=auto` always leaves the host |
 | `--set host-mem-log=SECONDS` | 30 | a `memory: host MemAvailable` line every so often; 0 = only at the start and the stop |
+| `--set usb-log=SECONDS` | 3 | how often the phone's USB gadget is read for its `usb:` line (section 2.9a), which is logged at the start, on every change and at the stop; 0 = off |
 | `--set ram-meminfo=FILE` | `/proc/meminfo` | where `ram=auto` reads `MemTotal` and `MemAvailable` (tests) |
 
 **The guest's RAM (`ram=auto`, the owner's decision of 2026-11-12: iOS gets at least 90% of the phone's RAM).**
@@ -587,6 +588,38 @@ the phone reboots, and wlan0 keeps GRO off and `disable_ipv6` 1 if xnuhost is ki
 (neither breaks One UI's Wi-Fi: [hardware.md](hardware.md) section 3, "Return"; `bin/wifictl restore
 SESSION/wifi.state` puts them back). With `wifi=tap`, the tap's routing rules and iptables chains stay until
 `oneios-net.sh down` (the tap itself goes with the process).
+
+### 2.9a The USB gadget in the log (`src/usb.c`, 2026-11-13)
+
+xnuhost never opens, writes or binds anything of USB, the USB gadget, configfs, Type-C or power supplies but
+the battery and thermal bridges' reads of named files of `/sys/class/power_supply/battery` and of `online` of
+`usb`, `ac`, `wireless` and `pogo` there (read only; checked in the sources, 2026-11-13), and it sets no property. Keeping
+adb on the gadget through a session is the fork's (`oneos/interface.md`, "USB and adb during a session"). What
+xnuhost adds is a line that says when the gadget changed, so that a session's log shows when adb's USB function,
+or the controller under it, went away (phone, 2026-11-13: a cable plugged in during an iOS session, and the Mac saw
+no USB device at all):
+
+```text
+usb: state <sys.usb.state>, config <sys.usb.config>, UDC <sys.usb.controller> <its state>
+                                     at the start, whenever one of the four changed, and " (at the stop)"
+usb: state mtp,adb, config mtp,adb, UDC a600000.dwc3 configured            (a cable to a computer, adb up)
+usb: state mtp,adb, config mtp,adb, UDC a600000.dwc3 not attached          (no cable, or one that never enumerated)
+```
+
+The properties are read from Android's property area as bionic does: `__system_property_find` until the
+property exists (the `prop_info` then stays where it is), its `__system_property_serial` on each poll, and
+`__system_property_read_callback` for the value only when the serial changed. The UDC's state is the one named
+file `/sys/class/udc/<sys.usb.controller>/state` (the kernel's `usb_state_string`: `not attached`, `powered`,
+`default`, `addressed`, `configured`, `suspended`); the controller is found by that property's name, used only
+when it is one path component, and `/sys/class/udc` is never listed. The main thread polls every `usb-log`
+seconds (3; not a realtime thread; three serials and one small file a poll). A value that is not there reads
+`(none)`, a state file that cannot be read `(unreadable)`, a controller that is not a plain name `(not a name)`.
+On the PC (no property area: the host build, or the Android binary under qemu-aarch64) the line is
+`usb: state (none), config (none), UDC (none) (unreadable)`, once.
+`test_xnuhost`'s `test_usb` checks it with a stand-in property source and state file: the first line, nothing
+logged or read again while the serials and the file stay, a change of the file alone and of one property, a value
+read only through its serial, a property that goes away, a controller name that is a path (`../../../proc/self`:
+its file is never opened), and `usb-log`'s default and range. **Not run on the phone yet.**
 
 ## 3. What each XNU subsystem gets from the host
 

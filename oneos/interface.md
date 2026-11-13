@@ -102,7 +102,7 @@ A tool the package lacks is shown as "Not in this runtime", not as a failure.
 | `data/` | the guest's writable state (Data store, anything xnuhost keeps). Survives a new runtime or image | xnuhost |
 | `session/` | this session: `xnuhost.pid`, `xnuhost.log`, `ready`, `return.request`, `tmp/`, the baseline | switch, xnuhost |
 | `logs/` | earlier sessions' `xnuhost-<epoch>.log` (the last 5; the next switch moves `session/xnuhost.log` there, so the epoch is that switch's time and the file's own time is its session's last line) | switch |
-| `switch.log`, `return.log`, `return.outcome`, `control/display.log`, `control/watchdog_feeder.log` | the fork's own logs: the switch, the return with the watcher and the key readers, how the last return ended, the display helper's output, the watchdog feeder | switch, return |
+| `switch.log`, `return.log`, `return.outcome`, `control/display.log`, `control/watchdog_feeder.log`, `control/usb.log` | the fork's own logs: the switch, the return with the watcher and the key readers, how the last return ended, the display helper's output, the watchdog feeder, the session's USB watcher (section 6a) | switch, return |
 
 ## 4. How the switch starts xnuhost
 
@@ -171,6 +171,56 @@ is gone, writes the hardware's range; the return writes One UI's values back bef
 
 The Volume Up + Volume Down chord is read on the host side with `getevent` (which does not grab), so it
 works whatever xnuhost is doing, as long as xnuhost does not grab that device.
+
+## 6a. USB and adb during a session
+
+**The rule: adb over USB works for the whole session, across unplug and replug, and the return leaves the USB
+gadget as One UI had it.** It is the fork's to keep (fork branch `fix-usb-adb`, akshaynexus/OneOS PR #1, **not merged yet**, 2026-11-13; its `docs/oneios.md`, "USB and
+adb during a session"); xnuhost only reads and logs it (`docs/booter.md` 2.9a).
+
+**Today the fork only records and logs (the repairs are off by default):** until a phone session has shown them right,
+the USB watcher and the return write nothing and log each repair they would make. A session turns them on with the
+file `usb-repair` in the stage at the switch (`su -c 'touch /data/local/tmp/oneios/usb-repair'`; recorded as
+`repair=1` in `control/base/usb`). So by default a session is as before for USB.
+
+Why the fork has to: the USB gadget's functions are set by One UI's framework (UsbDeviceManager in system_server,
+through the USB gadget HAL or init's `sys.usb.config` triggers of `init.usb.configfs.rc`), on every plug-in and
+unplug. The switch stops system_server, so from then on nobody re-arms the gadget: whatever unbinds it or drops
+adb from it during the session stays. adbd and the UDC binding themselves outlive the framework (this morning's
+session, 2026-11-13 at c1223f8, kept USB adb from before the switch to after the return with the cable in).
+
+What the fork does (`oneios_switch.sh`, `oneios_return.sh`):
+
+1. **At the switch's baseline** (One UI whole) it records `control/base/usb`: `sys.usb.config`, `sys.usb.state`,
+   `persist.sys.usb.config`, `sys.usb.controller`, `sys.usb.configfs`, `init.svc.adbd`, the gadget's UDC file
+   (`/config/usb_gadget/g1/UDC`) and whether USB debugging is on (adb in `sys.usb.config` or
+   `persist.sys.usb.config`, or `settings get global adb_enabled` = 1). `switch.log`: `USB of One UI: ...`.
+2. **After the framework's stop**, with USB debugging on, a USB watcher (`oneios_switch.sh --usb-watch`, a shell loop
+   in init's namespace and the root cgroup, never in xnuhost's; not a realtime thread; `control/usb.log`) reads the
+   gadget every 3 s and logs it when it changed, and makes at most one repair every 21 s, each only back to One UI's
+   own value: adbd not running (`ctl.start adbd`); adb gone from `sys.usb.config` (One UI's config again); the UDC
+   file empty while One UI had it bound (One UI's controller written into it); a cable in (`/sys/class/power_supply/usb/online`
+   = 1) for 15 s with `/sys/class/udc/<sys.usb.controller>/state` still `not attached`, `attached` or `powered`
+   (`sys.usb.config none`, then One UI's, as OneOS's adb watchdog of the Android sessions does; twice per plug-in at
+   most, so a charger that never enumerates is left alone). With USB debugging off it does nothing.
+3. **At the return** the watcher ends in step 1 (`control/usb-watch.off`, then its pid; it also ends on the state
+   `returning`), and in step 4, before One UI's zygote starts, `sys.usb.config` (with its triggers), adbd and the UDC
+   file go back to the record where they differ (`return.log`: `usb: before the restore: ...`, `usb: after the
+   restore: ...`). Logged only; never a reason for the failsafe.
+
+Only properties and named files: the UDC by the name in `sys.usb.controller`, never a listing of `/sys/class/udc`,
+the gadget or `/sys/class/power_supply`. Nothing persist is written, nothing under `/sys/power`, no reboot, no input
+device. The stand-in phone checks all three (`tools/oneios-tool/tests/phone/usb.sh`, from `run.sh`, against the
+fork's own scripts; skipped, with a line, against a fork checkout that has no `--usb-watch` yet). **Not run on the phone yet.**
+
+What was found about the fault of 2026-11-13 (the Mac saw no USB device during the session at c2d281a): see the fork's
+PR and `docs/oneios.md` there. In short: nothing of xnuhost or the bridges opens anything of USB, the gadget,
+configfs, Type-C or a power supply but read-only `power_supply` files, and sets no property (the sources at c2d281a;
+the diff c1223f8..c2d281a has no such change: 0062 is the guest's own IOKit trace); the fork's scripts touched no USB
+property or file before this change; and the Mac did not see the phone on USB **before** the switch either (that
+session was staged over wireless adb for that reason), with One UI's framework still running. So that session's
+missing USB was not caused by the switch; the cable, the Mac's port, or a gadget state One UI already had are left
+(a guess until the lines asked for in the PR come back).
 
 ## 7. Overlay mode
 

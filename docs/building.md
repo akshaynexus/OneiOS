@@ -416,7 +416,9 @@ $T phone log --follow --markers    # kernel, launchd, backboardd, SpringBoard, t
                                    #   (right after a switch it waits for this session's log: the switch replaces it ~40 s in)
 $T phone log --gpu --tail 200      # named filters: --panic --markers --display --gpu --wifi --hid --mem; --grep REGEX; --since SECONDS
 $T phone log --follow --save-auto  # also into out/session-logs/DATE/live-HHMMSS.log; --analyze: timeline and stacks at the end
-$T phone log --list                # the logs by name: xnuhost, switch, return, outcome, display, watchdog, logs/xnuhost-<epoch>.log
+$T phone log --list                # the logs by name: xnuhost, switch, return, outcome, display, watchdog, usb, logs/xnuhost-<epoch>.log
+$T phone log --file usb            # the session's USB watcher: the gadget and adbd, its repairs (oneos/interface.md 6a)
+$T phone log --grep 'xnuhost I usb: ' # xnuhost's own "usb: state ..., config ..., UDC ..." lines (docs/booter.md 2.9a)
 $T phone status --watch            # the status again every 5 s
 $T phone return                    # session/return.request, then waits for "One UI restored in place"
 $T phone pull-data OUT --ioslog    # the Data store's copy (no session open), then ioslog boots and checks

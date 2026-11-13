@@ -48,7 +48,7 @@ plog > "$W/all.txt" 2>/dev/null && cmp -s "$W/all.txt" "$L" && ok "log: the whol
 [ "$(plog --tail 3 2>/dev/null)" = "$(tail -n 3 "$L")" ] && ok "log --tail 3" || bad "log --tail"
 check "log --file switch" 0 "=== OneOS app switch .* versionCode 115 ===" plog --file switch
 check "log --file return" 0 "One UI restored in place" plog --file return
-check "log --file of no known name" 1 "one of xnuhost, switch, return, outcome, display, watchdog or logs/xnuhost-<epoch>.log" plog --file ../../etc/passwd
+check "log --file of no known name" 1 "one of xnuhost, switch, return, outcome, display, watchdog, usb or logs/xnuhost-<epoch>.log" plog --file ../../etc/passwd
 m=$(plog --markers 2>/dev/null)
 [ "$(printf '%s\n' "$m" | grep -c 'backboardd\[')" = 1 ] && [ "$(printf '%s\n' "$m" | wc -l)" = 11 ] && printf '%s\n' "$m" | tail -n 1 | grep -q "xnuhost I exit 0" \
   && ok "log --markers: nine stages once each, the stop and the exit" || bad "log --markers" "$(printf '%s' "$m" | cut -c1-60 | tr '\n' '|')"

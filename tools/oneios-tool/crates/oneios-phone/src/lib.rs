@@ -92,7 +92,7 @@ pub enum Command {
 
 #[derive(clap::Args)]
 pub struct LogArgs {
-    /// Which log: xnuhost (default), switch, return, outcome, display, watchdog, or logs/xnuhost-<epoch>.log
+    /// Which log: xnuhost (default), switch, return, outcome, display, watchdog, usb, or logs/xnuhost-<epoch>.log
     #[arg(long, default_value = "xnuhost")]
     file: String,
     /// The named logs with their sizes, and the earlier sessions' (the fork's `oneios_root.sh logs`)
