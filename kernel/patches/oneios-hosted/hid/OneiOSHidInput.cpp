@@ -19,7 +19,8 @@
 // metaclass gets the live one as its superclass before the module load is finished.
 //
 // Boot arguments: oneios-hid-driverkit=1 adds no personalities (oneios_hid_personalities); oneios-hid=0 starts nothing; oneios-hid-log=0 keeps the once-a-second state line quiet
-// (default 1: it is how a boot shows that backboardd opened the digitizer and that events arrive).
+// (default 1: it is how a boot shows that backboardd opened the digitizer and that events arrive);
+// oneios-hid-queue-kib=N the event queue of the services' user clients (default 0: off, Apple's 16 KiB; 256 to try; setQueueSize)
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
@@ -239,6 +240,32 @@ queueCounts(IORegistryEntry *driver, unsigned long long *queued, unsigned long l
 	it->release();
 }
 
+// The event queue of each user client of the service (backboardd's), in KiB (hang/keyboard, 2026-11-13). Apple's
+// IOHIDEventServiceUserClient::start sizes its queue from the service's "QueueSize" property (kIOHIDEventServiceQueueSize,
+// bytes), else 16 KiB, and drops an event that does not fit (DebugState's dropped count, our "N dropped"). 16 KiB holds a
+// few dozen digitizer events: a backboardd that stalls for half a second while fingers move at 120 frames a second
+// overflows it, and a dropped event can be a finger's lift, after which backboardd keeps that touch down for good (the
+// phone, 2026-11-12 23:15: "5105 HID events queued ... 6 dropped"; in the hangs backboardd stalled for seconds). The
+// iPhone's own touch path sets the property too (AppleSPUHIDDriver: "set %s kIOHIDEventServiceQueueSize to %d KB" in the
+// kernelcache). Set on the event driver as soon as it attaches, before backboardd opens it (a client already open keeps its
+// queue until it opens again). oneios-hid-queue-kib=N (default 0: Apple's 16 KiB, off until booted; 256 to try); hidq_size
+// still wins over the property.
+static uint32_t oneios_hid_queue_kib = 0;   // off until a boot has run it (hand-off, 2026-11-13)
+
+static void
+setQueueSize(IORegistryEntry *driver, const char *what)
+{
+	if (!oneios_hid_queue_kib) {
+		return;
+	}
+	const uint32_t bytes = (oneios_hid_queue_kib > 4096 ? 4096 : oneios_hid_queue_kib) << 10;
+	driver->setProperty("QueueSize", (unsigned long long)bytes, 32);
+	char clients[256];
+	const unsigned open = describeClients(driver, clients, sizeof(clients));
+	IOLog("oneios-hid: %s: event queue %u KiB for its user clients (QueueSize)%s\n", what, bytes >> 10,
+	    open ? "; already open: theirs stays 16 KiB until they open again" : "");
+}
+
 // Called by each NativeHidInput once a second, on its work loop (its tick).
 //
 // backboardd classifies a digitizer by the event service it opened, not by the HID device below it: it drops a
@@ -263,6 +290,7 @@ native_hid_live_checkpoint(IOService *device)
 		state->clients = 0;
 		IOLog("oneios-hid: %s: event driver %s attached (registry id 0x%llx)\n", what, driver->getMetaClass()->getClassName(),
 		    driver->getRegistryEntryID());
+		setQueueSize(driver, what);
 	}
 	if (!driver) {
 		return;
@@ -596,6 +624,7 @@ oneios_hid_input_start(void)
 	uint32_t enabled = 1;
 	PE_parse_boot_argn("oneios-hid", &enabled, sizeof(enabled));
 	PE_parse_boot_argn("oneios-hid-log", &oneios_hid_log, sizeof(oneios_hid_log));
+	PE_parse_boot_argn("oneios-hid-queue-kib", &oneios_hid_queue_kib, sizeof(oneios_hid_queue_kib));
 	if (!enabled || oneios_hid_stage) {
 		return;
 	}
