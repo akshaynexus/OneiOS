@@ -654,9 +654,9 @@ and no-80 MHz flags), with `wifi=sim` a fixed list (38 channels). Log line: `wif
 below is in. `test_wifi`: 162 checks (the band parser on a constructed attribute tree, cut and split cases; the sim's
 channel message).
 
-**Not done: the guest driver's half** is in `kernel/patches/oneios-hosted/net/pending-scan-timestamp-channels.diff`
-(not built by anything; written against `OneiOSWifi.cpp` of this commit; **never compiled**: the box's kernel-build
-queue was full when the work stopped). It: stamps each BSS with the continuous-clock time the radio saw it
+**The guest driver's half** is in `OneiOSWifi.cpp` since the hand-over of 2026-11-13: it was kept as a diff until
+then, applied in the integration tree of that day and **compiled** in its kernel (`HOSTED_OUT=integ`, the prelink
+audit 0 failures, `stubs-check` 666 good); **not booted yet**. It: stamps each BSS with the continuous-clock time the radio saw it
 (`mach_continuous_time` in ns minus the host's `age_ms`) and writes it at 0x8d0 of every 2280-byte `SCAN_RESULT`
 (and "now" for `CURRENT_NETWORK`); answers `CHANNELS_INFO` from the host's list (built-in list until one came);
 builds `SUPPORTED_CHANNELS` from the same list (active unless passive, DFS flag 0x100 on radar channels); logs
@@ -665,9 +665,8 @@ builds `SUPPORTED_CHANNELS` from the same list (active unless passive, DFS flag 
 (.. ms before now), element bytes`; the log line buffer grows to 384 bytes.
 
 **Next, in order:**
-1. `git apply kernel/patches/oneios-hosted/net/pending-scan-timestamp-channels.diff`, delete the file, build
-   (`flock /tmp/oneios-kbuild.lock env HOSTED_OUT=... kernel/build-hosted.sh`; the archive is `oneios-tool kernel gen
-   net`), prelink (audit 0 failures, `stubs-check.py`), and boot the PC with `--set wifi=sim`: `scan record 1` must show
+1. Boot the PC with `--set wifi=sim` (a kernel built from `main`; the archive is `oneios-tool kernel gen net`):
+   `scan record 1` must show
    a TIMESTAMP a few ms before now, `channels info: 38 channels (the host's list)`, and wifid's log (`ioslog --proc wifid`)
    `APPLE80211_IOC_CHANNELS_INFO returned 38 channels in list` instead of `Could not read`.
 2. On the phone: a join to a known network in range. Lines: `ONEIOS WIFI: scan record 1`, `wifi: N channels of the

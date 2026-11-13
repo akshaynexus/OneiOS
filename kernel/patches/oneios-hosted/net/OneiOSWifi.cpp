@@ -137,9 +137,13 @@ struct link_event {
 };
 // 24A446's scan record is 2280 bytes (IO80211.framework's __addScanResultToList reads fields up to 0x8e6 and asks
 // CURRENT_NETWORK with that length): the 1164-byte record's fields at the same places, a longer element area, and a
-// tail (an address at 0x8d0, flags and counts at 0x8d8 to 0x8e6) that is zero here. A caller with a buffer of that
-// size gets the whole record, so the tail is never what its buffer held before.
-enum { kScanRecord27 = 2280 };
+// tail. The tail starts with the BSS's TIMESTAMP at 0x8d0: 64 bits, nanoseconds of the continuous clock (the framework
+// stores it as the record's "TIMESTAMP"; CoreWiFi's -[CWFScanResult age] is clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)
+// minus it, and CWFFilteredScanResults drops a result older than the scan's maxAge or before its minTimestamp). It was
+// zero until 2026-11-13, so every result was as old as the phone's uptime and auto-join saw none ("All scan results are
+// filtered out", the phone). The flags and counts at 0x8d8 to 0x8e6 stay zero. A caller with a buffer of that size gets
+// the whole record, so the tail is never what its buffer held before.
+enum { kScanRecord27 = 2280, kScanRecordTimestamp = 0x8d0, kChannelsInfoSize = 10016 };
 static_assert(sizeof(apple80211req) == 0x28, "request layout");
 static_assert(sizeof(scan_result) == 1164 && __builtin_offsetof(scan_result, ssid_length) == 0x60 &&
               __builtin_offsetof(scan_result, age_ms) == 0x84 && __builtin_offsetof(scan_result, elements) == 0x8c, "scan result layout");
@@ -157,7 +161,7 @@ static_assert(sizeof(ow_bss) == 56 && sizeof(ow_state) == 92 && sizeof(ow_join) 
 enum { kStaOff = OW_LINK_OFF, kStaIdle = OW_LINK_IDLE, kStaScanning = OW_LINK_SCANNING, kStaAuth = OW_LINK_AUTH, kStaAssoc = OW_LINK_ASSOC,
        kStaKeys = OW_LINK_KEYS, kStaUp = OW_LINK_UP };
 enum { kMaxNetworks = 64, kScanTimeoutMs = 10000, kJoinTimeoutMs = 30000 };
-struct Net { ow_bss bss; uint8_t ies[OW_MAX_IES]; };
+struct Net { ow_bss bss; uint8_t ies[OW_MAX_IES]; uint64_t seen_ns; };   // seen_ns: when the radio last saw it (TIMESTAMP)
 
 static IOLock *gLock;                  // everything below
 static Net *gScan, *gFill;             // the last finished scan, and the one the host is sending
@@ -172,6 +176,8 @@ static bool gKeyed;                    // the last join had a key
 static int32_t gRssi = -127, gNoise = -95;
 static uint32_t gRate;
 static char gCountry[3] = "XX";
+static ow_channel gChannels[OW_MAX_CHANNELS];   // the host's channel list (OW_CHANNELS); empty: the built-in one
+static unsigned gChannelCount;
 static uint8_t gMac[6];
 static ifnet_t gIf;
 static thread_call_t gScanTimeout, gJoinTimeout;
@@ -180,7 +186,7 @@ static uint32_t gLogged[256 / 32];
 
 static void log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void log(const char *fmt, ...) {
-    char line[240]; va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof line, fmt, ap); va_end(ap);
+    char line[384]; va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof line, fmt, ap); va_end(ap);
     IOLog("ONEIOS WIFI: %s\n", line);
 }
 
@@ -355,8 +361,12 @@ static void joined() {
 }
 
 // ---- the host's messages (the transport's receive worker) ----
+// The continuous clock in nanoseconds: what clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) gives user space.
+static uint64_t continuous_ns() { uint64_t ns = 0; absolutetime_to_nanoseconds(mach_continuous_time(), &ns); return ns; }
 static void copy_bss(Net &to, const ow_bss &bss, const uint8_t *ies, size_t available) {
     to.bss = bss;
+    const uint64_t now = continuous_ns(), ago = static_cast<uint64_t>(bss.age_ms) * 1000000ULL;
+    to.seen_ns = ago < now ? now - ago : now;   // when the radio last saw it: the host says how long ago
     size_t n = bss.ie_length;
     if (n > available) n = available;
     if (n > OW_MAX_IES) n = OW_MAX_IES;
@@ -413,6 +423,18 @@ static void host_message(uint16_t type, const uint8_t *payload, size_t length) {
         if (shown++ < 20) log("scan done: %u networks (host error %d)", count, d.error);
         break;
     }
+    case OW_CHANNELS: {
+        ow_channels head = {}; if (length < sizeof head) return;
+        memcpy(&head, payload, sizeof head);
+        unsigned n = head.count;
+        if (n > OW_MAX_CHANNELS) n = OW_MAX_CHANNELS;
+        if (n > (length - sizeof head) / sizeof(ow_channel)) n = static_cast<unsigned>((length - sizeof head) / sizeof(ow_channel));
+        IOLockLock(gLock);
+        memcpy(gChannels, payload + sizeof head, n * sizeof(ow_channel)); gChannelCount = n;
+        IOLockUnlock(gLock);
+        if (n) log("the host's channels: %u, %u MHz to %u MHz", n, gChannels[0].freq_mhz, gChannels[n - 1].freq_mhz);
+        break;
+    }
     case OW_JOIN_RESULT: {
         ow_join_result r = {}; memcpy(&r, payload, length < sizeof r ? length : sizeof r);
         IOLockLock(gLock);
@@ -441,6 +463,20 @@ static void fill_channel(channel &c, uint32_t mhz) {
     if (mhz >= 5925) { c.channel = (mhz - 5950) / 5; c.flags = 0x2 | 0x10 | 0x2000; }   // 6 GHz
     else if (mhz >= 4900) { c.channel = (mhz - 5000) / 5; c.flags = 0x2 | 0x10; }
     else { c.channel = mhz == 2484 ? 14 : (mhz - 2407) / 5; c.flags = 0x2 | 0x8; }
+}
+// The channels the radio may use: the host's list (OW_CHANNELS, from nl80211's wiphy on the phone), or until it came
+// (an older runtime) the 2.4 GHz channels 1 to 13 and the common 5 GHz ones, with no restriction flags.
+static unsigned channel_list(ow_channel out[OW_MAX_CHANNELS]) {
+    IOLockLock(gLock);
+    unsigned n = gChannelCount;
+    memcpy(out, gChannels, n * sizeof(ow_channel));
+    IOLockUnlock(gLock);
+    if (n) return n;
+    static const uint16_t known[] = { 2412, 2417, 2422, 2427, 2432, 2437, 2442, 2447, 2452, 2457, 2462, 2467, 2472,
+                                      5180, 5200, 5220, 5240, 5260, 5280, 5300, 5320, 5500, 5520, 5540, 5560, 5580, 5600, 5620,
+                                      5640, 5660, 5680, 5700, 5720, 5745, 5765, 5785, 5805, 5825 };
+    for (uint16_t f : known) out[n++] = ow_channel{ f, 0, 0 };
+    return n;
 }
 // The rates of a BSS's Supported Rates and Extended Supported Rates elements, in 500 kb/s units without the basic bit.
 static unsigned rates_of(const Net &n, uint32_t *out, unsigned max) {
@@ -503,7 +539,7 @@ static bool refused_set(int type) { return type >= 0 && static_cast<size_t>(type
 
 static int answer(bool set, apple80211req &rq) {
     const int type = rq.req_type;
-    union Out { uint8_t raw[5120]; channels_list chans; scan_result res; assoc_request assoc; assoc_request27 assoc27; };   // not on the stack
+    union Out { uint8_t raw[kChannelsInfoSize]; channels_list chans; scan_result res; assoc_request assoc; assoc_request27 assoc27; };   // not on the stack
     Out *outp = static_cast<Out *>(IOMallocData(sizeof(Out)));
     if (!outp) return ENOMEM;
     memset(outp, 0, sizeof(Out));
@@ -560,7 +596,10 @@ static int answer(bool set, apple80211req &rq) {
     char country[3] = { gCountry[0], gCountry[1], 0 };
     bool have = false;
     if (type == kScanResult) {
-        if (gScanCursor < gScanCount) { fill_result(out.res, gScan[gScanCursor++]); have = true; } else gScanCursor = 0;
+        if (gScanCursor < gScanCount) {
+            const Net &n = gScan[gScanCursor++];
+            fill_result(out.res, n); memcpy(out.raw + kScanRecordTimestamp, &n.seen_ns, sizeof n.seen_ns); have = true;
+        } else gScanCursor = 0;
     }
     IOLockUnlock(gLock);
     switch (type) {
@@ -592,15 +631,62 @@ static int answer(bool set, apple80211req &rq) {
         return copy_out(rq, out.raw, 256); }
     case kCountryCode: return answer_bytes(rq, country, 3);   // the two letters and a NUL (the daemon asks with a 3-byte buffer)
     case kAssociateResult: return answer_value(rq, static_cast<uint32_t>(assoc));
-    case kSupportedChannels: case kHwSupportedChannels: {
+    case kSupportedChannels: case kHwSupportedChannels: {   // the host's channels: active unless passive-only, DFS where radar
+        ow_channel list[OW_MAX_CHANNELS]; const unsigned count = channel_list(list);
         out.chans.version = 1; unsigned n = 0;
-        static const uint16_t known[] = { 2412, 2417, 2422, 2427, 2432, 2437, 2442, 2447, 2452, 2457, 2462, 2467, 2472,
-                                          5180, 5200, 5220, 5240, 5260, 5280, 5300, 5320, 5500, 5520, 5540, 5560, 5580, 5600, 5620,
-                                          5640, 5660, 5680, 5700, 5720, 5745, 5765, 5785, 5805, 5825 };
-        for (uint16_t f : known) { fill_channel(out.chans.list[n], f); out.chans.list[n].flags |= 0x80; n++; }
+        for (unsigned i = 0; i < count && n < 401; i++) {
+            fill_channel(out.chans.list[n], list[i].freq_mhz);
+            if (!(list[i].flags & OW_CH_PASSIVE)) out.chans.list[n].flags |= 0x80;   // APPLE80211_C_FLAG_ACTIVE
+            if (list[i].flags & OW_CH_RADAR) out.chans.list[n].flags |= 0x100;       // APPLE80211_C_FLAG_DFS
+            n++;
+        }
         out.chans.count = n; return copy_out(rq, &out.chans, sizeof out.chans); }
-    case kScanResult: if (!have) return EIO; return copy_out(rq, out.raw, rq.req_len >= kScanRecord27 ? kScanRecord27 : sizeof out.res);   // EIO after the last record
-    case kCurrentNetwork: if (state < kStaAssoc) return ENOENT; fill_result(out.res, current); out.res.rssi = static_cast<int16_t>(rssi); return copy_out(rq, out.raw, rq.req_len >= kScanRecord27 ? kScanRecord27 : sizeof out.res);
+    case kChannelsInfo: {
+        // 24A446's IO80211 (Apple80211GetWithIOCTL, type 207) reads a 10016-byte record: the count (16 bits) at 0x0c,
+        // then per channel i (at most 400) the number at 0x32e+i, indoor only at 0x4be+i, DFS at 0x64e+i, passive at
+        // 0x7de+i, 40 MHz at 0x96e+i, 80 MHz at 0xafe+i (bytes), a 32-bit bitmap at 0x12d0+4i (zero: wifid does not
+        // read it) and a 6 GHz flag at 0x1aa0+i (CHANNELINFO_BAND_NUM: 1 with it, else 0 below channel 15 and 3
+        // above). wifid reads CH_NUM, DFS, BAND_NUM, 40MHZ and 80MHZ; it logged "Could not read
+        // APPLE80211_IOC_CHANNELS_INFO err=-3903" while this was refused (the phone, 2026-11-13).
+        ow_channel list[OW_MAX_CHANNELS]; const unsigned count = channel_list(list);
+        w[0] = 1;
+        unsigned n = 0;
+        for (unsigned i = 0; i < count && n < 400; i++) {
+            const uint16_t f = list[i].freq_mhz; const uint8_t fl = list[i].flags;
+            const bool six = f >= 5925, five = f >= 4900 && !six;
+            channel c; fill_channel(c, f);
+            out.raw[0x32e + n] = static_cast<uint8_t>(c.channel);
+            out.raw[0x4be + n] = (fl & OW_CH_INDOOR) ? 1 : 0;
+            out.raw[0x64e + n] = (fl & OW_CH_RADAR) ? 1 : 0;
+            out.raw[0x7de + n] = (fl & OW_CH_PASSIVE) ? 1 : 0;
+            out.raw[0x96e + n] = (five || six) && !(fl & OW_CH_NO_HT40) ? 1 : 0;
+            out.raw[0xafe + n] = (five || six) && !(fl & OW_CH_NO_80MHZ) ? 1 : 0;
+            out.raw[0x1aa0 + n] = six ? 1 : 0;
+            n++;
+        }
+        const uint16_t n16 = static_cast<uint16_t>(n); memcpy(out.raw + 0x0c, &n16, 2);
+        static bool said;
+        if (!said) { said = true; log("channels info: %u channels (%s list)", n, gChannelCount ? "the host's" : "the built-in"); }
+        return copy_out(rq, out.raw, kChannelsInfoSize); }
+    case kScanResult: {
+        if (!have) return EIO;   // after the last record
+        static bool dumped;      // the first record of the boot, field by field, as the framework will read it
+        if (!dumped) {
+            dumped = true;
+            uint64_t stamp; memcpy(&stamp, out.raw + kScanRecordTimestamp, sizeof stamp);
+            const uint64_t now = continuous_ns(); const scan_result &r = out.res;
+            log("scan record 1 (%u bytes asked): channel %u flags 0x%x, RSSI %d, noise %d, SNR %d, capability 0x%x, beacon %u TU, "
+                "BSSID %02x:%02x:%02x:..., name of %u bytes, %u rates, age %u ms, TIMESTAMP %llu ns (%llu ms before now), %u element bytes",
+                rq.req_len, r.ch.channel, r.ch.flags, r.rssi, r.noise, r.snr, r.capability, r.beacon_interval, r.bssid[0], r.bssid[1], r.bssid[2],
+                r.ssid_length, r.rate_count, r.age_ms, static_cast<unsigned long long>(stamp),
+                static_cast<unsigned long long>(now > stamp ? (now - stamp) / 1000000 : 0), r.elements_length);
+        }
+        return copy_out(rq, out.raw, rq.req_len >= kScanRecord27 ? kScanRecord27 : sizeof out.res); }
+    case kCurrentNetwork: {
+        if (state < kStaAssoc) return ENOENT;
+        fill_result(out.res, current); out.res.rssi = static_cast<int16_t>(rssi);
+        const uint64_t now = continuous_ns(); memcpy(out.raw + kScanRecordTimestamp, &now, sizeof now);   // joined: seen now
+        return copy_out(rq, out.raw, rq.req_len >= kScanRecord27 ? kScanRecord27 : sizeof out.res); }
     default: return EOPNOTSUPP;
     }
 }

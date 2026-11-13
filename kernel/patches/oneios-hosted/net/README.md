@@ -113,10 +113,10 @@ started), `oneios_wifi_requests`, `oneios_wifi_refused`, `oneios_wifi_rx`, `onei
 Built on the Mac (`HOSTED_OUT=radio`) and prelinked; the collection passes the import audit and the stub check.
 What a boot on the phone showed: `docs/hardware.md` section 3, "Tested".
 
-## Pending (fix-wifi-join, 2026-11-13): `pending-scan-timestamp-channels.diff`
+## Scan TIMESTAMP and channel list (fix-wifi-join, 2026-11-13)
 
-Not built: a diff of `OneiOSWifi.cpp` kept beside it until it is compiled and booted (`docs/hardware.md` 3, "Wi-Fi does
-not join"). It fills the scan record's TIMESTAMP at 0x8d0 (zero today, so CoreWiFi's auto-join filters every result
-out by age), answers `APPLE80211_IOC_CHANNELS_INFO` (207) from the host's channel list (`OW_CHANNELS`, which the
-runtime already sends), builds the supported-channel lists from it, and logs the first scan record of a boot.
-Apply with `git apply kernel/patches/oneios-hosted/net/pending-scan-timestamp-channels.diff`, then delete the file.
+`OneiOSWifi.cpp` fills the scan record's TIMESTAMP at 0x8d0 (it was zero, so CoreWiFi's auto-join filtered every
+result out by age), answers `APPLE80211_IOC_CHANNELS_INFO` (207) from the host's channel list (`OW_CHANNELS`, which
+the runtime sends), builds the supported-channel lists from it, and logs the first scan record of a boot
+(`docs/hardware.md` 3, "Wi-Fi does not join"). Compiled in the integration kernel of 2026-11-13 (prelink audit 0
+failures, stubs 666 good); not booted yet.
