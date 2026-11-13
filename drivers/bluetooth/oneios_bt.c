@@ -61,7 +61,8 @@ off(const char *why)
 /* After the root mount: the transport core, the two kernel controls and the /dev nodes (devfs is up then). bluetoothd
  * uses none of them before launchd starts it. Started at the board's probe, before the root mount, the PC's qemu boots
  * of 2026-11-13 never got their root device (3 of 3: APFS's start waited for IOBSD while IOResources stayed busy;
- * with oneios_bt=0 or no bridge, 2 of 2 booted). */
+ * with oneios_bt=0 or no bridge, 2 of 2 booted). Starting them here did not remove that stall (later boots stalled
+ * too: docs/hardware.md 4, "PC stall, not fixed"); it is kept because nothing needs them earlier. */
 static void
 node_thread(void *arg __unused, wait_result_t w __unused)
 {
