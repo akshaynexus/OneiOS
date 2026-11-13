@@ -978,7 +978,7 @@ What it does now:
 ```sh
 tools/oneios-tool/tests/phone/pull-resume.sh                 # the stand-in test; FAKE_PROC=stand-in for the Mac's mode
 SPEED=4096:280 tools/oneios-tool/tests/phone/pull-resume.sh   # also times a 4096 MiB store: one stream, --verify chunk, --verify end
-cargo test --manifest-path tools/oneios-tool/Cargo.toml -p oneios-phone pull   # the progress file's parser, the ranges
+cargo test --manifest-path tools/oneios-tool/Cargo.toml -p oneios-phone pull   # 3 tests: the progress file's parser, the ranges
 ```
 
 The test (`tests/phone/pull-resume.sh`, the stand-in phone with a busybox that breaks what the test asks for; a
@@ -993,7 +993,8 @@ changing during the copy; `--restart`; a `.part` without a progress file; a fore
 while a session is open. After every copy that ends well: `cmp` with the phone's file, not more bytes on disk
 than the phone's file holds (`st_blocks`), no `.part` and no progress file left. Result, Linux x86_64 on btrfs,
 2026-11-13: 105 checks, `ALL OK`, with the host's `/proc` and with the stand-in's own (`FAKE_PROC=stand-in`).
-`tests/phone/modes.sh` does not run it (it runs `tests/phone/run.sh`, whose two checks of the first port's
+The same day: `tests/phone/modes.sh` phone 76, app 65, cycle 103 in both modes, `sparse-compare.sh` 35 checks
+`ALL SAME`, `cargo test -p oneios-phone` 11 passed. `modes.sh` does not run it (it runs `tests/phone/run.sh`, whose two checks of the first port's
 command are now of the ranged one). **Not measured:** the `SPEED=` run of the stand-in; the per-chunk lines of
 the 40 MiB test store say nothing about a phone.
 
@@ -1076,7 +1077,7 @@ SPEED=4096:280 tools/oneios-tool/tests/phone/sparse-compare.sh   # also the time
   are printed. (2) The same streams through the writer against a model of APFS as described above: without the
   punch the short holes are allocated (23.1 MB for 3.4 MB of data in the first stream), with it exactly the
   pages that hold data are, and no punch is off a block's edge or past the file's end. (3) The zero check.
-  (4) An error of the stream and one of the file. `cargo test -p oneios-phone` as a whole: 8 passed.
+  (4) An error of the stream and one of the file. `cargo test -p oneios-phone` as a whole: 11 passed (three of them `pull.rs`'s).
 - `sparse-compare.sh`: seven streams of `oneios-tool debug mkstream` (was `tests/phone/mkstream.py`; `runs`: zero runs and data runs shorter than
   4 KiB, between 4 KiB and 4 MiB, and longer; `tail`: ends inside a block; `zero`; `empty`; `lastbyte`: a data
   byte at the very end; `dense`; `phone`: 64 MiB shaped like the store) through the script, through
