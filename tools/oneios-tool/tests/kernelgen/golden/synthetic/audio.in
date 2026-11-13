@@ -1,0 +1,27 @@
+// A made-up source for the edit list "audio": every anchor once, between lines of its own.
+// (before anchor 0)
+extern kmod_info_t g_kernel_kmod_info;
+// (before anchor 1)
+    bool isInput;
+// (before anchor 2)
+    uint32_t channels() const { return isInput ? InputChannels : OutputChannels; }
+// (before anchor 3)
+        transportSet(!isInput, true);
+// (before anchor 4)
+        transportSet(!isInput, false);
+// (before anchor 5)
+            const uint32_t played = droidvm_snd_play(at, PeriodFrames);
+// (before anchor 6)
+            droidvm_audio_played = droidvm_audio_played + played;
+// (before anchor 7)
+        droidvm_audio_periods = droidvm_audio_periods + 1;
+// (before anchor 8)
+    DroidVMAudioDevice *device = OSTypeAlloc(DroidVMAudioDevice);
+// (before anchor 9)
+    setNumber(e, "output latency", Latency);
+// (before anchor 10)
+    bool speaker = publishDevice(resources, false, "Speaker", "droidvm-audio-out");
+    bool mic = publishDevice(resources, true, "Mic", "droidvm-audio-in");
+// (before anchor 11)
+    IOLog("DroidVMAudio: published Speaker=%d Mic=%d as IOAudio2Devices\n", speaker, mic);
+// (the end)

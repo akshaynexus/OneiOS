@@ -1,0 +1,54 @@
+// A made-up source for the edit list "hid": every anchor once, between lines of its own.
+// (before anchor 0)
+    0x75,0x01,0x95,0x04,0x81,0x02,
+    // OneiOS (build-oneios-hid.py): bit 4, the ringer switch (Telephony / Ring Enable), then three bits of padding.
+    0x05,0x0b,0x09,0x2d,0x95,0x01,0x81,0x02,
+    0x75,0x03,0x95,0x01,0x81,0x03,0xc0
+};
+// (before anchor 1)
+        self->buttons=static_cast<uint8_t>(uintptr_t(mask)&0x1f);   // OneiOS: Home and the ringer switch too
+// (before anchor 2)
+static const int32_t kEdgeX=54*65536/1320,kEdgeY=54*65536/2868;   // OneiOS: 54 px of 1320 x 2868
+// OneiOS: where the last contact began and where the last one lifted, for the log (OneiOSHidInput.cpp).
+extern "C" {extern volatile int32_t oneios_touch_last[4];}
+// (before anchor 3)
+        native_touch_edge_stats[1]=native_touch_edge_stats[1]+1;
+        oneios_touch_last[0]=x;oneios_touch_last[1]=y;   // OneiOS
+// (before anchor 4)
+    if(!touch && (mask&kMaskTouch)) {   // OneiOS: where the contact lifted, for the log
+        oneios_touch_last[2]=call<int32_t,uint32_t,IOOptionBits>(child,kGetFixed,kDivGetFixed,kX,0);
+        oneios_touch_last[3]=call<int32_t,uint32_t,IOOptionBits>(child,kGetFixed,kDivGetFixed,kY,0);
+    }
+    if(!touch && (mask&kMaskTouch))fromEdge[index]=false;
+// (before anchor 5)
+    uint32_t lastSeq=0;
+    uint64_t lastTouchTime=0;   // OneiOS: the last touch report's time, so that each is later than the one before
+    IOReturn submitTouchReport(IOMemoryDescriptor *report) {   // OneiOS
+        const uint64_t now=mach_absolute_time();
+        uint64_t time=oneios_touch_frame_time;
+        if(!time || time>now)time=now;
+        if(time<=lastTouchTime)time=lastTouchTime+1;
+        lastTouchTime=time;
+        return handleReportWithTime(time,report,kIOHIDReportTypeInput,0);
+    }
+// (before anchor 6)
+        IOReturn result=buffer?self->submitTouchReport(buffer):kIOReturnNoMemory;   // OneiOS: at the scan time
+        OSSafeReleaseNULL(buffer);
+        native_hid_input_observed(6,result);
+// (before anchor 7)
+extern "C" void native_touch_set_sink(void (*)(void *), void *) __attribute__((weak_import));
+// OneiOS: the scan time of the touch frame being reported (OneiOSTouchTime.inc), 0 = none.
+extern "C" {extern volatile uint64_t oneios_touch_frame_time; uint64_t mach_absolute_time(void);}
+// (before anchor 8)
+return OSString::withCString(touchOnly?"OneiOS touch screen":"OneiOS buttons");
+// (before anchor 9)
+    bool eventDriverFound=false;
+    IORegistryEntry *wrappedDriver=nullptr;   // OneiOS: the event driver last handed to edge::install (not retained)
+// (before anchor 10)
+        IORegistryEntry *driver=eventDriver(this,4);   // OneiOS: each time, the driver can be another one by now
+        eventDriverFound=driver!=nullptr;
+        if(driver && driver!=wrappedDriver && (touchEnabled || touchOnly)){wrappedDriver=driver;edge::install(driver);}
+// (before anchor 11)
+    if(!driver)return;   // OneiOS: a later driver is wrapped too (its table is checked and copied as the first one's)
+    if(kSlotDiversity[kDispatch]!=kDivDispatch)return;
+// (the end)

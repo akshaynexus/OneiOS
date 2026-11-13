@@ -653,7 +653,16 @@ pages and its neighbours, the refusals, a page a task maps, a page whose unmap i
 task: a mapped code page, a fault on an unmapped page, the kernel mapping it, the store retried and visible
 in the kernel's view, a breakpoint, a looping thread preempted by the timer; the deferred maps and unmaps (in the
 queue's order, more unmaps than the queue holds, and two threads of one task released on vCPUs 0 and 1 while one of
-them, or an order, carries a queued unmap: 200 rounds, 2026-11-12; under qemu on the PC, 5 runs in a row passed).
+them, or an order, carries a queued unmap: 200 rounds, 2026-11-12; under qemu on the PC, 5 runs in a row passed); and
+WebKit's JIT (`test_jit`, 2026-11-12): one physical page mapped `task_map` as read-write-execute (MAP_JIT's W+X
+reservation) at one address and read-execute at a second (the W^X alias WebKit uses when the host has no APRR/SPRR
+fast permissions, which standard Arm cores do not), a thread writing an instruction sequence through the read-write
+alias, the i-cache maintenance an Arm JIT must do, and a branch to the read-execute alias: the page runs as it was
+written (the two aliases share the physical page, so a store through one is fetched through the other), and the
+store is also in the kernel's own view of the page. This proves the host layer carries WebKit's separated-W^X-heaps
+JIT; the `msr sprr_uperm_el0` per-thread path is never taken, since the kernel leaves the commpage's fast-permissions
+byte zero. (Under qemu-user the host has no SELinux, so whether the phone's kernel permits a W+X mapping of the RAM
+memfd for a task is **not** covered here; see section 7.)
 
 **Not covered anywhere**: qemu-user has no seccomp and no `process_vm_writev`, so the `svc #0x80` trap and
 `task_read/write` have run nowhere (the test prints SKIP). The filter's logic is tested in the interpreter
@@ -669,6 +678,12 @@ link-time high address (`0xfffffff00719c028`). That is where the hosted layer ha
 - A task that jumps into the stub's `svc` with chosen registers can `mmap` any offset of the RAM memfd: a
   guest kernel compromise by guest code (not a host one beyond what the uid allows). `--set task-uid=N`
   drops tasks to another uid; default is xnuhost's own, because the drop is untested.
+- **W+X of the RAM memfd on the phone is unverified.** The JIT page a `used_for_jit` entry describes is mapped
+  `task_map` with `XH_PROT_READ | XH_PROT_WRITE | XH_PROT_EXEC` (the stub `mmap`s `PROT_READ|WRITE|EXEC` of the RAM
+  memfd). xnuhost's own RAM mapping is W+X and works, and `test_jit` passes under qemu-user, but qemu-user has no
+  SELinux; One UI's kernel under KernelSU may refuse a write+execute mapping of a shared file for a task process. If
+  it does, the fill fails and `task.c` logs `tasks: pid N: a deferred map (va 0x..., prot 7) failed`; that is the
+  first line to read when WebKit's content process cannot run its JIT on the phone.
 - Trap cost is a signal plus two hand-offs per system call or fault: measured in section 2.6a on the Mac's container,
   not yet on the phone.
 - `task_map` rides on the next release (section 2.6a); `task_unmap` and `task_protect` are one round trip to the

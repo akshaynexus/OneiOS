@@ -26,7 +26,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 | Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp`: the hosted kernel's audio archive since 2026-11-12 (before: not built, no device in iOS) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | helper run on the phone beside One UI (plays and records, 0 underruns, about 130 ms); host-tested against a fake AAudio; in sessions iOS's I/O thread failed for large buffers (system sounds 3 s late or lost): hosted 0052, not yet run (section 6) |
 | Camera | `drivers/camera`: the `oneios,camera` transport, `/dev/oneios-camera`; `userland/camera`: the capture plug-in (its device object not written) | `runtime/bridges/camera`: helper `oneios-camera` (provider HAL in a session, Camera2 NDK with One UI), ring, device, `camctl` | host and kernel sides built and host-tested; iOS shows no camera yet; one phone run (2026-11-11): cameraserver lists 4 cameras and opens one for a root client, no frame arrived (no binder threads in the process: fixed, the fix not yet run on the phone); the HAL back end never run (section 7) |
 | Backlight and light sensor | `drivers/brightness`: the backlight service (port of iOSPlus10's `AppleARMBacklight`), the light readings; the HID light sensor device, built into the hosted kernel's HID archive | `runtime/bridges/brightness`: the backlight sysfs node, `als_rear` by evdev, `brightctl` | both built; host tested; in a PC boot the HID device starts and Apple's `AppleUSBALSService` attaches to it; on the phone backboardd finds the service; the slider reached no request because CoreBrightness ran VMBLControl (fixed 2026-11-12 in backboardd through the Metal plug-in, not yet run; section 7a) |
-| Battery | `drivers/battery`: an `IOPMPowerSource` powerd reads | `runtime/bridges/battery`: Android's `power_supply` nodes, polled, changes sent over the bridge channel; `batteryctl` | both built; host tested with a fake sysfs; never run on the phone or in a session (section 7c) |
+| Battery | `drivers/battery`: an `IOPMPowerSource` powerd reads | `runtime/bridges/battery`: Android's `power_supply` nodes, polled, changes sent over the bridge channel; `batteryctl` | both built; host tested with a fake sysfs; one phone session (2026-11-12 23:45, on the charger): published, and a "plugged in" sound before the lock screen (the startup chime: section 7c) |
 | Thermal | `drivers/thermal`: `OneiOSThermal` (the readings and the level in the registry); `userland/helpers/oneios-thermal` sets iOS's `com.apple.system.thermalpressurelevel` from it | `runtime/bridges/thermal`: the thermal zones, Samsung's thermistors, the battery's sensors; a level on iOS's scale; xnuhost's CPU step when hot; `thermalctl` | host built and tested; the bridge and `thermalctl` run on the phone (2026-11-12); the step, the driver and the helper not yet run; an idle session's heat traced to the guest's idle cache flush (xnuhost's `setway-skip`: -40% CPU) (section 7d) |
 | Touch screen and buttons | `kernel/patches/oneios-hosted/hid`: UniXNU's NativeHidInput (digitizer, buttons) under the collection's `IOHIDDevice`, UniXNU-droidvm's virtio-input transport with the side keys | xnuhost's `input.c` (evdev, no grab) and `virtio_input.c`; `input_script.c` for a host with no panel | built; in a PC boot backboardd opens both services and scripted touches and keys are queued for it as HID events; never run on the phone (section 7b) |
 
@@ -36,7 +36,7 @@ Common pieces:
   `oneios,bridge`, carrying small messages (haptic requests, HCI packets). Guest end `drivers/bridge/OneiOSBridge.c`,
   host end `runtime/bridges/devices/bridge_dev.c`. Devices that already have a virtio driver in UniXNU-droidvm
   (network, sound) use standard virtio devices instead.
-- **Tests**: `runtime/bridges/tests/host.sh` (CI runs it): 198 checks (and 48 in `brightness/`, 57 in `battery/`) with ASan and UBSan, the virtio devices driven
+- **Tests**: `runtime/bridges/tests/host.sh` (CI runs it): 198 checks (and 48 in `brightness/`, 65 in `battery/`) with ASan and UBSan, the virtio devices driven
   through xnuhost's real transport (`runtime/xnuhost/src/virtio.c`) by a guest made of plain memory; then the Android
   build. `drivers/build.py --check` compiles the kernel sources with the kernel build's own compile records
   (xnu-12377, arm64e, `-Wall -Wextra -Werror`); the archive's 292 undefined symbols all resolve in `xnu.macho`.
@@ -313,7 +313,7 @@ by its own script), so iOS had no en0 in any boot. Now `build-hosted.sh` builds 
   collection and 25 of the 130 roots link it, so it cannot be replaced by a copy compiled into the kernel (what
   Droid-VM does). The classes are compiled against IONetworkingFamily-188's headers (APSL; fetched into
   `out/sources/IONetworkingFamily`), and the build checks those headers against the kernelcache's classes
-  (`IONetworking-24A446-v54.json`, made by `layout.py`): 250 and 221 vtable slots, every slot's
+  (`IONetworking-24A446-v54.json`, made by `oneios-tool kernel layout net`): 250 and 221 vtable slots, every slot's
   pointer-authentication discriminator, and whether its function is the family's or the kernel's. 159 original
   functions are bound at their addresses in the collection through `.original` stubs (`stubs-check.py`: good).
 - The Apple80211 requests and events of DroidVMWifi.inc (below), with its made-up station replaced: `SCAN_REQ` sends
@@ -419,7 +419,8 @@ absent: a reason not to run it on the phone as it is.
 
 ### Tested
 
-- Host (arm64 Linux container, `runtime/host-tests.sh`): `test_wifi` 132 checks (frame rules; the netlink group reader; the DHCP reader; a 4000-byte coalesced
+- Host (arm64 Linux container, `runtime/host-tests.sh`): `test_wifi` 153 checks (frame rules; the netlink group reader; the DHCP reader, with the REQUEST forms
+  SELECTING, INIT-REBOOT, RENEWING and REBINDING, iOS's and another station's, and the log line of each; a 4000-byte coalesced
   IPv4 frame and a 3000-byte IPv6 one cut into three with right lengths, sequence numbers and checksums; the station
   against a fake radio; the AIDL parcels byte for byte; the join's plan for WPA2, WPA3, transition, WPA with TKIP,
   open, OWE and a network not seen; the supplicant's callbacks decoded); `test_aidl_binder` 35 checks: the client
@@ -443,8 +444,22 @@ absent: a reason not to run it on the phone as it is.
     up to 50 ms until the guest has a buffer; and in the guest a state message that says "up" for the network a
     join waits for completes that join, so a lost result costs at most the 2 s to the next state.
   - Whether iOS got an address is not in that log. The bridge now logs iOS's DHCP as it crosses (`wifi: DHCP: iOS
-    sends DISCOVER`, `wifi: DHCP: OFFER of a.b.c.d from e.f.g.h`, `REQUEST`, `ACK`) and, 10 s after a join, `wifi:
-    10 s after the join: N frames from iOS, M to it`.
+    sends DISCOVER for 0.0.0.0`, `wifi: DHCP: OFFER of a.b.c.d from e.f.g.h`, `iOS sends REQUEST SELECTING for
+    a.b.c.d`, `ACK of a.b.c.d from e.f.g.h`; a REQUEST's state as RFC 2131 4.3.2 tells them apart: SELECTING,
+    INIT-REBOOT, RENEWING, REBINDING) and, 10 s after a join, `wifi: 10 s after the join: N frames from iOS, M to it;
+    K DHCP messages of other stations`.
+  - **`DHCP: REQUEST of 0.0.0.0 from 0.0.0.0`, repeated** (the boot before 2026-11-12 23:45, after the join and the
+    ACK of 172.16.235.71): not iOS's renewals and not a wrong offset. The decoder read the BOOTP header right; the line
+    was the one for a message **from the radio** (iOS's own were logged as `iOS sends ...`), and it printed yiaddr and
+    option 54, which a REQUEST never has (yiaddr) or has only in the SELECTING state (option 54). So each such line was
+    an INIT-REBOOT or REBINDING REQUEST broadcast by another station on the network (a RENEWING one is unicast to the
+    server and does not reach iOS): proven for the decoder by `test_wifi`'s DHCP checks (the three forms, built as
+    clients send them, all decode with yiaddr 0.0.0.0 and no server); that they were other stations' is [I] (their
+    client address was not logged). They also used up the 16 lines a join gets, so iOS's own later messages were not
+    logged. Since 2026-11-13 a message whose client (chaddr) is not en0's address is counted, only the first after a
+    join is logged (`wifi: DHCP: another station's REQUEST INIT-REBOOT for a.b.c.d (client 3c:22:fb:..) (passed to iOS
+    as any broadcast; ...)`), and the count is in the 10-second line; iOS's own message back from the radio would say
+    `iOS's own REQUEST ... came back from the radio`.
 - **Second session (the diagnostic session of 2026-11-12 11:53, `kernel.kc` 8eff915f from `bd7c1fb`, with the
   medium fix)**: wifid takes en0 (`the interface is enabled (en0 is up)`, its whole attach: CARD_CAPABILITIES, POWER,
   RSSI_BOUNDS, HW_SUPPORTED_CHANNELS, `sets 564` FILTER_MONITOR_EVENTS with 33 bytes, STATE, PHY_MODE, OP_MODE ...)
@@ -471,6 +486,78 @@ absent: a reason not to run it on the phone as it is.
   manager's lookup, `getStaInterface("wlan0")`, `getMacAddress` (wlan0's own address), `listNetworks` (0) all
   answered by Android 17's servicemanager and the vendor's supplicant; `wifictl scan`: 53 networks with their
   security from nl80211 in 6 s.
+
+### en0 late: two minutes before iOS turns Wi-Fi on (fix-wifi-late, 2026-11-13)
+
+On the phone (boot of 2026-11-12 23:45, main ea06d46, kernel.kc through 0058, the Data store kept) xnuhost had wlan0
+from +0.1 s, but `ONEIOS WIFI: the interface is enabled (en0 is up)` came at +130 s (+162 s the boot before, 261 s
+after the driver's start in prelink's session 2), while the join and DHCP took 2 s. What it waited for, read in 24A446
+and configd's source (configd's `Plugins/InterfaceNamer`, apple-oss-distributions):
+
+1. **configd's InterfaceNamer names a new interface only once IOKit is quiet** (`copyUnitForEstablishedInterface`:
+   `waiting for quiet`). An interface is not new when its naming database (`NetworkInterfaces.plist`) has its prefix
+   and hardware address, or when the IORegistry reserves a unit for it: `network-interface-unit-en` on the interface
+   or a parent. 24A446's `WaitQuietTimeout` is 240 s and `WaitStackTimeout` 300 s (configd's `__data`; the bundle's
+   Info.plist sets neither).
+2. **en0 was always new.** Its address is wlan0's, a random one while One UI is not joined, so it changes between
+   sessions and the database did not match it ([I]: the phone's `NetworkInterfaces.plist` was not read; the
+   database is also written only once IOKit is quiet, so a session that ended earlier left none). The iPhone's own Wi-Fi node reserves the unit (24A446's device tree:
+   `/arm-io/apcie/pci-bridge0/centauri-alpha`, `network-interface-unit-en = <0>`); our nub `oneios-wlan` did not.
+3. **IOKit is quiet only after driverkitd.** The only busy service is the service root, `oneios,xnuhost` (class
+   `IOPlatformExpertDevice`; 0042's `oneios-iobusy:` lines on the PC at 30, 60, 120, 240 s and on the earlier PC boot
+   until between 240 and 480 s): `StartIOKitMatching` holds one busy count on it until the IOKit daemon (driverkitd
+   on iOS) has sent its dexts' personalities (`IOService::iokitDaemonLaunched`; the kernel then logs `KextLog:
+   driverkitd is active`). So en0's name, and with it wifid's attach and the `enable` of en0, waited for driverkitd,
+   which on the phone runs in the first two busy minutes (lsd, backboardd, iconservicesagent). [I] That driverkitd's
+   time is the +130 s: the phone's log of that boot was not read here; the lines to read are below.
+
+**Fix (built, PC-booted, not on the phone):** the nub has `network-interface-unit-en = <0>` (32 bits), as the
+iPhone's node, so InterfaceNamer names en0 as soon as the interface appears (`OneiOSWifi.cpp`, `net/README.md`, "en0's
+name"). InterfaceNamer still refuses the unit when its database has en0 at another registry path (`builtinAvailable`;
+configd then says `has reserved unit 0, but it's not available`). No XNU source changed, so no numbered patch.
+
+**New lines** (the driver): `ONEIOS WIFI: first naming (en0 attached to the network stack): by configd[PID], +S s
+after the driver's start, IOKit busy N`, and the same `first ...` line for `enable (IFF_UP)`, the first `Apple80211
+request`, `power on`, `scan request`, `join request` (who, when, IOKit's busy count).
+
+**On the PC** (qemu-aarch64 under a load of 12-24 on 4 CPUs, `--set wifi=sim`, so every time is many times the
+phone's), the image set `out/image-pc/24A446`, a Data store with no naming database (no earlier boot on it got as
+far as naming):
+- With the fix (`kernel.kc` `ee5a85d7`, from this branch; times after the driver's start): launchd +769 s, configd
+  spawned +834 s, `KextLog: driverkitd is active` +872 s, `first naming ...: by configd[34], +1009.874 s ..., IOKit busy
+  0`, `first Apple80211 request: by configd[34], +1142 s`, `first enable (IFF_UP): by configd[34], +1144.6 s` (so
+  IPConfiguration in configd brings en0 up, not wifid), wifid's first request +1350 s (its attach: 12, 19, 106, 254,
+  207, 103, `sets 564` ...), `first scan request: by wifid[40], +1775 s`, `scan done: 2 networks` (the made-up
+  radio). configd's own log (read from the running boot's `data.img` with `oneios-tool ioslog show ... --proc
+  configd`): `copyUnitForEstablishedInterface: <SCNetworkInterface ... address = 02:d7:36:0c:64:80, builtin = TRUE, path
+  = IOService:/IOResources/oneios-wlan/OneiOSWifiController/IO80211Interface ...> has reserved unit 0`, then `Known
+  interface named unit = 0`, and `*QUIET*` only after that: **the reserved-unit path is taken**. On the PC driverkitd
+  was done before configd's InterfaceNamer started (configd's plugins load slowly under qemu), so this boot cannot show
+  the time the fix saves; the phone's order is the open question (below).
+- Without it (`kernel.kc` `ee88c1b1`: the same `first ...` lines, no reserved unit): the boot was stopped by its
+  4200 s `timeout` with configd running for about 1300 s, driverkitd not yet active, and no naming. Consistent with
+  `waiting for quiet`, not proven: configd's log of that boot was not on the volume after the kill.
+- driverkitd on 24A446 does not ask LaunchServices on this hardware (`Hardware does not support third party
+  drivers`, `Using cached application list`, in its log of both PC boots), so lsd is not what it waits for.
+
+**What to read in the next phone boot's `xnuhost.log`:**
+- `ONEIOS WIFI: first naming (...): by configd[..], +S s ..., IOKit busy 1`: S a few seconds after configd's start and
+  busy 1 (before driverkitd) is the fix working; then `first enable (IFF_UP)`, `first Apple80211 request`, `first
+  power on`, `first scan request` within seconds, and `the interface is enabled (en0 is up)` well before +130 s.
+- `KextLog: driverkitd is active` (and `deferred rematching count N` just before it): when IOKit went quiet; with the
+  fix the naming no longer waits for it. The `oneios-iobusy: N s:` lines say whether the root was still busy.
+- If `first naming` comes with `IOKit busy 0` right after `KextLog: driverkitd is active`, the unit was refused: read
+  configd's log (below) for `has reserved unit 0, but it's not available`.
+- If en0 is named early but `first enable` or `first power on` still comes late, the wait is in wifid, not configd:
+  the `NAME[PID]` of those lines says who.
+
+**In iOS's own log** (`oneios-tool ioslog show data.img --proc configd`, then `--proc driverkitd`, `--proc wifid`):
+configd's `InterfaceNamer` lines `addTimestamp: *START*`, `*STACK*`, `*QUIET*`, `*QUIET&NAMED*`, `waiting for quiet`,
+`has reserved unit 0`, `Assigned unit 0 (from database)`, `timed out waiting for IOKit to quiesce` and `Busy services
+:`; driverkitd's `Starting driverkitd`, `Hardware does not support third party drivers` (then no LaunchServices
+query) or `Retrieving applications from LaunchServices` (then it waits for lsd); wifid's first lines after its start.
+Not checked without the phone: driverkitd's start and send times there, whether the database's en0 entry has our
+registry path, and that nothing after the naming (wifid's own start, its preferences) adds a wait.
 
 ### Missing, unknown
 
@@ -715,7 +802,7 @@ copy it (`/product`'s children are not copied). The kernel drops MobileGestalt's
 (`gestalt-cache-drop`), so a node published before the first answer is what it reads.
 
 What is built:
-- **The device**: the audio archive (`kernel/patches/oneios-hosted/audio/build-oneios-audio.py`) stages a third
+- **The device**: the audio archive (`oneios-tool kernel gen audio`) stages a third
   IOAudio2Device into `DroidVMAudio.cpp`: UID `Actuator`, one output stream, mono S16 at 48 kHz
   (`oneios-actuator-channels=2` for stereo), the speaker's engine (240-frame periods on the guest's clock), output
   latency one period (not the speaker's 6480 frames: the haptic synth keeps haptics in step with a device's
@@ -844,7 +931,7 @@ compatible `droidvm,virtio-snd`, 48 kHz S16, stereo out, mono in, periods of 240
 
 **Until 2026-11-12 neither was built into the hosted kernel**: iOS had no audio device at all. The five session logs
 on the phone of 2026-11-11/12 show `audio: on: helper ...` and then nothing: the guest never started a stream. Now
-they are the hosted build's audio archive, `kernel/patches/oneios-hosted/audio/build-oneios-audio.py`
+they are the hosted build's audio archive, `oneios-tool kernel gen audio`
 (`liboneiosaudio.a`, force-loaded; `oneios_drivers_start` calls `oneios_audio_start`, weak in `OneiOSBridge.c`):
 the transport unchanged (`-DDROIDVM_DEVICE_DYNAMIC=1`), `DroidVMAudio.cpp` staged with boot arguments, and
 `OneiOSAudio.c` (the start line and a report every 30 s while the counters move). Kernel log lines:
@@ -1245,6 +1332,21 @@ Details and the phone test: `runtime/bridges/battery/README.md`, `drivers/batter
   change of level or charging state, the rest at most every 30 s; `drivers/battery/OneiOSBattery.cpp` publishes it.
 - [F 24A446 `powerd`, disassembled] it matches `IOServiceMatching("IOPMPowerSource")`, and its reader needs
   `BatteryInstalled` = true, `CurrentCapacity` and `MaxCapacity`.
+- **The order** (since 2026-11-13, `drivers/battery/oneios_battery_props.h`): the guest asks the host before its service
+  exists; the host's first reading is in the service's registry properties before `registerService()`, so powerd's first
+  match reads the real ExternalConnected; that first publish sends no `kIOPMMessageBatteryStatusHasChanged`, and a later
+  host message sends one only when a published value changed. Host-tested (`drivers/tests/host.sh`: 21 checks;
+  `runtime/bridges/battery`: 65, among them the phone on its charger: the real state at the query, no report while it
+  stays, an unplug and a plug each reported). The code before 2026-11-13 already put the first reading in before
+  `registerService()`; it also messaged (to no client yet) at that publish. PC boot with a fake
+  charger (2026-11-13): `ONEIOS BATTERY: on: IOPMPowerSource published at 100%, on power (ExternalConnected true, ...
+  before registerService)` 3 s in, minutes before launchd.
+- **The charging chime** [F 24A446 powerd and SpringBoard, disassembled; `drivers/battery/README.md` "The charging
+  chime"]: powerd publishes `Play Charging Chime` = ExternalConnected; SpringBoard's `SBChargingController` chimes for
+  an unmarked power source with it true, and at startup marks the connected ones silently only when its startup
+  context has the boot overlay (backboardd's boot UI) or is dark. Phone, 2026-11-12 23:45 (on the charger, Full): the
+  "plugged in" sound played before the lock screen. [I] SpringBoard found no boot overlay (it started at +38 s, the
+  first frame came at +48.8 s); not proven: the iOS log lines that decide it are in that README.
 
 | Android node | iOS key | Mapping |
 |---|---|---|

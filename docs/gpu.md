@@ -353,8 +353,8 @@ uses its size there (aligned to 1 MiB from 1 MiB up), so 64 GiB is far more than
 Delivered in the hosted kernel, not as a kext:
 
 - `0005-gpu-3d.patch`: under `#if XNU_HOSTED`, `oneios_board_late_start` calls `oneios_gpu3d_start` (weak default).
-- `gpu/build-oneios-gpu.py`: a board archive of the hosted build only (`kernel/build-hosted.sh` copies it into the
-  build's device repository and adds `liboneiosgpu.a` to the force-loaded archives). It compiles `gpu/OneiOSGpu.cpp`
+- `oneios-tool kernel gen gpu`: a board archive of the hosted build only (`kernel/build-hosted.sh` adds it to the board's
+  archives of the build's device repository and `liboneiosgpu.a` to the force-loaded archives; was `gpu/build-oneios-gpu.py`). It compiles `gpu/OneiOSGpu.cpp`
   and, unchanged from `external/UniXNU-droidvm/package/`, `DroidVMVirtioGpu.cpp` (the transport) and
   `DroidVMVirtioGpu3D.cpp` (contexts, blobs over guest pages, fenced submissions, `droidvm_virtgpu_call`).
 - The transport is compiled with `DROIDVM_VIRTIO_GPU_DYNAMIC=1`: its queues and command buffers (about 9 MB) are one
@@ -376,7 +376,7 @@ compiles it; `build/oneios-gpu/adreno/status.json` says which). No kernel patch 
 | Object | From | What |
 |---|---|---|
 | `NativeAdrenoPublish`, `NativeAdrenoUserClient`, `NativeAdrenoSubmit`, `NativeAdrenoMemory`, `NativeAdrenoCpu`, `AdrenoPM4.kit` | `external/NativeAdreno`, `external/AdrenoPM4`, built by Droid-VM's `build-droidvm-gpu.py` run up to its accelerator step (its edits to Publish and Memory included) | `AGXDeviceUserClient` (the user client), the published `NativeAdrenoGpu` service, execbuf and memory |
-| `DroidVMGpu` | `external/UniXNU-droidvm/package/DroidVMGpu.cpp`, from a staged copy with four changes (`STAGED` in `build-oneios-gpu.py`) | NativeAdreno's hardware classes never attached; the publish; the accelerator's registration |
+| `DroidVMGpu` | `external/UniXNU-droidvm/package/DroidVMGpu.cpp`, from a staged copy with four changes (`staged/gpu.rs` of `oneios-tool kernel gen gpu`) | NativeAdreno's hardware classes never attached; the publish; the accelerator's registration |
 | `NativeAdrenoAccelerator.late` | `external/NativeAdreno/NativeAdrenoAccelerator.cpp` with `external/NativeMetal/OriginalAcceleratorABI.h` | `AGXAccelerator`, a subclass of the collection's `IOAcceleratorES`; its static initializer is out of `__mod_init_func` and runs after IOGPUFamily has loaded |
 | `IOAcceleratorES-bindings`, `IOAcceleratorES-originals` | generated from `gpu/IOAcceleratorES-24A446-v54.json` | the parent's constructor and base destructor as stubs `bti c; b <name>.original`, its metaclass as an absolute symbol |
 | `OneiOSAdreno` | `gpu/OneiOSAdreno.cpp` | the start, the bound-parent check, the superclass slide, the self-test, weak stand-ins for sheng's display hand-off and log export |

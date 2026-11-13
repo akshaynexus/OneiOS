@@ -71,7 +71,7 @@ an `IOHIDInterface` with usage page 0x20 (Sensor), usage 0x41 (Ambient Light), v
 Apple's USB displays. `OneiOSALSDevice.cpp` is a HID device of that shape (`oneios_als_hid.h`: one input field,
 illuminance in millilux), fed by `oneios_als_listen`.
 
-It subclasses the collection's own `IOHIDDevice`, so it is built by `kernel/patches/oneios-hosted/hid/build-oneios-hid.py`
+It subclasses the collection's own `IOHIDDevice`, so it is built by `oneios-tool kernel gen hid`
 against that folder's `OriginalHidDeviceABI.h` (the class's layout for 24A446 iPhone18,2), its class registers after
 IOHIDFamily has loaded, and `oneios_hid_input_start` (the last call of `oneios_drivers_start`) calls
 `oneios_als_device_start()` after the touch screen and the buttons are published.

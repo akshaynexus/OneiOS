@@ -1,0 +1,8 @@
+// A made-up source for the edit list "aes": every anchor once, between lines of its own.
+// (before anchor 0)
+#include <kern/task.h>
+// (before anchor 1)
+  bool isKeySupported(unsigned selector) override { return selector == 0; }
+// (before anchor 2)
+  if (key->selector || (operation != IOAESEncrypt && operation != IOAESDecrypt)) {
+// (the end)

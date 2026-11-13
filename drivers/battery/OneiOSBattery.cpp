@@ -7,7 +7,8 @@
  * MaxCapacity, IsCharging, ExternalConnected and the rest from. README.md here has the path and what is not proven.
  *
  * IOPMPowerSource is open XNU, so this subclasses it directly; the shape follows UniXNU-droidvm's DroidVMBattery.cpp
- * (which polls a goldfish device), with the host's messages in place of the device's registers. Boot argument:
+ * (which polls a goldfish device), with the host's messages in place of the device's registers. What is published
+ * for a host state, and when powerd is told, is oneios_battery_props.h (host-tested). Boot argument:
  * oneios_battery=0 (no service).
  */
 #include <IOKit/IOService.h>
@@ -16,15 +17,14 @@
 #include <IOKit/pwr_mgt/IOPM.h>
 #include <IOKit/pwr_mgt/IOPMPowerSource.h>
 #include <libkern/c++/OSBoolean.h>
+#include <libkern/c++/OSCollectionIterator.h>
+#include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSSymbol.h>
 #include <pexpert/pexpert.h>
 
 #include "oneios_bridge.h"
-
-#define OBA_WARN_PERCENT     10u
-#define OBA_CRITICAL_PERCENT 2u
-#define OBA_TIME_UNKNOWN     0xffff      /* what AppleSmartBattery publishes while it has no estimate */
+#include "oneios_battery_props.h"
 
 class OneiOSBattery : public IOPMPowerSource {
 	OSDeclareDefaultStructors(OneiOSBattery);
@@ -32,6 +32,8 @@ public:
 	void apply(const struct ob_battery_state *state);
 private:
 	void setNumber(const OSSymbol *key, uint32_t value);
+	void setProps(const struct oba_props *p);
+	void publishWithoutMessage(void);
 };
 
 OSDefineMetaClassAndStructors(OneiOSBattery, IOPMPowerSource);
@@ -41,6 +43,7 @@ static OneiOSBattery *gOneiOSBattery;
 static IOLock *gBatteryLock;
 static struct ob_battery_state gLatest;
 static volatile uint32_t gLatestSeen;
+static struct oba_publisher gPublisher;          /* under gBatteryLock */
 static uint32_t gLoggedFlags = ~0u, gLoggedPercent = ~0u;
 
 void
@@ -53,52 +56,88 @@ OneiOSBattery::setNumber(const OSSymbol *key, uint32_t value)
 	}
 }
 
-/* With gBatteryLock held. */
+void
+OneiOSBattery::setProps(const struct oba_props *p)
+{
+	setBatteryInstalled(p->installed);
+	setExternalConnected(p->external);
+	setExternalChargeCapable(p->charge_capable);
+	setIsCharging(p->charging);
+	setMaxCapacity(p->max);
+	setCurrentCapacity(p->current);
+	setAtWarnLevel(p->warn);
+	setAtCriticalLevel(p->critical);
+	setCycleCount(p->cycles);
+	setTimeRemaining((int)p->time_remaining);
+	if (p->has_voltage) {
+		setVoltage(p->voltage);
+	}
+	if (p->has_amperage) {
+		setAmperage(p->amperage);
+		setNumber(gInstant, (uint32_t)p->amperage);
+	}
+	if (p->has_temperature) {
+		setNumber(gTemperature, p->temperature);
+	}
+	setPSProperty(gFullyCharged, p->full ? kOSBooleanTrue : kOSBooleanFalse);
+	setPSProperty(gRawExternal, p->raw_external ? kOSBooleanTrue : kOSBooleanFalse);
+	setNumber(gRawCurrent, p->raw_current);
+	setNumber(gRawMax, p->raw_max);
+	setNumber(gNominal, p->nominal);
+	setNumber(gDesign, p->design);
+}
+
+/*
+ * The first publish, before registerService(): what IOPMPowerSource::updateStatus() does (the properties into the
+ * registry) without its kIOPMMessageBatteryStatusHasChanged. Nothing can hear it yet, and the host's first reading is
+ * the start, not a change (oneios_battery_props.h: an ExternalConnected that turns true is SpringBoard's charging chime).
+ */
+void
+OneiOSBattery::publishWithoutMessage(void)
+{
+	OSCollectionIterator *iterator = OSCollectionIterator::withCollection(properties);
+	if (iterator == NULL) {
+		return;
+	}
+	OSObject *entry;
+	while ((entry = iterator->getNextObject()) != NULL) {
+		OSSymbol *key = OSDynamicCast(OSSymbol, entry);
+		OSObject *value = key != NULL ? properties->getObject(key) : NULL;
+		if (value != NULL) {
+			setProperty(key, value);
+		}
+	}
+	iterator->release();
+	settingsChangedSinceUpdate = false;
+}
+
+/* With gBatteryLock held. The first call is the initial publish (before registerService); later ones are changes. */
 void
 OneiOSBattery::apply(const struct ob_battery_state *s)
 {
-	bool present = (s->flags & OB_BATTERY_PRESENT) != 0, plugged = (s->flags & OB_BATTERY_PLUGGED) != 0;
-	bool charging = (s->flags & OB_BATTERY_CHARGING) != 0, full = (s->flags & OB_BATTERY_FULL) != 0;
-	uint32_t percent = s->percent > 100 ? 100 : s->percent;
+	struct oba_props p;
+	enum oba_publish what = oba_publish(&gPublisher, s, &p);
+	if (what == OBA_PUBLISH_NOTHING) {
+		return;
+	}
+	setProps(&p);
+	if (what == OBA_PUBLISH_INITIAL) {
+		publishWithoutMessage();
+	} else {
+		updateStatus();
+	}
 
-	setBatteryInstalled(present);
-	setExternalConnected(plugged);
-	setExternalChargeCapable(plugged);
-	setIsCharging(charging);
-	setMaxCapacity(100);
-	setCurrentCapacity(percent);
-	setAtWarnLevel(!plugged && percent <= OBA_WARN_PERCENT);
-	setAtCriticalLevel(!plugged && percent <= OBA_CRITICAL_PERCENT);
-	setCycleCount(s->cycles);
-	setTimeRemaining(s->minutes < 0 ? OBA_TIME_UNKNOWN : s->minutes);
-	if (s->voltage_mv != 0) {
-		setVoltage(s->voltage_mv);
-	}
-	if (s->current_ma != OB_BATTERY_UNKNOWN) {
-		setAmperage(s->current_ma);
-		setNumber(gInstant, (uint32_t)s->current_ma);
-	}
-	if (s->temp_deci_c != OB_BATTERY_UNKNOWN) {
-		setNumber(gTemperature, (uint32_t)(s->temp_deci_c * 10));   /* hundredths of a degree, as AppleSmartBattery */
-	}
-	setPSProperty(gFullyCharged, full ? kOSBooleanTrue : kOSBooleanFalse);
-	setPSProperty(gRawExternal, plugged ? kOSBooleanTrue : kOSBooleanFalse);
-	setNumber(gRawCurrent, (uint32_t)((uint64_t)s->full_mah * percent / 100));
-	setNumber(gRawMax, s->full_mah);
-	setNumber(gNominal, s->full_mah);
-	setNumber(gDesign, s->design_mah);
-	updateStatus();
-
-	if (s->flags != gLoggedFlags || percent != gLoggedPercent) {
+	if (what == OBA_PUBLISH_INITIAL || s->flags != gLoggedFlags || p.current != gLoggedPercent) {
 		gLoggedFlags = s->flags;
-		gLoggedPercent = percent;
-		IOLog("ONEIOS BATTERY: %u%%, %s%s%s (%d/10 C, %u mV, %d mA)\n", percent, present ? (plugged ? "on power" : "on battery") : "no battery",
-		    charging ? ", charging" : "", full ? ", full" : "", s->temp_deci_c == OB_BATTERY_UNKNOWN ? 0 : s->temp_deci_c, s->voltage_mv,
+		gLoggedPercent = p.current;
+		IOLog("ONEIOS BATTERY: %s%u%%, %s%s%s (%d/10 C, %u mV, %d mA)\n", what == OBA_PUBLISH_INITIAL ? "first state, no change message: " : "",
+		    p.current, p.installed ? (p.external ? "on power" : "on battery") : "no battery", p.charging ? ", charging" : "",
+		    p.full ? ", full" : "", s->temp_deci_c == OB_BATTERY_UNKNOWN ? 0 : s->temp_deci_c, s->voltage_mv,
 		    s->current_ma == OB_BATTERY_UNKNOWN ? 0 : s->current_ma);
 	}
 }
 
-/* On the bridge's worker thread. */
+/* On the bridge's worker thread. Before the service exists only the latest state is kept: the start publishes it. */
 static void
 oba_from_host(void *context, uint16_t type, const uint8_t *payload, uint32_t length)
 {
@@ -149,6 +188,8 @@ oneios_battery_start(void)
 		IOLog("ONEIOS BATTERY: off: no memory\n");
 		return;
 	}
+	/* The host's first reading before anything is published: a service with no state, or a default one, would turn
+	 * into the real state later, and powerd would report that as a change. */
 	oneios_bridge_listen(OB_CH_BATTERY, oba_from_host, NULL);
 	(void)oneios_bridge_send(OB_CH_BATTERY, OB_BATTERY_QUERY, NULL, 0);
 	for (unsigned waited = 0; waited < 1000u && !__atomic_load_n(&gLatestSeen, __ATOMIC_ACQUIRE); waited += 10u) {
@@ -187,6 +228,7 @@ oneios_battery_start(void)
 		IOLog("ONEIOS BATTERY: off: the service did not start\n");
 		return;
 	}
+	/* The initial publish (no message), then registerService: powerd's first match reads the host's state. */
 	IOLockLock(gBatteryLock);
 	battery->apply(&gLatest);
 	gOneiOSBattery = battery;
@@ -194,5 +236,7 @@ oneios_battery_start(void)
 	IOLockUnlock(gBatteryLock);
 	battery->registerService();
 	battery->release();                         /* the registry keeps it */
-	IOLog("ONEIOS BATTERY: on: IOPMPowerSource published at %u%%, %s\n", percent, (flags & OB_BATTERY_PLUGGED) ? "on power" : "on battery");
+	IOLog("ONEIOS BATTERY: on: IOPMPowerSource published at %u%%, %s (ExternalConnected %s, IsCharging %s, FullyCharged %s before registerService)\n",
+	    percent, (flags & OB_BATTERY_PLUGGED) ? "on power" : "on battery", (flags & OB_BATTERY_PLUGGED) ? "true" : "false",
+	    (flags & OB_BATTERY_CHARGING) ? "true" : "false", (flags & OB_BATTERY_FULL) ? "true" : "false");
 }

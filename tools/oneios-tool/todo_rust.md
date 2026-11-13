@@ -33,6 +33,7 @@ switch.
 | `image` | 9 subcommands, plus `apfs-ls` and `apfs-copy` (compressed files too; apfs-fuse as a second backend) | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds (the 36th: no `kernel.kc` in the Linux set, README); the APFS reader: every file of the SystemOS and AppOS images as apfs-fuse gives it | `IMAGETOOL_IMPL=rust` as the default is the owner's call |
 | `ioslog` | done | yes on 7 archives (CSV byte for byte, from an archive, an image and a mounted volume) | **a run on the phone's real Data store**; the Mac's `ios3-log.csv`; `checks` on a real log; `pull` |
 | `prelink` | `roots`, `hosted` (2 of 12 steps) | yes for the two, byte for byte on the real kernelcache | **the other ten steps**, the pairing and the emitter first (section 4) |
+| `sym kernel`, `log panic` (2026-11-13, branch `ksym`, crate `oneios-ksym`) | done (new: a kernel panic's caller, pc, lr and frames named in `kernel.kc` and `xnu.macho`; no Python original) | compared with `llvm-symbolizer --inlining` on three Linux-built pairs: 19 of 19 addresses of a stand-in panic and 31,605 of 31,605 more per pair (311,605 on one) name the same function, file:line and inlined frames (README "sym kernel") | **the Mac's log and kernel of the 2026-11-12 panic** (`tests/ksym/compare.sh KC KERNEL LOG`, with `DSYM=`); a real panic log from the phone; names for kext frames (the collection keeps no kext symbols: the prelink's pairing records could give them); a run on a Mac |
 
 ## Build and unit tests
 
@@ -427,9 +428,8 @@ Open, in order:
 2. On the Mac: `tests/ioslog/compare.sh out/session-logs/2026-11-12/ios3.logarchive`, and `ioslog show` of it
    against `ios3-log.csv` (the same only if that file was made by `unifiedlog_iterator` at commit `3d5b27a`).
 3. `checks`: its patterns are the texts the notes quote; run it on a real log and correct them.
-4. `ioslog pull`: copy `data.img` from the phone (`adb exec-out "su -c 'cat ...'"`, only when `pidof xnuhost` is
-   empty, free disk checked, written sparsely in the tool: skip all-zero 4 MiB blocks with a seek). Not written:
-   no phone on the Linux PC. Until then `docs/newtodo.md`'s adb line.
+4. `ioslog pull`: written as `phone pull-data OUT [--ioslog]` (section 6; gzip -1 on the phone, refused beside a
+   session, zero blocks not written: `sparse.rs`). Not run on the phone. The free disk is not checked.
 5. An `Info.plist` in the saved archive, if Apple's `log show --archive` is wanted on it.
 6. **Done (third Linux round): the APFS reader reads compressed files** (decmpfs: zlib, LZVN, LZFSE and LZBITMAP,
    inline and in the resource fork; `flate2`, `lzfse_rust`, `zbitmap`; no decoder of our own). All 2,910 compressed
@@ -467,6 +467,16 @@ Open, in order:
 4. `phone status`'s `session:` line is this tool's own test (stage.sh's: the pid file and /proc); the fork's
    `@@RESULT session` line beside it is the root script's (its control folder). They can differ for a moment
    around a switch.
+5. **The sparse copy on the Mac's APFS** (`sparse.rs`; README "The sparse copy"). Done on Linux (2026-11-13):
+   holes of the file system's block on tmpfs and btrfs, the same bytes as `sparsewrite.py` on 7 streams and on a
+   32 GiB one, a quarter of its CPU. Written from the documentation and **not run**: the macOS branch (APFS
+   fills a hole shorter than about 16 MiB in front of a write; `F_PUNCHHOLE` after the write gives it back). On
+   the Mac: `cargo test -p oneios-phone sparse -- --nocapture` (prints each file's data regions and blocks with
+   the punch on and off, and what 1000 punches cost) and `MAP=1 SPEED=4096:280 tests/phone/sparse-compare.sh`.
+   If a punched hole does not stay a hole, or a punch is slow, `ONEIOS_SPARSE_PUNCH=0` is the script's behaviour;
+   then correct the test's macOS expectations and `hole_block`. ext4 and f2fs through the kernel were not run on
+   the Linux box either (a mount needs root); the phone's own file system does not matter (the copy is read
+   there, written here).
 
 ## Docs
 
@@ -491,6 +501,44 @@ the Mac and on Linux). `scripts/image/imagetool.py` cannot go whole: `check-ipsw
 steps are 1:1. `scripts/phone/stage.sh` stays until `oneios-tool phone` has run on the phone. Python that is not
 ported and stays: `userland/tweak`, `scripts/fetch`, `scripts/ios`, the display capture, `kernel/prelink/*.py`,
 `runtime/package/pack.py`, the tests' helpers under `tools/oneios-tool/tests/`.
+
+## 8. `kernel`: the board archive generators, the build record, the kernelcache records (group 1 of the Python retirement, 2026-11-13)
+
+Branch `rs-kernelgen`. Crate `crates/oneios-kernel`; commands, modules, the comparison, the goldens and what was
+checked only on Linux: [README.md](README.md) "kernel". The port and the comparison are commit `a5b2d95` (the last
+with every script: `tests/kernelgen/compare-python.sh` runs there). The kernel builds need Rust now.
+
+| Script | Command | State |
+|---|---|---|
+| `kernel/device/scripts/build-oneios-board.py` | `kernel gen board` | **retired** (`e3068d3`) |
+| `kernel/patches/oneios-hosted/{storage,aes,keystore,net,hid,audio,gpu,display}/build-oneios-*.py` | `kernel gen NAME` | **retired**, one commit each (`0026865` storage, `8a6a12d` aes, `052fe44` keystore, `1f41bc1` audio, `00dade7` gpu, `96be67f` display, `f7d9085` net, `e99e649` hid) |
+| `kernel/build-record.py` | `kernel build-record` | **retired** (`4e7b15c`) |
+| `hid/layout.py`, `net/layout.py`, `display/port-legacy-display.py` | `kernel layout hid\|net`, `kernel port-legacy-display` | **retired** (`01abbd2`) |
+| `display/display-capture.py` | none | kept: a viewer for a PC boot, Linux only (README "kernel") |
+
+Open:
+1. **The Mac.** Nothing of this was built or run on a Mac: the crate, `kernel/build-hosted.sh` with the commands
+   (Xcode 27.2), `kernel/build-macos.sh` with `kernel build-record`. The Mac's kernel (`eae11352...` then) should
+   come out the same as before; `compare-golden.sh WORK` after the Mac's build says whether the generated files are
+   the frozen ones (the staged sources and the bindings do not depend on the host).
+   On Linux both builds ran in the retired state (`build-hosted.sh`, `build-linux.sh`: README "kernel").
+2. **`drivers/build.py` stays Python** and `kernel gen board` runs it. `drivers_build.rs` is a second copy of its
+   `record` and `command`; `compare-python.sh ... compile-command` (while the script exists it always can run) and
+   a unit test compare them. Porting the script would end the copy: `drivers/build.py --check` is what the other
+   agents run after a driver change, so do it with them.
+3. `kernel/prelink/classes.py` stays Python (`kernel layout` runs it); `kernel/hosted-fixup.py`, the inline
+   `python3` of `kernel/build-hosted.sh` (the board.toml and defconfig edits) and UniXNU's driver are Python too:
+   the kernel build needs python3 either way.
+4. The comments in `kernel/patches/oneios-hosted/*/*.cpp`, `*.h`, `*.inc`, in three patches (0005, 0008, 0022) and
+   in the records' "about" lines still say `build-oneios-NAME.py`, `layout.py` and `port-legacy-display.py`: not
+   changed, because a changed source or patch changes the build's inputs (the SHA-256 lists, the build id). Change
+   them with the next real change of each file.
+5. `cargo clippy -p oneios-kernel -p oneios-tool`: three style warnings in the crate (`chunks_exact` with a constant
+   size in `port_legacy_display.rs`, one each in `build_oneios_hid.rs` and `build_oneios_net.rs`); left, so that the
+   sources are the ones the last kernel build compiled.
+6. `oneios-prelink` does not build alone (`cargo build -p oneios-prelink`: `toml::Table` needs toml's `serde`
+   feature, which only another crate of the workspace turns on), so neither does `-p oneios-kernel`, which uses its
+   kernelcache reader: build the workspace, or `-p oneios-kernel -p oneios-tool`.
 
 ## Notes for the next agent
 

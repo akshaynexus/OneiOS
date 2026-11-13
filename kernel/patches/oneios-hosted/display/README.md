@@ -20,17 +20,17 @@ iPhone18,2 kernelcache and to xnuhost:
 | `LegacyDisplayProbe.cpp` | `external/UniXNU-droidvm/package`, staged with five lines added | Registers the class, makes the service on a nub that carries the boot video as device memory, attaches the nub under `/arm-io` as `gop-display` (`device_type` `display-subsystem`), publishes the scale, hands frames to the virtio scanout |
 | `DroidVMVirtioGpuDisplay.cpp` | `external/UniXNU-droidvm/package`, unchanged | The scanout client of the virtio GPU: a resource per IOSurface (up to 32, by its guest pages), `SET_SCANOUT` and `RESOURCE_FLUSH` per frame from its own thread; the boot video as a resource too |
 | `OneiOSDisplay.cpp` | here | The kernel's two entries, the parent class under xnuhost's slide, the display's switches as defaults, the log lines, Droid-VM's default-surface factory |
-| `legacy-display-24A446-v54.json` | `port-legacy-display.py` | The original class in this kernelcache: 379 slots with their diversities, the fields and functions the backend uses |
-| `build-oneios-display.py` | here | The archive (below) |
+| `legacy-display-24A446-v54.json` | `oneios-tool kernel port-legacy-display` (was `port-legacy-display.py` here) | The original class in this kernelcache: 379 slots with their diversities, the fields and functions the backend uses |
+| `oneios-tool kernel gen display` | `tools/oneios-tool/crates/oneios-kernel/src/build_oneios_display.rs` (was `build-oneios-display.py` here) | The archive (below) |
 | `display-capture.py` | here | A client of `display.sock` for the PC: says when the picture changed and writes PNGs |
 
 The transport (`DroidVMVirtioGpu.cpp`) and the 3D half are in the GPU's archive (`../gpu`, `docs/gpu.md`).
 
-## The class for this kernelcache (`port-legacy-display.py`)
+## The class for this kernelcache (`oneios-tool kernel port-legacy-display`)
 
 Droid-VM's reviewed fixture (`legacy-display-24A446.json`) is for the iPad17,3 kernelcache of the same build.
 `kernel/prelink/classes.py` already reads the class from the iPhone18,2 one (`classes-24A446-v54.json`: 0x1dd8
-bytes, 379 slots, as on the iPad). `port-legacy-display.py` shows the family's code is the same code at another
+bytes, 379 slots, as on the iPad). `oneios-tool kernel port-legacy-display` shows the family's code is the same code at another
 address and carries the reviewed meanings over; it fails rather than guess:
 
 - All 215 slots whose target is in IOMobileGraphicsFamily's text are at one distance from the iPad's (-0x101d40).
@@ -46,12 +46,12 @@ address and carries the reviewed meanings over; it fails rather than guess:
   the fixture checks them by are read back.
 
 ```sh
-kernel/patches/oneios-hosted/display/port-legacy-display.py      # rewrites legacy-display-24A446-v54.json
+oneios-tool kernel port-legacy-display      # rewrites legacy-display-24A446-v54.json (run in the checkout, or --repo)
 ```
 
 Both kexts are in the collection's closure as roots (`kernel.kc.prelink.json`), with their personalities.
 
-## The archive (`build-oneios-display.py`)
+## The archive (`oneios-tool kernel gen display`)
 
 `kernel/build-hosted.sh` copies the script into the build's device repository, appends it to the board's archives
 (after the GPU's) and sets `CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y` in the build's copy of the hosted defconfig. With

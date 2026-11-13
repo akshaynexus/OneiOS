@@ -49,7 +49,7 @@
 # /arm-io/virtio-gpu drm-host-pool) may be mapped into a task and at a kernel address, as 0020 allows the boot
 # framebuffer: the virtio-gpu 3D driver maps each context's response buffer from it. No patch links NativeAdreno:
 # Metal's kernel side (the AGXAccelerator under the collection's IOAcceleratorES, AGXDeviceUserClient) is in the GPU
-# archive of 0005 (gpu/build-oneios-gpu.py, gpu/OneiOSAdreno.cpp) and starts from oneios_gpu3d_start.
+# archive of 0005 (oneios-tool kernel gen gpu, gpu/OneiOSAdreno.cpp) and starts from oneios_gpu3d_start.
 0024-gpu-pool.patch
 # fable-user (Q6): the host's text fixups on code pages only, once, with a record of the changed words so that a
 # page validated again is hashed as it was read ("Text page corruption detected" otherwise); a twin that cannot be
@@ -184,6 +184,10 @@
 # 64th, 256th asking; at most 800 lines. A debugging aid, nothing else changes.
 0062-iokit-hardware-probe-trace.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
-# net/build-oneios-net.py), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
+# oneios-tool kernel gen net), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and
 # IOEthernetInterface (their layout checked against IONetworking-24A446-v54.json at each build).
+# fix-wifi-late (2026-11-13), in that archive, not a numbered patch (no XNU source changed): the nub reserves en0's
+# unit (network-interface-unit-en = <0>, as the iPhone's Wi-Fi node), so configd's InterfaceNamer names en0 at once
+# instead of waiting for IOKit quiet, which comes only after driverkitd; "first ..." lines time the naming, the enable,
+# the first request, the power on, the first scan and join (net/README.md, "en0's name").

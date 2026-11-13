@@ -1,0 +1,55 @@
+// A made-up source for the edit list "audio": every anchor once, between lines of its own.
+// (before anchor 0)
+extern kmod_info_t g_kernel_kmod_info;
+// OneiOS (build-oneios-audio.py): the UIDs and the speaker's output latency, from boot arguments at attach.
+#include <pexpert/pexpert.h>
+static uint32_t oneios_output_latency = 6480;
+static char oneios_out_uid[32] = "Speaker", oneios_in_uid[32] = "Mic";
+// OneiOS: the "Actuator" device (haptics): drivers/haptics/oneios_haptic.c takes its periods.
+extern "C" bool oneios_haptic_actuator_ready(void);
+extern "C" void oneios_haptic_actuator_published(bool yes);
+extern "C" void oneios_haptic_actuator_running(bool on);
+extern "C" uint32_t oneios_haptic_actuator_play(const int16_t *frames, uint32_t count, uint32_t channels);
+static uint32_t oneios_actuator_on = 1, oneios_actuator_channels = 1;
+static bool oneios_publishing_actuator;
+extern "C" { volatile uint64_t oneios_actuator_frames; }
+// (before anchor 1)
+    bool isInput;
+    bool isActuator = false;   // OneiOS: the "Actuator" output: its periods go to drivers/haptics
+// (before anchor 2)
+    uint32_t channels() const { return isInput ? InputChannels : isActuator ? oneios_actuator_channels : OutputChannels; }
+// (before anchor 3)
+        if (isActuator) oneios_haptic_actuator_running(true); else transportSet(!isInput, true);
+// (before anchor 4)
+        if (isActuator) oneios_haptic_actuator_running(false); else transportSet(!isInput, false);
+// (before anchor 5)
+            const uint32_t played = isActuator ? oneios_haptic_actuator_play(at, PeriodFrames, ch) : droidvm_snd_play(at, PeriodFrames);
+// (before anchor 6)
+            if (isActuator) oneios_actuator_frames = oneios_actuator_frames + played;
+            else droidvm_audio_played = droidvm_audio_played + played;
+// (before anchor 7)
+        if (!isActuator) droidvm_audio_periods = droidvm_audio_periods + 1;
+// (before anchor 8)
+    DroidVMAudioDevice *device = OSTypeAlloc(DroidVMAudioDevice);
+    if (device) device->isActuator = oneios_publishing_actuator;   // OneiOS: before initRole sizes the ring
+// (before anchor 9)
+    setNumber(e, "output latency", isActuator ? Latency : oneios_output_latency);   // OneiOS: the host path's latency
+// (before anchor 10)
+    // OneiOS: oneios-audio-out-uid, oneios-audio-in-uid (none: no microphone), oneios-audio-latency.
+    PE_parse_boot_arg_str("oneios-audio-out-uid", oneios_out_uid, sizeof(oneios_out_uid));
+    PE_parse_boot_arg_str("oneios-audio-in-uid", oneios_in_uid, sizeof(oneios_in_uid));
+    PE_parse_boot_argn("oneios-audio-latency", &oneios_output_latency, sizeof(oneios_output_latency));
+    bool speaker = publishDevice(resources, false, oneios_out_uid, "droidvm-audio-out");
+    bool mic = strcmp(oneios_in_uid, "none") != 0 && publishDevice(resources, true, oneios_in_uid, "droidvm-audio-in");
+    // OneiOS: the Actuator (haptics), when drivers/haptics has the host's actuator; oneios-actuator=0 leaves it out.
+    PE_parse_boot_argn("oneios-actuator", &oneios_actuator_on, sizeof(oneios_actuator_on));
+    PE_parse_boot_argn("oneios-actuator-channels", &oneios_actuator_channels, sizeof(oneios_actuator_channels));
+    if (oneios_actuator_channels != 2) oneios_actuator_channels = 1;
+    oneios_publishing_actuator = true;
+    bool actuator = oneios_actuator_on && oneios_haptic_actuator_ready() && publishDevice(resources, false, "Actuator", "oneios-actuator");
+    oneios_publishing_actuator = false;
+    oneios_haptic_actuator_published(actuator);
+// (before anchor 11)
+    IOLog("DroidVMAudio: published Speaker=%d Mic=%d Actuator=%d as IOAudio2Devices (UIDs %s, %s, Actuator x%u; output latency %u frames)\n", speaker, mic,
+          actuator, oneios_out_uid, oneios_in_uid, oneios_actuator_channels, oneios_output_latency);
+// (the end)

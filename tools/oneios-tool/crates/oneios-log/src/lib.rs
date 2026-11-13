@@ -16,7 +16,8 @@ use table::Format;
 
 const USAGE: &str = "\
 usage: oneios-tool log stacks LOG [--proc NAME] [--thread 0xT] [--slide HEX] [--no-sym] [--summary]
-                                  [--dsc DIR] [--index DIR]
+                                  [--dsc DIR] [--index DIR] [--kc PATH] [--kernel PATH]
+       oneios-tool log panic LOG [--kc PATH] [--kernel PATH]
        oneios-tool log timeline LOG
        oneios-tool log diff LOG_A LOG_B [--words N] [--all]
        oneios-tool log gpu LOG [--json | --csv]
@@ -28,7 +29,12 @@ LOG is an xnuhost session log (xnuhost.log). A line cut by another writer is spl
 record gives the fields it still has.
   stacks    the user backtraces (oneios-ubt samples, sheng-exc exceptions) per thread over time, named in the dyld
             shared cache through `oneios-tool sym`'s index (the slide is found per boot); the threads that never
-            change are listed at the end. --no-sym prints the addresses only.
+            change are listed at the end. --no-sym prints the addresses only. A log with a kernel panic gets
+            `panic`'s part at the end.
+  panic     the kernel panics (`panic(cpu N caller 0x...)`, the fault's pc and lr, the `frame 0x...` lines), named
+            through `oneios-tool sym kernel`: member, segment, function + offset, file:line, inlined frames. The
+            collection and the kernel: --kc and --kernel, else ONEIOS_KC and ONEIOS_KERNEL, else the newest under
+            out/kernel (`oneios-tool sym kernel --help`). Without a collection the addresses are listed unnamed.
   timeline  the milestones of every boot with time and line: start, kernel, launchd, frames, gestures and whether
             the guest drew after them, crashes, the end
   diff      the kinds of lines one log has and the other does not, with counts and first lines
@@ -40,6 +46,8 @@ record gives the fields it still has.
 pub enum Command {
     /// The user backtraces per thread over time, named through `oneios-tool sym`'s index
     Stacks(Opts),
+    /// The kernel panics, named through `oneios-tool sym kernel` (kernel.kc and xnu.macho)
+    Panic(Opts),
     /// The milestones of every boot with time and line
     Timeline(Opts),
     /// The kinds of lines one log has and the other does not (two logs)
@@ -77,6 +85,12 @@ pub struct Opts {
     /// stacks: the folder of `oneios-tool sym`'s index
     #[arg(long, value_name = "DIR")]
     index: Option<PathBuf>,
+    /// stacks, panic: the kernel collection that ran (kernel.kc)
+    #[arg(long, value_name = "PATH")]
+    kc: Option<PathBuf>,
+    /// stacks, panic: the unprelinked kernel it was made from (xnu.macho)
+    #[arg(long, value_name = "PATH")]
+    kernel: Option<PathBuf>,
     /// stacks: print the addresses only
     #[arg(long = "no-sym")]
     no_sym: bool,
@@ -142,6 +156,7 @@ pub fn main(command: Command) -> i32 {
 
 struct Args {
     paths: Vec<PathBuf>,
+    kernel: oneios_ksym::Locate,
     proc_name: Option<String>,
     thread: Option<u64>,
     slide: Option<u64>,
@@ -162,8 +177,16 @@ fn options(o: Opts, loc: &mut Locate) -> Result<Args> {
     if o.index.is_some() {
         loc.index_parent = o.index;
     }
+    let mut kernel = oneios_ksym::Locate::from_env();
+    if o.kc.is_some() {
+        kernel.kc = o.kc;
+    }
+    if o.kernel.is_some() {
+        kernel.kernel = o.kernel;
+    }
     Ok(Args {
         paths: o.paths,
+        kernel,
         proc_name: o.proc_name,
         thread: o.thread.as_deref().map(hex).transpose()?,
         slide: o.slide.as_deref().map(hex).transpose()?,
@@ -182,10 +205,18 @@ pub fn run_inner(args: &[String], loc: Locate, err: &mut dyn Write) -> Result<St
     run_command(parsed.command, loc, err)
 }
 
+/// The kernel panics of a log, named in the kernel collection and its unprelinked kernel (`oneios-ksym`). `None`:
+/// the log has none.
+fn kernel_panics(path: &Path, loc: &oneios_ksym::Locate, err: &mut dyn Write) -> Result<Option<String>> {
+    let bytes = std::fs::read(path).map_err(|e| anyhow!("{}: {e}", path.display()))?;
+    Ok(oneios_ksym::panics_report(&String::from_utf8_lossy(&bytes), &path.display().to_string(), loc, None, err))
+}
+
 /// The command's whole output.
 fn run_command(command: Command, mut loc: Locate, err: &mut dyn Write) -> Result<String> {
     let (command, opts) = match command {
         Command::Stacks(o) => ("stacks", o),
+        Command::Panic(o) => ("panic", o),
         Command::Timeline(o) => ("timeline", o),
         Command::Diff(o) => ("diff", o),
         Command::Gpu(o) => ("gpu", o),
@@ -214,8 +245,19 @@ fn run_command(command: Command, mut loc: Locate, err: &mut dyn Write) -> Result
                 }
             };
             let o = stacks::Options { proc_name: a.proc_name, thread: a.thread, slide: a.slide, summary_only: a.summary };
-            Ok(stacks::report(&log, index.as_ref(), &o))
+            let mut text = stacks::report(&log, index.as_ref(), &o);
+            if !a.no_sym {
+                if let Some(panics) = kernel_panics(&a.paths[0], &a.kernel, err)? {
+                    text.push_str("\n== kernel panics (oneios-tool sym kernel) ==\n");
+                    text.push_str(&panics);
+                }
+            }
+            Ok(text)
         }
+        "panic" => match kernel_panics(&a.paths[0], &a.kernel, err)? {
+            Some(panics) => Ok(panics),
+            None => Ok(format!("{}: no kernel panic (no `panic(cpu N caller 0x...)` line)\n", a.paths[0].display())),
+        },
         "timeline" => Ok(timeline::report(&load(&a.paths[0])?)),
         "diff" => {
             let (first, second) = rayon::join(|| load(&a.paths[0]), || load(&a.paths[1]));

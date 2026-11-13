@@ -20,9 +20,9 @@ was tested: `docs/hardware.md` section 3.
 |---|---|
 | `OneiOSWifi.cpp` | The classes, the Apple80211 requests and events, the station (scan, join, leave: messages to the host), frames in and out, `oneios_net_start` |
 | `OneiOSWifiLayout.cpp` | `IONetworkInterface::setInterfaceSubType`'s store (the Wi-Fi subfamily). That function is not virtual, so it has no slot to bind it by; this file does what it does with the family's own member layout (the header with its private members visible; the classes' sizes are asserted) |
-| `layout.py` | Reads the two original classes from the kernelcache into `IONetworking-24A446-v54.json` (run by hand; needs `out/kernel-inputs/24A446/kernelcache.macho` and a `kernel.kc.prelink.json`) |
+| `oneios-tool kernel layout net` (was `layout.py` here) | Reads the two original classes from the kernelcache into `IONetworking-24A446-v54.json` (run by hand; needs `out/kernel-inputs/24A446/kernelcache.macho` and a `kernel.kc.prelink.json`) |
 | `IONetworking-24A446-v54.json` | What the kernelcache says of `IOEthernetController` (0x118 bytes, 250 slots) and `IOEthernetInterface` (0x148 bytes, 221 slots): metaclass, vtable, each slot's target, pointer-authentication discriminator and whether the target is the family's code, the constructor, the base destructor. Addresses and numbers only: no Apple code, so it is committed |
-| `build-oneios-net.py` | Fetches IONetworkingFamily-188's headers, checks them against the record, compiles the sources, generates the bindings, makes the archive |
+| `oneios-tool kernel gen net` | Fetches IONetworkingFamily-188's headers, checks them against the record, compiles the sources, generates the bindings, makes the archive |
 | `drivers/net/oneios_wifi_proto.h` | The station's messages (shared with `runtime/bridges/wifi`) |
 
 ## Why the original classes, and how they are checked
@@ -64,11 +64,35 @@ controller calls `setSelectedMedium` with its one medium (`kIOMediumIEEE80211Aut
 medium to every `setLinkStatus`, link up or down. Without it the framework's list is empty, wifid does not take the
 interface, and nothing ever asks for a scan (the first phone session). `docs/hardware.md` section 3 has the evidence.
 
+## en0's name: the reserved unit
+
+configd's InterfaceNamer (configd's `Plugins/InterfaceNamer/ifnamer.c`, `copyUnitForEstablishedInterface`) names a
+network interface at once only when it knows it: its naming database (`NetworkInterfaces.plist` on the Data volume)
+has the interface's prefix and **hardware address**, or the IORegistry reserves a unit for it (a property
+`network-interface-unit-en`, one or two 32-bit units, on the interface or a parent in the service plane:
+`NetworkInterfaceGetReservedRange`). Any other interface is new, and a new interface is named only once IOKit is quiet
+(`waiting for quiet` in configd's log). IOKit's service root stays busy until the IOKit daemon (driverkitd on iOS) has
+sent its dexts' personalities (`IOService::iokitDaemonLaunched`, the kernel's `KextLog: driverkitd is active`); 0042's
+`oneios-iobusy:` lines name that root, `oneios,xnuhost (class IOPlatformExpertDevice)`, as the one busy service.
+
+en0's address is wlan0's, which is a random one while One UI is not joined, so it changes between sessions and the
+database's entry never matched: every session's en0 was new and waited for driverkitd (named +130 s and +162 s after
+xnuhost's start on the phone, 2026-11-12, 261 s in prelink's session 2). The iPhone's own Wi-Fi node reserves the
+unit (24A446's device tree: `/arm-io/apcie/pci-bridge0/centauri-alpha` has `network-interface-unit-en = <0>`), so the
+nub `oneios-wlan` has the same property now and InterfaceNamer names the interface en0 as soon as it appears. It still
+refuses the unit when the database holds en0 at another registry path (`builtinAvailable`: then `has reserved unit 0,
+but it's not available` in configd's log, and the wait for quiet as before).
+
 ## Boot argument and log lines
 
 `oneios-wifi=0` leaves the Wi-Fi out. The lines (`ONEIOS WIFI: ...`), in the order of a good boot: `classes
 registered below the collection's IOEthernetController and IOEthernetInterface; starting /arm-io/net`, `on: the
-phone's Wi-Fi, address ..; asking the host for its radio`, `the host has the phone's radio`, `the interface is enabled (en0 is up)`, `event N for en0, M bytes -> error` (the
+phone's Wi-Fi, address ..; asking the host for its radio`, `the host has the phone's radio`, `first naming (en0 attached
+to the network stack): by configd[PID], +S s after the driver's start, IOKit busy N` (one `first ...` line each for
+the naming, `enable (IFF_UP)`, the first `Apple80211 request`, `power on`, the first `scan request` and `join
+request`: who, when, and IOKit's busy count then; busy 1 at the naming means it did not wait for driverkitd, which
+only a known address or the reserved unit allows; busy 0 says nothing by itself: compare the time with `KextLog:
+driverkitd is active`), `the interface is enabled (en0 is up)`, `event N for en0, M bytes -> error` (the
 first 24 events posted to the daemon, and any that fails: 10 is SCAN_DONE, 9 ASSOC_DONE, 4 LINK_CHANGED), `NAME[PID] gets|sets N: len .. val .. ->
 error` (each Apple80211 request with the process that made it, for the first 150, then a type's first, and every
 scan, join and leave), `NAME[PID]: interface request 0x..` (the first 24 other requests on en0), `NAME[PID] asks the

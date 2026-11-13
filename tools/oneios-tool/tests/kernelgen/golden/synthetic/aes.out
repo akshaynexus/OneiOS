@@ -1,0 +1,11 @@
+// A made-up source for the edit list "aes": every anchor once, between lines of its own.
+// (before anchor 0)
+#include <kern/task.h>
+// made-up keys
+// (before anchor 1)
+  bool isKeySupported(unsigned selector) override { return selector == 0 || droidvmHardwareKey(selector); }
+// (before anchor 2)
+  IOAESKeyData droidvmKey;
+  key = droidvmKeyFor(key, droidvmKey);
+  if (key->selector || (operation != IOAESEncrypt && operation != IOAESDecrypt)) {
+// (the end)
