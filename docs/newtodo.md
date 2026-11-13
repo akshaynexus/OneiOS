@@ -73,6 +73,16 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
      `oneios-mem:`'s in-use figures; if `host MemAvailable` still falls under ~300 MiB, lower `ram-percent` in the
      image's `xnuhost.conf`; check `/sys/kernel/mm/transparent_hugepage/shmem_enabled` (a shmem huge page setting
      may keep punched pages).
+   - **Fixed RAM (fix-fixed-memory, 2026-11-13): built and host-tested, OFF by default (`ram-giveback=0` turns it on),
+     not run in a PC boot of iOS or on the phone.** The owner's requirement: RAM and GPU memory set once at the start.
+     xnuhost prefaults the whole memfd on a nice-19 thread, `mlock`s it where Linux allows and it fits in MemAvailable
+     less `ram-session-reserve` (1 GiB; `ram=auto` gets the same bound), refuses `ram_discard`, unlocks once if the host's
+     MemAvailable falls under `ram-unlock-below` (256 MiB), and logs a third `memory: fixed RAM:` line (locked, refused,
+     host swap-ins/outs, major faults, KGSL's per-process memory). Kernel 0067 (the kernel told not to give back, order
+     kept) is written but not in the series. No separate GPU pool: the blobs are guest pages of the same memfd
+     (`docs/gpu.md` 2, "No separate GPU pool"). Details, safety and log lines: `docs/booter.md` 2.2 "Fixed RAM". Next: a PC
+     boot before/after (`--ram 4G`, same Data store; then `--set ram-giveback=0`), kernel 0067 built, then the phone with
+     `ram-giveback=0` in the image's `xnuhost.conf`.
    - **Swap: built (the Linux PC, 2026-11-12), not on the phone.** Hosted 0057 makes `/private/var/vm` root:wheel 0755 before
      launchd in every Data store and, on each swap file failure, logs which volume the folder was on and whether it
      was read-only; the roottweak's `data_layout` puts the folder in new seeds. errno 30 is not settled (the sealed

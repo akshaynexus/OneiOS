@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <sys/types.h>
 #include "xnuhost/hostcall.h"
 
 #define XH_MAX_CPUS 8
@@ -50,6 +51,14 @@ typedef struct {
   int64_t ram_host_floor;   // ram-host-floor=: what ram=auto always leaves the host, bytes; -1 = unset (1.5 GiB)
   char  ram_meminfo[256];   // ram-meminfo=FILE: where ram=auto reads MemTotal (tests); default /proc/meminfo
   uint64_t ram_auto_total, ram_auto_available;
+  unsigned ram_auto_bound;  // XH_RAM_BOUND_*: what decided ram=auto's size
+  // The RAM held fixed for the session (ramfix.c; -1 = unset). ram-giveback=1 is 0058's way instead: nothing prefaulted
+  // or locked, free pages given back (and ram=auto as before, without the MemAvailable bound).
+  int   ram_giveback;       // ram-giveback=0|1 (1 until the fixed RAM has run on a PC boot and the phone)
+  int   ram_prefault;       // ram-prefault=0|1 (1)
+  int   ram_lock;           // ram-lock=0|1 (1): mlock the prefaulted RAM where Linux allows and it fits
+  int64_t ram_session_reserve;   // ram-session-reserve=SIZE (1 GiB): MemAvailable at the start that ram=auto and the lock leave the host
+  int64_t ram_unlock_below;      // ram-unlock-below=SIZE (256 MiB): the valve; 0 = never unlock
   int   host_mem_log;       // host-mem-log=SECONDS: the host's MemAvailable in the log every so often; 0 = off; -1 = unset (30)
   int   usb_log;            // usb-log=SECONDS: how often the USB gadget is read for its "usb:" line (usb.c), which is
                             // logged at the start and on every change; 0 = off; -1 = unset (3)
@@ -102,6 +111,8 @@ uint64_t xh_parse_size(const char *text, bool *ok);
 // 0 when that leaves the guest less than 1 GiB. Portable (unit-tested).
 #define XH_RAM_AUTO_PERCENT 90
 #define XH_RAM_AUTO_FLOOR   (3ull << 29)    // 1.5 GiB
+#define XH_RAM_SESSION_RESERVE (1ull << 30) // ram-session-reserve: MemAvailable at the start the fixed RAM leaves the host
+#define XH_RAM_UNLOCK_BELOW    (256ull << 20)   // ram-unlock-below: the lock's valve
 #define XH_RAM_MAX (64ull << 30)            // the RAM window and the kernel's own range share 0x20_0000_0000 .. 0x3c_0000_0000
 uint64_t xh_ram_auto(uint64_t total, unsigned percent, uint64_t floor);
 // MemTotal and MemAvailable of a /proc/meminfo file, in bytes: 0, or -1 when the file has not both.
@@ -228,6 +239,51 @@ int64_t xh_ram_discard_fd(int fd, uint64_t fd_base, uint64_t lo, uint64_t len, u
 // size. A range mincore refuses (not mapped) counts nothing. The `memory:` line's swap figure is the memfd's held
 // pages (st_blocks, which counts swapped ones too) less this.
 uint64_t xh_ram_resident(const void *base, uint64_t size, uint64_t page);
+// ram_discard as the host call answers it: refused with -EPERM (counted in fixed_refused) while the RAM is held fixed
+// (XH_FEATURE_RAM_FIXED, ram-giveback=0), else xh_ram_discard_fd.
+extern uint64_t g_discard_fixed_refused;
+int64_t xh_ram_discard_host(bool fixed, int fd, uint64_t fd_base, uint64_t lo, uint64_t len, uint64_t phys, uint64_t size, uint64_t page);
+
+// ---- the guest's RAM held fixed for the session (ramfix.c; docs/booter.md 2.2, "Fixed RAM") ----------------------------
+// ram=auto when the RAM is fixed: xh_ram_auto, and no more than the host's MemAvailable at the start less `reserve` (what
+// the host needs while iOS runs), in 256 MiB steps; 0 under 1 GiB. `bound` says which of the three decided.
+enum { XH_RAM_BOUND_SHARE = 1, XH_RAM_BOUND_FLOOR = 2, XH_RAM_BOUND_AVAILABLE = 3 };
+uint64_t xh_ram_fixed_auto(uint64_t total, uint64_t available, unsigned percent, uint64_t floor, uint64_t reserve, unsigned *bound);
+// A RAM of `size` may be locked: the host has it free now and `reserve` besides.
+bool xh_ram_lock_fits(uint64_t size, uint64_t available, uint64_t reserve);
+#define XH_RAMFIX_STEP (16ull << 20)        // a prefault step: one mlock call or 4096 page reads
+typedef struct {
+  // asked (set before the start)
+  bool lock;                // lock what is prefaulted (mlock), all or nothing
+  const char *lock_why;     // why lock is off, for the log ("ram-lock=0", "more than the host has free")
+  uint64_t step;            // bytes per step; 0 = XH_RAMFIX_STEP
+  uint64_t unlock_below;    // the valve: host MemAvailable under this while locked: munlock once; 0 = never
+  // done (written by the prefault, read by the log)
+  uint64_t size, prefaulted, locked;     // bytes
+  int lock_error;           // the errno of the mlock that failed (EPERM, ENOMEM, EAGAIN): then nothing is locked
+  bool locking, done, stop, unlocked;
+  uint64_t ms;              // the prefault's time
+  uint64_t unlock_available;             // MemAvailable when the valve opened
+} xh_ramfix;
+extern xh_ramfix g_ramfix;
+// What the prefault calls; the tests put failing ones here.
+extern int (*xh_ramfix_mlock)(const void *, size_t);
+extern int (*xh_ramfix_munlock)(const void *, size_t);
+// [base, base + size), a shared mapping of the RAM memfd, synchronously, step by step (stops early on r->stop).
+void xh_ramfix_prefault(xh_ramfix *r, uint8_t *base, uint64_t size);
+// The valve: true when it opened now (the RAM unlocked).
+bool xh_ramfix_valve(xh_ramfix *r, uint8_t *base, uint64_t available);
+// The prefault on a thread of its own at nice 19 (SCHED_OTHER), then the valve once a second while the RAM is locked.
+int  xh_ramfix_start(xh_ramfix *r, uint8_t *base, uint64_t size, const char *meminfo);
+void xh_ramfix_stop(xh_ramfix *r);
+// One line of what decides whether a lock can work here: RLIMIT_MEMLOCK, CAP_IPC_LOCK, the cgroup's memory limits.
+void xh_ramfix_facts(char *out, size_t size);
+typedef struct { uint64_t vm_locked, mlocked, swap_ins, swap_outs, major_faults; } xh_ramfix_counters;
+// VmLck of this process, the host's Mlocked (bytes); the host's pswpin/pswpout and this process's majflt (counts).
+void xh_ramfix_sample(xh_ramfix_counters *c);
+// KGSL's per-process memory files of `pid` (/sys/class/kgsl/kgsl/proc/PID: "name value, ..." as KGSL prints them),
+// the length written; 0 where there is no KGSL.
+size_t xh_kgsl_memory(int pid, char *out, size_t size);
 
 // ---- MMIO dispatch (mmio.c) ---------------------------------------------------------------------
 typedef struct xh_mmio_region {

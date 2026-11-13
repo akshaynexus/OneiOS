@@ -1,0 +1,59 @@
+diff --git a/osfmk/arm64/hosted/hostcall.h b/osfmk/arm64/hosted/hostcall.h
+--- a/osfmk/arm64/hosted/hostcall.h
++++ b/osfmk/arm64/hosted/hostcall.h
+@@ -134,6 +134,8 @@
+ #define XH_FEATURE_PAC          (1ull << 0)   // paca/pacg: arm64e runs; one key set for kernel and tasks
+ #define XH_FEATURE_TASKS        (1ull << 1)   // the task trap layer works on this host (seccomp, memfd)
+ #define XH_FEATURE_PAC_KEYS_OFF (1ull << 2)   // PR_PAC_SET_ENABLED_KEYS: plain arm64 tasks can run
++#define XH_FEATURE_RAM_FIXED    (1ull << 3)   // the RAM is held for the whole session (ram-giveback=0): ram_discard
++                                              // is refused (-EPERM); a kernel gives no free pages back (0067)
+ 
+ // ---- calls from the host into the kernel --------------------------------------------------------
+ struct xh_upcalls {
+diff --git a/osfmk/vm/vm_resident.c b/osfmk/vm/vm_resident.c
+--- a/osfmk/vm/vm_resident.c
++++ b/osfmk/vm/vm_resident.c
+@@ -978,6 +978,16 @@
+ #include <arm64/hosted/hosted.h>
+ #include <arm64/hosted/free_report.h>
+ static TUNABLE(uint32_t, hosted_fr_on, "oneios-free-report", 1);
++/*
++ * 0067 (fix-fixed-memory, 2026-11-13): the host may hold the guest's RAM fixed for the session (xnuhost's default
++ * since 0067, ram-giveback=0: the memfd prefaulted once at the start and locked where Linux allows). It says so with
++ * XH_FEATURE_RAM_FIXED in hosted_info.features, and then nothing is given back: a page punched out of a fixed RAM
++ * would only be faulted in again. The free queues keep 0058's order all the same (pages iOS freed first): it costs
++ * nothing, and where the host could not lock the RAM it keeps iOS on the pages the host has kept resident.
++ * Set once, at the thread's start: oneios-free-report-giveback=1 gives back anyway (a check), =0 never; absent, as
++ * the host says (a host without the bit, xnuhost before 0067 or with ram-giveback=1: given back, as 0058 did).
++ */
++static uint32_t hosted_fr_giveback = 1;
+ static uint32_t  hosted_fr_held[MAX_COLORS];
+ static vm_page_t hosted_fr_first[MAX_COLORS];
+ static uint32_t  hosted_fr_reported;            /* pages on the free queues given back */
+@@ -2179,7 +2189,7 @@
+ 		/* the free target is read each time: it is a sysctl (kern.vm_page_free_target) */
+ 		const uint32_t keep = hosted_fr_stress ? 0 : vm_page_free_target + extra, keep_q = xh_fr_keep_per_queue(keep, vm_colors);
+ 
+-		while (hosted_fr_on && !hosted_fr_stats.stopped) {
++		while (hosted_fr_on && hosted_fr_giveback && !hosted_fr_stats.stopped) {
+ 			uint32_t free = vm_page_free_count, reported = os_atomic_load(&hosted_fr_reported, relaxed);
+ 			/* 0058's decision (whether, and down to keep), 0066's size: up to `batch` pages, whole slices */
+ 			uint32_t excess = xh_fr_batch(free > reported ? free - reported : 0, keep, hysteresis, UINT32_MAX, active);
+@@ -2248,7 +2258,16 @@
+ hosted_free_report_start(void)
+ {
+ 	thread_t thread = THREAD_NULL;
+-
++	uint32_t forced = 0;
++	const bool fixed = (hosted_info.features & XH_FEATURE_RAM_FIXED) != 0;
++	const bool told = PE_parse_boot_argn("oneios-free-report-giveback", &forced, sizeof(forced));
++
++	/* 0067: whether free pages go back to the host at all */
++	hosted_fr_giveback = told ? forced != 0 : !fixed;
++	printf("oneios-mem: free pages given back to the host: %s (the host %s the RAM fixed%s); the free queues %s\n",
++	    hosted_fr_on && hosted_fr_giveback ? "yes" : "no", fixed ? "holds" : "does not hold",
++	    told ? ", oneios-free-report-giveback set" : "",
++	    hosted_fr_on ? "take the pages iOS freed first (0058)" : "keep the stock order");
+ 	printf("oneios-mem: free-page reporting %s (oneios-free-report=%u): keep %u pages (free target %u + %u MiB), "
+ 	    "hysteresis %u MiB, batch %u pages, runs %u pages, every %u ms; %u of %u free pages never touched\n",
+ 	    hosted_fr_on ? (hosted_fr_stress ? "on, stress check" : "on") : "off", hosted_fr_on,

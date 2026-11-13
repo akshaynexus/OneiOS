@@ -17,8 +17,8 @@ ARM64_RUN := $(if $(ARM64_NATIVE),,$(QEMU))
 WARN := -Wall -Wextra -Werror
 INC := -Iinclude -Isrc -Istub -I../loader/include -I../bridges/include -I../../drivers/bridge -I../../drivers/camera
 CFLAGS ?= -O2 -g
-SRC := main log perf config insn mem discard mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input virtio_gpu gpu3d display input input_script cpu hostcalls task usb
-PORTABLE := log perf config insn discard mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input input input_script virtio_gpu gpu3d cpu task usb
+SRC := main log perf config insn mem discard ramfix usb mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input virtio_gpu gpu3d display input input_script cpu hostcalls task
+PORTABLE := log perf config insn discard ramfix usb mmio gic sysreg uart blk imageset virtio virtio_blk virtio_input input input_script virtio_gpu gpu3d cpu task
 LOADER_SRC := $(wildcard ../loader/src/*.c)
 HDR := $(wildcard include/xnuhost/*.h src/*.h stub/*.h ../loader/include/xnuloader/*.h)
 A := build/android
@@ -158,14 +158,14 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	@if [ -z "$(ARM64_NATIVE)$(QEMU)" ]; then echo "check-arm64: qemu-aarch64 not installed: skipped"; else \
 	  rm -f $(A)/testdata/data.img; \
 	  echo "check-arm64: booting the test kernel under $(or $(ARM64_RUN),this arm64 Linux kernel)"; \
-	  timeout 30 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M \
+	  timeout 30 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M --set ram-giveback=1 \
 	     --display none --no-input --width 64 --height 64 2>&1 | tee $(A)/check.log; \
 	  grep -q 'TESTKERNEL: all passed' $(A)/check.log && \
-	  echo "check-arm64: ram=auto on a host of 3 GiB (ram-meminfo): the guest gets 1536 MiB" && \
+	  echo "check-arm64: ram=auto on a host of 3 GiB, 2 GiB available (ram-meminfo): the guest gets 1024 MiB with ram-giveback=0 (MemAvailable less the 1 GiB reserve), held fixed" && \
 	  printf 'MemTotal:        3145728 kB\nMemAvailable:    2097152 kB\n' > $(A)/meminfo-3g && rm -f $(A)/testdata/data.img && \
-	  { timeout 30 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --set ram-meminfo=$(A)/meminfo-3g \
+	  { timeout 30 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --set ram-meminfo=$(A)/meminfo-3g --set ram-giveback=0 \
 	     --display none --no-input --width 64 --height 64 > $(A)/ramauto.log 2>&1; \
-	    grep -q 'ram=auto: host MemTotal 3072 MiB, MemAvailable 2048 MiB; the guest gets 1536 MiB' $(A)/ramauto.log && \
+	    grep -q 'ram=auto: host MemTotal 3072 MiB, MemAvailable 2048 MiB; the guest gets 1024 MiB' $(A)/ramauto.log && grep -q 'memory: the guest.s RAM is held for the session: 1024 MiB, prefaulted' $(A)/ramauto.log && \
 	    grep -q 'TESTKERNEL: all passed' $(A)/ramauto.log || { grep -E 'memory|FAIL|TESTKERNEL' $(A)/ramauto.log | tail -8; echo "check-arm64: ram=auto failed"; false; }; } && \
 	  echo "check-arm64: a guest that keeps restarting: xnuhost starts again in place 8 times, then exit 3" && \
 	  { XNUHOST_RUNNER="$(ARM64_RUN)" timeout 60 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 1 --ram 256M \
@@ -178,7 +178,7 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 # runs on the same host only. In the Mac's container: add -o build/android/xnuhost -o build/android/testkernel.elf.
 bench-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	@rm -f $(A)/testdata/data.img
-	timeout 120 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M \
+	timeout 120 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M --set ram-giveback=1 \
 	   --display none --no-input --width 64 --height 64 --boot-args testkernel-bench$(BENCH_SCALE:%==%) $(BENCH_SET) 2>&1 | \
 	   grep -E 'BENCH|perf:|TESTKERNEL: (all|FAIL)|hand-off'
 

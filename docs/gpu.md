@@ -73,6 +73,21 @@ Without `external/virglrenderer` xnuhost still builds, with the 2D device, and s
   context's 16 KiB response buffer; drm2kgsl keeps its first 2 MiB unused. The kernel's window is 8 MiB smaller
   for it unless `--gpu 2d`.
 
+- **No separate GPU pool (fix-fixed-memory, 2026-11-13: asked for, not built, and why).** The owner asked for a
+  preallocated host pool (1.0-1.3 GiB, `gpu-pool=`) serving the guest's blobs as udmabufs over pool ranges. Read end to
+  end, there is no per-blob host allocation to pool: every Turnip BO is `HOST3D_GUEST` / `MSM_BO_GUEST_ALLOC`
+  (`DroidVMVirtioGpu3D.cpp` `createBlob`: `taskPages`/`guestPages` from XNU's own VM; drm2kgsl's `gem_new` refuses any
+  other: "this host allocates no BO backing"), and the udmabufs are over **the guest's RAM memfd**. backboardd's
+  936 MiB of "own task" blobs in the c2d281a session were part of the guest's 6,254 MiB in the host's RAM, not beside
+  it. A host pool would be memory iOS cannot use unless the guest kernel driver carved its BOs from a host range
+  (Droid-VM's `--pre-alloc drm-guest-mb` with a guest-side buddy allocator): a change in `DroidVMVirtioGpu3D.cpp`, the
+  widgets agent's IOSurface path, a larger `0024` pool range (64 MiB today, and pool pages fail `copyin`), and nothing
+  of it runs on the PC (no KGSL). So the GPU's memory is held fixed by holding the RAM fixed (`ram-giveback=0`,
+  [booter.md](booter.md) 2.2): the blobs' pages are prefaulted and locked with the rest and never given back. What stays
+  per blob on the host is KGSL's and udmabuf's own kernel memory (page arrays, sg tables, IOMMU tables: about 1 % of the
+  blob bytes [estimate]); the fixed-RAM `memory:` line prints KGSL's per-process files for xnuhost so the next phone boot
+  shows whether that grows. The cost per blob (udmabuf, import, bind: `blobs made N, mean X us`) is unchanged.
+
 ### 2.1 The drm2kgsl patch (`drm2kgsl/patches/0001-vbo-headroom-and-chunked-guest-blobs.patch`)
 
 Two changes to Droid-VM's `drm2kgsl_renderer.c` at the pin, marked `ONEIOS` in the code:

@@ -22,6 +22,8 @@ void xh_config_defaults(xh_config *c)
   c->ram_host_floor = -1;
   c->host_mem_log = -1;
   c->usb_log = -1;
+  c->ram_giveback = c->ram_prefault = c->ram_lock = -1;
+  c->ram_session_reserve = c->ram_unlock_below = -1;
   strcpy(c->display, "shm");
   strcpy(c->gpu, "auto");
   c->input = true;
@@ -101,6 +103,11 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
   else if (!strcmp(key, "ram-meminfo")) return copy(c->ram_meminfo, sizeof c->ram_meminfo, value);
   else if (!strcmp(key, "host-mem-log")) { ok = number(value, 0, 86400, &c->host_mem_log); }
   else if (!strcmp(key, "usb-log")) { ok = number(value, 0, 3600, &c->usb_log); }
+  else if (!strcmp(key, "ram-giveback")) { bool on; if (flag(value, &on)) return -1; c->ram_giveback = on; }
+  else if (!strcmp(key, "ram-prefault")) { bool on; if (flag(value, &on)) return -1; c->ram_prefault = on; }
+  else if (!strcmp(key, "ram-lock")) { bool on; if (flag(value, &on)) return -1; c->ram_lock = on; }
+  else if (!strcmp(key, "ram-session-reserve")) { uint64_t v = xh_parse_size(value, &ok); ok = ok && v < (1ull << 40); if (ok) c->ram_session_reserve = (int64_t)v; }
+  else if (!strcmp(key, "ram-unlock-below")) { uint64_t v = xh_parse_size(value, &ok); ok = ok && v < (1ull << 40); if (ok) c->ram_unlock_below = (int64_t)v; }
   else if (!strcmp(key, "width")) c->width = (unsigned)atoi(value);
   else if (!strcmp(key, "height")) c->height = (unsigned)atoi(value);
   else if (!strcmp(key, "hz")) { c->hz = (unsigned)atoi(value); ok = c->hz == 0 || (c->hz >= 24 && c->hz <= 240); }
@@ -305,6 +312,15 @@ int xh_config_finish(xh_config *c)
   if (c->host_mem_log < 0) c->host_mem_log = from_image.host_mem_log < 0 ? 30 : from_image.host_mem_log;
   if (c->usb_log < 0) c->usb_log = from_image.usb_log < 0 ? 3 : from_image.usb_log;
   if (!*c->ram_meminfo) strcpy(c->ram_meminfo, *from_image.ram_meminfo ? from_image.ram_meminfo : "/proc/meminfo");
+  // The RAM held fixed for the session (ramfix.c) with ram-giveback=0; the default is still 0058's way (ram-giveback=1):
+  // the fixed RAM has run in the host tests and the test kernel only, not in a PC boot of iOS or on the phone.
+  if (c->ram_giveback < 0) c->ram_giveback = from_image.ram_giveback < 0 ? 1 : from_image.ram_giveback;
+  if (c->ram_prefault < 0) c->ram_prefault = from_image.ram_prefault < 0 ? !c->ram_giveback : from_image.ram_prefault;
+  if (c->ram_lock < 0) c->ram_lock = from_image.ram_lock < 0 ? !c->ram_giveback : from_image.ram_lock;
+  if (c->ram_session_reserve < 0) c->ram_session_reserve = from_image.ram_session_reserve < 0 ? (int64_t)XH_RAM_SESSION_RESERVE : from_image.ram_session_reserve;
+  if (c->ram_unlock_below < 0) c->ram_unlock_below = from_image.ram_unlock_below < 0 ? (int64_t)XH_RAM_UNLOCK_BELOW : from_image.ram_unlock_below;
+  if (c->ram_giveback) c->ram_prefault = c->ram_lock = 0;        // a RAM that gives pages back is neither prefaulted nor locked
+  if (!c->ram_prefault) c->ram_lock = 0;
   if (!c->ram_bytes) {
     uint64_t total = 0, available = 0;
     if (xh_meminfo(c->ram_meminfo, &total, &available)) {
@@ -312,10 +328,14 @@ int xh_config_finish(xh_config *c)
       fprintf(stderr, "xnuhost: ram=auto: no MemTotal in %s: the guest gets 4 GiB\n", c->ram_meminfo);
       c->ram_bytes = 4ull << 30;
     } else {
-      c->ram_bytes = xh_ram_auto(total, (unsigned)c->ram_percent, (uint64_t)c->ram_host_floor);
+      // Held for the whole session: no more than the host has free at the start, less what it needs while iOS runs.
+      uint64_t reserve = c->ram_giveback ? 0 : (uint64_t)c->ram_session_reserve;
+      c->ram_bytes = xh_ram_fixed_auto(total, available, (unsigned)c->ram_percent, (uint64_t)c->ram_host_floor, reserve, &c->ram_auto_bound);
       if (!c->ram_bytes) {
-        fprintf(stderr, "xnuhost: ram=auto: this host has %llu MiB; %d%% of it, or all but %llu MiB, is less than the guest's 1 GiB: give --ram SIZE\n",
-                (unsigned long long)(total >> 20), c->ram_percent, (unsigned long long)((uint64_t)c->ram_host_floor >> 20));
+        fprintf(stderr, "xnuhost: ram=auto: this host has %llu MiB, %llu MiB of it available; %d%% of it, all but %llu MiB, or the available "
+                "less %llu MiB, is less than the guest's 1 GiB: give --ram SIZE\n", (unsigned long long)(total >> 20),
+                (unsigned long long)(available >> 20), c->ram_percent, (unsigned long long)((uint64_t)c->ram_host_floor >> 20),
+                (unsigned long long)(reserve >> 20));
         return -1;
       }
       c->ram_auto_total = total;
@@ -336,6 +356,30 @@ uint64_t xh_ram_auto(uint64_t total, unsigned percent, uint64_t floor)
   uint64_t ram = (share < left ? share : left) & ~((256ull << 20) - 1);
   if (ram > XH_RAM_MAX) ram = XH_RAM_MAX;
   return ram >= (1ull << 30) ? ram : 0;
+}
+
+uint64_t xh_ram_fixed_auto(uint64_t total, uint64_t available, unsigned percent, uint64_t floor, uint64_t reserve, unsigned *bound)
+{
+  uint64_t ram = xh_ram_auto(total, percent, floor);
+  unsigned why = 0;
+  if (ram) {
+    unsigned p = percent > 100 ? 100 : percent;
+    uint64_t share = total / 100 * p + total % 100 * p / 100, left = total > floor ? total - floor : 0;
+    why = share <= left ? XH_RAM_BOUND_SHARE : XH_RAM_BOUND_FLOOR;
+  }
+  if (ram && reserve) {
+    // Held from the start and never given back: no more than the host has free now, less what it needs while iOS runs.
+    uint64_t fits = (available > reserve ? available - reserve : 0) & ~((256ull << 20) - 1);
+    if (fits < ram) { ram = fits; why = XH_RAM_BOUND_AVAILABLE; }
+    if (ram < (1ull << 30)) ram = 0;
+  }
+  if (bound) *bound = ram ? why : 0;
+  return ram;
+}
+
+bool xh_ram_lock_fits(uint64_t size, uint64_t available, uint64_t reserve)
+{
+  return available > reserve && size <= available - reserve;
 }
 
 int xh_meminfo(const char *path, uint64_t *total, uint64_t *available)

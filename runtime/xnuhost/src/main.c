@@ -189,6 +189,40 @@ static void host_facts(void)
 
 static void gic_line(unsigned cpu, bool line) { xh_cpu_line(cpu, line); }
 
+// The guest's RAM held fixed for the session (ramfix.c, docs/booter.md 2.2 "Fixed RAM"): the kernel is told before it
+// starts (XH_FEATURE_RAM_FIXED: no free pages given back), and the whole memfd is prefaulted, locked where Linux allows
+// and it fits, on a nice-19 thread while the boot goes on. ram-giveback=1: 0058's way, nothing of this.
+static xh_ramfix_counters was;         // the `memory: fixed RAM` line's counters at its last line (first: the start)
+static bool have_was;
+
+static void ram_fix_start(void)
+{
+  char facts[400];
+  xh_ramfix_sample(&was);
+  have_was = true;
+  if (config.ram_giveback) {
+    LOGI("memory: ram-giveback=1: the guest's RAM is faulted in as it is used and its free pages are given back (0058); not prefaulted, not locked");
+    return;
+  }
+  g_info.features |= XH_FEATURE_RAM_FIXED;
+  if (!config.ram_prefault) { LOGI("memory: the guest's RAM is held for the session, not prefaulted (ram-prefault=0); free pages are not given back"); return; }
+  xh_ramfix_facts(facts, sizeof facts);
+  uint64_t total = 0, available = 0;
+  g_ramfix.lock = config.ram_lock;
+  g_ramfix.lock_why = config.ram_lock ? NULL : "ram-lock=0";
+  g_ramfix.unlock_below = (uint64_t)config.ram_unlock_below;
+  // A lock is safe only with room beside it: the host's MemAvailable now, less ram-session-reserve.
+  if (g_ramfix.lock && !xh_meminfo(config.ram_meminfo, &total, &available) &&
+      !xh_ram_lock_fits(g_mem.size, available, (uint64_t)config.ram_session_reserve)) {
+    g_ramfix.lock = false;
+    g_ramfix.lock_why = "more than the host's MemAvailable less ram-session-reserve";
+  }
+  LOGI("memory: the guest's RAM is held for the session: %llu MiB, prefaulted on a thread at nice 19 in %llu MiB steps, %s; free pages are "
+       "not given back (ram-giveback=0); %s", (unsigned long long)(g_mem.size >> 20), (unsigned long long)(XH_RAMFIX_STEP >> 20),
+       g_ramfix.lock ? "locked as it goes (mlock)" : g_ramfix.lock_why, facts);
+  if (xh_ramfix_start(&g_ramfix, g_mem.host, g_mem.size, config.ram_meminfo)) LOGE("memory: the guest's RAM is not prefaulted");
+}
+
 // The pool behind /arm-io/virtio-gpu drm-host-pool, as Droid-VM's boards size it (--pre-alloc drm-host-mb=8):
 // drm2kgsl keeps its first 2 MiB unused, the rest holds 16 KiB of response buffer per 3D context.
 #define GPU_POOL_BYTES (8ull << 20)
@@ -338,6 +372,7 @@ static int boot(void)
   LOGI("memory: %llu MiB at 0x%llx, physical = virtual (slide 0x%llx); I/O aperture 0x%llx",
        (unsigned long long)(window >> 20), (unsigned long long)phys,
        (unsigned long long)((uintptr_t)g_mem.host - kernel.base), (unsigned long long)(uintptr_t)g_mem.io_host);
+  ram_fix_start();
 
   // The board: GIC, console, disks, input, display.
   xl_device_kind kinds[XL_MAX_DEVICES];
@@ -690,11 +725,18 @@ static void ram_choice_log(void)
 {
   if (!config.ram_auto_total) { LOGI("memory: the guest gets %llu MiB (ram=%s)", (unsigned long long)(config.ram_bytes >> 20), config.ram_given ? "SIZE" : "auto: no MemTotal, 4 GiB"); return; }
   uint64_t total = config.ram_auto_total, floor = (uint64_t)config.ram_host_floor;
-  LOGI("memory: ram=auto: host MemTotal %llu MiB, MemAvailable %llu MiB; the guest gets %llu MiB: the least of %d%% (%llu MiB) and "
-       "MemTotal less the host's floor of %llu MiB (%llu MiB), in 256 MiB steps", (unsigned long long)(total >> 20),
-       (unsigned long long)(config.ram_auto_available >> 20), (unsigned long long)(config.ram_bytes >> 20), config.ram_percent,
-       (unsigned long long)(total / 100 * (unsigned)config.ram_percent >> 20), (unsigned long long)(floor >> 20),
-       (unsigned long long)((total > floor ? total - floor : 0) >> 20));
+  uint64_t available = config.ram_auto_available, reserve = config.ram_giveback ? 0 : (uint64_t)config.ram_session_reserve;
+  char third[160] = "";
+  // Since 2026-11-13 the RAM is held for the whole session (ramfix.c): it must fit beside what the host keeps running.
+  if (reserve)
+    snprintf(third, sizeof third, ", and MemAvailable less the session's reserve of %llu MiB (%llu MiB)", (unsigned long long)(reserve >> 20),
+             (unsigned long long)((available > reserve ? available - reserve : 0) >> 20));
+  static const char *const bound[] = { "?", "the share", "the floor", "MemAvailable" };
+  LOGI("memory: ram=auto: host MemTotal %llu MiB, MemAvailable %llu MiB; the guest gets %llu MiB: the least of %d%% (%llu MiB)%s "
+       "MemTotal less the host's floor of %llu MiB (%llu MiB)%s, in 256 MiB steps (%s decides)", (unsigned long long)(total >> 20),
+       (unsigned long long)(available >> 20), (unsigned long long)(config.ram_bytes >> 20), config.ram_percent,
+       (unsigned long long)(total / 100 * (unsigned)config.ram_percent >> 20), reserve ? "," : " and", (unsigned long long)(floor >> 20),
+       (unsigned long long)((total > floor ? total - floor : 0) >> 20), third, bound[config.ram_auto_bound < 4 ? config.ram_auto_bound : 0]);
 }
 
 // Every host-mem-log seconds: what the host has left and how much of the guest's RAM it holds (the memfd's pages that
@@ -733,6 +775,28 @@ static void host_memory_tick(bool now)
        "page tables %llu MiB", (unsigned long long)(in_ram >> 20), (unsigned long long)((held > in_ram ? held - in_ram : 0) >> 20),
        (unsigned long long)((swap_total > swap_free ? swap_total - swap_free : 0) >> 20), (unsigned long long)(swap_total >> 20),
        (unsigned long long)(tables >> 20));
+  // The fixed RAM (2026-11-13, ramfix.c): what is held and locked, what was refused, and since the last line the host's
+  // swap traffic (all processes) and this process's faults that needed the host's I/O (a swapped-out page read back).
+  // With the RAM held and locked, `held` stays at the RAM's size, `swapped out` at 0, and the KGSL figures (the host's
+  // own GPU memory for this process, beside the guest's pages the blobs are made of) flat once the UI is up.
+  xh_ramfix_counters c;
+  xh_ramfix_sample(&c);
+  char kgsl[400] = "";
+  size_t k = xh_kgsl_memory(getpid(), kgsl + 8, sizeof kgsl - 8);
+  if (k) memcpy(kgsl, "; KGSL: ", 8);
+  const char *state = config.ram_giveback ? "given back as freed (ram-giveback=1)" :
+                      !config.ram_prefault ? "held, not prefaulted" :
+                      !__atomic_load_n(&g_ramfix.done, __ATOMIC_ACQUIRE) ? "held, prefault running" :
+                      g_ramfix.unlocked ? "held, unlocked by the valve" : g_ramfix.locked ? "held and locked" : "held, not locked";
+  LOGI("memory: fixed RAM: %s; prefaulted %llu of %llu MiB, locked %llu MiB (VmLck; host Mlocked %llu MiB); give-back refused %llu calls; "
+       "since the last line: host swap-ins +%llu, swap-outs +%llu pages, xnuhost major faults +%llu%s", state,
+       (unsigned long long)(__atomic_load_n(&g_ramfix.prefaulted, __ATOMIC_RELAXED) >> 20), (unsigned long long)(g_mem.size >> 20),
+       (unsigned long long)(c.vm_locked >> 20), (unsigned long long)(c.mlocked >> 20),
+       (unsigned long long)__atomic_load_n(&g_discard_fixed_refused, __ATOMIC_RELAXED),
+       (unsigned long long)(have_was ? c.swap_ins - was.swap_ins : 0), (unsigned long long)(have_was ? c.swap_outs - was.swap_outs : 0),
+       (unsigned long long)(have_was ? c.major_faults - was.major_faults : 0), kgsl);
+  was = c;
+  have_was = true;
 }
 
 // Every usb-log seconds (3): the phone's USB gadget, logged at the start and whenever it changed (usb.c). From the
@@ -861,6 +925,11 @@ int main(int argc, char **argv)
   xh_input_stop();
   xh_display_close();
   sync();                                   // the Data store's pages
+  // The RAM goes back to the host at once with this process (its last mapping and descriptor: the tasks and the factory
+  // are gone already); a kill does the same. Nothing to undo: mlock ends with the mapping.
+  xh_ramfix_stop(&g_ramfix);
+  LOGI("memory: the guest's RAM: %llu MiB held to the end, %llu MiB of it locked; the exit gives all of it back to the host",
+       (unsigned long long)(g_mem.size >> 20), (unsigned long long)(__atomic_load_n(&g_ramfix.locked, __ATOMIC_RELAXED) >> 20));
   if (stop_state.reason == XH_HALT_RETURN) session_file("return.request", "the guest asked to return\n");
   if (stop_state.reason == XH_HALT_RESTART) guest_restart();     // returns only if it could not
   int code = stop_state.reason == XH_HALT_RESTART ? EXIT_RESTART : stop_state.reason == XH_HALT_PANIC ? EXIT_PANIC :

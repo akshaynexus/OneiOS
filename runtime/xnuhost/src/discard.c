@@ -38,6 +38,17 @@ int64_t xh_ram_discard_fd(int fd, uint64_t fd_base, uint64_t lo, uint64_t len, u
   return r;
 }
 
+// While the RAM is held fixed (ram-giveback=0, XH_FEATURE_RAM_FIXED) nothing goes back: a hole punched in a RAM that is
+// held for the session would only be faulted in again. A kernel from before 0067 still asks; its first -EPERM stops its
+// reporting for the boot (0058: "free pages are no longer given back").
+uint64_t g_discard_fixed_refused;
+
+int64_t xh_ram_discard_host(bool fixed, int fd, uint64_t fd_base, uint64_t lo, uint64_t len, uint64_t phys, uint64_t size, uint64_t page)
+{
+  if (fixed) { __atomic_fetch_add(&g_discard_fixed_refused, 1, __ATOMIC_RELAXED); return -EPERM; }
+  return xh_ram_discard_fd(fd, fd_base, lo, len, phys, size, page);
+}
+
 uint64_t xh_ram_resident(const void *base, uint64_t size, uint64_t page)
 {
   static unsigned char vec[16384];            // one call per 16384 pages (64 MiB of 4 KiB pages); the main loop's only

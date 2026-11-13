@@ -242,6 +242,10 @@ static void test_unmap_queue(uint64_t task, uint64_t thread, uint64_t code_va, u
   const uint64_t d_va = 0x600000000ull;
   uint64_t d_pa = page_alloc();
   *(volatile uint64_t *)(uintptr_t)kva(d_pa) = 0x3333;
+  if (H->info->features & XH_FEATURE_RAM_FIXED) {
+    put("SKIP ram_discard with a task's mapping: the RAM is held fixed (ram-giveback=0); check-arm64's first boot runs it\n");
+    return;
+  }
   check(H->task_map(C0, task, d_va, 0x4000, XH_PROT_READ, d_pa) == 0 && load_once(C0, thread, code_va, d_va, &trap, &got) == XH_TRAP_BRK &&
         got == 0x3333 && H->ram_discard(C0, d_pa, 0x4000) == 0 && load_once(C0, thread, code_va, d_va, &trap, &got) == XH_TRAP_BRK && got == 0 &&
         (*(volatile uint64_t *)(uintptr_t)kva(d_pa) = 0x4444, load_once(C0, thread, code_va, d_va, &trap, &got)) == XH_TRAP_BRK && got == 0x4444,
@@ -788,8 +792,13 @@ void kernel_main(const struct boot_args *args, const struct xh_vector *vector, s
         "text_fixup: TPIDRRO_EL0 reads become TPIDR_EL0 reads, TPIDR_EL0 reads (the CPU number) become 0");
   uint64_t scratch = page_alloc();
   *(volatile uint64_t *)(uintptr_t)kva(scratch) = 5;
-  check(H->ram_discard(cpu, scratch, 0x4000) == 0 && *(volatile uint64_t *)(uintptr_t)kva(scratch) == 0, "ram_discard gives pages back (they read as zero)");
-  {
+  if (H->info->features & XH_FEATURE_RAM_FIXED)
+    // The RAM held for the session (xnuhost's default since 2026-11-13, kernel 0067): nothing goes back.
+    check(H->ram_discard(cpu, scratch, 0x4000) == -1 && *(volatile uint64_t *)(uintptr_t)kva(scratch) == 5 &&
+          H->ram_discard(cpu, scratch + 0x800, 0x4000) == -1 && *(volatile uint64_t *)(uintptr_t)kva(scratch) == 5,
+          "ram_discard is refused while the RAM is held fixed (-EPERM), and the page keeps its data");
+  else {
+    check(H->ram_discard(cpu, scratch, 0x4000) == 0 && *(volatile uint64_t *)(uintptr_t)kva(scratch) == 0, "ram_discard gives pages back (they read as zero)");
     // A run of three pages and its neighbours: only the run reads zero; refused: unaligned, empty, outside the RAM.
     uint64_t run = page_alloc();
     page_alloc(); page_alloc(); page_alloc(); page_alloc();
