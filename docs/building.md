@@ -419,8 +419,11 @@ $T phone log --follow --save-auto  # also into out/session-logs/DATE/live-HHMMSS
 $T phone log --list                # the logs by name: xnuhost, switch, return, outcome, display, watchdog, logs/xnuhost-<epoch>.log
 $T phone status --watch            # the status again every 5 s
 $T phone return                    # session/return.request, then waits for "One UI restored in place"
-$T phone pull-data OUT --ioslog    # the Data store's copy (no session open), then ioslog boots and checks
-#   pull-data by hand: adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'" | $T phone sparse-write OUT --gunzip
+$T phone pull-data OUT --ioslog    # the Data store's copy (no session open), then ioslog boots and checks. In chunks
+                                   #   (--chunk 256 MiB), each checked against the phone's sha256 and tried again when its
+                                   #   stream breaks (--retries 5); after a stop, the same command again goes on (OUT.part,
+                                   #   OUT.part.progress; --restart begins again; --verify end: the sums after the last chunk)
+#   one stream by hand (no resume, no sums): adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'" | $T phone sparse-write OUT --gunzip
 ```
 
 One command for the whole cycle (each step can be left out with `--only` or `--skip`; `--dry-run` says what each

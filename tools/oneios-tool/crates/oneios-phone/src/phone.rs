@@ -434,7 +434,7 @@ pub fn manifest_cmd(adb: &Adb, dir: &str, out: Option<&str>, stage_too: bool) ->
     Ok(())
 }
 
-// ---------------------------------------------------------------- pull-data and sparse-write
+// ---------------------------------------------------------------- sparse-write (pull-data: pull.rs)
 
 fn progress_line(start: Instant, last: &mut Instant, size: u64, data: u64, total: Option<u64>) {
     if last.elapsed() < Duration::from_secs(2) {
@@ -457,50 +457,6 @@ pub fn sparse_write(out: &str, gunzip: bool, expect: Option<u64>) -> Result<()> 
     println!("{out}: {} bytes, {} of them written ({} s)", w.size, w.data, start.elapsed().as_secs());
     if let Some(expect) = expect.filter(|e| *e != w.size) {
         bail!("{out}: {} bytes came, {expect} were expected", w.size);
-    }
-    Ok(())
-}
-
-/// Copy the Data store (data/data.img) from the phone, read only, no session running: gzip on the phone, holes
-/// for the zero runs here, and the length checked against the phone's.
-pub fn pull_data(adb: &Adb, out: &str, ioslog: bool) -> Result<()> {
-    adb.need_root()?;
-    adb.refuse_in_session()?;
-    let image = format!("{STAGE}/data/data.img");
-    let size = adb.root_ok(&format!("stat -c %s {image}\n"), "reading data.img's size")?;
-    let size: u64 = size.trim().parse().map_err(|_| anyhow!("data.img's size is \"{}\"", size.trim()))?;
-    let part = format!("{out}.part");
-    let file = fs::File::create(&part).with_context(|| part.clone())?;
-    eprintln!("data.img: {size} bytes on the phone; copying to {out}");
-    let mut child = adb.exec_out(&format!("su -c '{BUSYBOX} gzip -1 -c {image}'"))?;
-    let stream = child.stdout.take().expect("piped");
-    let (start, mut last) = (Instant::now(), Instant::now());
-    let copied = sparse::copy(flate2::read::MultiGzDecoder::new(std::io::BufReader::with_capacity(1 << 20, stream)), &file, |s, d| {
-        progress_line(start, &mut last, s, d, Some(size))
-    });
-    let status = child.wait().context("waiting for adb")?;
-    let w = copied.with_context(|| format!("the copy stopped ({part} is what came)"))?;
-    if !status.success() {
-        bail!("adb exec-out ended with {status}; {part} is what came");
-    }
-    if w.size != size {
-        bail!("{} bytes came, the phone's data.img has {size}; {part} is what came", w.size);
-    }
-    // the store must not have changed while it was read
-    let after = adb.root_ok(&format!("stat -c %s {image}\n"), "reading data.img's size")?;
-    if after.trim() != size.to_string() {
-        bail!("data.img's size changed while it was read ({size} -> {})", after.trim());
-    }
-    fs::rename(&part, out).with_context(|| out.to_string())?;
-    println!("{out}: {} bytes, {} of them written ({} s)", w.size, w.data, start.elapsed().as_secs());
-    if ioslog {
-        for step in ["boots", "checks"] {
-            println!("--- ioslog {step} {out}");
-            let status = oneios_ioslog::run(&[step.to_string(), out.to_string()]);
-            if status != 0 {
-                bail!("ioslog {step} ended with status {status}");
-            }
-        }
     }
     Ok(())
 }

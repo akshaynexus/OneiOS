@@ -7,7 +7,7 @@
 
 use crate::adb::{last_lines, Adb, STAGE};
 use crate::log::{catch_stop, sleep_or_stop, stopped, Mark, Markers};
-use crate::{app, phone};
+use crate::{app, phone, pull};
 use anyhow::{anyhow, bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -572,7 +572,7 @@ impl Cycle<'_> {
             }
         }
         if self.a.pull_data {
-            phone::pull_data(adb, &self.out.join("data.img").display().to_string(), true)?;
+            pull::pull_data(adb, &self.out.join("data.img").display().to_string(), &pull::Options { ioslog: true, ..Default::default() })?;
         }
         Ok(())
     }

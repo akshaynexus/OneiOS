@@ -9,6 +9,7 @@ pub mod app;
 pub mod cycle;
 pub mod log;
 pub mod phone;
+pub mod pull;
 pub mod sparse;
 
 use adb::Adb;
@@ -71,9 +72,29 @@ pub enum Command {
         #[arg(long)]
         stage: bool,
     },
-    /// Copy the Data store (data.img) from the phone, zero runs as holes; no session may be open
+    /// Copy the Data store (data.img) from the phone in chunks, each checked against the phone's sha256, zero runs
+    /// as holes; a copy that stopped goes on where it stopped (OUT.part, OUT.part.progress); no session may be open
     PullData {
         out: String,
+        /// A chunk's size in MiB: one adb stream each (default 256; a copy that goes on keeps the size it began with)
+        #[arg(long, value_name = "MIB")]
+        chunk: Option<u64>,
+        /// How many times a chunk whose stream broke or whose sum differed is copied again before the command gives up
+        #[arg(long, default_value_t = 5)]
+        retries: u32,
+        /// Seconds before the first retry of a chunk; doubled for each further one, at most 30
+        #[arg(long, value_name = "SECONDS", default_value_t = 2)]
+        backoff: u64,
+        /// End a stream that gave no byte for this many seconds, and try the chunk again (0: never)
+        #[arg(long, value_name = "SECONDS", default_value_t = 120)]
+        stall: u64,
+        /// When the phone's sha256 of a chunk is asked: before the chunk is copied (a chunk of zeros is then not
+        /// copied at all), or for every chunk after the last one is copied
+        #[arg(long, value_enum, default_value = "chunk")]
+        verify: pull::Verify,
+        /// Throw away OUT.part and its progress and begin again
+        #[arg(long)]
+        restart: bool,
         /// Then `ioslog boots` and `ioslog checks` on the copy
         #[arg(long)]
         ioslog: bool,
@@ -182,7 +203,11 @@ pub fn main(cli: Cli) -> i32 {
             phone::image_check(&adb).map(|n| println!("image: manifest.json and the {n} files it lists agree"))
         }),
         Command::Manifest { dir, out, stage } => Adb::connect(serial).and_then(|adb| phone::manifest_cmd(&adb, &dir, out.as_deref(), stage)),
-        Command::PullData { out, ioslog } => Adb::connect(serial).and_then(|adb| phone::pull_data(&adb, &out, ioslog)),
+        Command::PullData { out, chunk, retries, backoff, stall, verify, restart, ioslog } => Adb::connect(serial).and_then(|adb| {
+            // Ctrl-C ends the chunk that is being copied and says how to go on; the chunks done stay
+            log::catch_stop();
+            pull::pull_data(&adb, &out, &pull::Options { chunk, retries, backoff, stall, verify, restart, ioslog })
+        }),
     };
     match result {
         Ok(()) => 0,

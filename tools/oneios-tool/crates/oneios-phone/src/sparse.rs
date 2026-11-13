@@ -19,6 +19,7 @@
 //!   where it changes nothing: Linux's is fallocate's FALLOC_FL_PUNCH_HOLE).
 
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{self, Read};
 use std::os::unix::fs::FileExt;
@@ -181,9 +182,13 @@ impl<S: Sink> Writer<S> {
         }
     }
 
-    fn finish(&mut self, size: u64) -> Result<()> {
-        self.sink.set_len(size).context("setting the length")?;
-        self.hole(size - size % self.block as u64);
+    /// The stream ended at offset `end`. `whole`: it was the whole of a new file, whose length is set now; a
+    /// range of a file that has its length already keeps it.
+    fn finish(&mut self, end: u64, whole: bool) -> Result<()> {
+        if whole {
+            self.sink.set_len(end).context("setting the length")?;
+        }
+        self.hole(end - end % self.block as u64);
         Ok(())
     }
 }
@@ -208,8 +213,21 @@ pub fn copy(from: impl Read, out: &File, progress: impl FnMut(u64, u64)) -> Resu
     copy_to(from, out, hole_block(out), punch_wanted(), progress)
 }
 
-fn copy_to<S: Sink>(mut from: impl Read, sink: S, block: usize, punch: bool, mut progress: impl FnMut(u64, u64)) -> Result<Written> {
-    let mut w = Writer { sink, block, punch, end: 0, data: 0, punched: 0 };
+/// Copy `from` into the range of `out` that begins at `at` (a multiple of the block): as `copy`, but the file
+/// has its length already and keeps it (`phone pull-data` copies the store chunk by chunk, each at its offset).
+/// The range must read as zeros before (`clear`), because a block of zeros is not written here either.
+/// `Written::size` is what the stream gave: the caller checks it against the range's length.
+pub fn copy_at(from: impl Read, out: &File, at: u64, progress: impl FnMut(u64, u64)) -> Result<Written> {
+    copy_from(from, out, hole_block(out), punch_wanted(), at, false, progress)
+}
+
+fn copy_to<S: Sink>(from: impl Read, sink: S, block: usize, punch: bool, progress: impl FnMut(u64, u64)) -> Result<Written> {
+    copy_from(from, sink, block, punch, 0, true, progress)
+}
+
+/// `at`: where the stream begins in the file. `whole`: the stream is the whole file (`Writer::finish`).
+fn copy_from<S: Sink>(mut from: impl Read, sink: S, block: usize, punch: bool, at: u64, whole: bool, mut progress: impl FnMut(u64, u64)) -> Result<Written> {
+    let mut w = Writer { sink, block, punch, end: at, data: 0, punched: 0 };
     let mut buf = vec![0u8; BUFFER];
     let mut size = 0u64;
     loop {
@@ -217,15 +235,116 @@ fn copy_to<S: Sink>(mut from: impl Read, sink: S, block: usize, punch: bool, mut
         if have == 0 {
             break;
         }
-        w.put(&buf[..have], size)?;
+        w.put(&buf[..have], at + size)?;
         size += have as u64;
         progress(size, w.data);
         if have < BUFFER {
             break;
         }
     }
-    w.finish(size)?;
+    w.finish(at + size, whole)?;
     Ok(Written { size, data: w.data, block: block as u64, punched: w.punched })
+}
+
+/// `lseek` to the next data (`SEEK_DATA`) or the next hole (`SEEK_HOLE`) at or after `at`. None: there is none
+/// before the file's end (ENXIO). A file system that does not report holes says "data here, a hole at the end".
+fn seek(file: &File, at: u64, whence: libc::c_int) -> io::Result<Option<u64>> {
+    // SAFETY: lseek takes no pointer. The file's position is not used anywhere here (pread, pwrite).
+    match unsafe { libc::lseek(file.as_raw_fd(), at as libc::off_t, whence) } {
+        -1 => match io::Error::last_os_error() {
+            e if e.raw_os_error() == Some(libc::ENXIO) => Ok(None),
+            e => Err(e),
+        },
+        found => Ok(Some(found as u64)),
+    }
+}
+
+/// The data regions of `file` inside `at..at + len`, as the file system reports them; when it reports none
+/// (an error of `lseek`), the whole range.
+fn data_regions(file: &File, at: u64, len: u64) -> Vec<(u64, u64)> {
+    let end = at + len;
+    let (mut regions, mut pos) = (Vec::new(), at);
+    while pos < end {
+        let data = match seek(file, pos, libc::SEEK_DATA) {
+            Ok(Some(data)) if data < end => data.max(pos),
+            Ok(_) => break,
+            Err(_) => return vec![(at, end)],
+        };
+        let hole = match seek(file, data, libc::SEEK_HOLE) {
+            Ok(Some(hole)) if hole > data => hole.min(end),
+            _ => end,
+        };
+        regions.push((data, hole));
+        pos = hole;
+    }
+    regions
+}
+
+/// Make `at..at + len` read as zeros again (`at` a multiple of the block): a range that holds what a stream
+/// that broke left there is copied a second time, and `copy_at` writes no block of zeros over it. A hole where
+/// the file system punches one; where it does not, zeros are written (they cost space, the bytes are right).
+/// The file system's map is not asked whether the range holds data: the caller knows whether it was written to
+/// (a map of data not yet written out is not trusted on every file system).
+pub fn clear(file: &File, at: u64, len: u64) -> Result<()> {
+    let (block, end) = (hole_block(file) as u64, at + len);
+    // whole blocks only (F_PUNCHHOLE refuses anything else); a tail inside a block is written
+    let whole = (end - end % block).saturating_sub(at);
+    let punched = whole > 0 && punch_hole(file, at, whole).is_ok();
+    let mut pos = if punched { at + whole } else { at };
+    while pos < end {
+        let n = (end - pos).min(ZERO.len() as u64) as usize;
+        file.write_all_at(&ZERO[..n], pos).context("writing zeros")?;
+        pos += n as u64;
+    }
+    Ok(())
+}
+
+/// SHA-256 (lower-case hex) of `len` zero bytes: what a range that is one hole reads as.
+pub fn zeros_sha256(len: u64) -> String {
+    let mut hash = Sha256::new();
+    hash_zeros(&mut hash, len);
+    oneios_common::hex(&hash.finalize())
+}
+
+fn hash_zeros(hash: &mut Sha256, mut len: u64) {
+    while len > 0 {
+        let n = len.min(ZERO.len() as u64) as usize;
+        hash.update(&ZERO[..n]);
+        len -= n as u64;
+    }
+}
+
+/// SHA-256 (lower-case hex) of the bytes `at..at + len` of `file` as they read back, a hole as zeros; None when
+/// the range holds no data region at all (its sum is `zeros_sha256(len)`, which the caller keeps). With `map`
+/// the holes the file system reports are not read (reading a hole fills the page cache with zero pages): zeros
+/// are hashed in their place. Without it every byte is read. Call it after the data was written out
+/// (`sync_data`): the map of data still in memory is not trusted on every file system.
+pub fn range_sha256(file: &File, at: u64, len: u64, map: bool) -> Result<Option<String>> {
+    let regions = if map { data_regions(file, at, len) } else { vec![(at, at + len)] };
+    if regions.is_empty() {
+        return Ok(None);
+    }
+    let mut hash = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    let mut pos = at;
+    for (from, to) in regions {
+        hash_zeros(&mut hash, from - pos);
+        pos = from;
+        while pos < to {
+            let want = (to - pos).min(buf.len() as u64) as usize;
+            match file.read_at(&mut buf[..want], pos) {
+                Ok(0) => anyhow::bail!("the file ends at {pos}, inside the range {at}..{}", at + len),
+                Ok(n) => {
+                    hash.update(&buf[..n]);
+                    pos += n as u64;
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e).context("reading the copy back"),
+            }
+        }
+    }
+    hash_zeros(&mut hash, at + len - pos);
+    Ok(Some(oneios_common::hex(&hash.finalize())))
 }
 
 #[cfg(test)]

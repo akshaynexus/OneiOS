@@ -438,8 +438,16 @@ Open, in order:
 2. On the Mac: `tests/ioslog/compare.sh out/session-logs/2026-11-12/ios3.logarchive`, and `ioslog show` of it
    against `ios3-log.csv` (the same only if that file was made by `unifiedlog_iterator` at commit `3d5b27a`).
 3. `checks`: its patterns are the texts the notes quote; run it on a real log and correct them.
-4. `ioslog pull`: written as `phone pull-data OUT [--ioslog]` (section 6; gzip -1 on the phone, refused beside a
-   session, zero blocks not written: `sparse.rs`). Not run on the phone. The free disk is not checked.
+4. `ioslog pull`: written as `phone pull-data OUT [--ioslog]` (section 6; refused beside a session, zero blocks
+   not written: `sparse.rs`). Its first form, one `gzip -1` stream, ran on the phone over wireless adb on
+   2026-11-13 and broke twice (after 1.6 and 0.6 of 32 GiB). It is now a copy in chunks that goes on where it
+   stopped and checks each chunk against the phone's SHA-256 (`pull.rs`; README "The copy that goes on";
+   `tests/phone/pull-resume.sh`). **That form has not run on the phone.** Open, in order: (a) run it there over
+   wireless adb, and `--verify end` beside the default `--verify chunk`: the README lists what to look at
+   (busybox's `dd skip=` and `sha256sum`, the time of each way, the chunk size, a break on purpose, APFS's
+   `SEEK_DATA`); (b) the stand-in's times (`SPEED=4096:280 tests/phone/pull-resume.sh`) were not taken;
+   (c) not written: the sum of chunk N asked while chunk N+1 is copied (it would hide the sums' time), and a
+   check of the free disk.
 5. An `Info.plist` in the saved archive, if Apple's `log show --archive` is wanted on it.
 6. **Done (third Linux round): the APFS reader reads compressed files** (decmpfs: zlib, LZVN, LZFSE and LZBITMAP,
    inline and in the resource fork; `flate2`, `lzfse_rust`, `zbitmap`; no decoder of our own). All 2,910 compressed
