@@ -28,6 +28,7 @@ mod seed;
 mod aea;
 mod archive;
 mod ipsw;
+pub mod rangeserve;
 pub mod remotezip;
 mod tar;
 

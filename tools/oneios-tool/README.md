@@ -8,7 +8,7 @@ script before it may replace it; the commands and the results are below. What is
 | `sym` | `scripts/debug/dsc.py` (**retired 2026-11-12**: deleted, its output frozen in `tests/sym/golden/`) | done | yes: byte for byte on 18 of 18 address sets (Linux, 2026-11-12; the Mac's run: 18 of 18) |
 | `sym kernel`, `log panic` | naming a kernel panic's frames by hand (`atos -o xnu.macho` on the Mac, with each segment's move subtracted) | done; **not run on the Mac's log and kernel of the 2026-11-12 panic** (not on the Linux box) | compared with `llvm-symbolizer --inlining` on three Linux-built pairs: the stand-in panic's 19 addresses and 31,605 more per pair (311,605 on one) name the same function, file:line and inlined frames |
 | `log` | nothing (new) | done | not applicable; 33 commands end with status 0, two runs equal |
-| `image`, `remotezip` | `scripts/image/imagetool.py`, `scripts/fetch/remotezip.py` (**both left in place, unused: the owner decides**) | all 15 subcommands in Rust since 2026-11-13, and the image scripts run them | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds, byte for byte (the 36th: the Linux set has no `kernel.kc`); the six last subcommands and `remotezip`: 25 of 25 side by side, the archive byte for byte, the real IPSW over HTTP (the section at the end) |
+| `image`, `remotezip`, `rangeserve` | `scripts/image/imagetool.py`, `scripts/fetch/remotezip.py` (**both left in place, unused: the owner decides**), `scripts/serve/rangeserve.py` (retired) | all 15 subcommands in Rust since 2026-11-13, and the image scripts run them | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds, byte for byte (the 36th: the Linux set has no `kernel.kc`); the six last subcommands and `remotezip`: 25 of 25 side by side, the archive byte for byte, the real IPSW over HTTP (the section at the end) |
 | `ioslog` | the manual steps of `docs/newtodo.md` "How to resume" step 2 (mount, copy, `unifiedlog_iterator`) | done; not run on the phone's Data store yet | yes on 7 archives: CSV byte for byte from a `.logarchive`, from a Data-store image and from a mounted volume |
 | `prelink` | the steps of `kernel/prelink/build.sh` | all 12 steps (`PRELINK_IMPL=rust`) | yes: every step's files and stdout byte for byte on two Linux-built kernels, `kernel.kc` `ffbe95f7...` and `cdd98e7e...` |
 | `kernel` | the board archive generators of the kernel build (`build-oneios-*.py`, nine), `kernel/build-record.py`, the two `layout.py` and `port-legacy-display.py` | all ported, and the scripts **retired 2026-11-13** (deleted, their outputs frozen in `tests/kernelgen/golden/`): the kernel builds run the commands | yes: every file of the nine archives byte for byte (261 files, one line of two `objects.json` aside), the build record, the three kernelcache records, and `kernel/build-hosted.sh` gives the same kernel either way but for the build time it carries (2,074 bytes of time stamps and the UUID; Linux, 2026-11-13) |
@@ -19,7 +19,7 @@ script before it may replace it; the commands and the results are below. What is
 | `app` | the app lines of `docs/building.md` section 7 (new) | written; **the app was not built or installed with it** (the owner's decision for this box) | not applicable; 65 checks pass with a stand-in checkout, gradlew, gh and phone (`tests/app/run.sh`); `app version` runs on the real clone |
 | `cycle`, `phone log` | the test cycle of `docs/building.md` section 6 by hand (new) | written; **not run on the phone or with real builds** | not applicable; 90 checks pass with a stand-in checkout and phone (`tests/cycle/run.sh`) |
 
-**The image scripts, the kernel builds, the prelink and the runtime package run no Python tool of this repository any more** (2026-11-13; still Python: `scripts/ios/`, `scripts/serve/rangeserve.py`, the root tweaks). The image scripts call `oneios-tool image`
+**The image scripts, the kernel builds, the prelink and the runtime package run no Python tool of this repository any more** (2026-11-13; still Python: `scripts/ios/`, the root tweaks). The image scripts call `oneios-tool image`
 (`IMAGETOOL_IMPL` is gone; `scripts/image/imagetool.py` is left in the tree, unused), as do the retired tools' callers (`kernel/prelink/build.sh`
 and, since 2026-11-13, the kernel builds, `runtime/package.sh` and the kernel's and the prelink's hand tools: "kernel",
 "package" and the group 2 section, below). (Before, one script used the Rust tool without being asked:
@@ -1439,7 +1439,14 @@ Libraries: `ureq`, `flate2`, `crc32fast`, `regex`, `plist` (the BuildManifest), 
 Checked on Linux only. Not run on a Mac: these modules, `scripts/fetch/fetch.sh` and `scripts/image/build.sh` with
 the CLI (`seed-apfs-macos.sh` now takes the profile from `oneios-tool image profile`).
 
-**Not ported in this round** (group 3's rest): `scripts/serve/rangeserve.py` (the local range server of
-`scripts/serve/serve-image.sh`) and `scripts/ios/{ios-sign,macho-check,make-tbds}.py` (the iOS-side signing, the
+**`scripts/serve/rangeserve.py` is `oneios-tool rangeserve DIR PORT`** (`rangeserve.rs`; retired, `scripts/serve/serve-image.sh`
+starts the command): `tests/servepy/compare-golden.sh` asks 31 requests of the server with curl (whole files, a HEAD,
+ranges of every form, ranges a file does not have, the names that are not served) and compares the status, the
+headers that matter and the body's SHA-256 with the script's frozen answers: **31 of 31** the same; 2 unit tests. Not
+compared: the `Server` and `Date` headers and the page of a 404 (Python's own). One difference: a `bytes=-N` range of an
+empty file is 416 (the script answered 206 with no bytes). Not run through a tunnel, and not on a Mac.
+
+**Not ported in this round** (group 3's rest):
+`scripts/ios/{ios-sign,macho-check,make-tbds}.py` (the iOS-side signing, the
 import check and the stub maker, called by `scripts/setup/ios-toolchain.sh` and `userland/*/build.sh`). They are
 unchanged and still Python.

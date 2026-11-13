@@ -6,7 +6,8 @@
 #   scripts/serve/serve-image.sh FILE [TUNNELS] [PORT]    start (default 4 tunnels, port 8787); prints the URLs
 #   scripts/serve/serve-image.sh --stop                   end the server and every tunnel
 #
-# The server (scripts/serve/rangeserve.py) binds 127.0.0.1 and answers byte ranges; each tunnel is its own
+# The server (`oneios-tool rangeserve`, tools/oneios-tool: scripts/serve/rangeserve.py until 2026-11-13; the binary is
+# built when missing or stale, ONEIOS_TOOL=PATH for another) binds 127.0.0.1 and answers byte ranges; each tunnel is its own
 # cloudflared process in tmux (oneios-serve-http, oneios-serve-tN). URLs: logs/serve-urls.txt.
 set -uo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -23,7 +24,9 @@ SERVE="$ROOT/logs/serve"; rm -rf "$SERVE"; mkdir -p "$SERVE"
 ln -sf "$FILE" "$SERVE/"; [ -f "$FILE.sha256" ] && ln -sf "$FILE.sha256" "$SERVE/"
 NAME=$(basename "$FILE")
 tmux kill-session -t oneios-serve-http 2>/dev/null
-tmux new-session -d -s oneios-serve-http "python3 $ROOT/scripts/serve/rangeserve.py $SERVE $PORT 2> $ROOT/logs/serve-http.log"
+. "$ROOT/scripts/lib/oneios-tool.sh"
+oneios_tool "$ROOT" || { echo "the server is oneios-tool rangeserve (Rust): cargo build --release --manifest-path tools/oneios-tool/Cargo.toml"; exit 2; }
+tmux new-session -d -s oneios-serve-http "$ONEIOS_TOOL rangeserve $SERVE $PORT 2> $ROOT/logs/serve-http.log"
 for i in $(seq 1 "$N"); do
   tmux kill-session -t "oneios-serve-t$i" 2>/dev/null
   : > "$ROOT/logs/serve-t$i.log"
