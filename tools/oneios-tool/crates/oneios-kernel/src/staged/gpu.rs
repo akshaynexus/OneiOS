@@ -35,3 +35,28 @@ pub const GPU: &[(&str, &str)] = &[
      concat!("    oneios_gpu_client_list(clients, sizeof clients);\n",
              "    {\n")),
 ];
+
+/// DroidVMVirtioGpu3D.cpp's lines that change (hang, 2026-11-13): each blob's life goes to OneiOSAdreno.cpp, which
+/// prints by client what kind the live blobs are, how old, and which closed ones the GPU's work in flight still holds
+/// (oneios-gpu-kinds:, oneios-gpu-ages:; docs/gpu.md 5.1). The hooks are weak: without OneiOSAdreno.cpp nothing changes.
+/// Each anchor must be there exactly once.
+pub const GPU3D: &[(&str, &str)] = &[
+    ("DroidVMClientMemory droidvm_virtgpu_client_memory[64];\n",
+     concat!("DroidVMClientMemory droidvm_virtgpu_client_memory[64];\n",
+             "// OneiOS: a blob made (its resource id, client slot, bytes, kind bits: 1 host-visible, 2 the caller's pages wired,\n",
+             "// 4 this driver's pages in the caller's task, the blob flags << 4), closed while the GPU may still use it, and gone.\n",
+             "void oneios_gpu_blob_made(uint32_t, uint32_t, uint64_t, uint32_t, task_t, uint64_t) __attribute__((weak));\n",
+             "void oneios_gpu_blob_closed(uint32_t) __attribute__((weak));\n",
+             "void oneios_gpu_blob_gone(uint32_t) __attribute__((weak));\n")),
+    ("    c->resources[c->resourceCount++] = r;\n",
+     concat!("    c->resources[c->resourceCount++] = r;\n",
+             "    if (oneios_gpu_blob_made)\n",
+             "        oneios_gpu_blob_made(r.id, c->slot, r.size, (r.hostVisible ? 1u : 0u) | (r.wired ? 2u : 0u) | (r.prepared ? 4u : 0u) |\n",
+             "                             ((in.blob_flags & 0xfu) << 4), task, user);\n")),
+    ("        c->closed[c->closedCount++] = {*r, c->sequence};\n",
+     concat!("        c->closed[c->closedCount++] = {*r, c->sequence};\n",
+             "        if (oneios_gpu_blob_closed) oneios_gpu_blob_closed(r->id);\n")),
+    ("    countPages(c, r, -1);\n",
+     concat!("    countPages(c, r, -1);\n",
+             "    if (oneios_gpu_blob_gone) oneios_gpu_blob_gone(r.id);\n")),
+];

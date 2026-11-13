@@ -350,6 +350,21 @@ int xh_meminfo(const char *path, uint64_t *total, uint64_t *available)
   return found == 3 && *total ? 0 : -1;
 }
 
+int xh_meminfo_value(const char *path, const char *key, uint64_t *bytes)
+{
+  FILE *f = fopen(path, "r");
+  if (!f) return -1;
+  char line[128];
+  size_t n = strlen(key);
+  int r = -1;
+  while (fgets(line, sizeof line, f)) {
+    unsigned long long kb;
+    if (!strncmp(line, key, n) && line[n] == ':' && sscanf(line + n + 1, " %llu kB", &kb) == 1) { *bytes = (uint64_t)kb << 10; r = 0; break; }
+  }
+  fclose(f);
+  return r;
+}
+
 // ---- the display's mode ---------------------------------------------------------------------------
 bool xh_panel_native(const xh_panel_mode *modes, unsigned count, xh_panel_mode *native)
 {

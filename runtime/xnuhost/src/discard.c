@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/falloc.h>
+#include <sys/mman.h>
 #include <time.h>
 
 xh_discard_stats g_discard;
@@ -35,4 +36,18 @@ int64_t xh_ram_discard_fd(int fd, uint64_t fd_base, uint64_t lo, uint64_t len, u
   if (r) __atomic_fetch_add(&g_discard.failed, 1, __ATOMIC_RELAXED);
   else __atomic_fetch_add(&g_discard.bytes, size, __ATOMIC_RELAXED);
   return r;
+}
+
+uint64_t xh_ram_resident(const void *base, uint64_t size, uint64_t page)
+{
+  static unsigned char vec[16384];            // one call per 16384 pages (64 MiB of 4 KiB pages); the main loop's only
+  if (!base || !page || ((uintptr_t)base & (page - 1))) return 0;
+  uint64_t resident = 0;
+  for (uint64_t at = 0; at < size; at += (uint64_t)sizeof vec * page) {
+    uint64_t length = size - at < (uint64_t)sizeof vec * page ? size - at : (uint64_t)sizeof vec * page;
+    if (mincore((void *)((uintptr_t)base + at), (size_t)length, vec)) continue;
+    uint64_t pages = (length + page - 1) / page;
+    for (uint64_t i = 0; i < pages; i++) resident += vec[i] & 1;
+  }
+  return resident * page;
 }

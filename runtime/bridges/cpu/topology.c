@@ -215,11 +215,38 @@ uint64_t br_cpu_thermal_mask(const br_cpu_topology *t, char type, unsigned cap)
 
 void br_cpu_plan_cap(br_cpu_plan *plan, const br_cpu_plan *base, const br_cpu_topology *t, unsigned cap)
 {
+  uint64_t e = 0;
+  for (unsigned i = 0; i < t->ncpu; i++) if (t->cpu[i].present && t->cpu[i].type == 'E') e |= 1ull << i;
   for (unsigned i = 0; i < base->nvcpu && i < BR_MAX_VCPUS; i++) {
     uint64_t want = base->v[i].affinity, allowed = br_cpu_thermal_mask(t, base->v[i].type, cap);
     uint64_t mask = want & allowed ? want & allowed : allowed ? allowed : want;
+    // The cores a step adds of the other kind (step 2's E cores for a P vCPU) are the vCPU's too: intersected with its
+    // own kind's mask they were lost, and the phone's six P vCPUs ran on two cores at "trapping" (0x60, 2026-11-13)
+    // where the step means four (0x63).
+    const uint64_t kind = base->v[i].type == 'E' ? e : ~e;
+    if (want & allowed) mask |= allowed & ~kind;
     __atomic_store_n(&plan->v[i].affinity, mask, __ATOMIC_RELEASE);
   }
+}
+
+uint64_t br_cpu_pin_mask(const br_cpu_plan *plan, const br_cpu_plan *base, unsigned vcpu)
+{
+  if (vcpu >= plan->nvcpu || vcpu >= BR_MAX_VCPUS) return 0;
+  const uint64_t mask = __atomic_load_n(&plan->v[vcpu].affinity, __ATOMIC_ACQUIRE);   // the thermal step may change it
+  if (!mask) return mask;
+  unsigned rank = 0, same = 0;
+  for (unsigned j = 0; j < base->nvcpu && j < BR_MAX_VCPUS; j++) {
+    if (base->v[j].type != base->v[vcpu].type) continue;
+    if (j < vcpu) rank++;
+    same++;
+  }
+  // One core each only while there are enough: with more vCPUs of a kind than cores in the mask (a thermal step), a
+  // pinned vCPU waits behind the others on its core while another core of the mask idles, and a vCPU preempted while
+  // it holds a kernel lock holds up every vCPU spinning on that lock (phone, 2026-11-13: three P vCPUs on each of two
+  // cores at "trapping"; interrupts up to 953 ms, system calls up to 639 ms). Then the whole mask: Linux spreads them.
+  if (same > (unsigned)__builtin_popcountll(mask)) return mask;
+  for (unsigned i = 0; i < 64; i++) if (mask >> i & 1 && rank-- == 0) return 1ull << i;
+  return mask;
 }
 
 int br_cpu_place(int tid, const br_cpu_plan *plan, unsigned index)

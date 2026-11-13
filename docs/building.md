@@ -312,7 +312,11 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   `--ram 9728M` is the phone's size ([booter.md](booter.md) 1).
 - What XNU sees of its memory: `oneios-mem:` lines every 30 s (free, given back to the host, in use, memorystatus
   available); `oneios-free-report=0` turns 0058's free-page reporting off for a comparison
-  ([kernel/patches/oneios-hosted/README.md](../kernel/patches/oneios-hosted/README.md), 0058).
+  ([kernel/patches/oneios-hosted/README.md](../kernel/patches/oneios-hosted/README.md), 0058). Since 0066 a fourth line
+  splits the give-back's time (`give-back time T ms: lock waits ..., host calls ...; on a CPU U ms; per MiB ...`);
+  `oneios-free-report-run=1 oneios-free-report-batch=64` gives back the way 0058 did, and
+  `oneios-free-report-stress=1 oneios-free-report-hysteresis=1` makes a PC boot give back all the time (how 0066 was
+  measured). xnuhost's second `memory:` line says how much of the guest's RAM the PC itself swapped out.
 - `oneios-data-wait=3000`: under qemu the first boot spends minutes re-deriving the shared cache's 4 KiB code
   hashes (emulated SHA); the committed default (300 s) is for the phone.
 - `hosted_mapcheck=1` (boot argument, debugging only): the kernel records every page it maps into and unmaps
@@ -706,7 +710,7 @@ Rust 1.95 or newer (apk-info-zip 1.1.1 needs 1.95; built with 1.98.0 and 1.99.1)
 |---|---|---|
 | `scripts/image/build.sh`, `scripts/image/verify.sh` | `IMAGETOOL_IMPL=rust` (default `python`), `ONEIOS_TOOL=PATH` | `oneios-tool image` runs profile, apfs-info, apfs-owners, hashes, tree-copy, seed-pack, manifest and the set folder's verify; pack and the archive's verify stay with the Python tool. Same files, byte for byte (README "image") |
 | `scripts/image/kernel-inputs.sh` | none needed; `IM4P_TOOL=PATH` forces it | without the `lzfse` program the kernelcache is decoded by `oneios-tool image im4p`; the result is checked against the pinned SHA-256 either way (section 1) |
-| `kernel/build-hosted.sh`, `kernel/build-linux.sh`, `kernel/build-macos.sh` | none: Rust only since 2026-11-13 (`ONEIOS_TOOL=PATH` for another binary) | the board archives (`storage`, `board`, `aes`, `keystore`, `net`, `hid`, `audio`, `gpu`, `display`) are built by `oneios-tool kernel gen NAME`, which UniXNU's driver runs from `board.toml`, and the VM kernel's build record by `oneios-tool kernel build-record`; the Python generators were deleted after every file they write was compared byte for byte, and their outputs are frozen in `tests/kernelgen/golden/` (README "kernel") |
+| `kernel/build-hosted.sh`, `kernel/build-linux.sh`, `kernel/build-macos.sh` | none: Rust only since 2026-11-13 (`ONEIOS_TOOL=PATH` for another binary) | the board archives (`storage`, `board`, `aes`, `keystore`, `net`, `hid`, `audio`, `gpu`, `display`) are built by `oneios-tool kernel gen NAME`, which UniXNU's driver runs from `board.toml`, and the VM kernel's build record by `oneios-tool kernel build-record`; the Python generators were deleted after every file they write was compared byte for byte, and their outputs are frozen in `tests/kernelgen/golden/` (README "kernel"); since 2026-11-13 `kernel gen gpu` compiles a staged `DroidVMVirtioGpu3D.cpp` with the GPU report's blob hooks (`staged/gpu.rs` `GPU3D`) |
 | `kernel/prelink/build.sh` | none: Rust only since 2026-11-12 (`ONEIOS_TOOL=PATH` for another binary) | `oneios-tool prelink` runs all twelve steps; the Python steps were deleted after every step's output was compared byte for byte, and their outputs are frozen as hashes (`tests/prelink/compare-golden.sh`). 14 s instead of two minutes |
 
 `oneios-tool image seed-pack` writes `data.seed`'s members in parallel, each at its own offset (the same bytes as
