@@ -162,6 +162,8 @@ struct Cycle<'a> {
     notes: Vec<String>,
     markers: Markers,
     marker_times: Vec<(f64, String)>,
+    /// The watch step ran in this run: `marker_times` are the boot's markers, with their seconds after the switch.
+    watched: bool,
     lines_seen: u64,
     switched: Option<Instant>,
     /// The phone's clock just before this cycle's switch. With it, `look` reads session/xnuhost.log only once the
@@ -248,14 +250,18 @@ impl Cycle<'_> {
                 }
                 cmd.push("kernel/prelink/build.sh".into());
                 self.job("cycle-prelink", &cmd)?;
-                self.say("the audit: kernel/prelink/build.sh stops on a failure; then python3 kernel/prelink/stubs-check.py (every stub good, or the cycle stops)");
+                self.say("the audit: kernel/prelink/build.sh stops on a failure; then oneios-tool prelink stubs-check (every stub good, or the cycle stops)");
                 if !self.dry {
-                    let out = Command::new("python3").arg(root.join("kernel/prelink/stubs-check.py")).arg(&kc).current_dir(&root).output().context("stubs-check.py")?;
+                    // this binary's own step (it was kernel/prelink/stubs-check.py)
+                    let out = Command::new(std::env::current_exe().context("this program's path")?).args(["prelink", "stubs-check"]).arg(&kc).current_dir(&root).output().context("prelink stubs-check")?;
                     let text = String::from_utf8_lossy(&out.stdout).to_string();
                     let line = text.lines().find(|l| l.starts_with("stubs: ")).unwrap_or("").to_string();
                     println!("  {line}");
                     if !out.status.success() || !line.ends_with(", 0 bad") {
-                        bail!("the collection's stubs are not all good: {}", last_lines(&text, 4));
+                        // the count, then the first bad stubs (the check prints up to ten after its count line)
+                        let first: Vec<&str> = text.lines().filter(|l| !l.starts_with("stubs: ")).take(3).map(str::trim).collect();
+                        let first = if first.is_empty() { String::new() } else { format!(" ({})", first.join("; ")) };
+                        bail!("the collection's stubs are not all good: {line}{first}");
                     }
                     self.notes.push(format!("prelink: audit 0 failures (build.sh exit 0), {line}"));
                 }
@@ -484,11 +490,7 @@ impl Cycle<'_> {
         for line in whole.lines() {
             self.lines_seen += 1;
             if let Some(mark) = self.markers.line(line) {
-                let what = match &mark {
-                    Mark::Stage(name) => (*name).to_string(),
-                    Mark::Panic => "PANIC".to_string(),
-                    Mark::End => "end".to_string(),
-                };
+                let what = mark_name(&mark);
                 println!("  +{since:5.0} s  {what:11} {line}");
                 self.marker_times.push((since, format!("{what}: {line}")));
             }
@@ -575,13 +577,56 @@ impl Cycle<'_> {
         Ok(())
     }
 
-    fn summary(&self, result: &Result<()>) -> Result<()> {
+    /// The summary's result: from the same step results as its Steps table (a step that failed is named, with its
+    /// reason), and what stopped the cycle. "Every step ended well" only when the table has no failed step.
+    fn result_line(&self, result: &Result<()>) -> String {
+        let stopped = result.as_ref().err().map(|e| format!("{e:#}"));
+        let failed: Vec<String> = self
+            .times
+            .iter()
+            .filter_map(|(step, _, how)| how.strip_prefix("failed: ").map(|why| (step, why)))
+            // the reason that stopped the cycle is not said twice
+            .map(|(step, why)| if stopped.as_deref() == Some(why) { step.clone() } else { format!("{step} ({why})") })
+            .collect();
+        let mut parts = Vec::new();
+        if let Some(why) = &stopped {
+            parts.push(format!("**stopped**: {why}"));
+        }
+        if !failed.is_empty() {
+            parts.push(format!("**failed {}**: {}", if failed.len() == 1 { "step" } else { "steps" }, failed.join("; ")));
+        }
+        if parts.is_empty() {
+            "every step that ran ended well".to_string()
+        } else {
+            parts.join("; ")
+        }
+    }
+
+    /// The markers of a run that did not watch (the watch ran in an earlier run of this name, or not at all): read
+    /// from the collect step's copy of the session's log, else from the phone's session log by its name. Returns the
+    /// marker lines, the markers, and where they were read from (empty: no log could be read).
+    fn saved_markers(&self, adb: Option<&Adb>) -> (Vec<String>, Markers, String) {
+        let (text, from) = match fs::read(self.out.join("xnuhost.log")).ok().filter(|text| !text.is_empty()) {
+            Some(text) => (text, "`xnuhost.log` in this folder (the collect step's copy of the phone's `session/xnuhost.log`)".to_string()),
+            None => match adb.and_then(|adb| adb.root(&format!("cat {STAGE}/session/xnuhost.log\n")).ok()).filter(|r| r.ok() && !r.out.is_empty()) {
+                Some(r) => (r.out.into_bytes(), "the phone's `session/xnuhost.log` (`oneios-tool phone log --file xnuhost`; this folder has no copy of it)".to_string()),
+                None => return (Vec::new(), Markers::default(), String::new()),
+            },
+        };
+        let mut markers = Markers::default();
+        let mut lines = Vec::new();
+        for line in String::from_utf8_lossy(&text).lines() {
+            if let Some(mark) = markers.line(line) {
+                lines.push(format!("{}: {line}", mark_name(&mark)));
+            }
+        }
+        (lines, markers, from)
+    }
+
+    fn summary(&self, result: &Result<()>, adb: Option<&Adb>) -> Result<()> {
         let mut s = format!("# Cycle {}\n\n", self.name);
         let (date, time) = local_date_time();
-        s += &format!("- written {date} {time} by oneios-tool cycle; the result: {}\n", match result {
-            Ok(()) => "every step that ran ended well".to_string(),
-            Err(e) => format!("**stopped**: {e:#}"),
-        });
+        s += &format!("- written {date} {time} by oneios-tool cycle; the result: {}\n", self.result_line(result));
         let commit = Command::new("git").arg("-C").arg(&self.root).args(["rev-parse", "--short", "HEAD"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
         s += &format!("- OneiOS checkout: {} at {commit}\n", self.root.display());
         s += "\n## Versions and hashes\n\n";
@@ -597,14 +642,34 @@ impl Cycle<'_> {
         for (step, seconds, how) in &self.times {
             s += &format!("| {step} | {seconds:.1} | {how} |\n");
         }
-        s += "\n## Markers (seconds after the switch was asked)\n\n";
-        if self.marker_times.is_empty() {
-            s += "none seen\n";
-        }
-        for (t, line) in &self.marker_times {
-            s += &format!("- +{t:.0} s {line}\n");
-        }
-        let panics: Vec<&String> = self.markers.found.iter().filter(|(m, _)| *m == Mark::Panic).map(|(_, l)| l).collect();
+        let saved;
+        let found = if self.watched {
+            s += "\n## Markers (seconds after the switch was asked)\n\n";
+            if self.marker_times.is_empty() {
+                s += "none seen\n";
+            }
+            for (t, line) in &self.marker_times {
+                s += &format!("- +{t:.0} s {line}\n");
+            }
+            &self.markers.found
+        } else {
+            // this run did not watch the boot: what it saw (nothing, or what a hold read) is not the boot's markers
+            let (lines, markers, from) = self.saved_markers(adb);
+            if from.is_empty() {
+                s += "\n## Markers\n\nThe watch step did not run in this run, and no session log could be read (no `xnuhost.log` in this folder, none on the phone): no markers.\n";
+            } else {
+                s += &format!("\n## Markers (the stamps are the log's own)\n\nThe watch step did not run in this run (the boot was watched by an earlier run, or not at all): the markers were read from {from}.\n\n");
+                if lines.is_empty() {
+                    s += "none in that log\n";
+                }
+                for line in &lines {
+                    s += &format!("- {line}\n");
+                }
+            }
+            saved = markers;
+            &saved.found
+        };
+        let panics: Vec<&String> = found.iter().filter(|(m, _)| *m == Mark::Panic).map(|(_, l)| l).collect();
         s += &format!("\n## Panics\n\n{}\n", if panics.is_empty() { "none".to_string() } else { panics.iter().map(|l| format!("- `{l}`")).collect::<Vec<_>>().join("\n") });
         s += &format!("\n## The way back\n\n{}\n", if self.way_back.is_empty() { "no return was made by this cycle" } else { &self.way_back });
         fs::write(self.out.join("summary.md"), s).context("summary.md")
@@ -650,7 +715,7 @@ impl Cycle<'_> {
                 ("watch", "read session/xnuhost.log's new lines every 2 s and print the markers (kernel, launchd, backboardd, SpringBoard, the first frame, a panic); return on a panic or after --ready-timeout without the first frame"),
                 ("hold", "keep the session for --hold seconds, or until Ctrl-C (which returns unless --stay)"),
                 ("return", "write session/return.request and wait for One UI's restore line"),
-                ("collect", "xnuhost.log, switch.log, return.log, return.outcome, sums.txt and summary.md into the session's folder (--pull-data: also the Data store and ioslog)"),
+                ("collect", "xnuhost.log, switch.log, return.log, return.outcome, sums.txt and summary.md into the session's folder (--pull-data: also the Data store and ioslog); summary.md names every step that failed, and a run that did not watch reads the markers from the saved xnuhost.log"),
             ] {
                 if on(step) {
                     println!("== {step}\nwould: {what}");
@@ -672,8 +737,10 @@ impl Cycle<'_> {
             if let Err(e) = &r {
                 eprintln!("collect: {e:#}");
             }
-            self.summary(&result)?;
+            self.summary(&result, Some(&adb))?;
             println!("  summary.md in {}", self.out.display());
+            // a collect that failed fails the cycle, as any other step does
+            return result.and(r.map_err(|e| anyhow!("collect: {e:#}")));
         }
         result
     }
@@ -705,9 +772,16 @@ impl Cycle<'_> {
             println!("== watch");
             let start = Instant::now();
             let r = self.watch(adb);
-            self.timed("watch", start, &r.as_ref().map(|_| ()).map_err(|e| anyhow!("{e:#}")));
-            match r {
-                Ok(true) => {
+            self.watched = true;
+            // a boot that did not get ready is a failed watch in the Steps table too
+            let ended = match &r {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(anyhow!("the boot did not reach its first frame ({})", self.notes.last().cloned().unwrap_or_default())),
+                Err(e) => Err(anyhow!("{e:#}")),
+            };
+            self.timed("watch", start, &ended);
+            match ended {
+                Ok(()) => {
                     if on("hold") {
                         println!("== hold");
                         let start = Instant::now();
@@ -715,7 +789,6 @@ impl Cycle<'_> {
                         self.timed("hold", start, &Ok(()));
                     }
                 }
-                Ok(false) => failure = Some(anyhow!("the boot did not reach its first frame ({})", self.notes.last().cloned().unwrap_or_default())),
                 Err(e) => failure = Some(e),
             }
         } else if on("hold") {
@@ -754,6 +827,15 @@ impl Cycle<'_> {
     }
 }
 
+/// A marker's name in the watch's lines and in the summary.
+fn mark_name(mark: &Mark) -> String {
+    match mark {
+        Mark::Stage(name) => (*name).to_string(),
+        Mark::Panic => "PANIC".to_string(),
+        Mark::End => "end".to_string(),
+    }
+}
+
 pub fn main(a: Args) -> i32 {
     let run = || -> Result<()> {
         for s in a.only.iter().chain(&a.skip) {
@@ -769,7 +851,7 @@ pub fn main(a: Args) -> i32 {
         let out = root.join("out/session-logs").join(date).join(&name);
         catch_stop();
         println!("cycle {name}: {}{}", steps.join(", "), if a.dry_run { " (dry run: nothing is built, the phone is not touched)" } else { "" });
-        let mut c = Cycle { a: &a, root, name, out, dry: a.dry_run, times: Vec::new(), notes: Vec::new(), markers: Markers::default(), marker_times: Vec::new(), lines_seen: 0, switched: None, switch_epoch: None, runtime_dir: None, image_dir: None, way_back: String::new() };
+        let mut c = Cycle { a: &a, root, name, out, dry: a.dry_run, times: Vec::new(), notes: Vec::new(), markers: Markers::default(), marker_times: Vec::new(), watched: false, lines_seen: 0, switched: None, switch_epoch: None, runtime_dir: None, image_dir: None, way_back: String::new() };
         let result = c.run(&steps);
         if stopped() && result.is_ok() {
             println!("cycle: ended by Ctrl-C");

@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+# A made-up stand-in for xnu-linux-toolchain's iig: only the three places `oneios-tool kernel iig-fix` changes
+# (kernel/linux/unixnu-layout.sh runs it on a copy of the real one), with made-up code around them.
+import re
+
+
+def parameters(text):
+    names = []
+    for part in text.split(','):
+        part = part.strip()
+        if not part or part == 'void':
+            continue
+        ident = re.findall(r'[A-Za-z_][A-Za-z0-9_]*', part)
+        names.append(ident[-1])
+    return names
+
+
+def source(stem, driverkit):
+    return ['// made-up\n',
+           f'#include <DriverKit/{stem}.h>\n',
+            '\n']
+
+
+def header(stem, local):
+    return (f'"{stem}.h"' if local
+               else f'<DriverKit/{stem}.h>')

@@ -292,11 +292,42 @@ The same commands on Linux and on macOS; neither needs root. `build.sh` picks th
 
 **The owners on macOS.** A volume a user attaches with owners honoured keeps root's folders closed to that user,
 and attaching as root needs `sudo`. So `build.sh` attaches with owners ignored and reads the real owner, group and
-mode of every entry below `/private/var` from the image itself: `imagetool.py` `ApfsTree` walks the volume's
+mode of every entry below `/private/var` from the image itself: `oneios-tool image` (its APFS reader; `imagetool.py`'s `ApfsTree` before 2026-11-13) walks the volume's
 file-system tree (inode, directory and xattr records; no file data). On a sealed volume that tree is hashed and its
 index entries number their children relative to the root's object id (24A446: root 1158, children 1158 + n). The
 copy stops if an entry's type, mode or xattr names differ between the mount and the records, or if an entry is in
-one and not in the other. `imagetool.py apfs-owners IMAGE [DIR]` prints what it reads.
+one and not in the other. `oneios-tool image apfs-owners IMAGE [DIR]` prints what it reads.
+
+**A store that was used: block 0 is old, and the newest checkpoint may be cut off.** The read-only images above are
+written once, so block 0's superblock is current and `apfs-info` and `apfs-owners` read it as it is (imagetool.py's
+reader, no checks beyond its own). The Data store (`data/data.img`) is different: Apple's APFS writes block 0's copy
+of the container superblock only at a clean unmount, every session ends with the kernel killed, and a block that a
+later transaction frees is used again a few transactions on. Seen on a store written by iOS 27's own APFS on the PC
+(2026-11-13, `oneios-tool image apfs-checkpoints`; 94 container superblocks in a checkpoint descriptor area of 188
+blocks, transactions 105 to 198): block 0 still held transaction 14, whose object map block had become a node of the
+extent reference tree; of the 94 checkpoints only the newest ten passed, every older one names at least one block
+that was written again since. So a reader of a used store must (as "Mounting an Apple File System Partition" of
+Apple's reference says, and as apfs-fuse does) take block 0 only for the place of the checkpoint descriptor area
+(`nx_xp_desc_base`, `nx_xp_desc_blocks`), read every container superblock there, and use the one with the highest
+transaction that is whole; and since the last one may be half written, check before it trusts, and go on to the
+checkpoint before when a check fails (apfs-fuse stops at the newest superblock with a good checksum):
+
+- a block address against the container's block count and the file's length, before the block is read;
+- an object's header: the Fletcher-64 checksum of the block (`o_cksum`), its type, its object id (a physical
+  object's is its own address, a virtual one's is the id it was looked up by, the container superblock's is 1) and
+  a transaction (`o_xid`) that is not newer than the checkpoint's: a newer one means the block was written again;
+- a checkpoint's superblock is the last block of its own run in the descriptor area (`nx_xp_desc_index`,
+  `nx_xp_desc_len`, modulo the area's length), the blocks before it are its checkpoint map
+  (`checkpoint_map_phys_t`, the last one marked `CHECKPOINT_MAP_LAST`), and its container UUID is block 0's (a
+  superblock of a container that was there before the store was made again is not a candidate);
+- a tree node: root or not, its level one below its parent's, its table and every key and value inside the node.
+  The nodes of a sealed volume's hashed file-system tree, the root too, carry no header (32 zero bytes, the flag
+  `BTNODE_NOHEADER`): only their shape can be checked.
+
+The container's object map is `OMAP_MANUALLY_MANAGED` (no snapshots), so it keeps one mapping per volume: an older
+state of a volume is reached through an older checkpoint's object map, not through a history in the newest one
+(the format, keys of object id and transaction, would allow one). File contents carry no checksum in APFS.
+`oneios-tool`'s reader for used stores does all of this (`tools/oneios-tool/README.md` "The APFS reader").
 
 Checked on 2026-11-12: the Mac's `data.seed` and the phone's (built on the Linux PC with apfs-fuse, same hook) hold
 the same 20,847 entries with the same owners, modes, times, links, xattrs (none: `/private/var` of 24A446 has only

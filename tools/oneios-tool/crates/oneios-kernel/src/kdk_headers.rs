@@ -1,0 +1,318 @@
+//! `oneios-tool kernel kdk-headers [--url URL] [--dmg FILE] [--apple-kernel-h] OUTPUT` (was kernel/kdk-headers.py,
+//! retired 2026-11-13): make a headers-only KDKROOT for xnu-12377 from a remote Kernel Debug Kit, without a 1.2 GB
+//! download.
+//!
+//! xnu-12377 includes CoreEntitlements/V2, TrustCache, CodeSignature and TrustedExecutionMonitor headers that are
+//! not in its source. Apple ships them in the KDK (KDK_SDK.pkg: Kernel.framework/PrivateHeaders/platform; KDK.pkg:
+//! System/Library/KernelSupport/CoreEntitlements/V2/Kernel.h). OUTPUT gets only those headers, in the KDK layout,
+//! so KDKROOT=OUTPUT adds them to the include path and nothing else (no KernelSupport archives in the link).
+//!
+//! macOS: hdiutil attaches the remote disk image over HTTP (range reads). The xar TOC gives the payload offsets.
+//! KDK_SDK.pkg/Payload is 140 KB (28 headers). Kernel.h (the CEKernelAPI_t table that AMFI hands to xnu) is in
+//! KDK.pkg/Payload (1.1 GB of kernels and kexts). Default: we write our own Kernel.h from the V2
+//! API.h/Acceleration.h prototypes (one function pointer per CE* function, typed with __typeof__). That is enough
+//! for NEGRONI: the table is only filled by our own AMFI stand-in, never by Apple's AMFI kext. --apple-kernel-h
+//! streams KDK.pkg/Payload (pbzx -> cpio, nothing written to disk) until Apple's Kernel.h is found. Linux: give
+//! --dmg FILE (7z extracts the pkg).
+//!
+//! From iOSPlus10 scripts/ios26/kdk-headers.py, itself based on UniXNU scripts/kdk-headers.py
+//! (BSD-2-Clause-Patent, Copyright (c) 2026, UniXNU contributors; changed there for the HTTP mount and the early
+//! stop). The output is Apple's: it stays in out/ (git-ignored), is never committed, never packaged and never
+//! fetched in CI. OneiOS reads it only with KDK_HEADERS=1 (kernel/build-macos.sh); UniXNU's series builds without
+//! a KDK.
+//!
+//! Libraries: flate2 (the xar TOC is zlib), roxmltree (the TOC is XML), lzma-rs (pbzx chunks are xz), ureq (the
+//! HEAD request that follows the download's redirect: hdiutil takes the final URL). The cpio reader is ours: the
+//! payload is read as a stream and left early, and it is 20 lines.
+
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+use anyhow::{bail, Context, Result};
+
+use crate::gen::fail;
+
+const DEFAULT_URL: &str = "https://github.com/dortania/KdkSupportPkg/releases/download/25F84/Kernel_Debug_Kit_26.5.2_build_25F84.dmg";
+const PLATFORM: &str = "System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/";
+const KERNEL_SUPPORT: &str = "System/Library/KernelSupport/CoreEntitlements/";
+const KERNEL_H: &str = "System/Library/KernelSupport/CoreEntitlements/V2/Kernel.h";
+
+#[derive(clap::Args)]
+pub struct Args {
+    #[arg(long, default_value = DEFAULT_URL)]
+    url: String,
+    /// Local disk image instead of --url
+    #[arg(long)]
+    dmg: Option<PathBuf>,
+    /// Stream KDK.pkg/Payload (up to 1.1 GB over the network) for Apple's Kernel.h
+    #[arg(long = "apple-kernel-h")]
+    apple_kernel_h: bool,
+    output: PathBuf,
+}
+
+/// What is taken from one payload: the folders whose files are kept, and the folder after which the rest of the
+/// payload is not read.
+struct Wanted {
+    payload: &'static str,
+    prefixes: Vec<String>,
+    stop_after: Option<&'static str>,
+}
+
+fn wanted(apple_kernel_h: bool) -> Vec<Wanted> {
+    let platform = ["CoreEntitlements", "TrustCache", "CodeSignature", "TrustedExecutionMonitor"].iter().map(|n| format!("{PLATFORM}{n}/")).collect();
+    let mut list = vec![Wanted { payload: "KDK_SDK.pkg/Payload", prefixes: platform, stop_after: None }];
+    if apple_kernel_h {
+        // stop after this directory: the rest of the 1.1 GB payload is kernels and kexts
+        list.push(Wanted { payload: "KDK.pkg/Payload", prefixes: vec![KERNEL_SUPPORT.to_string()], stop_after: Some(KERNEL_SUPPORT) });
+    }
+    list
+}
+
+/// Our CEKernelAPI_t: a function pointer per CE* prototype in V2/API.h and V2/Acceleration.h.
+fn synthesize_kernel_h(output: &Path) -> Result<()> {
+    let v2 = output.join(PLATFORM).join("CoreEntitlements/V2");
+    let prototype = regex::Regex::new(r"(?m)^(CE[A-Z][A-Za-z0-9]*)\(").unwrap();
+    let mut names: Vec<String> = Vec::new();
+    for header in ["API.h", "Acceleration.h"] {
+        let text = crate::gen::read_text(&v2.join(header))?;
+        for found in prototype.captures_iter(&text) {
+            if !names.iter().any(|n| n == &found[1]) {
+                names.push(found[1].to_string());
+            }
+        }
+    }
+    // CE<Name> -> <name> with a lowercase first letter
+    let members: Vec<String> = names.iter().map(|n| format!("    __typeof__(&{n}) {}{};", n[2..3].to_lowercase(), &n[3..])).collect();
+    let target = output.join(KERNEL_H);
+    crate::gen::mkdirs(target.parent().unwrap())?;
+    let text = format!(
+        "/* Generated by OneiOS kernel/kdk-headers.py (not Apple's file).\n * CEKernelAPI_t: the CoreEntitlements V2 function table that the AMFI implementation registers with\n * amfi_core_entitlements_register(). Member = CE<Name> -> <name> with a lowercase first letter. */\n#pragma once\n#include <CoreEntitlements/V2/API.h>\n#include <CoreEntitlements/V2/Acceleration.h>\ntypedef struct CEKernelAPI {{\n{}\n}} CEKernelAPI_t;\n",
+        members.join("\n")
+    );
+    crate::gen::write_text(&target, &text)?;
+    println!("kdk-headers: wrote our {KERNEL_H} ({} members)", names.len());
+    Ok(())
+}
+
+/// A xar archive's files: path -> (offset in the archive, length, the encoding's style).
+fn xar_entries(handle: &mut File) -> Result<HashMap<String, (u64, u64, String)>> {
+    let mut header = [0u8; 28];
+    handle.read_exact(&mut header)?;
+    if &header[..4] != b"xar!" {
+        fail!("not a xar archive");
+    }
+    let header_size = u16::from_be_bytes(header[4..6].try_into().unwrap()) as u64;
+    let toc_packed = u64::from_be_bytes(header[8..16].try_into().unwrap());
+    handle.seek(SeekFrom::Start(header_size))?;
+    let mut toc = String::new();
+    flate2::read::ZlibDecoder::new(handle.take(toc_packed)).read_to_string(&mut toc).context("the xar table of contents")?;
+    let document = roxmltree::Document::parse(&toc).context("the xar table of contents")?;
+    let (heap, mut entries) = (header_size + toc_packed, HashMap::new());
+    fn child<'a>(node: roxmltree::Node<'a, 'a>, name: &str) -> Option<roxmltree::Node<'a, 'a>> {
+        node.children().find(|c| c.has_tag_name(name))
+    }
+    fn walk(node: roxmltree::Node, prefix: &str, heap: u64, entries: &mut HashMap<String, (u64, u64, String)>) -> Result<()> {
+        for item in node.children().filter(|c| c.has_tag_name("file")) {
+            let path = format!("{prefix}{}", child(item, "name").and_then(|n| n.text()).context("a xar file without a name")?);
+            if let Some(data) = child(item, "data") {
+                let number = |name: &str| -> Result<u64> { Ok(child(data, name).and_then(|n| n.text()).with_context(|| format!("{path}: no {name}"))?.trim().parse()?) };
+                let style = child(data, "encoding").and_then(|e| e.attribute("style")).with_context(|| format!("{path}: no encoding"))?;
+                entries.insert(path.clone(), (heap + number("offset")?, number("length")?, style.to_string()));
+            }
+            walk(item, &format!("{path}/"), heap, entries)?;
+        }
+        Ok(())
+    }
+    walk(child(document.root_element(), "toc").context("the xar archive has no toc")?, "", heap, &mut entries)?;
+    Ok(entries)
+}
+
+/// A pbzx payload as one stream of bytes: its chunks (xz or stored), decoded as they are needed.
+struct Stream<'a> {
+    handle: &'a mut File,
+    end: u64,
+    buffer: Vec<u8>,
+    pos: usize,
+}
+
+impl<'a> Stream<'a> {
+    fn new(handle: &'a mut File, length: u64) -> Result<Stream<'a>> {
+        let end = handle.stream_position()? + length;
+        let mut magic = [0u8; 12];
+        handle.read_exact(&mut magic)?;
+        if &magic[..4] != b"pbzx" {
+            fail!("payload is not pbzx");
+        }
+        Ok(Stream { handle, end, buffer: Vec::new(), pos: 0 })
+    }
+
+    /// The next chunk, or None at the payload's end.
+    fn chunk(&mut self) -> Result<Option<Vec<u8>>> {
+        if self.handle.stream_position()? >= self.end {
+            return Ok(None);
+        }
+        let mut head = [0u8; 16];
+        self.handle.read_exact(&mut head)?;
+        let mut chunk = vec![0u8; u64::from_be_bytes(head[8..].try_into().unwrap()) as usize];
+        self.handle.read_exact(&mut chunk)?;
+        if chunk.starts_with(b"\xfd7zXZ\x00") {
+            let mut plain = Vec::new();
+            lzma_rs::xz_decompress(&mut chunk.as_slice(), &mut plain).map_err(|e| anyhow::anyhow!("a pbzx chunk: {e:?}"))?;
+            return Ok(Some(plain));
+        }
+        Ok(Some(chunk))
+    }
+
+    fn read(&mut self, size: usize) -> Result<Vec<u8>> {
+        while self.buffer.len() - self.pos < size {
+            let Some(chunk) = self.chunk()? else { fail!("payload ends inside a cpio record") };
+            self.buffer.drain(..self.pos);
+            self.pos = 0;
+            self.buffer.extend_from_slice(&chunk);
+        }
+        self.pos += size;
+        Ok(self.buffer[self.pos - size..self.pos].to_vec())
+    }
+}
+
+fn octal(field: &[u8]) -> Result<usize> {
+    Ok(usize::from_str_radix(std::str::from_utf8(field)?.trim(), 8)?)
+}
+
+/// The regular files below `prefixes` of an odc cpio stream, written under `output`; returns their count. With
+/// `stop_after` the stream is left at the first entry after that folder's entries.
+fn extract_cpio(stream: &mut Stream, prefixes: &[String], stop_after: Option<&str>, output: &Path) -> Result<usize> {
+    let (mut count, mut seen) = (0, false);
+    loop {
+        let header = stream.read(76)?;
+        if &header[..6] != b"070707" {
+            fail!("payload is not an odc cpio archive");
+        }
+        let (mode, name_size, file_size) = (octal(&header[18..24])?, octal(&header[59..65])?, octal(&header[65..76])?);
+        let name = stream.read(name_size)?;
+        let name = String::from_utf8(name[..name.len() - 1].to_vec()).context("a cpio name")?;
+        let name = name.strip_prefix("./").unwrap_or(&name);
+        let data = stream.read(file_size)?;
+        if name == "TRAILER!!!" {
+            return Ok(count);
+        }
+        if mode & 0o170000 == 0o100000 && prefixes.iter().any(|p| name.starts_with(p.as_str())) {
+            let target = output.join(name);
+            crate::gen::mkdirs(target.parent().unwrap())?;
+            std::fs::write(&target, data).with_context(|| target.display().to_string())?;
+            count += 1;
+        }
+        if let Some(stop) = stop_after {
+            if name.starts_with(stop) {
+                seen = true;
+            } else if seen {
+                return Ok(count);
+            }
+        }
+    }
+}
+
+/// Python's `repr()` of a tuple of strings (the message of a payload without the headers).
+fn tuple_repr(items: &[String]) -> String {
+    let inner: Vec<String> = items.iter().map(|i| oneios_common::pyrepr::repr_str(i)).collect();
+    format!("({}{})", inner.join(", "), if items.len() == 1 { "," } else { "" })
+}
+
+/// `subprocess.run(command, check=True)` with its stdout dropped where the script dropped it.
+fn run(command: &mut Command, quiet: bool) -> Result<()> {
+    if quiet {
+        command.stdout(Stdio::null());
+    }
+    let status = command.status().with_context(|| format!("{:?}: cannot be started", command.get_program()))?;
+    if !status.success() {
+        bail!("{:?} ended with {status}", command.get_program());
+    }
+    Ok(())
+}
+
+/// The first file named `name` below `dir`.
+fn find(dir: &Path, name: &str) -> Option<PathBuf> {
+    let mut folders = vec![dir.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.file_name().is_some_and(|n| n == name) {
+                return Some(path);
+            }
+            if path.is_dir() && !path.is_symlink() {
+                folders.push(path);
+            }
+        }
+    }
+    None
+}
+
+/// The package KernelDebugKit.pkg of the disk image: 7z extracts it (a local image, not on macOS), or hdiutil
+/// attaches the image (a local one, or the remote one over HTTP). Returns the package and whether it is attached.
+fn package(args: &Args, work: &Path, mount: &Path) -> Result<(PathBuf, bool)> {
+    if let (Some(dmg), false) = (&args.dmg, cfg!(target_os = "macos")) {
+        run(Command::new("7z").args(["e", "-y"]).arg(format!("-o{}", work.display())).arg(dmg).args(["*/KernelDebugKit.pkg", "-r"]), false)?;
+        return Ok((work.join("KernelDebugKit.pkg"), false));
+    }
+    let source = match &args.dmg {
+        Some(dmg) => crate::gen::s(&crate::gen::resolve(dmg)),
+        // hdiutil does not follow the download's redirect: a HEAD request gives the final URL
+        None => ureq::head(&args.url).timeout(std::time::Duration::from_secs(60)).call().with_context(|| args.url.clone())?.get_url().to_string(),
+    };
+    run(Command::new("hdiutil").args(["attach", "-nobrowse", "-readonly", "-mountpoint"]).arg(mount).arg(source), true)?;
+    Ok((find(mount, "KernelDebugKit.pkg").context("the disk image has no KernelDebugKit.pkg")?, true))
+}
+
+/// The wanted headers of the package's payloads, into `output`.
+fn extract(pkg: &Path, wanted: &[Wanted], output: &Path) -> Result<()> {
+    let mut handle = File::open(pkg).with_context(|| pkg.display().to_string())?;
+    let entries = xar_entries(&mut handle)?;
+    for want in wanted {
+        let (offset, length, encoding) = entries.get(want.payload).with_context(|| format!("the package has no {}", want.payload))?;
+        if encoding != "application/octet-stream" {
+            fail!("{}: unexpected xar encoding {encoding}", want.payload);
+        }
+        handle.seek(SeekFrom::Start(*offset))?;
+        let count = extract_cpio(&mut Stream::new(&mut handle, *length)?, &want.prefixes, want.stop_after, output)?;
+        if count == 0 {
+            fail!("{}: none of {} found", want.payload, tuple_repr(&want.prefixes));
+        }
+        println!("kdk-headers: {}: {count} headers", want.payload);
+    }
+    Ok(())
+}
+
+pub fn main(args: Args) -> Result<()> {
+    let name = match &args.dmg {
+        Some(dmg) => crate::gen::name(dmg),
+        None => args.url.rsplit('/').next().unwrap_or("").to_string(),
+    };
+    let identity = format!("{name}\n");
+    let stamp = args.output.join(".kdk-headers");
+    if stamp.is_file() && std::fs::read_to_string(&stamp).is_ok_and(|text| text == identity) {
+        println!("kdk-headers: {} is up to date", args.output.display());
+        return Ok(());
+    }
+    if args.output.exists() {
+        std::fs::remove_dir_all(&args.output).with_context(|| args.output.display().to_string())?;
+    }
+    let work = std::env::temp_dir().join(format!("kdk-headers.{}", std::process::id()));
+    let mount = work.join("mnt");
+    crate::gen::mkdirs(&mount)?;
+    let done = package(&args, &work, &mount).and_then(|(pkg, attached)| {
+        let done = extract(&pkg, &wanted(args.apple_kernel_h), &args.output);
+        if attached {
+            let _ = Command::new("hdiutil").args(["detach", "-force"]).arg(&mount).stdout(Stdio::null()).status();
+        }
+        done
+    });
+    let _ = std::fs::remove_dir_all(&work);
+    done?;
+    if !args.apple_kernel_h {
+        synthesize_kernel_h(&args.output)?;
+    }
+    crate::gen::write_text(&stamp, &identity)
+}

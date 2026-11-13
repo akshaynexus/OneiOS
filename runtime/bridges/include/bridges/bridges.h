@@ -169,6 +169,11 @@ bool    br_hci_packet_ok(uint8_t type, const uint8_t *packet, size_t length);
 // Two threads: one answers the HAL's callbacks, one makes the calls (br_hci_send only queues, up to
 // 512 packets). ONEIOS_HWBINDER names another binder device than /dev/hwbinder (the PC test).
 br_hci *br_hci_open_hidl(br_hci_rx_fn rx, br_hci_state_fn state, void *ctx);
+// A stand-in controller (bt/hci_sim.c, bluetooth=sim): answers every command as a 5.4 controller does, vendor
+// commands with Unknown HCI Command, and an LE scan with one made-up device; data goes nowhere. For a boot with no
+// phone (the PC). br_hci_sim_set_address sets the address it reports (display order) before the first open.
+br_hci *br_hci_open_sim(br_hci_rx_fn rx, br_hci_state_fn state, void *ctx);
+void    br_hci_sim_set_address(const uint8_t address[6]);
 // Asks hwservicemanager for the HAL once and lets it go: 11 (1.1) or 10 (1.0) when it is registered and
 // this domain may find it, else -errno (-ENODEV: no binder device). Logs why when it is not found.
 int     br_hci_hidl_probe(void);

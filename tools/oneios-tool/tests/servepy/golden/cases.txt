@@ -1,0 +1,165 @@
+== GET the file
+200
+accept-ranges: bytes
+content-length: 87000
+content-type: application/octet-stream
+body: 87000 bytes, sha256 31da239b073a998028392877d22dee44f9795cb65a65ee2d626fafc0e1524928
+== HEAD the file
+200
+accept-ranges: bytes
+content-length: 87000
+content-type: application/octet-stream
+body: none (HEAD)
+== GET the .sha256
+200
+accept-ranges: bytes
+content-length: 17
+content-type: application/octet-stream
+body: 17 bytes, sha256 c0055b2caef9b2ccb03905009b30c7c436fe0cd8a5fae8ec922c252bd82c8442
+== GET an empty file
+200
+accept-ranges: bytes
+content-length: 0
+content-type: application/octet-stream
+body: 0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+== GET a link to a file
+200
+accept-ranges: bytes
+content-length: 87000
+content-type: application/octet-stream
+body: 87000 bytes, sha256 31da239b073a998028392877d22dee44f9795cb65a65ee2d626fafc0e1524928
+== GET a name with a space (percent-encoded), with a query
+200
+accept-ranges: bytes
+content-length: 20
+content-type: application/octet-stream
+body: 20 bytes, sha256 ef74fb330de9985464940157c134286c71a252a4f5f469424524e4e16138d373
+== range: the first hundred bytes
+206
+accept-ranges: bytes
+content-length: 100
+content-range: bytes 0-99/87000
+content-type: application/octet-stream
+body: 100 bytes, sha256 46c5a00c71b9befe0542b5c1ee1e857cf88ff2547446780bfcb0455e414460d0
+== range: from an offset to the end
+206
+accept-ranges: bytes
+content-length: 7000
+content-range: bytes 80000-86999/87000
+content-type: application/octet-stream
+body: 7000 bytes, sha256 42719df0ae172b771abe2094c9c22f242fc7096e5fb29baa4a9738ff153c5bf1
+== range: an end past the file
+206
+accept-ranges: bytes
+content-length: 3100
+content-range: bytes 83900-86999/87000
+content-type: application/octet-stream
+body: 3100 bytes, sha256 37cb10ee6cf8452d271a7f7a73e767f52dfbbfd6074200823b4d964f11ed1819
+== range: the last 50 bytes
+206
+accept-ranges: bytes
+content-length: 50
+content-range: bytes 86950-86999/87000
+content-type: application/octet-stream
+body: 50 bytes, sha256 14190b80654b82de4b15ec587deab19dcce67ef81909c7a8fe30dad871bcce37
+== range: the last bytes, more than the file has
+206
+accept-ranges: bytes
+content-length: 87000
+content-range: bytes 0-86999/87000
+content-type: application/octet-stream
+body: 87000 bytes, sha256 31da239b073a998028392877d22dee44f9795cb65a65ee2d626fafc0e1524928
+== range: one byte
+206
+accept-ranges: bytes
+content-length: 1
+content-range: bytes 5-5/87000
+content-type: application/octet-stream
+body: 1 bytes, sha256 5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9
+== range: a start alone, no hyphen
+206
+accept-ranges: bytes
+content-length: 86995
+content-range: bytes 5-86999/87000
+content-type: application/octet-stream
+body: 86995 bytes, sha256 740e6e15829d391b4f0c36ac528e4f382c98d18219ba93f4dd95a7e3f1e371e5
+== range: blanks around the numbers
+206
+accept-ranges: bytes
+content-length: 10
+content-range: bytes 10-19/87000
+content-type: application/octet-stream
+body: 10 bytes, sha256 a2de9f0e5add446240c016dae7c32f09960d58018a8601593f42c34fd942b05c
+== HEAD with a range
+206
+accept-ranges: bytes
+content-length: 10
+content-range: bytes 10-19/87000
+content-type: application/octet-stream
+body: none (HEAD)
+== range: a start at the file's end (416)
+416
+content-length: 0
+content-range: bytes */87000
+body: 0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+== range: an end before the start (416)
+416
+content-length: 0
+content-range: bytes */87000
+body: 0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+== range: the last 0 bytes (416)
+416
+content-length: 0
+content-range: bytes */87000
+body: 0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+== range: no numbers (416)
+416
+content-length: 0
+content-range: bytes */87000
+body: 0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+== range: letters (416)
+416
+content-length: 0
+content-range: bytes */87000
+body: 0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+== range: two ranges (the whole file)
+200
+accept-ranges: bytes
+content-length: 87000
+content-type: application/octet-stream
+body: 87000 bytes, sha256 31da239b073a998028392877d22dee44f9795cb65a65ee2d626fafc0e1524928
+== range: another unit (the whole file)
+200
+accept-ranges: bytes
+content-length: 87000
+content-type: application/octet-stream
+body: 87000 bytes, sha256 31da239b073a998028392877d22dee44f9795cb65a65ee2d626fafc0e1524928
+== range of an empty file (416)
+416
+content-length: 0
+content-range: bytes */0
+body: 0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+== 404: no such file
+404
+body: (the server's own page)
+== 404: a hidden file
+404
+body: (the server's own page)
+== 404: a folder
+404
+body: (the server's own page)
+== 404: a file in a folder
+404
+body: (the server's own page)
+== 404: a file in a folder, the slash encoded
+404
+body: (the server's own page)
+== 404: a link to a folder
+404
+body: (the server's own page)
+== 404: the folder itself
+404
+body: (the server's own page)
+== 404: the folder above
+404
+body: (the server's own page)

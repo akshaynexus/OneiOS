@@ -8,6 +8,7 @@
 #                                        install, plutil), our clang wrapper (arm64e), xnu-host-cc
 #   CommandLineTools/usr/libexec/migcom
 #   XcodeDefault.xctoolchain/usr/bin/iig the Python iig of xnu-linux-toolchain, with the two xnu-12377 fixes
+#                                        (`oneios-tool kernel iig-fix`: Rust, built when missing or stale)
 #   bin/lzfse, usrbin/{xcrun,plutil,codesign}  UniXNU's shims; build-linux.sh binds them into /usr/bin
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -44,9 +45,12 @@ for tool in unifdef tcsh csh; do ln -s "$SRC/bin/$tool" "$DST/hostbin/$tool"; do
 # xnu's makefiles ask sw_vers for the host version (only to print it): the macOS release of this XNU.
 printf '#!/bin/sh\ncase "${1:-}" in -productVersion) echo 26.5 ;; -buildVersion) echo 25F71 ;; *) printf "ProductName:\\tmacOS\\nProductVersion:\\t26.5\\n" ;; esac\n' > "$DST/hostbin/sw_vers"
 chmod +x "$DST/hostbin/sw_vers"
-# iig: a copy with the fixes iOSPlus10's scripts/laurel/ios26-iig-fix.py found for xnu-12377's .iig files.
+# iig: a copy with the fixes iOSPlus10's scripts/laurel/ios26-iig-fix.py found for xnu-12377's .iig files
+# (`oneios-tool kernel iig-fix`, kernel/linux/iig-fix.py until 2026-11-13; ONEIOS_TOOL=PATH names another binary).
 cp "$SRC/bin/iig" "$XCT/bin/iig"
-python3 -I "$ROOT/kernel/linux/iig-fix.py" "$XCT/bin/iig"
+. "$ROOT/scripts/lib/oneios-tool.sh"
+oneios_tool "$ROOT"
+"$ONEIOS_TOOL" kernel iig-fix "$XCT/bin/iig"
 chmod +x "$XCT/bin/iig"
 # Host headers and libraries of xnu's SETUP tools: cctools' <mach-o/*.h> and libmacho/libstuff, and UniXNU's
 # xnu-host-cc with its prefix header (taken from its setup-toolchain.py, so they stay in step with the pin).

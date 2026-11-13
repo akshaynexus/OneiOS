@@ -44,7 +44,7 @@ whether the slot's function is the family's or the kernel's. One difference stop
 The instance sizes are asserted in `OneiOSWifiLayout.cpp` and compared with the live metaclasses at the start.
 
 Calls into the family go through generated stubs (`bti c; b <name>.original`, the target an absolute symbol at the
-function's address in the collection, which XnuPrelink's emitter retargets; `kernel/prelink/stubs-check.py` checks
+function's address in the collection, which XnuPrelink's emitter retargets; `oneios-tool prelink stubs-check` checks
 every one in `kernel.kc`): 159 functions on 2026-11-12, all of them virtual functions bound by their slot, the two
 constructors and the two base destructors. **Nothing calls a non-virtual function of the family**: such a function
 has no slot, so its address would have to be found by hand. The build fails with the name when a source starts to

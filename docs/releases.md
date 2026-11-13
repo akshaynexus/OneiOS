@@ -29,7 +29,9 @@ Nothing of Apple's: no IPSW, no kernelcache, no cryptex or disk image, no trust 
 collection (the source-built XNU prelinked with Apple's kexts). Those are the **image set**, which each owner
 builds on their own machine from Apple's restore files (`scripts/image/`), and which the app imports from a file.
 
-`runtime/package/pack.py` enforces this on every package, and `runtime/package/test.sh` tests it:
+`oneios-tool package` (`tools/oneios-tool/crates/oneios-package/src/pack.rs`; it was `runtime/package/pack.py` until
+2026-11-13, and refuses exactly what that script refused: 91 frozen cases, `tools/oneios-tool/tests/packagepy`)
+enforces this on every package, and `runtime/package/test.sh` tests it:
 
 - by name: `kernelcache*`, `*cryptex*`, `.ipsw`, `.dmg`, `.aea`, `.img`, `.im4p`, `.img4`, `.kc`, `.trustcache`,
   `BuildManifest.plist` and the rest of `.gitignore`'s firmware names;
@@ -78,10 +80,11 @@ placeholder), `kernel` (null without one). `files` lists every file except `runt
 `runtime/package.sh` runs on a Linux x86_64 PC (as CI does) and on a Mac. On a Mac it takes the NDK from
 `$HOME/Library/Android/sdk/ndk/28.2.13676358` (the revision is checked as on Linux) and builds with its
 `darwin-x86_64` tools (`runtime/host.mk`). macOS's `tar` is bsdtar, so the archive is written by
-`runtime/package/pack.py archive`: the same ustar layout, owner 0:0, time `SOURCE_DATE_EPOCH`; for the same files its
+`oneios-tool package archive` (then `pack.py archive`): the same ustar layout, owner 0:0, time `SOURCE_DATE_EPOCH`; for the same files its
 bytes equal GNU tar 1.35's (checked 2026-11-12). The `.sha256` is `sha256sum`'s, or `shasum -a 256`'s where there is
-no `sha256sum`: the same line. The Apple-file checks are the same `pack.py check`; `runtime/package/test.sh` passes
-on the Mac (19 tests). The phone binaries built on the Mac had the same SHA-256 before and after the port's source
+no `sha256sum`: the same line. The Apple-file checks are the same `package check`; `runtime/package/test.sh` passed
+on the Mac with `pack.py` (19 tests; with the Rust command it passes on Linux, 19 tests with the same output: **not run on
+the Mac since**, where `package.sh` now needs Rust for `oneios-tool`). The phone binaries built on the Mac had the same SHA-256 before and after the port's source
 changes; they were not compared with a Linux build of the same commit.
 
 ```sh
@@ -104,9 +107,13 @@ runtime/package.sh 0.1.7-dev                           # -> out/release/oneios-r
 
 - `ci.yml` (pull requests, pushes to `main`), `ubuntu-24.04`: no firmware in git; `bash -n`, `py_compile` and
   `shellcheck -S error`; NDK 28.2.13676358 through the SDK's `sdkmanager` and the `aarch64-linux-android` Rust
-  target; the host tests (`runtime/package/test.sh`, `kernel/tests/host.sh`, and any executable `*/tests/host.sh` of
+  target, then **oneios-tool** (`.github/scripts/setup-build.sh`: a current stable Rust, `cargo build --release
+  --manifest-path tools/oneios-tool/Cargo.toml`, a few minutes): `runtime/package.sh` refuses Apple files with its
+  `package` command (and would build the tool itself when it were missing), and `kernel/tests/host.sh` runs its
+  `kernel series-check` and `kernel build-record --self-test`; the host tests (`runtime/package/test.sh`, `kernel/tests/host.sh`, and any executable `*/tests/host.sh` of
   another area); `runtime/package.sh 0.0.0-ci`, kept as an artifact for 14 days.
-- `release.yml` (a tag `v*`): checks that the tag is a version and its commit is on `main`, runs the tests, packages
+- `release.yml` (a tag `v*`): checks that the tag is a version and its commit is on `main`, builds oneios-tool by the
+  same script, runs the tests, packages
   and uploads the asset and its `.sha256` to the release of the tag (created if missing; a pre-release when the
   version has a suffix).
 - Neither downloads anything of Apple's. Actions are pinned by commit.

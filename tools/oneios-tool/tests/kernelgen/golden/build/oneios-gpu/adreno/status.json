@@ -1,0 +1,17 @@
+{
+  "compiled": true,
+  "objects": [
+    "accelerator/IOAcceleratorES-bindings.o",
+    "accelerator/IOAcceleratorES-originals.o",
+    "accelerator/NativeAdrenoAccelerator.late.o",
+    "accelerator/OneiOSAdreno.o",
+    "root/build/droidvm-gpu/AdrenoPM4.kit.o",
+    "root/build/droidvm-gpu/DroidVMGpu.o",
+    "root/build/droidvm-gpu/NativeAdrenoCpu.o",
+    "root/build/droidvm-gpu/NativeAdrenoMemory.o",
+    "root/build/droidvm-gpu/NativeAdrenoPublish.o",
+    "root/build/droidvm-gpu/NativeAdrenoSubmit.o",
+    "root/build/droidvm-gpu/NativeAdrenoUserClient.o"
+  ],
+  "linked": true
+}

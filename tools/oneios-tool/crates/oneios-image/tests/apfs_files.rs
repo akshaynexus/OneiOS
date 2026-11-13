@@ -57,7 +57,7 @@ fn files_of_a_made_image() {
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let image = image.to_str().unwrap();
 
-    assert_eq!(ApfsTree::volume_count(image).unwrap(), 3);
+    assert_eq!(ApfsTree::volume_count(image, true).unwrap(), 3);
     let tree = ApfsTree::open_volume(image, 2, true).unwrap();
     assert_eq!((tree.name.as_str(), tree.role.as_str()), ("Data", "none"));
 

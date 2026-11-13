@@ -2,39 +2,43 @@
 //! APFS image without mounting it. Only in this tool (imagetool.py has no such command).
 
 use crate::apfs::fuse::{self, Backend, Mount};
-use crate::apfs::{ApfsTree, DT_DIR, DT_LNK, DT_REG};
+use crate::apfs::{ApfsTree, Container, Pick, DT_DIR, DT_LNK, DT_REG};
 use crate::{crash, err, say, Fail};
 use std::path::Path;
 
-/// The volume `--volume N|NAME` names (default: the first).
-pub fn open(image: &str, volume: Option<&str>, newest: bool) -> Result<ApfsTree, Fail> {
-    let Some(want) = volume else { return ApfsTree::open_volume(image, 0, newest) };
-    if let Ok(index) = want.parse::<usize>() {
-        if index >= ApfsTree::volume_count(image)? {
-            return Err(err!("{image}: no volume {index}"));
-        }
-        return ApfsTree::open_volume(image, index, newest);
+/// `--newest` and `--checkpoint XID` as the state to read (neither: block 0's).
+pub fn pick(newest: bool, checkpoint: Option<u64>) -> Pick {
+    match checkpoint {
+        Some(xid) => Pick::Xid(xid),
+        None if newest => Pick::Newest,
+        None => Pick::Block0,
     }
-    let mut names = Vec::new();
-    for index in 0..ApfsTree::volume_count(image)? {
-        match ApfsTree::open_volume(image, index, newest) {
-            Ok(tree) if tree.name == want => return Ok(tree),
-            Ok(tree) => names.push(tree.name),
-            Err(_) => {}
-        }
-    }
-    Err(err!("{image}: no volume named {want} (it has: {})", names.join(", ")))
 }
 
-/// The volume as apfs-fuse mounts it: `--volume` must be a number there, or a name our reader can look up.
+/// The volume `--volume N|NAME` names (default: the first), in the state `pick` names. Which checkpoint is read
+/// is said on stderr when one was chosen (not for block 0's state, the default).
+pub fn open(image: &str, volume: Option<&str>, pick: Pick) -> Result<ApfsTree, Fail> {
+    let mut container = Container::open(image, pick)?;
+    let (index, tree) = container.volume_named(volume)?;
+    if let Some(opened) = tree.opened().filter(|_| pick != Pick::Block0) {
+        eprintln!("{}", opened.text(image, index, &tree.name));
+    }
+    Ok(tree)
+}
+
+/// The volume as apfs-fuse mounts it: `--volume` must be a number there, or a name our reader can look up (as
+/// block 0 has the volumes, else at the newest checkpoint). No `--volume`: the first volume, as our reader takes
+/// it (place 0 when our reader cannot say).
 fn mount(image: &str, volume: Option<&str>) -> Result<Mount, Fail> {
     let index = match volume {
-        None => 0,
+        None => [Pick::Block0, Pick::Newest].into_iter().find_map(|pick| Container::open(image, pick).and_then(|c| c.volumes()).ok()).and_then(|v| v.first().copied()).unwrap_or(0),
         Some(v) => match v.parse::<usize>() {
             Ok(index) => index,
             // a name: its number, which our reader can say when it reads the container
-            Err(_) => (0..ApfsTree::volume_count(image).unwrap_or(0))
-                .find(|i| ApfsTree::open_volume(image, *i, false).is_ok_and(|tree| tree.name == v))
+            Err(_) => [Pick::Block0, Pick::Newest]
+                .into_iter()
+                .find_map(|pick| Container::open(image, pick).and_then(|mut c| c.volume_named(Some(v))).ok())
+                .map(|(index, _)| index)
                 .ok_or_else(|| err!("--apfs fuse: no volume named {v} that our reader can look up; give the volume's number"))?,
         },
     };
@@ -60,9 +64,9 @@ fn with_backend<T>(image: &str, volume: Option<&str>, backend: Backend, own: imp
     }
 }
 
-pub fn ls(image: &str, path: &str, volume: Option<&str>, newest: bool, backend: Backend) -> Result<(), Fail> {
+pub fn ls(image: &str, path: &str, volume: Option<&str>, pick: Pick, backend: Backend) -> Result<(), Fail> {
     let own = || -> Result<String, Fail> {
-        let tree = open(image, volume, newest)?;
+        let tree = open(image, volume, pick)?;
         let dir = tree.find(path)?.ok_or_else(|| err!("{image}: no /{path} in the volume"))?;
         let mut entries = tree.list(dir)?;
         entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -164,9 +168,9 @@ fn copy_mounted(src: &Path, dst: &Path, done: &mut Copied) -> Result<(), Fail> {
     Ok(())
 }
 
-pub fn copy(image: &str, src: &str, dst: &str, volume: Option<&str>, newest: bool, backend: Backend) -> Result<(), Fail> {
+pub fn copy(image: &str, src: &str, dst: &str, volume: Option<&str>, pick: Pick, backend: Backend) -> Result<(), Fail> {
     let own = || -> Result<Copied, Fail> {
-        let tree = open(image, volume, newest)?;
+        let tree = open(image, volume, pick)?;
         let id = tree.find(src)?.ok_or_else(|| err!("{image}: no /{} in the volume", src.trim_matches('/')))?;
         let kind = match tree.stat(id)?.mode & 0o170000 {
             0o040000 => DT_DIR,

@@ -1,0 +1,39 @@
+== lead-imports: every kext
+stdout: 375 lines, sha256 b4eb5ba65b87f9310896436c897b9a71467fdf1ebd70f2e7e5d083dca62cbfc9
+status 0
+== lead-imports --kext com.apple.iokit.IOHIDFamily
+stdout: 13 lines, sha256 49de097f5bcc07b3e22f9800fba8528200e912b6af1499af7ad3b9b817643e9f
+status 0
+== lead-between: a block where every function is paired
+original: 3 functions between; native: 3
+0xfffffe000ade8034    20      _vnode_isreg                             |    16 _vnode_isreg | 
+0xfffffe000ade8048    20      _vnode_isdir                             |    16 _vnode_isdir | 
+0xfffffe000ade805c    20      _vnode_islnk                             |    16 _vnode_islnk | 
+0xfffffe000ade8070   156      _vnode_lookup_continue_needed            |   176 _vnode_lookup_continue_needed | 
+0xfffffe000ade810c    20      _vnode_isfifo                            |    16 _vnode_isfifo | 
+status 0
+== lead-between --add: the counts differ
+original: 2 functions between; native: 3
+0xfffffe000ade7d1c    40      _vnode_mount                             |    56 _vnode_mount | 
+0xfffffe000ade7d44    56      _vnode_isonexternalstorage               |    60 _vnode_mountdevvp | 
+0xfffffe000ade7d7c    84      ?                                        |    72 _vnode_isonexternalstorage | (its first words)
+0xfffffe000ade7dd0    84      _vnode_mountedhere                       |    96 _vnode_isonssd | 
+                                                                       |   128 _vnode_mountedhere | 
+stderr: pairblock: the counts differ; nothing added
+status 1
+not written: repo/kernel/prelink/lead/lead-reviewed.json
+== lead-imports --add
+stdout: 126 lines, sha256 2942a47250497547641a84a29d790b400566806b1510f433859af24f801ce7f6
+status 0
+sha256 9c3d8569854efd7863376b8b060f91a985d7a29226f0cf8be76aa2a3ea6dc15c 1709 bytes repo/kernel/prelink/lead/lead-reviewed.json
+== lead-imports: after --add
+stdout: 373 lines, sha256 b14d5bad632089f579962f56acba4511187421b6407b5e4db1a235e3338514ca
+status 0
+== lead-between --add: one unpaired function between two paired ones
+original: 1 functions between; native: 1
+0xfffffe000ade7e94    16      _vnode_istty                             |    12 _vnode_istty | 
+0xfffffe000ade7ea4    16      ?                                        |    12 _vnode_ismount | (its first words)
+0xfffffe000ade7eb4   152      _vnode_isrecycled                        |    64 _vnode_isrecycled | 
+pairblock: 1 records added (3 in all)
+status 0
+sha256 cf45435d7360e9368d4697ebde72fe3a25499089055bb02abbc8ce4af3e3dd03 2353 bytes repo/kernel/prelink/lead/lead-reviewed.json
