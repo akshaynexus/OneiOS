@@ -37,6 +37,13 @@ static unsigned fb_width, fb_height, fb_hz;
 
 bool xh_stopping(void) { return __atomic_load_n(&stop_state.requested, __ATOMIC_ACQUIRE) != 0; }
 
+uint64_t xh_mono_ms(void)
+{
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return (uint64_t)t.tv_sec * 1000u + (uint64_t)t.tv_nsec / 1000000u;
+}
+
 void xh_stop(uint32_t reason, uint32_t code, const char *why)
 {
   pthread_mutex_lock(&stop_lock);
@@ -795,14 +802,39 @@ int main(int argc, char **argv)
   sigset_t waited;
   sigemptyset(&waited);
   sigaddset(&waited, SIGTERM); sigaddset(&waited, SIGINT); sigaddset(&waited, SIGHUP); sigaddset(&waited, SIGQUIT);
+  // The return's graceful shutdown (docs/booter.md "The return"): the first stop signal, when iOS is up and
+  // return-graceful-ms > 0, asks iOS to power off and keeps the vCPUs running up to an absolute deadline; then the
+  // stop below runs as always. A panic (it sets stop directly, not through a signal), a second signal, the guest
+  // halting itself, or the deadline all leave the wait at once. The way back never depends on any of this: the
+  // deadline is ours, and the fork's SIGKILL is the backstop under everything.
+  xh_return_state ret;
+  xh_return_init(&ret);
   while (!xh_stopping()) {
     struct timespec tick = { 0, 100 * 1000 * 1000 };
     int signo = sigtimedwait(&waited, NULL, &tick);
     if (signo == SIGQUIT) { xh_cpu_dump_all(); xh_tasks_dump(); xh_sysreg_stats_log(); xh_perf_log(true); continue; }      // debugging: where each vCPU is
     if (signo > 0) {
-      char why[48];
-      snprintf(why, sizeof why, "signal %d", signo);
-      xh_stop(XH_HALT_OFF, 0, why);
+      switch (xh_return_on_signal(&ret, config.return_graceful_ms, guest_ready, xh_mono_ms())) {
+      case XH_RETURN_GRACEFUL: {
+        bool asked = br_bridge_request_shutdown();
+        LOGI("return: graceful shutdown asked%s; iOS has up to %d ms", asked ? "" : " (no bridge; nothing to ask, will time out)", config.return_graceful_ms);
+        break;
+      }
+      case XH_RETURN_STOP_SECOND:
+        LOGI("return: second request while shutting down; stopping now");
+        xh_stop(XH_HALT_OFF, 0, "second return request");
+        break;
+      case XH_RETURN_STOP_NOW: {
+        char why[48];
+        snprintf(why, sizeof why, "signal %d", signo);
+        xh_stop(XH_HALT_OFF, 0, why);
+        break;
+      }
+      }
+    }
+    if (xh_return_expired(&ret, xh_mono_ms())) {
+      LOGI("return: graceful shutdown timed out after %llu ms; stopping", (unsigned long long)xh_return_elapsed_ms(&ret, xh_mono_ms()));
+      xh_stop(XH_HALT_OFF, 0, "graceful shutdown timed out");
     }
     xh_perf_tick();                         // "perf:" lines every perf-log seconds
     host_memory_tick(false);                // "memory: host MemAvailable" every host-mem-log seconds
@@ -814,6 +846,17 @@ int main(int argc, char **argv)
       xh_display_flush(0, 0, d->width, d->height);
     }
   }
+  // A return was asked: a guest-initiated restart in the window is iOS finishing its shutdown, not a reboot to re-run
+  // in place. Take it as the return (exit 0), so the fork's watcher goes back to One UI instead of xnuhost re-exec'ing.
+  if (ret.active && stop_state.reason == XH_HALT_RESTART) {
+    LOGI("return: the guest restarted during the graceful shutdown; taking it as the return");
+    stop_state.reason = XH_HALT_OFF;
+  }
+  // The guest shut itself down inside the window (its kernel's PSCI SYSTEM_OFF or halt set the stop): say how long it
+  // took. A timeout or a second request logged its own line above; a panic took the panic path (reason PANIC).
+  if (ret.active && stop_state.reason != XH_HALT_PANIC && strcmp(stop_state.why, "graceful shutdown timed out") != 0 &&
+      strcmp(stop_state.why, "second return request") != 0)
+    LOGI("return: iOS shut down in %llu ms", (unsigned long long)xh_return_elapsed_ms(&ret, xh_mono_ms()));
 
   LOGI("stopping: %s (reason %u, code %u)", stop_state.why, stop_state.reason, stop_state.code);
   host_memory_tick(true);

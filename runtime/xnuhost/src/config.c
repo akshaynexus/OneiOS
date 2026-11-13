@@ -21,6 +21,7 @@ void xh_config_defaults(xh_config *c)
   c->ram_percent = -1;
   c->ram_host_floor = -1;
   c->host_mem_log = -1;
+  c->return_graceful_ms = -1;
   strcpy(c->display, "shm");
   strcpy(c->gpu, "auto");
   c->input = true;
@@ -99,6 +100,7 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
   else if (!strcmp(key, "ram-host-floor")) { uint64_t v = xh_parse_size(value, &ok); ok = ok && v < (1ull << 40); if (ok) c->ram_host_floor = (int64_t)v; }
   else if (!strcmp(key, "ram-meminfo")) return copy(c->ram_meminfo, sizeof c->ram_meminfo, value);
   else if (!strcmp(key, "host-mem-log")) { ok = number(value, 0, 86400, &c->host_mem_log); }
+  else if (!strcmp(key, "return-graceful-ms")) { ok = number(value, 0, 120000, &c->return_graceful_ms); }
   else if (!strcmp(key, "width")) c->width = (unsigned)atoi(value);
   else if (!strcmp(key, "height")) c->height = (unsigned)atoi(value);
   else if (!strcmp(key, "hz")) { c->hz = (unsigned)atoi(value); ok = c->hz == 0 || (c->hz >= 24 && c->hz <= 240); }
@@ -301,6 +303,10 @@ int xh_config_finish(xh_config *c)
   if (c->ram_percent < 0) c->ram_percent = from_image.ram_percent < 0 ? XH_RAM_AUTO_PERCENT : from_image.ram_percent;
   if (c->ram_host_floor < 0) c->ram_host_floor = from_image.ram_host_floor < 0 ? (int64_t)XH_RAM_AUTO_FLOOR : from_image.ram_host_floor;
   if (c->host_mem_log < 0) c->host_mem_log = from_image.host_mem_log < 0 ? 30 : from_image.host_mem_log;
+  // Default 0 (today's immediate kill): the graceful path's guest half (iOS actually powering off) is not yet built
+  // or tested end to end, so it is off until the Mac/phone proves it. return-graceful-ms=N (or the image's
+  // xnuhost.conf) turns it on. The host state machine itself is tested (docs/booter.md "The return").
+  if (c->return_graceful_ms < 0) c->return_graceful_ms = from_image.return_graceful_ms < 0 ? 0 : from_image.return_graceful_ms;
   if (!*c->ram_meminfo) strcpy(c->ram_meminfo, *from_image.ram_meminfo ? from_image.ram_meminfo : "/proc/meminfo");
   if (!c->ram_bytes) {
     uint64_t total = 0, available = 0;

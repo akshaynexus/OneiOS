@@ -1399,9 +1399,16 @@ Details and the phone test: `runtime/bridges/battery/README.md`, `drivers/batter
 - **The charging chime** [F 24A446 powerd and SpringBoard, disassembled; `drivers/battery/README.md` "The charging
   chime"]: powerd publishes `Play Charging Chime` = ExternalConnected; SpringBoard's `SBChargingController` chimes for
   an unmarked power source with it true, and at startup marks the connected ones silently only when its startup
-  context has the boot overlay (backboardd's boot UI) or is dark. Phone, 2026-11-12 23:45 (on the charger, Full): the
-  "plugged in" sound played before the lock screen. [I] SpringBoard found no boot overlay (it started at +38 s, the
-  first frame came at +48.8 s); not proven: the iOS log lines that decide it are in that README.
+  context has the boot overlay (backboardd's boot UI) or is dark. Phone, 2026-11-12 23:45 and again on a later boot
+  (c1223f8, iOS log read): the "plugged in" sound played before the lock screen. **Proven** from that log: the boot
+  overlay was still up (`addOverlay(1-init 2)`, `Current bootUI is an Apple Logo`) but its boot-UI activity assertion
+  had timed out at 37 s before SpringBoard's startup context tested it, so the startup took the chime branch; no
+  `isChimeDisabled:` line (not powerd, not a late power-source change). The battery service is not the cause; what the
+  startup context's overlay test reads is the backboardd-saved overlay that a clean iOS shutdown leaves and the next
+  boot restores. A session ends by killing xnuhost, so iOS never shuts down cleanly and nothing is saved: every boot
+  looks like a boot after a crash. The fix is the return's graceful shutdown (`docs/booter.md` "The return",
+  `return-graceful-ms`): ask iOS to power off before the kill so it saves its overlay. Host side built and tested; the
+  guest half (iOS actually powering off) is the Mac's to build and is not yet verified.
 
 | Android node | iOS key | Mapping |
 |---|---|---|

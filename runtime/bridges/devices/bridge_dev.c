@@ -220,6 +220,9 @@ static uint32_t bridge_config_read(xh_virtio *dev, uint32_t offset, unsigned siz
 static const xh_virtio_ops bridge_ops = { .device_id = OB_VIRTIO_DEVICE_ID, .nqueues = 2, .handle = bridge_handle, .config_read = bridge_config_read,
                                           .reset = bridge_reset, .manual = 1u << OB_QUEUE_RX, .kick = bridge_kick };
 
+// The one bridge of a session, for br_bridge_request_shutdown (the host has at most one).
+static bridge_state *g_active_bridge;
+
 xh_virtio *br_bridge_create(uint64_t base, unsigned spi, const br_bridge_config *config)
 {
   bridge_state *s = calloc(1, sizeof *s);
@@ -227,5 +230,16 @@ xh_virtio *br_bridge_create(uint64_t base, unsigned spi, const br_bridge_config 
   s->config = *config;
   s->dev = xh_virtio_create(base, spi, &bridge_ops, s, "oneios-bridge");
   if (!s->dev) { free(s); return NULL; }
+  g_active_bridge = s;
   return s->dev;
+}
+
+// The return's graceful-shutdown ask (OB_CTL_SHUTDOWN on the control channel). Queued like any host->guest message
+// (it waits in the backlog until the guest's driver reads it); false when there is no bridge to ask through. The
+// caller does not depend on the guest acting: it kills at return-graceful-ms regardless.
+bool br_bridge_request_shutdown(void)
+{
+  if (!g_active_bridge) return false;
+  to_guest(g_active_bridge, OB_CH_CONTROL, OB_CTL_SHUTDOWN, NULL, 0);
+  return true;
 }

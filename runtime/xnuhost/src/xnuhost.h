@@ -51,6 +51,8 @@ typedef struct {
   char  ram_meminfo[256];   // ram-meminfo=FILE: where ram=auto reads MemTotal (tests); default /proc/meminfo
   uint64_t ram_auto_total, ram_auto_available;
   int   host_mem_log;       // host-mem-log=SECONDS: the host's MemAvailable in the log every so often; 0 = off; -1 = unset (30)
+  int   return_graceful_ms; // return-graceful-ms: on a return (a stop signal), how long to let iOS shut itself down
+                            // before the kill; 0 = the immediate kill (the default until the guest half is tested); -1 = unset (0)
   xh_disk_config disk[XH_MAX_DISKS];
   unsigned ndisk;
   char  display[16];        // "shm", "drm", "none"
@@ -321,6 +323,20 @@ extern void (*xh_cpu_place)(int tid, unsigned vcpu);
 // ---- machine stop (main.c) ----------------------------------------------------------------------
 void xh_stop(uint32_t reason, uint32_t code, const char *why);     // any thread; returns
 bool xh_stopping(void);
+uint64_t xh_mono_ms(void);                                         // CLOCK_MONOTONIC in milliseconds
+
+// The return's graceful-shutdown state machine (return.c; docs/booter.md "The return"). Pure, unit-tested.
+typedef struct { bool active; uint64_t started_ms, deadline_ms; } xh_return_state;
+typedef enum {
+  XH_RETURN_GRACEFUL,     // start the wait: ask iOS to shut down, keep the vCPUs running
+  XH_RETURN_STOP_NOW,     // graceful off, or iOS not ready: stop immediately (today's behaviour)
+  XH_RETURN_STOP_SECOND,  // a second return request while already waiting: stop immediately
+} xh_return_decision;
+void xh_return_init(xh_return_state *st);
+// A return signal (SIGTERM/SIGINT/SIGHUP). graceful_ms: config.return_graceful_ms (0 = immediate kill).
+xh_return_decision xh_return_on_signal(xh_return_state *st, int graceful_ms, bool guest_ready, uint64_t now_ms);
+bool     xh_return_expired(const xh_return_state *st, uint64_t now_ms);   // the deadline has passed
+uint64_t xh_return_elapsed_ms(const xh_return_state *st, uint64_t now_ms);
 void xh_guest_ready(void);
 
 // ---- host-call vector (hostcalls.c, arch thunks) ------------------------------------------------

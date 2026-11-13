@@ -29,7 +29,11 @@ enum { OB_CH_CONTROL = 0, OB_CH_HAPTIC = 1, OB_CH_HCI = 2, OB_CH_CAMERA = 3, OB_
 // ---- control ----------------------------------------------------------------------------------
 // guest -> host OB_CTL_HELLO { u32 version }; host -> guest OB_CTL_HELLO { u32 version, u32 channels }
 // where bit n of channels says the host serves channel n.
-enum { OB_CTL_HELLO = 1 };
+// host -> guest OB_CTL_SHUTDOWN (no payload): the return asked for a graceful shutdown. The guest should begin its
+// normal power-off (so iOS saves what a clean shutdown saves) and then halt; xnuhost waits up to return-graceful-ms
+// (docs/booter.md "The return") and kills regardless. A guest that does nothing is simply killed at the limit, as
+// before, so the way back is never at risk.
+enum { OB_CTL_HELLO = 1, OB_CTL_SHUTDOWN = 2 };
 struct ob_ctl_hello { uint32_t version, channels; };
 
 // ---- haptics (guest -> host only) -------------------------------------------------------------

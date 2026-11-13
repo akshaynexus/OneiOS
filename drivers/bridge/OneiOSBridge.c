@@ -27,6 +27,7 @@
 
 extern void IOSleep(unsigned milliseconds);
 extern void delay(int usec);
+void oneios_power_request(void);     // the graceful-shutdown hook (defined weak below; a guest helper overrides it)
 extern uint64_t kvtophys(vm_offset_t va);
 // ArmCpu (the GIC): a handler for one SPI, run in the primary interrupt context before the EOI; 0 when attached.
 extern int armcpu_spi_attach(uint32_t intid, bool edge, void (*handler)(void *), void *context, uint32_t *readback, uint64_t *router);
@@ -199,6 +200,11 @@ static void ob_dispatch(const uint8_t *message, uint32_t written) {
             oneios_bridge_stage = 5;
             snprintf(oneios_bridge_status, sizeof(oneios_bridge_status), "up, host channels %#x", hello.channels);
             printf("ONEIOS BRIDGE: on: host protocol %u, channels %#x (1 control, 2 haptics, 4 Bluetooth)\n", hello.version, hello.channels);
+        } else if (header.type == OB_CTL_SHUTDOWN) {
+            // The return asked for a graceful power-off (xnuhost's return-graceful-ms). Hand it to the power-off path
+            // so iOS shuts down the way it does for the user, then halts; xnuhost kills at the limit either way.
+            printf("ONEIOS BRIDGE: host asked for a graceful shutdown (return)\n");
+            oneios_power_request();
         }
         return;
     }
@@ -323,6 +329,11 @@ __attribute__((weak)) void oneios_audio_start(void) {}
 // OneiOSWifi.cpp: the Wi-Fi controller and interface under the collection's IOEthernetController and
 // IOEthernetInterface, UniXNU-droidvm's virtio-net transport). Weak: a kernel without it has no network interface.
 __attribute__((weak)) void oneios_net_start(void) {}
+// The graceful shutdown the return asks for (OB_CTL_SHUTDOWN above). The real power-off is a guest userspace helper
+// the Mac builds (userland/helpers/oneios-shutdown, docs/booter.md "The return"), which runs iOS's clean power-off so
+// SpringBoard tears down and persists its boot overlay for the next boot. Weak default: nothing, so a kernel or image
+// without the helper is simply killed at return-graceful-ms, exactly as before (the way back is never at risk).
+__attribute__((weak)) void oneios_power_request(void) {}
 
 void oneios_drivers_start(void) {
     oneios_bridge_start();
