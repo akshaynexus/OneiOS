@@ -1,0 +1,182 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 0c5e1e7..d076ff1 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -9245,6 +9245,169 @@ oneios_swap_folder(void)
+ 	    mp ? vfs_statfs(mp)->f_fstypename : "?", mp && vfs_isrdonly(mp) ? "read-only" : "read-write");
+ 	vnode_put(vp);
+ }
++
++/*
++ * OneiOS hosted (0060): what lsd and iconservicesagent find of their stores when they start, said before launchd, so a
++ * boot's log tells whether the work they do at start is the stores' fault. lsd: each data container's Library/Caches
++ * entry (the database com.apple.LaunchServices-NNN-v2.csstore, the system content's SystemDataOnly-... copy, and the
++ * markers beside them: com.apple.LaunchServices.error
++ * is the recovery file lsd makes before it loads the database and removes once it loaded it; when it is there at start
++ * lsd throws the database away and builds an empty one, "found a recovery file, so creating a new empty store";
++ * .syncInterrupted, .dirty, .InstallJournal). iconservicesagent: each folder of com.apple.IconsCache (the drawn icons,
++ * *.isdata, its store.index and __cache_info__, the build and language it keeps the icons for). Lines:
++ *   oneios-ls-state: lsd D1F3ECC9-...: com.apple.LaunchServices-033554481-v2.csstore 12582912 bytes, modified 4100 s ago
++ *   oneios-icons-state: 15E09D24-...: 512 icons (.isdata) of 514 entries, store.index 65536 bytes (modified 4000 s ago), __cache_info__ 91 bytes
++ * One change: a recovery file left by the last session goes (oneios-ls-recovery=0 keeps it). lsd removes it once a load
++ * succeeded, but every session here ends with the whole kernel killed, never with lsd's own shutdown, so a session that
++ * ends before lsd got that far leaves it (a PC boot of 2026-11-13 ended 44 min after lsd made it, still there), and the next lsd
++ * throws away a database that 0043 found whole and registers every app again: every icon's validation token (the
++ * database's UUID and sequence number) then changes, and iconservicesagent draws every icon again. LaunchServices does
++ * the same itself when its sync marker says a reboot cut the last sync ("Previous sync was interrupted, presumably by a
++ * reboot. Removing any extant recovery file."): a reboot is not lsd's crash. lsd makes its own recovery file again
++ * before it loads, so a database that crashes lsd is still thrown away at lsd's next start.
++ *   oneios-ls-state: lsd D1F3ECC9-...: com.apple.LaunchServices.error 0 bytes, modified 2700 s ago: removed (0), lsd loads the database
++ * oneios-store-report=0 turns the whole step off.
++ */
++#define ONEIOS_STORE_NAMES 1024
++static int
++oneios_store_file(const char *path, off_t *size, int64_t *age, vfs_context_t ctx)
++{
++	vnode_t vp = NULLVP;
++	int error = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, ctx);
++	if (error) {
++		return error;
++	}
++	struct vnode_attr va;
++	VATTR_INIT(&va);
++	VATTR_WANTED(&va, va_data_size);
++	VATTR_WANTED(&va, va_modify_time);
++	error = vnode_getattr(vp, &va, ctx);
++	vnode_put(vp);
++	if (!error) {
++		struct timeval now;
++		microtime(&now);
++		*size = (off_t)va.va_data_size;
++		*age = (int64_t)now.tv_sec - (int64_t)va.va_modify_time.tv_sec;
++	}
++	return error;
++}
++
++static void
++oneios_store_report(proc_t p, user_addr_t scratch)
++{
++	uint32_t on = 1, remove_recovery = 1;
++	(void)PE_parse_boot_argn("oneios-store-report", &on, sizeof(on));
++	(void)PE_parse_boot_argn("oneios-ls-recovery", &remove_recovery, sizeof(remove_recovery));
++	if (on == 0) {
++		return;
++	}
++	static const char *const parents[] = {"/private/var/mobile/Containers/Data/InternalDaemon", "/private/var/containers/Data/InternalDaemon",
++		                              "/private/var/containers/Data/System"};
++	static const char icons[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.lsd.iconscache/Library/Caches/"
++	    "com.apple.IconsCache";
++	vfs_context_t ctx = vfs_context_current();
++	char (*names)[64] = kalloc_data(ONEIOS_STORE_NAMES * 64, Z_WAITOK);
++	char (*files)[64] = kalloc_data(16 * 64, Z_WAITOK);
++	char *path = kalloc_data(256, Z_WAITOK);
++	if (!names || !files || !path) {
++		goto done;
++	}
++	unsigned seen = 0;
++	for (size_t k = 0; k < sizeof(parents) / sizeof(parents[0]); ++k) {
++		unsigned count = 0;
++		if (native_ls_store_names(parents[k], "", names, 128, &count)) {
++			continue;
++		}
++		for (unsigned i = 0; i < count; ++i) {
++			unsigned n = 0;
++			snprintf(path, 256, "%s/%s/Library/Caches", parents[k], names[i]);
++			if (native_ls_store_names(path, "com.apple.LaunchServices", files, 12, &n)) {
++				continue;
++			}
++			unsigned system = 0;   /* the system content's own copy, SystemDataOnly-com.apple.LaunchServices-NNN-v2.csstore */
++			(void)native_ls_store_names(path, "SystemDataOnly-", files + n, 16 - n, &system);
++			n += system;
++			if (!n) {
++				continue;
++			}
++			seen++;
++			bool database = false;
++			for (unsigned j = 0; j < n; ++j) {
++				const size_t length = strlen(files[j]);
++				database |= length > 8 && !strcmp(files[j] + length - 8, ".csstore");
++			}
++			for (unsigned j = 0; j < n; ++j) {
++				off_t size = -1;
++				int64_t age = 0;
++				snprintf(path, 256, "%s/%s/Library/Caches/%s", parents[k], names[i], files[j]);
++				int error = oneios_store_file(path, &size, &age, ctx);
++				const size_t length = strlen(files[j]);
++				const bool recovery = !strcmp(files[j], "com.apple.LaunchServices.error");
++				if (error) {
++					printf("oneios-ls-state: lsd %s: %s: not read (%d)\n", names[i], files[j], error);
++				} else if (recovery && remove_recovery != 0) {
++					struct unlink_args request = {.path = scratch + 0xc00};
++					int32_t result = 0;
++					int removed = copyout(path, request.path, strlen(path) + 1);
++					if (!removed) {
++						removed = unlink(p, &request, &result);
++					}
++					printf("oneios-ls-state: lsd %s: %s %lld bytes, modified %lld s ago: %s (%d)%s\n", names[i], files[j],
++					    (long long)size, (long long)age, removed ? "not removed" : "removed", removed,
++					    removed ? ": lsd will start from an empty database" :
++					    database ? ", lsd loads the database" : " (no database here: lsd builds one)");
++				} else {
++					printf("oneios-ls-state: lsd %s: %s %lld bytes, modified %lld s ago%s\n", names[i], files[j], (long long)size,
++					    (long long)age, recovery ? " (the recovery file, kept: lsd will start from an empty database)" :
++					    !strncmp(files[j], "SystemDataOnly-", 15) ? " (the system content's database)" :
++					    length > 8 && !strcmp(files[j] + length - 8, ".csstore") ? " (the database)" : "");
++				}
++			}
++		}
++	}
++	if (!seen) {
++		printf("oneios-ls-state: no LaunchServices database or marker in any data container (lsd builds the database)\n");
++	}
++	unsigned folders = 0;
++	if (native_ls_store_names(icons, "", files, 16, &folders)) {
++		printf("oneios-icons-state: no drawn-icon store (iconservicesagent draws every icon)\n");
++		goto done;
++	}
++	for (unsigned i = 0; i < folders; ++i) {
++		if (files[i][0] == '.') {
++			continue;
++		}
++		unsigned n = 0, drawn = 0;
++		snprintf(path, 256, "%s/%s", icons, files[i]);
++		if (native_ls_store_names(path, "", names, ONEIOS_STORE_NAMES, &n)) {
++			continue;
++		}
++		for (unsigned j = 0; j < n; ++j) {
++			const size_t length = strlen(names[j]);
++			drawn += length > 7 && !strcmp(names[j] + length - 7, ".isdata");
++		}
++		off_t index = -1, info = -1;
++		int64_t index_age = 0, info_age = 0;
++		snprintf(path, 256, "%s/%s/store.index", icons, files[i]);
++		(void)oneios_store_file(path, &index, &index_age, ctx);
++		snprintf(path, 256, "%s/%s/__cache_info__", icons, files[i]);
++		(void)oneios_store_file(path, &info, &info_age, ctx);
++		/* -1: not there. Without __cache_info__ (or with another build or language in it) iconservicesagent empties the folder. */
++		printf("oneios-icons-state: %s: %u%s icons (.isdata) of %u entries, store.index %lld bytes (modified %lld s ago), "
++		    "__cache_info__ %lld bytes\n", files[i], drawn, n == ONEIOS_STORE_NAMES ? "+" : "", n, (long long)index,
++		    index < 0 ? 0LL : (long long)index_age, (long long)info);
++	}
++done:
++	if (names) {
++		kfree_data(names, ONEIOS_STORE_NAMES * 64);
++	}
++	if (files) {
++		kfree_data(files, 16 * 64);
++	}
++	if (path) {
++		kfree_data(path, 256);
++	}
++}
+ #endif /* XNU_HOSTED */
+ static void
+ native_ls_store_drop(proc_t p, user_addr_t scratch)
+@@ -9484,6 +9647,7 @@ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+ 	oneios_camera_addon_mount(p, scratch);        /* 0056 */
+ 	oneios_icon_store_refresh(p, scratch);        /* 0036 */
+ 	oneios_lsd_first_boot_done(p, scratch);       /* 0037 */
++	oneios_store_report(p, scratch);              /* 0060 */
+ 	oneios_jobs_enable();                         /* 0044 */
+ 	oneios_feature_flags_off(p, scratch);         /* 0048 */
+ 	oneios_jobs_disable();                        /* 0053 */

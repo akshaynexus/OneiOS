@@ -790,6 +790,130 @@ decision, 2026-11-12: no pressure feedback, no cache cap, no change to XNU's fre
   renderer still holds its udmabuf stays held by Linux (the import pins it) and the guest's reuse gets a new page (a
   guest bug either way).
 
+## 0060-ls-boot-state.patch (fix-boot-slow, 2026-11-13)
+
+The phone's boot of 2026-11-12 23:45 (kernel.kc through 0058, a Data store kept from earlier boots) built the lock
+screen and the Home Screen piece by piece: the clock, the wallpaper, the icons, then the labels one by one. In the
+first two minutes `oneios-cpu` had lsd at 90-92 % (+40 s, +58 s) and iconservicesagent at 115 % (+108 s).
+
+**The two stores, read in 24A446** (CoreServices in the dyld cache; `/System/Library/CoreServices/iconservicesagent`):
+
+- lsd keeps its database in its data container's `Library/Caches/com.apple.LaunchServices-33554481-v2.csstore`
+  (beside it `SystemDataOnly-...csstore`, the system content's copy). `_LSDatabaseCreateFromPersistentStore` first
+  looks for the recovery file `com.apple.LaunchServices.error`: when it is there lsd logs `_LSCreateStoreWithFileContents
+  found a recovery file, so creating a new empty store` and registers everything again. When it is not, lsd makes it,
+  loads the database, runs `_LSDatabaseClean` on it ("Cleaning new database object": it registers the CoreTypes bundle,
+  the extension points, the canonical names and the frameworks' localized strings again, at every start, on a loaded
+  database as on a new one) and only then removes the file. A database is also rebuilt when its header says the
+  seeding did not complete (`Database seeding is incomplete, need to rebuild`; set when MobileInstallation answers with
+  partial results) or names another build (`Local database thinks system build version is ...`). LaunchServices removes
+  the recovery file itself when its sync marker `com.apple.LaunchServices.syncInterrupted` says a reboot cut the last
+  save (`Previous sync was interrupted, presumably by a reboot. Removing any extant recovery file.`);
+  `com.apple.LaunchServices.dirty` marks unsaved changes and goes at each save.
+- iconservicesagent keeps the icons it drew in `systemgroup.com.apple.lsd.iconscache/Library/Caches/
+  com.apple.IconsCache/<UUID>/` (`*.isdata`, `store.index`, `store-source-registry.map`, `__cache_info__`). At start
+  (`-[ISMutableIconCache initWithURL:]`) it empties the folder unless `__cache_info__` holds this build's
+  `ProductBuildVersion`, the folder is owned by `_iconservices` (uid 276) and has no ACL. Each icon carries a validation
+  token, LaunchServices' database UUID and sequence number (`Generated image for icon %@ -- Validation token DB UUID %@
+  seq No %llu`); one whose token no longer matches is drawn again (`Rejected cached image ... validation state`).
+
+**What the PC showed** (qemu-aarch64, 8 vCPUs, 4 GiB, the PC image set; one Data store booted again and again, its
+copies for the comparisons; boots 1-6 shared the box with two other agents' boots and kernel builds, load 13-24 on 4
+CPUs; boot 7 had it alone; boots 8 and 9 (not in the table) were stopped before lsd started, 8 by its time limit at
+load 16, 9 to keep to one boot at a time; 10 and 11 ran one at a time through the box's qemu queue, `flock
+/tmp/oneios-qemu.lock`):
+
+| Boot | Data store | Kernel | launchd | lsd | first frame | lsd / iconservicesagent CPU-s, 30 min from launchd |
+|---|---|---|---|---|---|---|
+| 1 | new | fpr2 (through 0058) | +874 s | +2050 s | +2096 s | 168 / 2 |
+| 3 | after 1 (no database saved) | fpr2 | +531 s | +1392 s | none in 4067 s | lsd 137 to the end |
+| 4 | after 3, its recovery file left | 0060 (first build) | +1088 s | +1272 s | +1613 s | 1298 / 1666 (60 min): lsd built and seeded the database |
+| 5, 6 | after 4: database saved, 52 of 52 apps | 0060 / fpr2 | +515 s | +1508 / +1450 s | none in 3600 s | 27 / 0, 47 / 0 (60 min) |
+| 7 | the same, alone on the box | 0060 | +229 s | +308 s | +679 s | 75 / 160 |
+| 10 | a copy of the store after 6: the database (52 of 52 apps) and boot 6's recovery file | fpr2 | +310 s | +381 s | +1306 s | 57 / 0; containermanagerd 160 |
+| 11 | another copy of the same | 0060 (merged tree, `kernel.kc` `22f8c09d`) | +413 s | +966 s | +1449 s | 71 / 277 |
+
+**Before and after, the same store** (boots 10 and 11, one at a time; the box's load differed, so their times do not
+compare). Both kernels' 0043 said `names 52 of 52 apps of /Applications: kept`. Boot 10 (no 0060), iOS's own log: lsd
+`_LSCreateStoreWithFileContents found a recovery file, so creating a new empty store`, `result: (null)`, then `Seeding
+database with UID: 501`: everything registered again, containermanagerd busy, and 45 minutes later the session was
+killed with the new database not yet saved (on disk still the old one, with lsd's new recovery file beside it: the next
+boot does it all again). Boot 11 (0060): `oneios-ls-state: ... com.apple.LaunchServices.error 0 bytes, modified 11065 s
+ago: removed (0), lsd loads the database`; lsd made its own recovery file, `result: <private> options: 7` (the database
+loaded), no seeding, removed the file, saved the database again; iconservicesagent served the 72 stored icons (2
+`.isdata` rewritten, 70 untouched).
+
+- **The database is kept and loaded** (boot 7's own log): `oneios-ls: ... names 52 of 52 apps of /Applications: kept`;
+  lsd found no recovery file, loaded it (`result: <private> options: 7`), no `Seeding`, no rebuild. Before it removed
+  its recovery file it ran `_LSDatabaseClean`: `Registering CoreTypes bundle` (`Error -50 registering path
+  /System/Library/CoreServices/MobileCoreTypes.bundle`), 42 `Unable to create bundleRef`, `Registering extension
+  points` (`Failed to create node for framework (null)`), canonical names, localized strings: 26.8 s of iOS's clock,
+  about 5 min of real time on this PC (the guest's clock ran about 12 times slow here, below). On the phone, 10 or more
+  times faster, that is about the first minute of lsd at 90 %: **the phone's lsd minute is most likely this per-start
+  work, not a rebuild** (a guess for the phone: the next boot's log says).
+- **A kill during that window throws the database away.** Under load (boots 5 and 6) lsd was still in it 35 minutes
+  later, its recovery file in place, when the session was killed; boot 3 ended the same way. Every session here ends
+  with the kernel killed (a return, a panic, xnuhost's exit), never with lsd's own shutdown, so the next lsd finds the
+  file and starts empty: a full registration (boot 4's `Noting rebuild statistics`: 346 apps, 928 plug-ins,
+  `systemContentScanTime` 1439 s, `totalRebuildTime` 1454.5 s) and a new database, whose new UUID makes every drawn
+  icon's token stale. On the phone that is a return or a panic within lsd's first minute.
+- **The icon store is kept and valid across boots** on the PC: `__cache_info__` is `{ProductBuildVersion: 24A446,
+  language: en}`, the `<UUID>` folder is `_iconservices`' with no ACL (its parents carry the container ACL, which is not
+  looked at). Boot 4 drew 72 icons on the CPU (no 3D GPU on the PC); boot 7 found them (`72 icons (.isdata)`) and wrote
+  no new `.isdata`; its iconservicesagent (160 CPU-s) served them. So the phone's 115 % at +108 s is not the store being
+  thrown away when the database was kept; a guess: the Metal path's own cost at each boot (metal2vulkan's pipeline
+  cache, which the plug-in's client path puts in `_CS_DARWIN_USER_CACHE_DIR` or, failing that, the user temp folder that
+  launchd's `dirs_cleaner` empties at every boot: `external/NativeMetal/NativeAdrenoMetalPlugin.mm` `clientDevice`).
+  Not looked at on the phone.
+- 0036's stamp and 0037's semaphore did what they say (`generation 1: kept`; no `Reboot detected, performing first
+  boot work`).
+
+**The change.** Before launchd, after 0043's keep or drop and 0036/0037:
+
+- `oneios-ls-state:` one line per `com.apple.LaunchServices*` and `SystemDataOnly-*` entry of every lsd data container
+  (the databases, the recovery file, `.syncInterrupted`, `.dirty`, `.InstallJournal`, the app protection store): size
+  and age.
+- A recovery file there is removed (`oneios-ls-recovery=0` keeps it). For lsd the kill of the whole kernel is a reboot,
+  not its own crash, which is the case LaunchServices handles itself by removing the file; lsd makes the file again
+  before it loads, so a database that crashes lsd is still thrown away at lsd's next start in the same session. 0043 has
+  already checked that the database names every app.
+- `oneios-icons-state:` one line per `com.apple.IconsCache` folder: the drawn icons (`.isdata`), `store.index`'s size
+  and age, `__cache_info__`'s size (-1: missing, and iconservicesagent then starts the folder over).
+- `oneios-store-report=0` turns the step off.
+
+The lines on the PC (this patch before the merge of main, `kernel.kc` `06b06e68`, boot 7; the merged tree's
+`22f8c09d` gave the same lines in boot 11):
+
+```
+oneios-ls: D1F3ECC9-8A4D-42E8-8A88-F6F96F1A8E6E/com.apple.LaunchServices-33554481-v2.csstore: 11448320 bytes, names 52 of 52 apps of /Applications: kept
+oneios-ls-state: lsd D1F3ECC9-...: com.apple.LaunchServices.unregisteredtypes-501.db 12288 bytes, modified 6197 s ago
+oneios-ls-state: lsd D1F3ECC9-...: com.apple.LaunchServicesAppProtectionStore.plist 264 bytes, modified 7289 s ago
+oneios-ls-state: lsd D1F3ECC9-...: com.apple.LaunchServices-33554481-v2.csstore 11448320 bytes, modified 4614 s ago (the database)
+oneios-ls-state: lsd D1F3ECC9-...: SystemDataOnly-com.apple.LaunchServices-33554481-v2.csstore 11200440 bytes, modified 6283 s ago (the system content's database)
+oneios-icons-state: 15E09D24-AF82-354E-BECD-43DCC0B36EFC: 72 icons (.isdata) of 75 entries, store.index 720896 bytes (modified 6189 s ago), __cache_info__ 91 bytes
+```
+
+and with a recovery file left (boot 4's store; the first build said "lsd loads the database" there):
+`oneios-ls-state: lsd D1F3ECC9-...: com.apple.LaunchServices.error 0 bytes, modified 4975 s ago: removed (0) (no
+database here: lsd builds one)`.
+
+**Not changed: what it costs** (the hosting's share; PC boot 1, lsd's busiest 30 s, lsd 78-92 %): 154,027 task traps
+(5,125/s: 60,108 system calls, 88,431 faults, 5,488 interrupts); the hand-offs (trap to vCPU and back) 56.6 and 65.4 us
+at the mean (10 us at p50), about 19 s of the 30 s summed over the vCPUs; on cpu0 and cpu1 45 % of the wall time was
+kernel, 55 % an iOS thread's turn. lsd's calls are file system work, by kernel time: `madvise` 14,156 x 145 us,
+`open_nocancel` 3,661 x 636 us, `open` 1,697 x 1,264 us, `workq_kernreturn` 3,151 x 586 us, `getdirentries64` 2,912 x
+580 us, `getattrlist` 1,619 x 946 us, `mach_msg2` 6,123 x 333 us. These are qemu's times (about ten times the phone's);
+the phone's earlier boot had syscall p99 1.3 ms, fault p99 0.4 ms and 40-45 % kernel on cpu0 and cpu1. So the work is
+iOS's own (walking bundles, reading Info.plists and localizations, container queries), each step a trap the hosting
+makes dearer; doing less of it at each start is worth more than a cheaper trap, and the part that could be cut is
+Apple's `_LSDatabaseClean`, which this patch does not touch.
+
+Also seen on the PC, not changed: the guest's wall clock (iOS's log times) ran about 12 times slower than real time
+(boot 7: 109 `oneios-cpu` lines, 10 s apart on the console, span 91 s of iOS's log) and jumped between boots (launchd at
+20:38 UTC in boot 1, 14:18 in boot 3); rapportd logged 221,791 lines in boot 3's first minutes
+(`ServiceDiscovery:DiscoveryCache After pruning N records`), logd at 30-80 %; `oneios-tool`'s own APFS reader refuses
+these Data stores (`short read at 1152903912689233920`: it reads block 0's container superblock, an old checkpoint
+whose object map is gone) and falls back to apfs-fuse.
 ## 0062-iokit-hardware-probe-trace.patch (fixbt, 2026-11-13)
 
 A debugging aid for a daemon that runs and never opens its hardware (bluetoothd on the phone, 2026-11-12 23:45: on,
