@@ -1147,6 +1147,9 @@ static void test_config(const char *dir)
   char *argv4[] = { "xnuhost", "--image", image, "--set", "bluetooth=virtual" };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 5, argv4) == 0 && xh_config_finish(&c) == 0 && !strcmp(c.bluetooth, "virtual"));
+  char *argv4b[] = { "xnuhost", "--image", image, "--mode", "bench", "--set", "bluetooth=sim" };   // the PC's stand-in
+  xh_config_defaults(&c);
+  CHECK(xh_config_args(&c, 7, argv4b) == 0 && xh_config_finish(&c) == 0 && c.bridges == 0 && !strcmp(c.bluetooth, "sim"));
   char *argv5[] = { "xnuhost", "--image", image, "--set", "wifi=off" };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 5, argv5) == 0 && xh_config_finish(&c) == 0 && !strcmp(c.wifi, "off"));

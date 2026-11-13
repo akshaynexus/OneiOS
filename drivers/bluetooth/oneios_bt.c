@@ -58,7 +58,10 @@ off(const char *why)
 	oneios_bt_adt_hide();
 }
 
-/* devfs is up after the root mount: the nodes bluetoothd checks with access() */
+/* After the root mount: the transport core, the two kernel controls and the /dev nodes (devfs is up then). bluetoothd
+ * uses none of them before launchd starts it. Started at the board's probe, before the root mount, the PC's qemu boots
+ * of 2026-11-13 never got their root device (3 of 3: APFS's start waited for IOBSD while IOResources stayed busy;
+ * with oneios_bt=0 or no bridge, 2 of 2 booted). */
 static void
 node_thread(void *arg __unused, wait_result_t w __unused)
 {
@@ -68,7 +71,12 @@ node_thread(void *arg __unused, wait_result_t w __unused)
 		delay_for_interval(20, NSEC_PER_MSEC);
 		waited += 20;
 	}
+	obt_ios_start();
+	obt_ctl_attach();
+	obt_sk_attach();
 	obt_dev_attach();
+	OBT_SAY("transport up %u ms after the start: control com.apple.uart.sk.bluetooth (bluetoothd 27), "
+	    "control com.apple.uart.bluetooth, /dev/uart.bluetooth, /dev/cu.bluetooth, /dev/btwake\n", waited);
 	(void)thread_terminate(current_thread());
 }
 
@@ -99,12 +107,11 @@ oneios_bt_start(void)
 		off("the host serves no Bluetooth controller");
 		return;
 	}
-	obt_ios_start();
-	obt_ctl_attach();
-	obt_sk_attach();
-	if (kernel_thread_start(node_thread, NULL, &th) == KERN_SUCCESS) {
-		thread_deallocate(th);
+	if (kernel_thread_start(node_thread, NULL, &th) != KERN_SUCCESS) {
+		off("no thread to start the transport");
+		return;
 	}
+	thread_deallocate(th);
 	snprintf(obt_result, sizeof(obt_result), "on: the phone's controller through the host's Bluetooth HAL (opened when bluetoothd connects)");
 	OBT_SAY("%s\n", obt_result);
 }

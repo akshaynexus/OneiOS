@@ -481,7 +481,7 @@ On top of 0001, all under `#if XNU_HOSTED`. Work tree `HOSTED_OUT=smp`.
 |---|---|
 | `hosted_pmap.h` `hosted_kernel_device`, `hosted_machine.c` `hosted_exception_upcall` | A kernel data abort whose page-table entry names an address inside `xh_info.io_phys/io_size` (IOKit's IOMemoryMap of a board device, as `ArmCpu::mapGic`) is handed to the `mmio_emulate` host call with the fault's frame; the frame is resumed past the instruction. Such a page is never given to `kernel_map`. An instruction the host cannot emulate stops the kernel with the registers, instead of faulting forever. |
 | `start.s` `LowResetVectorBase`, `hosted_smp.c` `hosted_secondary_entry` | The reset vector page ArmCpu passes to PSCI `CPU_ON` branches to `hosted_cpu_start`. The new vCPU finds its CPU data by `xh_cpu.index` (the node's `reg`) and runs `arm_init_cpu` on that CPU's interrupt stack. |
-| `kernel/hosted-fixup.py` (run by `build-hosted.sh`, then the seal again) | `mrs xN, MPIDR_EL1` -> `ldr wN, [x18]` (the vCPU index) in the linked kernel: 7 sites, XNU's and ArmCpu's. At EL0 Linux answers MPIDR_EL1 itself with one value for every core, and ArmCpu parks a secondary whose MPIDR is not its affinity. Done after the link because the text is under corecrypto's HMAC (a rewrite at boot fails the POST with -2074). **fable-prelink:** kexts of the collection that read MPIDR_EL1 need the same rewrite. |
+| `oneios-tool kernel hosted-fixup` (was `kernel/hosted-fixup.py`; run by `build-hosted.sh`, then the seal again) | `mrs xN, MPIDR_EL1` -> `ldr wN, [x18]` (the vCPU index) in the linked kernel: 7 sites, XNU's and ArmCpu's. At EL0 Linux answers MPIDR_EL1 itself with one value for every core, and ArmCpu parks a secondary whose MPIDR is not its affinity. Done after the link because the text is under corecrypto's HMAC (a rewrite at boot fails the POST with -2074). **fable-prelink:** kexts of the collection that read MPIDR_EL1 need the same rewrite. |
 | `machine_routines.c` `ml_set_decrementer`, `ml_get_decrementer`, `ml_get_timer_pending`, `_enable_virtual_timer`; `hosted_smp.c` `hosted_timer_*` | The decrementer is the `timer_set` host call (one call instead of a trapped `CNTV_TVAL_EL0`). It still arrives as INTID 27 through ArmCpu's handler, which calls `rtclock_intr`. |
 | `hosted_machine.c` `hosted_kernel_esr` | Uses `xh_frame.signo` (SIGTRAP = `brk`) when the host gives it. |
 | `hostcall.h` | xnuhost's header as of `242ee8f`. |
@@ -790,6 +790,28 @@ decision, 2026-11-12: no pressure feedback, no cache cap, no change to XNU's fre
   renderer still holds its udmabuf stays held by Linux (the import pins it) and the guest's reuse gets a new page (a
   guest bug either way).
 
+## 0062-iokit-hardware-probe-trace.patch (fixbt, 2026-11-13)
+
+A debugging aid for a daemon that runs and never opens its hardware (bluetoothd on the phone, 2026-11-12 23:45: on,
+no transport opened). For the processes of the boot argument `oneios-iokit=NAME[,NAME...]` (default
+`bluetoothd,BlueTool`; `oneios-iokit=-` for none) the kernel logs one `oneios-iokit:` line per distinct request:
+
+- IOKit matching (`io_service_get_matching_service(s)`): the matching dictionary on one line and what was found
+  (`match {IONameMatch=bluetooth} -> IOPlatformDevice "bluetooth"`, `-> none (0x2c0)`), `match all` for an iterator;
+- matching notifications (`io_service_add_notification*`: `notify IOServiceFirstMatch {...}`): a daemon that waits
+  for a service shows what it waits for;
+- registry paths (`io_registry_entry_from_path`, `_ool`);
+- property reads (`io_registry_entry_get_property`, `_bytes`, `_recursively`, `_bin`/`_bin_buf`: what
+  `IORegistryEntrySearchCFProperty` uses): name, plane, recursive or not, the entry, found or not;
+- user client opens (`io_service_open_extended`): class, type, result;
+- kernel controls looked up by name (`CTLIOCGINFO`, `bsd/kern/kern_control.c`): `kernel control
+  "com.apple.uart.sk.bluetooth" -> id N` or `-> not registered (errno 2)`.
+
+A request is logged when first made, when its answer changes, and at its 16th, 64th, 256th, ... asking (a polling loop
+shows with its count), at most 800 lines a boot. The property wrappers rename the original routines
+(`hosted_impl_...`) and call them; nothing else changes. Built in `HOSTED_OUT=fixbt` on 2026-11-13 (see
+`docs/hardware.md` 4 for what it showed on the PC); not run on the phone.
+
 ## 0066-free-page-runs.patch (hang, 2026-11-13)
 
 **0058's give-back in long runs, and where its time goes.** On the phone (2026-11-12 23:45 boot) 0058 gave back 205
@@ -887,4 +909,4 @@ IONetworkingFamily-188's headers, which the build checks against `net/IONetworki
 vtable slots, every discriminator); 159 original functions are bound through `.original` stubs, none of them
 non-virtual. `net/README.md` has the files, the check, the boot argument (`oneios-wifi=0`) and the log lines;
 `docs/hardware.md` section 3 the design, the host's side and what ran. Built on the Mac (`HOSTED_OUT=radio`) and
-prelinked: the import audit passes (0 failures) and `stubs-check.py` finds 666 good stubs, 0 bad.
+prelinked: the import audit passes (0 failures) and `oneios-tool prelink stubs-check` finds 666 good stubs, 0 bad.

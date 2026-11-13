@@ -15,10 +15,13 @@
 # checked against the profile (size, CRC-32, and SHA-384 or SHA-256 where the profile pins one). AEA members
 # (the OS and SystemOS images) are decrypted: `ipsw fw aea --key` reads the key-service fields of the AEA
 # header and gets the key from Apple, and `ipsw fw aea` decrypts with it. The key is not written to disk.
-# Linux and macOS. Tools: python3 3.11+, and for the decryption ipsw (scripts/fetch/get-ipsw-cli.sh).
+# Linux and macOS. Tools: oneios-tool (tools/oneios-tool, Rust: `image check-ipsw`, `fetch`, `aea-info`, `record-plain`;
+# built when missing or stale, ONEIOS_TOOL=PATH for another; scripts/image/imagetool.py did this until 2026-11-13 and is
+# still in the tree, unused), python3 (the last check of the decrypted images), and for the decryption ipsw
+# (scripts/fetch/get-ipsw-cli.sh).
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-TOOL=$ROOT/scripts/image/imagetool.py
+. "$ROOT/scripts/lib/oneios-tool.sh"
 die() { echo "fetch: $*" >&2; exit 1; }
 
 list=0 keep=0 jobs=8 only= source= profile=
@@ -37,14 +40,16 @@ done
 [ -n "$profile" ] || die "usage: scripts/fetch/fetch.sh [--list] [-j N] [--only ROLES] [--keep-aea] [--source S] PROFILE"
 [ -f "$profile" ] || die "no profile $profile"
 
+oneios_tool "$ROOT" || die "the image tool is oneios-tool (Rust): cargo build --release --manifest-path tools/oneios-tool/Cargo.toml"
+tool() { "$ONEIOS_TOOL" image "$@"; }
 command -v python3 >/dev/null || die "missing tool: python3 (3.11 or newer)"
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' || die "missing tool: python3 3.11 or newer (this one is $(python3 -V 2>&1))"
 
 if [ "$list" = 1 ]; then
-  exec python3 -I "$TOOL" check-ipsw "$profile" ${source:+--source "$source"}
+  exec "$ONEIOS_TOOL" image check-ipsw "$profile" ${source:+--source "$source"}
 fi
 
-eval "$(python3 -I "$TOOL" profile "$profile" --shell)"
+eval "$(tool profile "$profile" --shell)"
 IN=${INPUTS:-$ROOT/inputs/$P_BUILD}
 IPSW=${IPSW:-$ROOT/out/bin/ipsw}
 [ -x "$IPSW" ] || IPSW=$(command -v ipsw || true)
@@ -54,7 +59,7 @@ aea_roles=()
 while IFS=$'\t' read -r role member name aea size out; do
   case ",$only," in ,,|*,"$role",*) ;; *) continue ;; esac
   [ "$aea" = 1 ] && [ ! -f "$IN/$name" ] && aea_roles+=("$role")
-done < <(python3 -I "$TOOL" profile "$profile" --members)
+done < <(tool profile "$profile" --members)
 if [ ${#aea_roles[@]} -gt 0 ] && [ -z "$IPSW" ]; then
   die "missing tool: ipsw (run scripts/fetch/get-ipsw-cli.sh; it decrypts the AEA images)"
 fi
@@ -65,14 +70,14 @@ if [ ${#aea_roles[@]} -gt 0 ] && [ -z "$only" ]; then
   [ "$free" -ge "$P_NEED_GIB" ] || die "$free GiB free in $IN, the profile asks for $P_NEED_GIB GiB: not started"
 fi
 
-python3 -I "$TOOL" fetch "$profile" "$IN" -j "$jobs" ${only:+--only "$only"} ${source:+--source "$source"}
+tool fetch "$profile" "$IN" -j "$jobs" ${only:+--only "$only"} ${source:+--source "$source"}
 
 while IFS=$'\t' read -r role member name aea size out; do
   case ",$only," in ,,|*,"$role",*) ;; *) continue ;; esac
   [ "$aea" = 1 ] || continue
   enc=$IN/$(basename "$member")
   [ -f "$enc" ] || continue                    # already decrypted by an earlier run
-  python3 -I "$TOOL" aea-info "$enc" >/dev/null || die "$enc: no key-service field in its header"
+  tool aea-info "$enc" >/dev/null || die "$enc: no key-service field in its header"
   echo "$(basename "$enc"): fetching its key from Apple and decrypting"
   key=$("$IPSW" fw aea --key "$enc" | tail -n 1 | awk '{print $NF}' | sed 's/^base64://')
   [ -n "$key" ] || die "$enc: no key from Apple's key service"
@@ -82,9 +87,9 @@ while IFS=$'\t' read -r role member name aea size out; do
   [ -f "$IN/.aea-out/$name" ] || die "$enc: the decrypted image is not where ipsw was told to put it"
   mv "$IN/.aea-out/$name" "$IN/$name"
   rmdir "$IN/.aea-out"
-  python3 -I "$TOOL" record-plain "$IN" "$role" "$IN/$name"
+  tool record-plain "$IN" "$role" "$IN/$name"
   [ "$keep" = 1 ] || rm -f "$enc"
-done < <(python3 -I "$TOOL" profile "$profile" --members)
+done < <(tool profile "$profile" --members)
 
 ( cd "$IN" && find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name 'inputs.json*' ! -name '*.part*' -print0 |
   sort -z | xargs -0 python3 -I -c '

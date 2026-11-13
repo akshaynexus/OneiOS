@@ -250,14 +250,18 @@ impl Cycle<'_> {
                 }
                 cmd.push("kernel/prelink/build.sh".into());
                 self.job("cycle-prelink", &cmd)?;
-                self.say("the audit: kernel/prelink/build.sh stops on a failure; then python3 kernel/prelink/stubs-check.py (every stub good, or the cycle stops)");
+                self.say("the audit: kernel/prelink/build.sh stops on a failure; then oneios-tool prelink stubs-check (every stub good, or the cycle stops)");
                 if !self.dry {
-                    let out = Command::new("python3").arg(root.join("kernel/prelink/stubs-check.py")).arg(&kc).current_dir(&root).output().context("stubs-check.py")?;
+                    // this binary's own step (it was kernel/prelink/stubs-check.py)
+                    let out = Command::new(std::env::current_exe().context("this program's path")?).args(["prelink", "stubs-check"]).arg(&kc).current_dir(&root).output().context("prelink stubs-check")?;
                     let text = String::from_utf8_lossy(&out.stdout).to_string();
                     let line = text.lines().find(|l| l.starts_with("stubs: ")).unwrap_or("").to_string();
                     println!("  {line}");
                     if !out.status.success() || !line.ends_with(", 0 bad") {
-                        bail!("the collection's stubs are not all good: {}", last_lines(&text, 4));
+                        // the count, then the first bad stubs (the check prints up to ten after its count line)
+                        let first: Vec<&str> = text.lines().filter(|l| !l.starts_with("stubs: ")).take(3).map(str::trim).collect();
+                        let first = if first.is_empty() { String::new() } else { format!(" ({})", first.join("; ")) };
+                        bail!("the collection's stubs are not all good: {line}{first}");
                     }
                     self.notes.push(format!("prelink: audit 0 failures (build.sh exit 0), {line}"));
                 }

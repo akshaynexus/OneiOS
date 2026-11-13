@@ -152,11 +152,12 @@ SEALED=$WORK/tree/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.b
 [ -f "$SEALED.crypto-hmac.json" ] || { echo "build-hosted: $SEALED was not sealed" >&2; exit 1; }
 mkdir -p "$ROOT/out/kernel/current-hosted$SUFFIX"
 cp "$SEALED" "$ROOT/out/kernel/current-hosted$SUFFIX/xnu.macho"
-# Post-link text fixes of the hosted layer (kernel/hosted-fixup.py: a vCPU's identity comes from xnuhost, not
+# Post-link text fixes of the hosted layer (`oneios-tool kernel hosted-fixup`, kernel/hosted-fixup.py until 2026-11-13: a
+# vCPU's identity comes from xnuhost, not
 # MPIDR_EL1), on the copy; then the seal again, over the changed text (the build's own seal script, which takes
 # an already sealed kernel).
 SEALED=$ROOT/out/kernel/current-hosted$SUFFIX/xnu.macho
-python3 -I "$ROOT/kernel/hosted-fixup.py" "$SEALED"
+"$ONEIOS_TOOL" kernel hosted-fixup "$SEALED"
 ( cd "$WORK/tree" && UNIXNU_XNU_ARCH=arm64e python3 scripts/seal-source-crypto-kernel.py "$SEALED" )
 # XNU_FILESET_REFERENCE=1: the RELEASE reference of the prelink (kernel/prelink/build.sh REFERENCE=), next to the kernel.
 REF=$WORK/tree/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf

@@ -177,6 +177,12 @@
 # head, given-back ones at its tail. oneios-free-report=0: off (stock order). An oneios-mem: line every 30 s says what
 # XNU sees of its memory. The decisions: osfmk/arm64/hosted/free_report.h = runtime/xnuhost/include/xnuhost/free_report.h.
 0058-free-page-report.patch
+# bluetooth: how a daemon looks for its hardware (bluetoothd ran on the phone, 2026-11-12 23:45, and never opened the
+# transport). Boot argument oneios-iokit=NAME[,NAME...] (default bluetoothd,BlueTool; - for none): one oneios-iokit:
+# line per distinct IOKit matching lookup, matching notification, registry path, property read (name, plane, entry),
+# user client open and kernel control looked up by name (CTLIOCGINFO), again when its answer changes and at the 16th,
+# 64th, 256th asking; at most 800 lines. A debugging aid, nothing else changes.
+0062-iokit-hardware-probe-trace.patch
 # hang (2026-11-13): 0058's give-back in long runs. Each cold free page brings the free, held pages next to it in
 # physical memory (oneios-free-report-run=PAGES, 256; 1: 0058's way), batches of up to 1024 pages when the free queues
 # hold that much above keep (oneios-free-report-batch), the free queue's lock held for at most 128 pages at a time, a

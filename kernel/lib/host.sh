@@ -40,7 +40,7 @@ xcode_setup() {
   # Xcode's clang warns on every kernel header; without this the log grows to gigabytes (iOSPlus10
   # scripts/ios26/build-kernel.sh). UniXNU's script appends its own flags to CFLAGS_EXTRA.
   export XNU_BUILD_WERROR=0
-  # The board's archive builders replay xnu's compile records with -Wall -Wextra -Werror (drivers/build.py). On Linux
+  # The board's archive builders replay xnu's compile records with -Wall -Wextra -Werror (`oneios-tool kernel drivers`). On Linux
   # kernel/linux/clang-wrapper ends every compile with -w, so no warning there is an error; Xcode 27.2's clang warns on
   # Apple's own headers (EXTERNAL_HEADERS/corecrypto: -Wextern-c-compat). The same rule here: warnings stay in the
   # archive logs and do not stop the build. The clang driver reads CCC_OVERRIDE_OPTIONS ('#': quietly; '+': append).

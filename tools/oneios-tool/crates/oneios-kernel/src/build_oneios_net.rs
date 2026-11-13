@@ -313,7 +313,7 @@ pub fn main() -> Result<()> {
     let (transport_source, start, subtype_source) = (package.join("DroidVMVirtioNet.c"), here.join("OneiOSWifi.cpp"), here.join("OneiOSWifiLayout.cpp"));
     let (layout_path, proto) = (here.join("IONetworking-24A446-v54.json"), ctx.repo.join("drivers/net/oneios_wifi_proto.h"));
     // (the script also asked for build-oneios-hid.py here: it imported that script's Mach-O readers, macho_object.rs now)
-    for path in [ctx.repo.join("drivers/build.py"), transport_source.clone(), start.clone(), subtype_source.clone(), proto.clone(), layout_path.clone(),
+    for path in [ctx.repo.join("drivers/sources.txt"), transport_source.clone(), start.clone(), subtype_source.clone(), proto.clone(), layout_path.clone(),
                  package.join("DroidVMDmaRegion.h"), ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json"), xnu.join("bsd")] {
         if !path.exists() {
             fail!("build-oneios-net: {} missing (scripts/setup/get-references.sh UniXNU-droidvm; kernel/fetch.sh)", path.display());

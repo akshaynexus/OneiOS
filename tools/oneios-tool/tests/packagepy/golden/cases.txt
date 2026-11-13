@@ -1,0 +1,280 @@
+== name: kernelcache.release.iphone18
+stderr: package: refused: deep/er/kernelcache.release.iphone18: the name matches kernelcache* (Apple firmware)
+status 3
+== name: KernelCache.Research
+stderr: package: refused: deep/er/KernelCache.Research: the name matches kernelcache* (Apple firmware)
+status 3
+== name: x-cryptex1-systemos
+stderr: package: refused: deep/er/x-cryptex1-systemos: the name matches *cryptex* (Apple firmware)
+status 3
+== name: restore.ipsw
+stderr: package: refused: deep/er/restore.ipsw: the name matches *.ipsw (Apple firmware)
+status 3
+== name: 090-12345-678.dmg
+stderr: package: refused: deep/er/090-12345-678.dmg: the name matches *.dmg (Apple firmware)
+status 3
+== name: os.dmg.aea
+stderr: package: refused: deep/er/os.dmg.aea: the name matches *.aea (Apple firmware)
+status 3
+== name: os.img
+stderr: package: refused: deep/er/os.img: the name matches *.img (Apple firmware)
+status 3
+== name: data.simg
+stderr: package: refused: deep/er/data.simg: the name matches *.simg (Apple firmware)
+status 3
+== name: system.erofs
+stderr: package: refused: deep/er/system.erofs: the name matches *.erofs (Apple firmware)
+status 3
+== name: kc.im4p
+stderr: package: refused: deep/er/kc.im4p: the name matches *.im4p (Apple firmware)
+status 3
+== name: boot.img4
+stderr: package: refused: deep/er/boot.img4: the name matches *.img4 (Apple firmware)
+status 3
+== name: ap.im4m
+stderr: package: refused: deep/er/ap.im4m: the name matches *.im4m (Apple firmware)
+status 3
+== name: kernel.kc
+stderr: package: refused: deep/er/kernel.kc: the name matches *.kc (Apple firmware)
+status 3
+== name: static.trustcache
+stderr: package: refused: deep/er/static.trustcache: the name matches *.trustcache (Apple firmware)
+status 3
+== name: BuildManifest.plist
+stderr: package: refused: deep/er/BuildManifest.plist: the name matches buildmanifest.plist (Apple firmware)
+status 3
+== name: Restore.plist
+stderr: package: refused: deep/er/Restore.plist: the name matches restore.plist (Apple firmware)
+status 3
+== name: apnonce.shsh2
+stderr: package: refused: deep/er/apnonce.shsh2: the name matches *.shsh* (Apple firmware)
+status 3
+== name: x.shsh
+stderr: package: refused: deep/er/x.shsh: the name matches *.shsh* (Apple firmware)
+status 3
+== name: dyld_shared_cache_arm64e
+stderr: package: refused: deep/er/dyld_shared_cache_arm64e: the name matches dyld_shared_cache* (Apple firmware)
+status 3
+== name: IOSomething.kext
+stderr: package: refused: deep/er/IOSomething.kext: the name matches *.kext (Apple firmware)
+status 3
+== name: Some.dext
+stderr: package: refused: deep/er/Some.dext: the name matches *.dext (Apple firmware)
+status 3
+== name: UPPER.IPSW
+stderr: package: refused: deep/er/UPPER.IPSW: the name matches *.ipsw (Apple firmware)
+status 3
+== name: the first of several (cryptex), and names that only look like the patterns
+stderr: package: refused: cryptex: the name matches *cryptex* (Apple firmware)
+status 3
+== names that only look like the patterns, and folders named like firmware: accepted
+status 0
+== content: IM4P
+stderr: package: refused: blob: IMG4 container
+status 3
+== content: IMG4
+stderr: package: refused: blob: IMG4 container
+status 3
+== content: IM4M
+stderr: package: refused: blob: IMG4 container
+status 3
+== content: IM4R
+stderr: package: refused: blob: IMG4 container
+status 3
+== content: a DER sequence whose Image4 tag comes after 24 bytes: accepted
+status 0
+== content: IMG4 letters without the DER byte, a binary plist: accepted
+status 0
+== content: AEA
+stderr: package: refused: blob: AEA archive
+status 3
+== content: a UDIF trailer 512 bytes before the end
+stderr: package: refused: blob: disk image (UDIF)
+status 3
+== content: the same letters one byte off: accepted
+status 0
+== content: UDIF letters at the start
+stderr: package: refused: blob: disk image (UDIF)
+status 3
+== content: a dyld cache
+stderr: package: refused: blob: dyld cache or APFS container
+status 3
+== content: an APFS container (magic at 0)
+stderr: package: refused: blob: dyld cache or APFS container
+status 3
+== content: an APFS container (magic at 32)
+stderr: package: refused: blob: dyld cache or APFS container
+status 3
+== content: an ELF program, text, an empty file: accepted
+status 0
+== Mach-O: 32-bit
+stderr: package: refused: bin/tool: a Mach-O that is not a 64-bit little-endian image
+status 3
+== Mach-O: big-endian 64-bit
+stderr: package: refused: bin/tool: a Mach-O that is not a 64-bit little-endian image
+status 3
+== Mach-O: big-endian 32-bit
+stderr: package: refused: bin/tool: a Mach-O that is not a 64-bit little-endian image
+status 3
+== Mach-O: fat
+stderr: package: refused: bin/tool: a Mach-O that is not a 64-bit little-endian image
+status 3
+== Mach-O: fat, the other byte order
+stderr: package: refused: bin/tool: a Mach-O that is not a 64-bit little-endian image
+status 3
+== Mach-O: fat 64
+stderr: package: refused: bin/tool: a Mach-O that is not a 64-bit little-endian image
+status 3
+== Mach-O: fat 64, the other byte order
+stderr: package: refused: bin/tool: a Mach-O that is not a 64-bit little-endian image
+status 3
+== Mach-O: a kernel collection (MH_FILESET), with a good record
+stderr: package: refused: kernel/xnu.macho: a kernel collection (MH_FILESET) holds Apple's kexts; it belongs to the image set
+status 3
+== Mach-O: a kernel collection without a record
+stderr: package: refused: kernel/xnu.macho: a kernel collection (MH_FILESET) holds Apple's kexts; it belongs to the image set
+status 3
+== Mach-O: an arm64 dylib, with a record
+stderr: package: refused: bin/tool: a Mach-O that is not an arm64 kernel executable
+status 3
+== Mach-O: an x86_64 executable, with a record
+stderr: package: refused: kernel/xnu.macho: a Mach-O that is not an arm64 kernel executable
+status 3
+== kernel: no build record
+stderr: package: refused: kernel/xnu.macho: a Mach-O without a build record (xnu.macho.build.json)
+status 3
+== kernel: a record that is no JSON (the message's tail is the parser's)
+stderr: package: refused: kernel/xnu.macho: unreadable build record: ...
+status 3
+== kernel: the record of another builder
+stderr: package: refused: kernel/xnu.macho: the build record is not from kernel/ (builder 'someone')
+status 3
+== kernel: a record without a builder
+stderr: package: refused: kernel/xnu.macho: the build record is not from kernel/ (builder None)
+status 3
+== kernel: a record for another file
+stderr: package: refused: kernel/xnu.macho: the build record is for another file (SHA-256 differs)
+status 3
+== kernel: kernelcache kexts added
+stderr: package: refused: kernel/xnu.macho: the build record does not say "no kernelcache kexts, not prelinked"
+status 3
+== kernel: the record does not say whether kexts were added
+stderr: package: refused: kernel/xnu.macho: the build record does not say "no kernelcache kexts, not prelinked"
+status 3
+== kernel: 0 instead of false
+stderr: package: refused: kernel/xnu.macho: the build record does not say "no kernelcache kexts, not prelinked"
+status 3
+== kernel: prelinked
+stderr: package: refused: kernel/xnu.macho: the build record does not say "no kernelcache kexts, not prelinked"
+status 3
+== kernel: Apple binary inputs
+stderr: package: refused: kernel/xnu.macho: the build record lists Apple binary inputs: ['a.kext', 'b']
+status 3
+== kernel: the record does not list its binary inputs
+stderr: package: refused: kernel/xnu.macho: the build record lists Apple binary inputs: None
+status 3
+== kernel: a source that may not be redistributed
+stderr: package: refused: kernel/xnu.macho: the kernel links sources that may not be redistributed: ['corecrypto-2023']
+status 3
+== kernel: restricted sources null
+stderr: package: refused: kernel/xnu.macho: the kernel links sources that may not be redistributed: None
+status 3
+== kernel: no build_id
+stderr: package: refused: kernel/xnu.macho: the build record has no build_id
+status 3
+== kernel: an empty build_id
+stderr: package: refused: kernel/xnu.macho: the build record has no build_id
+status 3
+== kernel: a second kernel in one package
+stderr: package: refused: other/second.macho: a second kernel in one package
+status 3
+== kernel: our own, with its record: accepted
+status 0
+== kernel: our own under a firmware name (its record's name then matches a pattern)
+stderr: package: refused: kernel/kernelcache.kc.build.json: the name matches kernelcache* (Apple firmware)
+status 3
+== path: a comma
+stderr: package: refused: notes,v2.txt: path segment 'notes,v2.txt' is outside [A-Za-z0-9_][A-Za-z0-9._+-]*
+status 3
+== path: a space
+stderr: package: refused: two words: path segment 'two words' is outside [A-Za-z0-9_][A-Za-z0-9._+-]*
+status 3
+== path: a leading dot
+stderr: package: refused: .hidden: path segment '.hidden' is outside [A-Za-z0-9_][A-Za-z0-9._+-]*
+status 3
+== path: a leading dash
+stderr: package: refused: dir/-dash: path segment '-dash' is outside [A-Za-z0-9_][A-Za-z0-9._+-]*
+status 3
+== path: a folder's name
+stderr: package: refused: bad dir: path segment 'bad dir' is outside [A-Za-z0-9_][A-Za-z0-9._+-]*
+status 3
+== path: every allowed character: accepted
+status 0
+== a symbolic link to a file
+stderr: package: refused: link: not a regular file or directory
+status 3
+== a symbolic link to a folder
+stderr: package: refused: dirlink: not a regular file or directory
+status 3
+== a symbolic link to nothing
+stderr: package: refused: dangling: not a regular file or directory
+status 3
+== a named pipe
+stderr: package: refused: pipe: not a regular file or directory
+status 3
+== order: z.dmg at the top before a/kernelcache
+stderr: package: refused: z.dmg: the name matches *.dmg (Apple firmware)
+status 3
+== order: a/z.dmg before b/a.ipsw
+stderr: package: refused: a/z.dmg: the name matches *.dmg (Apple firmware)
+status 3
+== order: a path the unpacker rejects, though a firmware name comes first
+stderr: package: refused: zz/bad,name: path segment 'bad,name' is outside [A-Za-z0-9_][A-Za-z0-9._+-]*
+status 3
+== order: a folder's bad name is seen when its parent is listed
+stderr: package: refused: a,b: path segment 'a,b' is outside [A-Za-z0-9_][A-Za-z0-9._+-]*
+status 3
+== manifest: a runtime without a kernel
+status 0
+sha256 769eda00022433557b7da43877659c3dfcf66b5dee7aee34c85bc7afb3a6cb0b runtime.json
+mode 644 ./NOTICE
+mode 755 ./bin/xnuhost
+mode 644 ./lib/oneios-display.dex
+mode 644 ./runtime.json
+mode 755 ./scripts/run.sh
+== manifest: again over its own runtime.json
+status 0
+sha256 1ceb9aa1d829e1adb9861e4eab6e1130db8095bfed8b035289a5e9d563955789 runtime.json
+== manifest: with our own kernel
+status 0
+sha256 7be04cad7b22d6a41e21fdf61d582b770b98177556db44f96fd7cfd00783b58f runtime.json
+  "kernel": {
+    "path": "kernel/xnu.macho",
+    "build_id": "test-1",
+    "sha256": "...",
+    "xnu": "xnu-0",
+    "profile": "test",
+    "record": "kernel/xnu.macho.build.json"
+  },
+== manifest: no bin/xnuhost
+stderr: package: refused: bin/xnuhost is missing or not executable
+status 3
+== manifest: bin/xnuhost is not executable
+stderr: package: refused: bin/xnuhost is missing or not executable
+status 3
+== manifest: an Apple name in the stage
+stderr: package: refused: fw/os.img: the name matches *.img (Apple firmware)
+status 3
+no runtime.json written
+== archive: the members in the list's order, owner 0:0, a fixed time
+status 0
+sha256 f70a37afe6f978e8038a76682a636352d144421565ec6b0bf2eb942f1619ab65 10240 bytes out.tar
+== archive: a member that is a link
+stderr: package: refused: alias: not a regular file
+status 3
+== archive: a member that is a folder
+stderr: package: refused: bin: not a regular file
+status 3
+== archive: a second name of a file already written
+stderr: package: refused: NOTICE2: not a regular file
+status 3

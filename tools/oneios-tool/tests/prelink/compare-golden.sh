@@ -98,7 +98,7 @@ if [ -n "$kernel" ]; then
   step record record "kernel.kc.build.json" --work @/work --kernel "$kernel" --kernelcache "$cache" --reviewed @/reviewed.merged.json \
     --xnuprelink "$xp" ${reference:+--reference @/reference.macho} --output @/kernel.kc.build.json --repo "$root"
   echo "kernel.kc: $(sha256sum < "$d/kernel.kc" | cut -c1-64)"
-  python3 "$data/stubs-check.py" "$d/kernel.kc" 2>&1 | tail -1
+  "$tool" prelink stubs-check "$d/kernel.kc" 2>&1 | tail -1
 fi
 echo "total: $total s"
 sort -k3 "$work/found.txt" > "$work/found.sorted.txt"

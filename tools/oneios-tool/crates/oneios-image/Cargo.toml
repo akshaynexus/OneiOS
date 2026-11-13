@@ -26,3 +26,10 @@ tar = { version = "0.4", default-features = false }
 base64 = "0.22"
 percent-encoding = "2"
 zbitmap = "0.1"
+# remotezip: HTTP range requests (ureq: its resolver hook carries the short try per address), inflate is flate2
+# above, the members' CRC-32; `ls`'s pattern.
+ureq = "2"
+crc32fast = "1"
+regex = "1"
+# check-ipsw, fetch: the BuildManifest.
+plist = { version = "1", default-features = false }

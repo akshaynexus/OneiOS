@@ -18,3 +18,5 @@ oneios-prelink.workspace = true
 oneios-kernel.workspace = true
 oneios-ioslog.workspace = true
 oneios-phone.workspace = true
+oneios-package.workspace = true
+oneios-testkit.workspace = true

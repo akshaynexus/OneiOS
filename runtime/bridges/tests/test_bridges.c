@@ -808,6 +808,45 @@ static void test_snd_device(void)
   CHECK(null->start(ctx, true, 48000, 2) == 0 && null->write(ctx, period, 240) == 240);
 }
 
+// The stand-in controller (bt/hci_sim.c): what bluetoothd's first commands get back.
+typedef struct { unsigned packets, states, reports; int state; uint8_t last[260]; size_t length; } sim_record;
+static void sr_rx(void *ctx, uint8_t type, const uint8_t *packet, size_t length)
+{
+  sim_record *r = ctx;
+  if (type != 4) return;
+  r->packets++;
+  if (packet[0] == 0x3e) { r->reports++; return; }
+  r->length = length < sizeof r->last ? length : sizeof r->last;
+  memcpy(r->last, packet, r->length);
+}
+static void sr_state(void *ctx, int state) { sim_record *r = ctx; r->states++; r->state = state; }
+
+static void test_bt_sim(void)
+{
+  sim_record r = { 0 };
+  br_hci_sim_set_address((const uint8_t *)"\x02\x0e\x10\xaa\xbb\xcc");
+  br_hci *h = br_hci_open_sim(sr_rx, sr_state, &r);
+  CHECK(h != NULL);
+  static const uint8_t reset[] = { 0x03, 0x0c, 0x00 }, version[] = { 0x01, 0x10, 0x00 }, addr[] = { 0x09, 0x10, 0x00 };
+  static const uint8_t vendor[] = { 0x48, 0xfc, 0x01, 0x0d }, commands[] = { 0x02, 0x10, 0x00 }, inquiry[] = { 0x01, 0x04, 0x05, 0x33, 0x8b, 0x9e, 0x08, 0x00 };
+  static const uint8_t scan[] = { 0x0c, 0x20, 0x02, 0x01, 0x00 }, extscan[] = { 0x42, 0x20, 0x06, 0x01, 0x00, 0, 0, 0, 0 }, ext_feat[] = { 0x04, 0x10, 0x01, 0x01 };
+  CHECK(br_hci_send(h, 1, reset, 3) == -ENOTCONN);                    // not open yet
+  CHECK(br_hci_open(h) == 0 && r.states == 1 && r.state == 1);       // ready at once
+  CHECK(br_hci_send(h, 1, reset, 3) == 0 && r.length == 6 && !memcmp(r.last, "\x0e\x04\x01\x03\x0c\x00", 6));
+  CHECK(br_hci_send(h, 1, version, 3) == 0 && r.length == 14 && r.last[1] == 12 && r.last[5] == 0 && r.last[6] == 0x0d && r.last[10] == 0x1d);
+  CHECK(br_hci_send(h, 1, addr, 3) == 0 && r.length == 12 && !memcmp(r.last + 6, "\xcc\xbb\xaa\x10\x0e\x02", 6));   // little-endian
+  CHECK(br_hci_send(h, 1, commands, 3) == 0 && r.length == 70 && r.last[6] == 0xff && r.last[69] == 0xff);
+  CHECK(br_hci_send(h, 1, ext_feat, 4) == 0 && r.length == 16 && r.last[6] == 1 && r.last[7] == 2);
+  CHECK(br_hci_send(h, 1, vendor, 4) == 0 && r.length == 6 && r.last[5] == 0x01);   // Unknown HCI Command, as a Qualcomm chip
+  unsigned before = r.packets;
+  CHECK(br_hci_send(h, 1, inquiry, 8) == 0 && r.packets == before + 2 && r.last[0] == 0x01);   // Command Status, Inquiry Complete
+  CHECK(br_hci_send(h, 1, scan, 5) == 0 && r.reports == 1 && r.last[0] == 0x0e);     // a legacy LE scan hears one device
+  CHECK(br_hci_send(h, 1, extscan, 9) == 0 && r.reports == 2);                        // and an extended one
+  br_hci_close(h);
+  CHECK(r.state == 0);
+  br_hci_destroy(h);
+}
+
 int main(void)
 {
   char tmp[] = "/tmp/oneios-bridges-XXXXXX";
@@ -816,6 +855,7 @@ int main(void)
   test_haptic();
   test_net();
   test_bt(tmp);
+  test_bt_sim();
   test_bridge_device(tmp);
   test_bridge_brightness(tmp);
   test_bridge_battery(tmp);

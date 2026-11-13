@@ -237,7 +237,7 @@ pub fn main() -> Result<()> {
                           classes: here.join("IOAcceleratorES-24A446-v54.json"), // kernel/prelink/classes.py's record of the class
                           accelerator_abi: ctx.repo.join("external/NativeMetal/OriginalAcceleratorABI.h"), here };
     let sources = [places.here.join("OneiOSGpu.cpp"), places.package.join("DroidVMVirtioGpu.cpp"), places.package.join("DroidVMVirtioGpu3D.cpp")];
-    let mut needed = vec![ctx.repo.join("drivers/build.py"), places.adreno.join("DroidVMVirtgpuABI.h"),
+    let mut needed = vec![ctx.repo.join("drivers/sources.txt"), places.adreno.join("DroidVMVirtgpuABI.h"),
                           ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json")];
     needed.extend(sources.iter().cloned());
     needed.extend([places.here.join("OneiOSAdreno.cpp"), places.classes.clone()]);
