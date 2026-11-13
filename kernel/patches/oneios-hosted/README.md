@@ -947,6 +947,76 @@ shows with its count), at most 800 lines a boot. The property wrappers rename th
 (`hosted_impl_...`) and call them; nothing else changes. Built in `HOSTED_OUT=fixbt` on 2026-11-13 (see
 `docs/hardware.md` 4 for what it showed on the PC); not run on the phone.
 
+## 0066-free-page-runs.patch (hang, 2026-11-13)
+
+**0058's give-back in long runs, and where its time goes.** On the phone (2026-11-12 23:45 boot) 0058 gave back 205
+MiB as 52,602 runs in 822 batches: every run one 4 KiB page (this kernel's page) and one `ram_discard`. xnuhost spent
+570 ms in those calls (11 us each); the guest's counter said 131,425 ms.
+
+- **What the old counter was.** `hosted_fr_stats.ticks` ran from before the free queue's lock was taken to after the
+  batch was back on the queue: the 1 s sleep between looks was never in it, but the lock wait, any time the utility
+  thread was preempted (after every host call, when interrupts come back on) and interrupts handled on it were. Boot A
+  below (0058's way, on the PC under load) shows what that time is: 49,144 ms by the clock, 1,567 ms on a CPU; 41,622
+  ms of it was the host calls' stretch, and one hold of the free queue's lock lasted 772 ms (the mutex's holder was
+  preempted). So the phone's 131 s was almost all the thread waiting for a CPU between its 52,602 calls [inference:
+  the phone's line had no split; the PC's does], not work, and not the host.
+- **What.** (`osfmk/vm/vm_resident.c`, `osfmk/arm64/hosted/free_report_runs.h`; all `#if XNU_HOSTED`, on 0058's code.)
+  - Each cold page brings the free pages next to it in physical memory: up to `oneios-free-report-run` pages in one run
+    (256 = 1 MiB; 1: none, 0058's way), ahead first, then behind, found through `vm_page_find_canonical` (O(1) in
+    `vm_pages[]`) and taken only if on the regular free queue, held by the host (not given back) and from a colour
+    queue still above its share of keep. Not with `HAS_MTE` (the free state is shared with the tagged classes there).
+  - A batch is up to `oneios-free-report-batch` pages (1024 = 4 MiB, the most; 0058: 64), only as far as the free
+    queues hold that much above keep, in whole slices; a small excess goes as before.
+  - The free queue's lock is held for at most 128 pages at a time, taking or putting back, and taken in spin mode for
+    the taking (preemption off: the hold is never the thread's wait for a CPU).
+  - A batch is given back as its runs, heap-sorted by page and joined (`xh_fr_sorted_runs`), one host call each.
+  - A fourth `oneios-mem:` line splits the time: `give-back time T ms: lock waits W, taking K (longest hold H us), host
+    calls C, putting back P; on a CPU U ms; per MiB T/M us (U/M on a CPU); runs longest L pages, N neighbours`. "On a
+    CPU" is the thread's own run time (`recount`); the guest cannot see a vCPU the host has descheduled, so that time
+    is in it too. The start line adds `runs N pages`.
+- **The decisions** (`xh_fr_sort`, `xh_fr_sorted_runs`, `xh_fr_batch_pages`, `xh_fr_neighbours`) are
+  `free_report_runs.h`, the same file as `runtime/xnuhost/include/xnuhost/free_report_runs.h`; the host tests check
+  they are one and test them (`tests/test_xnuhost.c`, "free report": the heap sort against 0058's insertion sort on 200
+  orders up to 1024 pages, duplicates, the batch and neighbour rules).
+- **Measured on the PC** (2026-11-13, qemu-aarch64, 8 vCPUs, `--ram 4G`, a fresh Data store each, `HOSTED_OUT=hang`,
+  `kernel.kc` `5b823f11` for A, `62245ded` for B; boot arguments of `docs/building.md` 5 plus
+  `oneios-free-report-stress=1 oneios-free-report-hysteresis=1`, which give back pages all the time; 960 s each, one
+  after the other, the PC shared with other agents and swapping guest RAM: xnuhost's new line said 1,058 MiB of the
+  guest's RAM swapped out by the PC at the end of A, 2,181 MiB at the end of B). A is `oneios-free-report-run=1
+  oneios-free-report-batch=64` (0058's way; A's kernel also still took the lock as 0058 did, not in spin mode); B is
+  the defaults. Both reached SpringBoard (A at 317 s, B at 305 s of the run), no panic. The last lines (MiB, ms, us):
+
+  | | A (0058's way) | B (0066) |
+  |---|---|---|
+  | given back | 950 MiB in 3,894 batches | 1,093 MiB in 423 batches |
+  | runs (host calls) | 233,969 (1.04 pages a run, longest 8) | 134,392 (2.08 pages a run, longest 615; 144,640 pages came as neighbours) |
+  | xnuhost's time in the calls | 976 ms (1.03 ms per MiB) | 669 ms (0.61 ms per MiB) |
+  | the guest's time by the clock | 49,144 ms (51.7 ms per MiB) | 45,497 ms (41.6 ms per MiB) |
+  | of it: host calls / taking / putting back / lock waits | 41,622 / 2,982 / 4,528 / 2 | 35,348 / 3,013 / 7,131 / 1 |
+  | the thread on a CPU | 1,567 ms (1,649 us per MiB) | 1,234 ms (1,129 us per MiB) |
+  | longest hold of the free queue's lock | 772 ms | 711 ms |
+
+  So per MiB 0066 costs the guest 32 % less of a CPU and xnuhost 41 % less, in a ninth of the batches; by the clock
+  the thread waits for a CPU all the same (97 % of its clock time is not on a CPU, in both). On this PC the freed pages
+  were mostly scattered (a run of two pages on average), so the runs were short; a bulk free (an app's exit) gives
+  longer ones. The longest hold stayed at 0.7 s even in spin mode: the vCPU itself was off the PC's CPUs, or the
+  `vm_page` entries it walked were in the PC's swap (2 GiB of the guest's RAM was) [inference]; the guest cannot
+  prevent either. The clock time is not a cost to iOS (the pages of a batch are off the free queue meanwhile, 4 MiB at
+  most, only far above the free target), but it is what the phone's 131 s were.
+- **Not run on the phone.** What to read there: the fourth `oneios-mem:` line's per MiB on a CPU and by the clock, and
+  `runs` against `batches` (0058's were 64 runs a batch).
+
+## gpu/: the blobs' kinds and ages, `oneios-cpu`'s span (hang, 2026-11-13; the archive, not a numbered patch)
+
+No XNU source changes, so no patch in the series: `oneios-tool kernel gen gpu` compiles a staged
+`DroidVMVirtioGpu3D.cpp` (`staged/gpu.rs` `GPU3D`: weak hooks at a blob's creation, deferred close and release), and
+`gpu/OneiOSAdreno.cpp` keeps a table of the live blobs (24,576 at most) and prints `oneios-gpu-kinds:` and
+`oneios-gpu-ages:` per client with the GPU report (`docs/gpu.md` 5.1: own blobs in the task or the kernel, mappable;
+wired by the VM tag of the caller's mapping; sizes under 1 MiB; ages; closed blobs still held). `oneios-cpu:` now divides
+by the time measured since its last walk and prints those seconds (it divided by the nominal 10 s: a late report in a
+stall inflated every share). Built into the kernel of 0066's boot B and booted on the PC (no 3D there: the hooks are
+never called, the table is never made; the `oneios-cpu` lines are). Not run on the phone.
+
 ## 0049-wifi-association-event.patch (radio2, 2026-11-12)
 
 `kev_post_msg` (bsd/kern/kern_event.c) refuses an event that does not fit one mbuf without a cluster (`MLEN`), with

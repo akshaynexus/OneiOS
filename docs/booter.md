@@ -68,8 +68,17 @@ host has left:
 ```text
 memory: ram=auto: host MemTotal M MiB, MemAvailable A MiB; the guest gets G MiB: the least of 90% (.. MiB) and MemTotal less the host's floor of 1536 MiB (.. MiB), in 256 MiB steps
 memory: host MemAvailable A MiB of M MiB; the guest's RAM holds H of G MiB; given back N MiB of free pages in C calls (F failed, T ms)
+memory: the guest's RAM: R MiB in the host's RAM, W MiB swapped out by the host; host swap S of Z MiB used, page tables P MiB
                                                                                      every host-mem-log seconds, and at the stop
 ```
+
+The second line (2026-11-13): `R` is the memfd's pages in the host's RAM (`mincore` over xnuhost's mapping,
+`xh_ram_resident` in `src/discard.c`, 64 MiB per call), `W` = `H` - `R`: pages the guest touched that Linux swapped
+out (zram on the phone; `st_blocks` counts them as held). A guest page that is swapped out costs a fault and a
+decompression in whichever vCPU or task touches it next. `S`, `Z` and `P` are `/proc/meminfo`'s SwapTotal - SwapFree,
+SwapTotal and PageTables (every iOS task is a Linux process with its own page tables over the memfd). First seen on the
+PC (2026-11-13, 4 GiB guest, the box under other agents' load): `2989 MiB in the host's RAM, 1058 MiB swapped out by the
+host; host swap 3670 of 15871 MiB used, page tables 332 MiB`.
 
 `H` is the memfd's resident pages (what the guest has touched and not given back); `N` what the kernel gave back
 with `ram_discard` since the start (section 2.2, "Free pages back to the host"), in `C` host calls that took `T` ms. xnuhost never changes its own
@@ -249,6 +258,10 @@ gives a step (1-3), and `main.c`'s `thermal_step` narrows the vCPU threads' affi
 is left out, then only the slowest P domain and the E cores, then the E cores only) and bumps `xh_cpu_place_epoch`, so
 `xh_thread_run` places each iOS thread again at its next run (`task.c`). Only xnuhost's own threads and its tasks' are
 changed, nothing outside the process: a SIGKILL leaves nothing to restore. `ONEIOS_THERMAL_CAP=0` turns the step off.
+Since 2026-11-13 a step keeps the CPUs it adds of the other kind (step 2: the P vCPUs on cpu5-6 and the E cores, `0x63`;
+before, `0x60`), and cpu-pin pins a vCPU to one core only while each vCPU of its kind has a core of the step's mask to
+itself, else the vCPUs share the whole mask (before, six P vCPUs went three to a core at step 2: the phone's hang of
+2026-11-13 ran there; `runtime/bridges/thermal/README.md`, "Fixed 2026-11-13").
 The same reading goes to the guest on the bridge's channel 6 (`drivers/thermal`). Detail:
 `runtime/bridges/thermal/README.md`.
 

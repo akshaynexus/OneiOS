@@ -295,11 +295,21 @@ int visit(proc_t p, void *arg)
 }
 void report(uint32_t every, uint32_t round)
 {
+    // The span is the time since the last walk, measured: in a stall the report thread wakes late (the phone,
+    // 2026-11-13 10:4x: the display's own 10 s line came after 30 s), and dividing by the nominal `every` gave a
+    // 10 s line whose processes added up to 1,440% of a CPU on eight vCPUs. The line says the measured seconds.
+    static uint64_t last;
+    const uint64_t walked = mach_absolute_time();
     Walk w = {};
     w.round = round;
     proc_iterate(1 /* PROC_ALLPROCLIST */, visit, &w, nullptr, nullptr);
-    if (round < 2) return;   // the first walk only records where each process was
-    const uint64_t span = uint64_t(every) * 1000000000ull;
+    uint64_t span = 0;
+    absolutetime_to_nanoseconds(walked - last, &span);
+    const bool first = round < 2 || !last;
+    last = walked;
+    if (first) return;   // the first walk only records where each process was
+    if (span < 1000000000ull) span = uint64_t(every) * 1000000000ull;
+    every = uint32_t((span + 500000000ull) / 1000000000ull);
     char text[220];
     size_t at = 0;
     for (unsigned i = 0; i < 8 && w.top[i].mach; i++) {
@@ -313,6 +323,190 @@ void report(uint32_t every, uint32_t round)
     IOLog("oneios-cpu: %u s: %s (all %llu%%)\n", every, at ? text : "idle", all * 100 / span);
 }
 }  // namespace cpu
+
+// Each blob's life (hang, 2026-11-13), from DroidVMVirtioGpu3D.cpp's staged hooks (staged/gpu.rs GPU3D): what kind of
+// memory the live blobs of each client are, how old they are, and which closed ones still wait for the client's GPU
+// work in flight. The phone's report (2026-11-12 23:45) showed backboardd at 926+148 MiB with 1,192 blobs under 1 MiB,
+// about 120 more every 10 s (blobs +182 closed +17): the driver closes what it is asked to, so the holder is the client;
+// these say which of its memory it is. Two lines per client with blobs, after its oneios-gpu-sizes line:
+//   oneios-gpu-kinds: backboardd own task 900 (700 MiB), kernel 2 (1), mappable 650; wired IOSurface 80 (140 MiB),
+//     malloc 3 (2), other 1 (1); made +182 gone +17
+//   oneios-gpu-ages: backboardd <16K 600, <64K 300, <256K 200, <1M 92; age <10 s 120, <1 min 300, <10 min 500, older 72;
+//     held closed 3 (1 MiB, oldest 2 s)
+// "own task" blobs are this driver's pages in the client's task (Turnip's BOs: buffers, textures, command streams,
+// descriptors, pooled blocks), "kernel" the same in the kernel's map (where the task's could not be had); "mappable" the
+// own ones made with the blob flag USE_MAPPABLE (what the CPU writes: command streams, shared buffers, staging).
+// "wired" blobs are the caller's own pages (CREATE_BLOB_USER) by the VM tag of the caller's mapping at that address:
+// IOSurface (VM_MEMORY_IOSURFACE, a surface imported), malloc (VM_MEMORY_MALLOC*, a no-copy buffer) and other. A blob's
+// age is from its creation; "held closed" are blobs closed while the client still had fenced work in flight, which the
+// driver frees once that work has finished: a count that only grows, or an oldest age in minutes, is work that never
+// finishes. Growth in "own task" small blobs that live long (the age columns) is memory the plug-in or Turnip keeps
+// (Turnip's BO cache keeps at most 16 MiB of BOs up to 1 MiB and 96 MiB of larger ones: TU_DARWIN_BO_CACHE_*);
+// growth in "wired IOSurface" is surfaces the render server keeps imported.
+#include <mach/vm_region.h>
+extern "C" kern_return_t mach_vm_region_recurse(vm_map_t, uint64_t *, uint64_t *, uint32_t *, int *, mach_msg_type_number_t *);
+
+namespace blobs {
+enum : uint32_t { Capacity = 32768, KindHostVisible = 1, KindWired = 2, KindTaskPages = 4, KindMappable = 1u << 4 };
+enum : uint8_t { TagNone, TagIOSurface, TagMalloc, TagOther };
+struct Entry { uint32_t id, born, closed; uint8_t slot, kind, tag, pad; uint64_t bytes; };
+Entry *table;                    // open addressing by resource id, IOMalloc'd at the first blob
+uint32_t used, untracked;
+uint64_t made[64], gone[64];     // by client slot, since boot
+IOSimpleLock *lock;
+uint32_t secondsNow()
+{
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+    return uint32_t(ns / 1000000000ull) + 1;   // never 0: 0 is "not closed"
+}
+uint32_t hash(uint32_t id) { return (id * 2654435761u) >> 17 & (Capacity - 1); }
+Entry *find(uint32_t id)
+{
+    for (uint32_t i = hash(id), n = 0; table && n < Capacity; i = (i + 1) & (Capacity - 1), n++) {
+        if (table[i].id == id) return &table[i];
+        if (!table[i].id) return nullptr;
+    }
+    return nullptr;
+}
+// The VM tag of the caller's mapping at `address` (a CREATE_BLOB_USER's pages).
+uint8_t tagAt(task_t task, uint64_t address)
+{
+    vm_map_t map = task ? get_task_map(task) : nullptr;
+    if (!map) return TagNone;
+    uint64_t at = address, size = 0;
+    uint32_t depth = 64;
+    vm_region_submap_info_data_64_t info = {};
+    mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+    if (mach_vm_region_recurse(map, &at, &size, &depth, reinterpret_cast<int *>(&info), &count) != KERN_SUCCESS || at > address)
+        return TagOther;
+    if (info.user_tag == 88 /* VM_MEMORY_IOSURFACE */) return TagIOSurface;
+    if (info.user_tag >= 1 && info.user_tag <= 13 && info.user_tag != 10) return TagMalloc;   // VM_MEMORY_MALLOC .. MALLOC_PROB_GUARD
+    return TagOther;
+}
+}  // namespace blobs
+extern "C" void oneios_gpu_blob_made(uint32_t id, uint32_t slot, uint64_t bytes, uint32_t kind, task_t task, uint64_t user)
+{
+    using namespace blobs;
+    if (!id || slot >= 64) return;
+    if (!lock) {
+        IOSimpleLock *made_lock = IOSimpleLockAlloc();
+        if (made_lock && !OSCompareAndSwapPtr(nullptr, made_lock, reinterpret_cast<void *volatile *>(&lock))) IOSimpleLockFree(made_lock);
+        if (!lock) return;
+    }
+    if (!table) {
+        Entry *t = static_cast<Entry *>(IOMallocZero(sizeof(Entry) * Capacity));   // 768 KiB, once
+        if (t && !OSCompareAndSwapPtr(nullptr, t, reinterpret_cast<void *volatile *>(&table))) IOFree(t, sizeof(Entry) * Capacity);
+        if (!table) return;
+    }
+    const uint8_t tag = (kind & KindWired) ? tagAt(task, user) : TagNone;
+    const uint32_t now = secondsNow();
+    IOSimpleLockLock(lock);
+    made[slot]++;
+    if (used >= Capacity / 4 * 3) {
+        untracked++;
+    } else {
+        uint32_t i = hash(id);
+        while (table[i].id && table[i].id != id) i = (i + 1) & (Capacity - 1);
+        if (!table[i].id) used++;
+        table[i] = {id, now, 0, uint8_t(slot), uint8_t(kind), tag, 0, bytes};
+    }
+    IOSimpleLockUnlock(lock);
+}
+extern "C" void oneios_gpu_blob_closed(uint32_t id)
+{
+    using namespace blobs;
+    if (!lock) return;
+    const uint32_t now = secondsNow();
+    IOSimpleLockLock(lock);
+    if (Entry *e = find(id)) e->closed = now;
+    IOSimpleLockUnlock(lock);
+}
+extern "C" void oneios_gpu_blob_gone(uint32_t id)
+{
+    using namespace blobs;
+    if (!lock) return;
+    IOSimpleLockLock(lock);
+    Entry *e = find(id);
+    if (e) {
+        if (e->slot < 64) gone[e->slot]++;
+        // backward shift: the probe chains stay whole
+        uint32_t i = uint32_t(e - table), j = i;
+        for (;;) {
+            table[i].id = 0;
+            for (;;) {
+                j = (j + 1) & (Capacity - 1);
+                if (!table[j].id) goto done;
+                const uint32_t k = hash(table[j].id);
+                if (i <= j ? (i < k && k <= j) : (i < k || k <= j)) continue;
+                break;
+            }
+            table[i] = table[j];
+            i = j;
+        }
+    done:
+        used--;
+    }
+    IOSimpleLockUnlock(lock);
+}
+namespace blobs {
+struct Census {
+    uint32_t task, kernel, mappable, iosurface, malloc, other, small[4], age[4], held;
+    uint64_t taskBytes, kernelBytes, iosurfaceBytes, mallocBytes, otherBytes, heldBytes;
+    uint32_t heldOldest;
+};
+// The two lines of each client slot with blobs. `was` keeps made/gone at the last report.
+void print(uint64_t (&wasMade)[64], uint64_t (&wasGone)[64])
+{
+    if (!lock || !table) return;
+    Census *all = static_cast<Census *>(IOMallocZero(sizeof(Census) * 64));
+    if (!all) return;
+    uint64_t madeNow[64], goneNow[64];
+    const uint32_t now = secondsNow();
+    IOSimpleLockLock(lock);
+    for (uint32_t i = 0; i < Capacity; i++) {
+        const Entry &e = table[i];
+        if (!e.id || e.slot >= 64) continue;
+        Census &c = all[e.slot];
+        const uint64_t mib = e.bytes;
+        if (e.kind & KindWired) {
+            if (e.tag == TagIOSurface) { c.iosurface++; c.iosurfaceBytes += mib; }
+            else if (e.tag == TagMalloc) { c.malloc++; c.mallocBytes += mib; }
+            else { c.other++; c.otherBytes += mib; }
+        } else if (!(e.kind & KindHostVisible)) {
+            if (e.kind & KindTaskPages) { c.task++; c.taskBytes += mib; } else { c.kernel++; c.kernelBytes += mib; }
+            if (e.kind & KindMappable) c.mappable++;
+        }
+        if (e.bytes < (1u << 20)) c.small[e.bytes < (16u << 10) ? 0 : e.bytes < (64u << 10) ? 1 : e.bytes < (256u << 10) ? 2 : 3]++;
+        const uint32_t age = now - e.born;
+        c.age[age < 10 ? 0 : age < 60 ? 1 : age < 600 ? 2 : 3]++;
+        if (e.closed) {
+            c.held++; c.heldBytes += e.bytes;
+            if (now - e.closed > c.heldOldest) c.heldOldest = now - e.closed;
+        }
+    }
+    memcpy(madeNow, made, sizeof madeNow);
+    memcpy(goneNow, gone, sizeof goneNow);
+    const uint32_t lost = untracked;
+    IOSimpleLockUnlock(lock);
+    for (unsigned s = 0; s < 64; s++) {
+        const DroidVMClientMemory &m = droidvm_virtgpu_client_memory[s];
+        const Census &c = all[s];
+        const uint32_t live = c.task + c.kernel + c.iosurface + c.malloc + c.other;
+        if (!m.name[0] || !(live || madeNow[s] != wasMade[s]) || (madeNow[s] == wasMade[s] && goneNow[s] == wasGone[s] && !c.held)) continue;
+        IOLog("oneios-gpu-kinds: %.16s own task %u (%llu MiB), kernel %u (%llu), mappable %u; wired IOSurface %u (%llu MiB), malloc %u (%llu), "
+              "other %u (%llu); made +%llu gone +%llu\n", m.name, c.task, c.taskBytes >> 20, c.kernel, c.kernelBytes >> 20, c.mappable,
+              c.iosurface, c.iosurfaceBytes >> 20, c.malloc, c.mallocBytes >> 20, c.other, c.otherBytes >> 20, madeNow[s] - wasMade[s],
+              goneNow[s] - wasGone[s]);
+        IOLog("oneios-gpu-ages: %.16s <16K %u, <64K %u, <256K %u, <1M %u; age <10 s %u, <1 min %u, <10 min %u, older %u; held closed %u "
+              "(%llu MiB, oldest %u s)%s\n", m.name, c.small[0], c.small[1], c.small[2], c.small[3], c.age[0], c.age[1], c.age[2], c.age[3],
+              c.held, c.heldBytes >> 20, c.heldOldest, lost ? "; table full: some blobs not counted" : "");
+    }
+    memcpy(wasMade, madeNow, sizeof madeNow);
+    memcpy(wasGone, goneNow, sizeof goneNow);
+    IOFree(all, sizeof(Census) * 64);
+}
+}  // namespace blobs
 
 namespace {
 void report(void *, wait_result_t)
@@ -371,6 +565,10 @@ void report(void *, wait_result_t)
                 IOLog("oneios-gpu-sizes: %.16s <1 %u, <2 %u, <4 %u, <8 %u, <16 %u, <32 %u, <64 %u, 64+ %u MiB blobs\n", c.name,
                       c.sizes[0], c.sizes[1], c.sizes[2], c.sizes[3], c.sizes[4], c.sizes[5], c.sizes[6], c.sizes[7]);
             }
+            // The kinds and ages of the blobs of each client that made or let go of one in the interval, or still has
+            // closed ones held (blobs:: above).
+            static uint64_t wasMade[64], wasGone[64];
+            blobs::print(wasMade, wasGone);
         }
         // Who asked for a Metal device (read MetalPluginName), when that changed: with the clients line, a process that
         // asked and holds no GPU memory had its device refused or made none (its reason: the oneios-gpu-text lines).

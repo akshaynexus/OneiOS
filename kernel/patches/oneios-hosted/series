@@ -194,6 +194,13 @@
 # user client open and kernel control looked up by name (CTLIOCGINFO), again when its answer changes and at the 16th,
 # 64th, 256th asking; at most 800 lines. A debugging aid, nothing else changes.
 0062-iokit-hardware-probe-trace.patch
+# hang (2026-11-13): 0058's give-back in long runs. Each cold free page brings the free, held pages next to it in
+# physical memory (oneios-free-report-run=PAGES, 256; 1: 0058's way), batches of up to 1024 pages when the free queues
+# hold that much above keep (oneios-free-report-batch), the free queue's lock held for at most 128 pages at a time, a
+# batch given back as its sorted runs (osfmk/arm64/hosted/free_report_runs.h = runtime/xnuhost/include/xnuhost/
+# free_report_runs.h). A fourth oneios-mem: line splits the give-back time: lock waits, taking, host calls, putting back,
+# the thread's own CPU time, per MiB. Numbered 0066 to stay clear of the 0059-0065 other agents have open.
+0066-free-page-runs.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # oneios-tool kernel gen net), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and
