@@ -761,11 +761,50 @@ does.
 - iPhone18,2's own device tree (`devicetree.bin` of the kernel inputs): `/arm-io/bluetooth` with
   `transport-encoding` 9 (APPLE PCIE) and `local-mac-address` from syscfg; ours is `/bluetooth`, encoding 1, which
   bluetoothd reads as above.
-- **PC stall, fixed in the driver:** with the transport core, the kernel controls and the device nodes started at the
-  board's probe (before the root mount), three qemu boots of 2026-11-13 out of three never got their root device
-  (APFS's start waited for `IOBSD` while `IOResources` stayed busy; `hosted_dump_threads=1`); with `oneios_bt=0` or no
-  bridge two out of two booted. They now start after the root mount (`ONEIOS BT: transport up N ms after the start:
-  ...`); the next qemu boot found its root at once and bluetoothd ran. The phone never showed the stall.
+- **PC stall, not fixed (corrected 2026-11-13 afternoon):** some qemu boots never get their root device: APFS's start
+  waits for the `IOBSD` resource while `IOResources` stays busy (AppleImage4, AMFI and AppleLockdownMode wait in their
+  starts for services that come later: `IOAESAccelerator`, `sep-endpoint,scrd`/`AppleCredentialManager`,
+  `AppleSEPManager`), with `/defaults` and the APFS media busy in the `oneios-iobusy:` lines; seen with
+  `hosted_dump_threads=1`. With the Bluetooth driver on: 3 stalls in 3 boots before the change below, then 1 boot that
+  mounted, then the same day 1 stall and, in a retry loop, 1 that mounted. With `oneios_bt=0` or no bridge: 2 of 2
+  booted. So the driver's transport now starting after the root mount (`ONEIOS BT: transport up N ms after the start:
+  ...`) is kept (nothing needs it earlier), but it did not remove the stall; [I] a timing race in the kernel's
+  early matching that the driver start's timing makes likelier. The phone never showed it. For a PC test: boot again
+  when `Waiting on <dict ...BBA627F7...>` is not followed by `BSD root` within about 90 s.
+
+### The phone's iOS log (Mac session 2026-11-13 10:5x, main c1223f8) and what is next
+
+- bluetoothd, in this order: `marconi-bt: Not a valid MAC address (all 00s)`, `marconi-bt: Unable to match bluetooth
+  service in device tree`, `DeviceTree transport = 0x00000001`, `HCI Transport is set to H4`, `Warning: BT driver=...`,
+  **`Beginning asynchronous power init`**, `Bluetooth is running inside a Virtual Machine, so skipping chip
+  initialization`, then 32 times `Power state changed. PowerState:3 managerState:2` and 55 times `Returning bluetooth
+  power state: FFFFFFFFDEADBEEF`. SpringBoard's and Preferences' sessions: `is turning power on for module Bluetooth`,
+  `GetControllerInfo: BlSt PoweredOff, Chip APPLE_VIRTUAL, HCIT UART`, `fStackStarted:0`. No `/dev/btwake` open, no
+  StackManager line. On the phone power init begins (it did not in the PC boots, which never got that far: the PC's
+  SpringBoard did not ask within the runs) and never finishes.
+- **The all-zero MAC is not ours [F]:** bluetoothd asks for a service named `marconi-bt` first (an Apple chip's node we
+  do not have), logs zeros for it, then asks for `bluetooth`. On the PC the same two `marconi-bt:` lines come, and
+  0062 shows `property "local-mac-address" (IODeviceTree, recursive) of IOPlatformDevice "bluetooth" -> found`, with no
+  `bluetooth: Not a valid MAC address` line. The phone's next boot's `oneios-iokit:` lines confirm it.
+- **[I] Power init waits on the virtual-machine path:** with `vmm-present` bluetoothd takes chip `APPLE_VIRTUAL` and
+  skips chip initialization, then its power state is never set (DEADBEEF looks like an unset value). Apple's VMs have
+  a virtual Bluetooth controller of their own (transport-encoding 10); with H4 the VM path probably waits for
+  something only that controller gives. Not proven.
+- **Next step: hide the VM from bluetoothd and BlueTool**, as was done for the audio server: the kernel already has
+  `owner-hide-vmm=NAME,...` (Droid-VM-UniXNU `zzyd-owner-hide-vmm.patch`, in our build; `kern.hv_vmm_present` reads 0
+  for those processes). Try it with the boot argument `owner-hide-vmm=bluetoothd,BlueTool` (add
+  `audiomxd,com.apple.WebKit.GPU` if those are wanted too: it is one list) in the image's `xnuhost.conf` boot-args, or
+  on the PC `--boot-args "... owner-hide-vmm=bluetoothd,BlueTool" --set bluetooth=sim`. Expected, not yet seen:
+  bluetoothd then runs its chip initialization (BlueTool's scripts, `Booting chipset`, the chipset from
+  `AppleOLYHAL`'s `HWIdentifiers`, which this guest does not have: `No AppleOLYHAL service. Retrying...` for 10 s, maybe
+  `Unknown platform/chipset/manufacturer combination, restarting`). UniXNU runs this bluetoothd only with a patched
+  binary and its own capability library (`native-ios27.md`), so the non-VM path may need a published `AppleOLYHAL`
+  with `HWIdentifiers` or more. A PC boot of 2026-11-13 with that argument mounted its root but was stopped in the shared
+  cache hashing (box load 20) before bluetoothd ran: no result yet.
+- **What the next phone boot must check:** in xnuhost.log the `oneios-iokit: bluetoothd[...]` and `oneios-iokit:
+  BlueTool[...]` lines (what it looks up, whether a `kernel control "com.apple.uart.sk.bluetooth"` lookup ever comes);
+  in iOS's log `oneios-tool ioslog show data.img --proc bluetoothd --grep "power|Power|chip|Chip|Virtual|BlueTool|OLYHAL|HWIdentifiers|StackManager|core stack|transport|MAC"`
+  and `--proc BlueTool`.
 
 ### Missing, unknown
 
