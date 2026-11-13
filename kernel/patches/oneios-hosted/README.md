@@ -819,7 +819,9 @@ first two minutes `oneios-cpu` had lsd at 90-92 % (+40 s, +58 s) and iconservice
 
 **What the PC showed** (qemu-aarch64, 8 vCPUs, 4 GiB, the PC image set; one Data store booted again and again, its
 copies for the comparisons; boots 1-6 shared the box with two other agents' boots and kernel builds, load 13-24 on 4
-CPUs; boots 7-9 had it alone):
+CPUs; boot 7 had it alone; boots 8 and 9 (not in the table) were stopped before lsd started, 8 by its time limit at
+load 16, 9 to keep to one boot at a time; 10 and 11 ran one at a time through the box's qemu queue, `flock
+/tmp/oneios-qemu.lock`):
 
 | Boot | Data store | Kernel | launchd | lsd | first frame | lsd / iconservicesagent CPU-s, 30 min from launchd |
 |---|---|---|---|---|---|---|
@@ -828,7 +830,18 @@ CPUs; boots 7-9 had it alone):
 | 4 | after 3, its recovery file left | 0060 (first build) | +1088 s | +1272 s | +1613 s | 1298 / 1666 (60 min): lsd built and seeded the database |
 | 5, 6 | after 4: database saved, 52 of 52 apps | 0060 / fpr2 | +515 s | +1508 / +1450 s | none in 3600 s | 27 / 0, 47 / 0 (60 min) |
 | 7 | the same, alone on the box | 0060 | +229 s | +308 s | +679 s | 75 / 160 |
-| 8, 9 | after 5 / 6: database and a recovery file | 0060 / fpr2 | see below | | | |
+| 10 | a copy of the store after 6: the database (52 of 52 apps) and boot 6's recovery file | fpr2 | +310 s | +381 s | +1306 s | 57 / 0; containermanagerd 160 |
+| 11 | another copy of the same | 0060 (merged tree, `kernel.kc` `22f8c09d`) | +413 s | +966 s | +1449 s | 71 / 277 |
+
+**Before and after, the same store** (boots 10 and 11, one at a time; the box's load differed, so their times do not
+compare). Both kernels' 0043 said `names 52 of 52 apps of /Applications: kept`. Boot 10 (no 0060), iOS's own log: lsd
+`_LSCreateStoreWithFileContents found a recovery file, so creating a new empty store`, `result: (null)`, then `Seeding
+database with UID: 501`: everything registered again, containermanagerd busy, and 45 minutes later the session was
+killed with the new database not yet saved (on disk still the old one, with lsd's new recovery file beside it: the next
+boot does it all again). Boot 11 (0060): `oneios-ls-state: ... com.apple.LaunchServices.error 0 bytes, modified 11065 s
+ago: removed (0), lsd loads the database`; lsd made its own recovery file, `result: <private> options: 7` (the database
+loaded), no seeding, removed the file, saved the database again; iconservicesagent served the 72 stored icons (2
+`.isdata` rewritten, 70 untouched).
 
 - **The database is kept and loaded** (boot 7's own log): `oneios-ls: ... names 52 of 52 apps of /Applications: kept`;
   lsd found no recovery file, loaded it (`result: <private> options: 7`), no `Seeding`, no rebuild. Before it removed
@@ -868,7 +881,8 @@ CPUs; boots 7-9 had it alone):
   and age, `__cache_info__`'s size (-1: missing, and iconservicesagent then starts the folder over).
 - `oneios-store-report=0` turns the step off.
 
-The lines on the PC (the final build, `kernel.kc` `06b06e68`, boot 7):
+The lines on the PC (this patch before the merge of main, `kernel.kc` `06b06e68`, boot 7; the merged tree's
+`22f8c09d` gave the same lines in boot 11):
 
 ```
 oneios-ls: D1F3ECC9-8A4D-42E8-8A88-F6F96F1A8E6E/com.apple.LaunchServices-33554481-v2.csstore: 11448320 bytes, names 52 of 52 apps of /Applications: kept
