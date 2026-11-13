@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 clap.workspace = true
 oneios-sym.workspace = true
+oneios-ksym.workspace = true
 oneios-log.workspace = true
 oneios-image.workspace = true
 oneios-prelink.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "oneios-ksym"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+memmap2.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+oneios-common.workspace = true
+# Mach-O: the collection's fileset entries, every member's segments and symbol table, the kernel's symbols and its
+# debug map (N_OSO stabs), archives of object files.
+object = { version = "0.37", default-features = false, features = ["read", "std"] }
+# DWARF: file:line and inlined frames. addr2line's Loader finds the DWARF where it is: in the kernel itself, in a
+# .dSYM beside it, or in the object files the kernel's debug map names.
+addr2line = { version = "0.25", default-features = false, features = ["loader", "rustc-demangle", "cpp_demangle"] }

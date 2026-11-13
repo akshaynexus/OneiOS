@@ -6,6 +6,7 @@ script before it may replace it; the commands and the results are below. What is
 | Tool | Replaces | State | Same output as the old tool |
 |---|---|---|---|
 | `sym` | `scripts/debug/dsc.py` (**retired 2026-11-12**: deleted, its output frozen in `tests/sym/golden/`) | done | yes: byte for byte on 18 of 18 address sets (Linux, 2026-11-12; the Mac's run: 18 of 18) |
+| `sym kernel`, `log panic` | naming a kernel panic's frames by hand (`atos -o xnu.macho` on the Mac, with each segment's move subtracted) | done; **not run on the Mac's log and kernel of the 2026-11-12 panic** (not on the Linux box) | compared with `llvm-symbolizer --inlining` on three Linux-built pairs: the stand-in panic's 19 addresses and 31,605 more per pair (311,605 on one) name the same function, file:line and inlined frames |
 | `log` | nothing (new) | done | not applicable; 33 commands end with status 0, two runs equal |
 | `image` | `scripts/image/imagetool.py` | 9 subcommands in Rust, the rest run the Python tool | yes: 138 stand-in cases; on the real set 35 of 36 items and the two full builds, byte for byte (the 36th: the Linux set has no `kernel.kc`) |
 | `ioslog` | the manual steps of `docs/newtodo.md` "How to resume" step 2 (mount, copy, `unifiedlog_iterator`) | done; not run on the phone's Data store yet | yes on 7 archives: CSV byte for byte from a `.logarchive`, from a Data-store image and from a mounted volume |
@@ -76,6 +77,8 @@ exists or where ours is measured to be faster; each such part says why in its mo
 | `zbitmap` 0.1 (MIT, github.com/valentinogrande/zbitmap) | LZBITMAP, the compression of most files of iOS 27's OS volumes (decmpfs kinds 13 and 14). A young crate: its output is checked against apfs-fuse on every compressed file of the two images |
 | `apk-info-zip` 1.1 (Apache-2.0, github.com/delvinru/apk-info) | `app`: an APK's signing certificates (schemes v1 to v3.x) |
 | `sha2` (`asm`), `rayon`, `memmap2`, `libc`, `anyhow` | hashing (the hash lists are `sha2` and `std::io::Write`), parallel work, file maps, `copy_file_range` (`image`, `sym`, `log`) |
+| `object` 0.37 | `sym kernel`: all Mach-O reading. The collection's header and load commands (`LC_FILESET_ENTRY`, each member's `LC_SEGMENT_64`s and `LC_SYMTAB`, read at the member's offset with `MachHeader64::parse` and `load_commands`: the crate has no fileset type of its own), `xnu.macho`'s symbols, sections and UUID, its debug map (`ObjectMap`: the `N_OSO` and `N_FUN` stabs), archives of object files |
+| `addr2line` 0.25 with its `loader` (on `gimli` 0.32; `cpp_demangle`, `rustc-demangle`) | `sym kernel`: all DWARF reading. `Loader::find_frames` gives function, file, line and the inlined frames of an address, from `xnu.macho`'s own DWARF, a dSYM, or the object files of the debug map; C++ names are demangled by `cpp_demangle` |
 
 Hand-written, and why:
 
@@ -89,6 +92,7 @@ Hand-written, and why:
 | `oneios-image/src/hashes.rs` | one read pass feeds the whole-file SHA-256 and the chunk hashes (1.9 to 2.9 times Python on the Mac); the list itself is a 32-byte header and the digests, written with `std::io::Write` |
 | `oneios-sym`'s index | the project's own on-disk index: answers in 3 to 10 ms where `dsc.py` takes 0.03 to 53 s |
 | `oneios-log` | xnuhost's own log format |
+| `oneios-ksym`: the index (`index.rs`), the walk that fills it (`dwarf.rs`: which addresses, in how many threads, the runs of equal answers), the panic block's reader (`panic.rs`), the search for the member and segment of an address | the project's own on-disk index, as `sym`'s: a later call takes 4 to 10 ms and reads none of the 93 MB collection, the kernel or its 1,070 object files, and stays right when a kernel build replaces them. Everything the index holds is read by `object` and `addr2line`. Three things the libraries leave open are done by hand, each in a few lines: an object file's time is compared with its `N_OSO` stab's (`addr2line`'s loader reads a rebuilt file as it is), instruction sections are found by their flags (`object` knows `__TEXT,__text` only), and `_block_invoke` names are demangled as LLVM writes them |
 
 `serde_json`'s `preserve_order` feature must not be enabled by any crate of this workspace: Cargo gives one set of
 features to the whole binary, and with it macos-unifiedlogs writes the keys of a decoded state dump in insertion
@@ -396,10 +400,186 @@ The index: built in 26.4 s (1068.8 MiB; 4,696 images, 11,365,799 symbols kept). 
 (18 of 18 on sets from four real logs; `dsc.py` 0.03-53 s, `sym` 3-170 ms) is in [todo_rust.md](todo_rust.md).
 Not compared on Linux: address sets from real phone logs (none on the box).
 
+## sym kernel
+
+`oneios-tool sym kernel` names the kernel addresses of an xnuhost panic: the member and segment of the kernel
+collection (`kernel.kc`) each one is in, the function + offset, and for the kernel itself file:line and the
+inlined frames from the unprelinked kernel (`xnu.macho`). `sym` names user addresses only (the dyld shared cache);
+the frames of the phone's panic of 2026-11-12 23:15 were named by hand with `atos` on the Mac. Crate
+`crates/oneios-ksym`; added 2026-11-13 on Linux.
+
+```sh
+oneios-tool sym kernel LOG                          # every panic block of an xnuhost session log (`-`: standard input)
+oneios-tool sym kernel 0xfffffff00b54c094 ...       # addresses by hand (hex): of the collection, or running ones with --slide
+oneios-tool sym kernel --symbol tcp_input           # where a function is: in the collection, in xnu.macho, running
+oneios-tool sym kernel --xnu 0xfffffff007789b78     # an address of xnu.macho, as atos and llvm-symbolizer take them
+oneios-tool sym kernel index [--force]              # build the index now; prints every kernel segment's move
+oneios-tool log panic LOG                           # the same panic blocks, from the log tool
+oneios-tool log stacks LOG                          # ends with them when the log has a panic
+#   --kc PATH/kernel.kc  --kernel PATH/xnu.macho  --dsym PATH  --no-kernel  --slide HEX  --index DIR
+#   -f text|json  --full-paths  --return  --no-call-sites  --stdin  --rehash  -j N
+```
+
+**The files.** `--kc` and `--kernel`, else `ONEIOS_KC` and `ONEIOS_KERNEL`, else the newest
+`out/kernel/*/kernel.kc` and the `xnu.macho` that its prelink record names (`kernel.kc.build.json` beside it:
+`inputs.kernel.path` or any `out/kernel/current-hosted*/xnu.macho` with `inputs.kernel.sha256`), else the newest
+`out/kernel/current-hosted*/xnu.macho`. In a git worktree under `.claude/worktrees/` the checkout's own `out/` is
+searched too. The output starts with the two paths and their SHA-256 (kept in `out/ksym-index/hashes.json` with the
+size and time they were taken at, so a later call does not hash 93 MB again; `--rehash` does), where the DWARF came
+from, and whether the two belong together: a `WARNING` when the record names another kernel, when a kernel segment
+has another size in the two files, or when the symbols the collection keeps for the kernel (70,579 here) are not
+all where this kernel's symbols land.
+
+**Addresses.** Four kinds, told apart by where they lie:
+
+| Address | From | Rule |
+|---|---|---|
+| in the collection | `panic(cpu N caller 0x...)`, the `frame 0x...` lines (`hosted_panic` prints them `- vm_kernel_slide`) | the fileset's `LC_FILESET_ENTRY` members and each member's `LC_SEGMENT_64`s are read; the smallest segment that holds the address gives member and segment (every kext lists the shared `__LINKEDIT`: the first member has it) |
+| in `com.apple.kernel` | the same | **xnu.macho address = address - (the segment's vmaddr in the collection - the same segment's vmaddr in xnu.macho), per segment.** The prelink places each segment on its own: here `__TEXT` moves by `0x180000`, `__DATA_CONST` by `0xc24000`, `__TEXT_EXEC` and `__KLD` by `0x386c000`, `__DATA` by `0x3a28000` (`sym kernel index` prints all ten). A symbol moves with the segment of its section (`n_sect`), not of its address: an end label sits on the next segment's first address, and `__LAST` has no size |
+| of the running kernel (the "physical aperture") | the fault's `pc` and `lr`, in the panic's text and in its register dump | **collection address = running address - slide** (modulo 2^64), **slide = RAM - link base**. xnuhost maps the guest's RAM once, at `0x2000000000 + (link base mod 2 MiB)` (`runtime/xnuhost/src/mem.c`, retried 16 GiB higher), copies every segment of the collection to `RAM + (vmaddr - link base)` (`runtime/loader/src/boot.c`; link base = the lowest vmaddr of the collection's own segments, `macho.c`) and runs it there with physical = virtual (`docs/booter.md` 2.2). The log has all three numbers: `kernel: ... link base 0xfffffff007004000` and `memory: N MiB at 0x2000004000, physical = virtual (slide 0x2ff9000000)`. So `pc 0x200454c094` is `0xfffffff00b54c094`, the panic's first `frame` line, and `lr 0x2003ff1038` is `0xfffffff00aff1038`, `0x7138` bytes after the `tcp_input` frame. `--slide HEX` gives the slide for addresses by hand or a log cut before its `memory:` line; the tool warns when the log's slide is not RAM - link base or its link base is not this collection's |
+| anything else | | said in the line (`not in the collection (A to B); as an address of the running kernel (slide S) it is X: not in it either`), never dropped |
+
+**Names.** Function + offset is the nearest symbol at or below the address in the same member and segment: for
+the kernel from `xnu.macho`'s symbol table (C++ demangled; of two names of one address the one the DWARF gives
+the function, else the last external one, so `_start` and not the `LowResetVectorEnd` label before it), for
+another member from its own symbol table in the collection. **This collection keeps no symbols of its 134 kexts**,
+so a kext frame is `member segment  __TEXT_EXEC+0xOFFSET`; kexts are at the kernelcache's addresses, so the
+address is the one a disassembler of `kernelcache.macho` shows. `--no-kernel` (or no `xnu.macho`) names the kernel
+from the symbols the collection keeps for it, without file:line.
+
+**DWARF** is read by `addr2line` (on `gimli`) from where it is, in this order: `--dsym PATH`; `xnu.macho`'s own
+`__DWARF` sections; a `.dSYM` in `xnu.macho`'s folder with its UUID; the kernel's **debug map**. The Linux build
+has the last: `xnu.macho` carries no DWARF and no dSYM (`mach.development.bcm2837.dSYM` in the build tree is
+empty), its 1,070 `N_OSO` stabs name the object files and archive members of the build tree
+(`out/kernel-hosted-*/...`), which hold the DWARF. An object file whose time is not the one its stab recorded was
+rebuilt since the link: its functions get no lines and the head says how many (lines of another build would be
+wrong ones). `llvm-symbolizer` and `llvm-addr2line` do not read a debug map: on `xnu.macho` they give function
+names only.
+
+**The index** (`out/ksym-index/<kernel.kc SHA-256>/<xnu.macho SHA-256>/`, `kc-only` without a kernel;
+`ONEIOS_KSYM_INDEX` or `--index` for another folder) is built by the first call for a pair of files: the members
+and segments, every symbol at its collection address, and file, line and inlined frames of **every instruction of
+the kernel** (2,471,575 addresses asked of `addr2line`, 761,328 runs of equal answers). `index.bin` 23.2 MiB,
+`meta.json` 0.1 MiB. After that a call reads neither the collection nor the kernel nor an object file, so the
+index stays right when the next kernel build replaces the object files. The threads (`-j N`, default: the CPUs)
+each take a share of the addresses; `index.bin` is the same file for 1, 3 and 4 threads. Times on the Linux PC (4
+CPUs; other agents' builds were running, load 3 to 12): **the first call for a pair 2.2 to 4.4 s** (the index
+1.3 to 3.7 s with 4 threads; with `-j2` 1.7 to 2.8 s at load 3 and 6 to 9 s at load 8 to 12; hashing the two files
+once is about 0.7 s), **later calls 4 to 10 ms** for a panic block of 19 addresses, the process from start to end
+(0.18 s in one call; a guess: the index was no longer in memory. Not looked into).
+
+**Output.** One line per address, `ADDRESS  member segment  function+offset  (file:line)`; in a panic block the
+line starts with what the address is (`caller`, `pc`, `lr`, `frame`). The file:line is the place in the function
+itself; the functions inlined there follow, each indented under the one it was inlined into, the last one being
+where the address is. `caller`, `lr` and `frame` are return addresses: when the call (4 bytes before) is on
+another line or in another function, a line `the call, at ADDRESS: ...` says where (`--no-call-sites` leaves it
+out; a call that never returns can be the last instruction of its function, and then the return address is the
+next function's first). `-f json` has every field (the address as given, `space`, `kc_address`,
+`kernel_address`, `member`, `segment`, `symbol`, `raw_symbol`, `offset`, `frames` with whole paths and mangled
+names, `call_site`, `note`). From the stand-in log of this box's kernel:
+
+```
+panic at xnuhost.log line 6 (cpu 4): Unexpected fault in kernel physical aperture at pc 0x00000020044edcd8, lr 0x0000002003ffe0cc (saved state: ...)
+  running address = collection address + slide 0x2ff9000000 (RAM 0x2000004000 - link base 0xfffffff007004000)
+  caller 0xfffffff00b4e80a4  com.apple.kernel __TEXT_EXEC  sleh_synchronous_sp1+0x54  (sleh.c:689)
+             the call, at 0xfffffff00b4e80a0: sleh_synchronous_sp1+0x50  (sleh.c:681)
+  pc     0x20044edcd8 (running; 0xfffffff00b4edcd8 in the collection)  com.apple.kernel __TEXT_EXEC  __ubsan_handle_mul_overflow_minimal+0x0  (ubsan_minimal.c:165)
+  lr     0x2003ffe0cc (running; 0xfffffff00affe0cc in the collection)  com.apple.kernel __TEXT_EXEC  compute_iaj+0x1ec  (tcp_input.c:453)
+               inlined compute_iaj_meat  (tcp_input.c:0)
+             the call, at 0xfffffff00affe0c8: compute_iaj+0x1e8  (tcp_input.c:453)
+                 inlined compute_iaj_meat  (tcp_input.c:439)
+  frame  0xfffffff00adcbc30  com.apple.kernel __TEXT_EXEC  sleh_synchronous+0xc18  (sleh.c:999)
+               inlined handle_abort  (sleh.c:1572)
+                 inlined handle_kernel_abort  (sleh.c:2717)
+  frame  0xfffffff00add05b4  com.apple.kernel __TEXT_EXEC  hosted_exception_upcall_entry+0x18
+  frame  0xfffffff00aff70b4  com.apple.kernel __TEXT_EXEC  tcp_input+0x153c  (tcp_input.c:3723)
+             the call, at 0xfffffff00aff70b0: tcp_input+0x1538  (tcp_input.c:3721)
+```
+
+### The comparison
+
+```sh
+tools/oneios-tool/tests/ksym/compare.sh                    # the pair `sym kernel` finds under out/kernel
+tools/oneios-tool/tests/ksym/compare.sh KC KERNEL [LOG]    # these files; LOG: a real xnuhost session log
+#   DSYM=PATH (the kernel's dSYM, when its object files are not on this machine)  SAMPLE=N  KEEP=1
+```
+
+The reference is `llvm-symbolizer --inlining --no-demangle` (LLVM 23.1.4) on a dSYM that `dsymutil` makes from the
+same `xnu.macho` (5.6 s): LLVM's DWARF linker and reader against `addr2line` reading the object files through the
+debug map. The Mac's log and kernel of the 2026-11-12 panic are not on this box (and a Linux-built kernel has
+other addresses), so without `LOG` the script's log is a stand-in that `tests/ksym/make-log.py` writes from the
+two files: the panic's 17 functions in order, for each a return address after its `bl` to the function above it
+in the backtrace (else after the middle one of its calls), the pc on the first frame, the lr after
+`compute_iaj`'s call of the handler, both as running addresses with slide `0x2ff9000000`. The collection addresses
+come from the test's own reader (`tests/ksym/kcmap.py`: `struct` and `mmap`, no Mach-O library), not from the
+tool. `handle_kernel_abort` is not a symbol of the Linux build (inlined into `sleh_synchronous`): 16 frame lines.
+
+Result on Linux x86_64 (2026-11-13), three pairs: `kernel.kc` `ffbe95f7` with `xnu.macho` `13ed0b70` (`pc`),
+`cdd98e7e` with `399f50fa` (`pc2`), `ff87a7ee` with `be249267` (`fpr2`, the tool's own choice). **Every check the
+same on all three:**
+
+| Check | Result |
+|---|---|
+| the log's 19 addresses (caller, pc, lr, 16 frames): function, file:line and every inlined frame against `llvm-symbolizer` | 19 of 19 the same, per pair (17 with file:line; `hosted_exception_upcall_entry` and `Call_continuation` are assembly: function + offset on both sides) |
+| the running pc and lr: collection address + slide = the log's address; the pc is the first frame's address | the same |
+| the kernel address and the function `make-log.py` wrote each address for | 19 of 19 |
+| each of the 17 functions' collection address three ways: the tool (`--symbol`), `kcmap.py` with the segment's move, the collection's own symbol table | 17 of 17 |
+| every instruction of those 17 functions (11,605) and 20,000 more addresses of `__TEXT_EXEC` | 31,605 of 31,605 the same; 31,062 to 31,065 with file:line, 9,542 to 9,682 of them in inlined code. With `SAMPLE=300000` on `pc`: 311,605 of 311,605 (91,504 in inlined code) |
+| the same again with the tool reading the dSYM (`--dsym`) instead of the debug map | the same numbers |
+| the collection alone (`--no-kernel`): function + offset from the symbols it keeps | 19 of 19 |
+
+At 16 to 21 of the 31,605 addresses (271 of 311,605) the two tools print different names of one address:
+`llvm-symbolizer` takes the outermost function's name from the symbol table and of two names the last
+(`inet_arp_handle_input`), the tool the one the DWARF has (`arp_ip_handle_input`). Both are symbols of that
+address; the script counts these as the same and prints how many. Names are compared mangled, so the two
+demanglers' spellings do not count (`cpp_demangle` writes an inherited constructor
+`OSSharedPtr<OSArray>::intrusive_shared_ptr(...)`, LLVM `OSSharedPtr<OSArray>::OSSharedPtr(...)`).
+
+**`compute_iaj` at `tcp_input.c:3723`** (the Mac's `atos -i` showed no inlined frame there). In this box's
+kernel (the same source line): `compute_iaj` is **not** inlined into `tcp_input`. Of `tcp_input`'s 6,070
+instructions none has `compute_iaj` or `compute_iaj_meat` as an inlined frame; `tcp_input+0x1538` is `bl
+compute_iaj` on line 3721 (`compute_iaj(tp);`) and the instruction after it, the return address, is line 3723 (the
+next statement), which is what the Mac's frame shows. `compute_iaj_meat` **is** inlined into `compute_iaj` (163 of
+its 174 instructions), so the fault's lr in `compute_iaj` names `compute_iaj_meat` as an inlined frame (above).
+For the Mac's kernel itself this is not checked: its `xnu.macho` is not here.
+
+**Not run:** the Mac's log (`out/session-logs/2026-11-12/boot-0.1.7b/xnuhost.log`) and its kernel (`kernel.kc`
+`8e7f4fdc`): not on this box. With them: `compare.sh PATH/kernel.kc PATH/xnu.macho PATH/xnuhost.log`, and
+`DSYM=PATH/xnu.macho.dSYM` (or the Mac's build tree's dSYM) because a Mac-built kernel's debug map names the Mac's
+object files; without any DWARF the script compares function names only and says so. Not run on a Mac at all (the
+script needs `llvm-symbolizer`, which Xcode does not install). A real panic log from the phone: none on the box;
+the block's format is `hosted_panic`'s source and XNU's `panic_with_thread_kernel_state` text.
+
+Unit tests (`crates/oneios-ksym`, no Apple file): 13. A fileset-shaped Mach-O made in the test (two members, the
+kernel's `__TEXT` moved by `0x180000` and `__TEXT_EXEC` by `0x3870000` as in the Mac build, a segment of no size,
+an end label, two names of one address), the physical-aperture rule on the Mac log's numbers, the index with lines
+given by hand, a panic block end to end (text and JSON), the pairing warnings, a debug map whose object files
+changed or are gone, the collection alone, a plain kernel in place of a collection. `oneios-log`: 1 more (8).
+`cargo test --release` for the whole workspace on Linux (2026-11-13): 73 tests pass (`oneios-common` 3,
+`oneios-image` 31 + 1, `oneios-ioslog` 4, `oneios-ksym` 4 + 9, `oneios-log` 8, `oneios-phone` 3, `oneios-prelink`
+3, `oneios-sym` 7). Run again after the change, because `sym`'s command line and `log stacks` were touched:
+`tests/sym/compare-golden.sh` (18 of 18 sets the same as `dsc.py`'s frozen output) and `tests/log/run.sh` on the
+two stand-in logs (33 commands, all status 0, two runs equal). `tests/compare-python.sh` has the part `ksym`.
+
+Limits:
+- Kext frames have no function names (above). The pairing records of the prelink are not used for them.
+- No end of a symbol is checked: an address after the last function of a segment gets that function with a large
+  offset.
+- `hosted_panic` prints at most 24 frames and stops at another stack; the register dump is cut at 1,024 bytes of
+  message. A `frame` line joined with another record (text after the address) is not taken as an address.
+- The index holds what the object files said when it was built. Built while some were stale, it has no lines for
+  their functions until `sym kernel index --force` with the files back (or `--dsym`).
+- `xnu.macho`'s own `__DWARF` sections (source 2) were not met in a real file; a dSYM (sources 1 and 3 share the
+  reader) and the debug map were.
+
 ## log
 
 `oneios-tool log stacks|timeline|diff|gpu|cpu|display|perf LOG...` reads an xnuhost session log
 ([todo_rust.md](todo_rust.md) has each subcommand). No Python original.
+
+`oneios-tool log panic LOG [--kc PATH] [--kernel PATH]` prints the log's kernel panics named through `sym kernel`
+("sym kernel" above), and `log stacks` ends with the same part when the log has a panic (`--no-sym` leaves it
+out). Without a collection (none given, none under `out/kernel`) the addresses are listed unnamed, with the reason.
 
 ```sh
 ONEIOS_LOG_DIR=<folder with *.log> tools/oneios-tool/tests/log/run.sh

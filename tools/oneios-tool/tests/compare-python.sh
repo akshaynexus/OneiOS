@@ -15,6 +15,8 @@
 #   phone     tests/phone/run.sh                  none (a stand-in phone; scripts/phone/stage.sh is the reference)
 #   app       tests/app/run.sh                    none (a stand-in OneOS checkout, gradlew, gh and phone)
 #   cycle     tests/cycle/run.sh                  the OneOS fork's checkout (its root script); tmux, zstd
+#   ksym      tests/ksym/compare.sh               KSYM="KC KERNEL [LOG]" (default: the newest out/kernel/*/kernel.kc
+#                                                 and the xnu.macho its record names); llvm-symbolizer, dsymutil
 #
 # Usage: compare-python.sh [PART...]   (default: all). Exit 0 when every part that ran passed; a part without its
 # inputs is "skipped" and does not fail the run. Each script's header has its own options.
@@ -23,6 +25,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../../.." && pwd)
 export PATH=$HOME/.cargo/bin:$PATH
 parts=${*:-units parity image apfs sym log ioslog prelink phone app cycle}
+[ $# -eq 0 ] && parts="$parts ksym"
 failed="" skipped="" passed=""
 run() {  # run PART COMMAND...
   local part=$1; shift
@@ -67,6 +70,11 @@ for part in $parts; do
   prelink)
     if [ -f "${KERNELCACHE:-$root/out/kernel-inputs/24A446/kernelcache.macho}" ]; then run prelink "$here/prelink/compare-golden.sh"
     else skip prelink "no kernelcache: scripts/image/kernel-inputs.sh, or KERNELCACHE=FILE"; fi ;;
+  ksym)
+    # sym kernel against llvm-symbolizer: KSYM="KC KERNEL [LOG]", else the pair `sym kernel` finds under out/kernel.
+    if ! command -v llvm-symbolizer >/dev/null; then skip ksym "no llvm-symbolizer"
+    elif [ -z "${KSYM:-}" ] && ! ls "$root"/out/kernel/*/kernel.kc >/dev/null 2>&1; then skip ksym "no out/kernel/*/kernel.kc: KSYM=\"KC KERNEL [LOG]\""
+    else run ksym "$here/ksym/compare.sh" ${KSYM:-}; fi ;;
   *) echo "compare-python: no part $part" >&2; exit 2 ;;
   esac
 done

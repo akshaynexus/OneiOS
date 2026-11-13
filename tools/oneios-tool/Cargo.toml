@@ -24,6 +24,7 @@ sha2 = "0.10"
 libc = "0.2"
 oneios-common = { path = "crates/oneios-common" }
 oneios-sym = { path = "crates/oneios-sym" }
+oneios-ksym = { path = "crates/oneios-ksym" }
 oneios-log = { path = "crates/oneios-log" }
 oneios-image = { path = "crates/oneios-image" }
 oneios-prelink = { path = "crates/oneios-prelink" }
