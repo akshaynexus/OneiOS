@@ -26,7 +26,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 | Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp`: the hosted kernel's audio archive since 2026-11-12 (before: not built, no device in iOS) | `devices/virtio_snd.c`, `audio/aaudio_helper.c` (`oneios-audio`) | helper run on the phone beside One UI (plays and records, 0 underruns, about 130 ms); host-tested against a fake AAudio; in sessions iOS's I/O thread failed for large buffers (system sounds 3 s late or lost): hosted 0052, not yet run (section 6) |
 | Camera | `drivers/camera`: the `oneios,camera` transport, `/dev/oneios-camera`; `userland/camera`: the capture plug-in (its device object not written) | `runtime/bridges/camera`: helper `oneios-camera` (provider HAL in a session, Camera2 NDK with One UI), ring, device, `camctl` | host and kernel sides built and host-tested; iOS shows no camera yet; one phone run (2026-11-11): cameraserver lists 4 cameras and opens one for a root client, no frame arrived (no binder threads in the process: fixed, the fix not yet run on the phone); the HAL back end never run (section 7) |
 | Backlight and light sensor | `drivers/brightness`: the backlight service (port of iOSPlus10's `AppleARMBacklight`), the light readings; the HID light sensor device, built into the hosted kernel's HID archive | `runtime/bridges/brightness`: the backlight sysfs node, `als_rear` by evdev, `brightctl` | both built; host tested; in a PC boot the HID device starts and Apple's `AppleUSBALSService` attaches to it; on the phone backboardd finds the service; the slider reached no request because CoreBrightness ran VMBLControl (fixed 2026-11-12 in backboardd through the Metal plug-in, not yet run; section 7a) |
-| Battery | `drivers/battery`: an `IOPMPowerSource` powerd reads | `runtime/bridges/battery`: Android's `power_supply` nodes, polled, changes sent over the bridge channel; `batteryctl` | both built; host tested with a fake sysfs; never run on the phone or in a session (section 7c) |
+| Battery | `drivers/battery`: an `IOPMPowerSource` powerd reads | `runtime/bridges/battery`: Android's `power_supply` nodes, polled, changes sent over the bridge channel; `batteryctl` | both built; host tested with a fake sysfs; one phone session (2026-11-12 23:45, on the charger): published, and a "plugged in" sound before the lock screen (the startup chime: section 7c) |
 | Thermal | `drivers/thermal`: `OneiOSThermal` (the readings and the level in the registry); `userland/helpers/oneios-thermal` sets iOS's `com.apple.system.thermalpressurelevel` from it | `runtime/bridges/thermal`: the thermal zones, Samsung's thermistors, the battery's sensors; a level on iOS's scale; xnuhost's CPU step when hot; `thermalctl` | host built and tested; the bridge and `thermalctl` run on the phone (2026-11-12); the step, the driver and the helper not yet run; an idle session's heat traced to the guest's idle cache flush (xnuhost's `setway-skip`: -40% CPU) (section 7d) |
 | Touch screen and buttons | `kernel/patches/oneios-hosted/hid`: UniXNU's NativeHidInput (digitizer, buttons) under the collection's `IOHIDDevice`, UniXNU-droidvm's virtio-input transport with the side keys | xnuhost's `input.c` (evdev, no grab) and `virtio_input.c`; `input_script.c` for a host with no panel | built; in a PC boot backboardd opens both services and scripted touches and keys are queued for it as HID events; never run on the phone (section 7b) |
 
@@ -36,7 +36,7 @@ Common pieces:
   `oneios,bridge`, carrying small messages (haptic requests, HCI packets). Guest end `drivers/bridge/OneiOSBridge.c`,
   host end `runtime/bridges/devices/bridge_dev.c`. Devices that already have a virtio driver in UniXNU-droidvm
   (network, sound) use standard virtio devices instead.
-- **Tests**: `runtime/bridges/tests/host.sh` (CI runs it): 198 checks (and 48 in `brightness/`, 57 in `battery/`) with ASan and UBSan, the virtio devices driven
+- **Tests**: `runtime/bridges/tests/host.sh` (CI runs it): 198 checks (and 48 in `brightness/`, 65 in `battery/`) with ASan and UBSan, the virtio devices driven
   through xnuhost's real transport (`runtime/xnuhost/src/virtio.c`) by a guest made of plain memory; then the Android
   build. `drivers/build.py --check` compiles the kernel sources with the kernel build's own compile records
   (xnu-12377, arm64e, `-Wall -Wextra -Werror`); the archive's 292 undefined symbols all resolve in `xnu.macho`.
@@ -1211,6 +1211,21 @@ Details and the phone test: `runtime/bridges/battery/README.md`, `drivers/batter
   change of level or charging state, the rest at most every 30 s; `drivers/battery/OneiOSBattery.cpp` publishes it.
 - [F 24A446 `powerd`, disassembled] it matches `IOServiceMatching("IOPMPowerSource")`, and its reader needs
   `BatteryInstalled` = true, `CurrentCapacity` and `MaxCapacity`.
+- **The order** (since 2026-11-13, `drivers/battery/oneios_battery_props.h`): the guest asks the host before its service
+  exists; the host's first reading is in the service's registry properties before `registerService()`, so powerd's first
+  match reads the real ExternalConnected; that first publish sends no `kIOPMMessageBatteryStatusHasChanged`, and a later
+  host message sends one only when a published value changed. Host-tested (`drivers/tests/host.sh`: 21 checks;
+  `runtime/bridges/battery`: 65, among them the phone on its charger: the real state at the query, no report while it
+  stays, an unplug and a plug each reported). The code before 2026-11-13 already put the first reading in before
+  `registerService()`; it also messaged (to no client yet) at that publish. PC boot with a fake
+  charger (2026-11-13): `ONEIOS BATTERY: on: IOPMPowerSource published at 100%, on power (ExternalConnected true, ...
+  before registerService)` 3 s in, minutes before launchd.
+- **The charging chime** [F 24A446 powerd and SpringBoard, disassembled; `drivers/battery/README.md` "The charging
+  chime"]: powerd publishes `Play Charging Chime` = ExternalConnected; SpringBoard's `SBChargingController` chimes for
+  an unmarked power source with it true, and at startup marks the connected ones silently only when its startup
+  context has the boot overlay (backboardd's boot UI) or is dark. Phone, 2026-11-12 23:45 (on the charger, Full): the
+  "plugged in" sound played before the lock screen. [I] SpringBoard found no boot overlay (it started at +38 s, the
+  first frame came at +48.8 s); not proven: the iOS log lines that decide it are in that README.
 
 | Android node | iOS key | Mapping |
 |---|---|---|
