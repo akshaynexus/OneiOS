@@ -752,7 +752,9 @@ and the 7 unit tests on synthetic log text.
 `oneios-tool phone [--serial S] CMD`: the phone on adb. Written against a stand-in (`tests/phone/fake-adb.sh`);
 **run on the real phone on 2026-11-12** (the Mac, SM-S928B): `status`, `stage runtime` (runtime 0.1.7 from the
 release's asset), `stage image`, `sums`, `image-check`, `switch`, `log --follow --markers`, `log --list`, `log --file`.
-`return` and `pull-data` have not run on it yet. `scripts/phone/stage.sh` stays until they have.
+`return` has not run on it yet. `pull-data` ran there on 2026-11-13 over wireless adb as the first port's one
+gzip stream and broke twice (below, "The copy that goes on"); the copy in chunks that replaced it **has not run
+on the phone**. `scripts/phone/stage.sh` stays until they have.
 
 ```sh
 oneios-tool phone status                      # root, the installed app, the session, `oneios_root.sh status` (read only)
@@ -767,7 +769,9 @@ oneios-tool phone image-check                 # the staged manifest.json against
 oneios-tool phone manifest DIR [--out FILE] [--stage]   # the phone's manifest.json with DIR's files' entries set to theirs
 oneios-tool phone switch [--version-code N]   # busybox setsid sh oneios_root.sh switch <the installed app's versionCode> 1
 oneios-tool phone return [--timeout 180] [--note TEXT]   # session/return.request, then waits for "One UI restored"
-oneios-tool phone pull-data OUT [--ioslog]    # data/data.img: gzip -1 on the phone, zero runs as holes here
+oneios-tool phone pull-data OUT [--ioslog]    # data/data.img in chunks, each checked against the phone's sha256, zero runs as holes;
+                                              #   run again after a stop and it goes on (OUT.part, OUT.part.progress)
+                                              #   [--chunk MIB] [--retries 5] [--backoff 2] [--stall 120] [--verify chunk|end] [--restart]
 oneios-tool phone sparse-write OUT [--gunzip] [--expect-size N]   # stdin to OUT, zero runs as holes (no phone)
 ```
 
@@ -807,12 +811,16 @@ What each does:
   and reads only what the log gained, every 2 s, until `One UI restored` is there; then it prints
   `return.outcome`. At `--timeout` it ends with status 1 and the last lines of the log (and says when the phone
   no longer answers: a restart is the return's failsafe).
-- `pull-data` is the adb line of `docs/newtodo.md` "How to resume" step 2 with the Mac's `sparsewrite.py` built in:
-  `adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'"`, unpacked
-  with `flate2` (`zlib-rs`), written to `OUT.part` (a block of zeros is not written, the length is set at the
-  end: "The sparse copy" below) and renamed to `OUT` only when as many bytes came as the phone's `stat -c %s` of
-  that file says, before and after. `--ioslog` then runs `ioslog boots OUT` and `ioslog checks OUT`.
-- `sparse-write OUT` is that copy without the phone, and `pull-data` by hand: `adb exec-out "su -c
+- `pull-data` copies `data/data.img` in chunks of `--chunk` MiB (256), each one adb stream of a range of that
+  one named file, unpacked with `flate2` (`zlib-rs`) and written at its offset into `OUT.part` (a block of zeros
+  is not written: "The sparse copy" below). Each chunk is checked against the phone's SHA-256 of the same range.
+  A stream that breaks is tried again (`--retries`), and a run that stopped, was killed or gave up goes on at
+  the first chunk that is not done when the same command is run again. `OUT.part` becomes `OUT` only when every
+  chunk is verified and the store's size and modification time are what they were at the start. `--ioslog` then
+  runs `ioslog boots OUT` and `ioslog checks OUT`. "The copy that goes on" below has the design, the options
+  and the test.
+- `sparse-write OUT` is the copy without the phone, and the first port's `pull-data` by hand (one stream, no
+  resume, no sums): `adb exec-out "su -c
   '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'" | oneios-tool phone sparse-write
   OUT --gunzip`. stdin goes to OUT; `--gunzip` unpacks it first; `--expect-size N` fails when another number of
   bytes came. It prints `OUT: N bytes, M of them written (S s)`.
@@ -909,6 +917,95 @@ suite's process group while a session ran stopped it with none left, in both mod
 5 passed. Before the change, on the same box: the host mode passed (phone 73, cycle 90 checks); the stand-in's
 `/proc` pointed at nothing (the Mac's case) failed 12 and 31 (above). **Linux only**: macOS itself was not run
 here; there, `stand-in` is the only mode, and the GNU tools and perl's setsid are the Mac's.
+
+### The copy that goes on (`pull-data`)
+
+`crates/oneios-phone/src/pull.rs`. **Not run on the phone**: written and tested against the stand-in phone only.
+
+The fault it answers (the Mac, wireless adb, 2026-11-13): the first port sent one `busybox gzip -1 -c data.img`
+stream. It broke twice with `reading the stream: incomplete deflate stream`, after 1.6 of 32.0 GiB (871 s, about
+1.8 MB/s) and after 0.6 GiB (213 s), with adb still connected, and each time the copy began at zero again.
+
+What it does now:
+- **Chunks.** The store is copied in chunks of `--chunk` MiB (default 256: 128 chunks for 32 GiB). Each chunk is
+  one `adb exec-out` stream: `su -c 'busybox dd if=.../data/data.img bs=1M skip=N count=M 2>/dev/null | busybox
+  gzip -1 -c'`. dd seeks to the range (`skip=` of a file), so a chunk costs its own bytes; its statistics go to
+  `/dev/null` (on an adb that joins stdout and stderr they would follow the gzip stream). The stream is unpacked
+  and written at its offset into `OUT.part`, which has the store's length from the start; a block of zeros is
+  not written (`sparse::copy_at`). Not a byte past the range is written, and a stream of more or fewer bytes
+  than the range, or whose gzip end (CRC, length) is missing, is an error.
+- **Sums.** The phone's SHA-256 of a chunk is one more read of the same range of the same file (`... dd ... |
+  busybox sha256sum`). It is compared with the SHA-256 of the range read back from `OUT.part` after it was
+  written out (`fdatasync`); holes are hashed as zeros without being read (`SEEK_DATA`, `SEEK_HOLE`). If the
+  two differ, the range is read back once more with every byte read, in case the file system's map of holes is
+  wrong (then the map is not used again in that run).
+  - `--verify chunk` (the default) asks for the sum **before** the chunk is copied. A chunk whose sum is that of
+    zeros is a hole and is not copied at all: one read on the phone instead of two, and no stream. A chunk
+    whose copy does not have the phone's sum is cleared and copied again at once.
+  - `--verify end` copies every chunk, then asks for every sum; a chunk that differs is copied again then.
+  - **Picked: `chunk`**, by the count of what the phone does, not by a measurement over wireless adb (there was
+    no phone on the box, and the stand-in's times were not taken): both ways read and hash every chunk once on
+    the phone; `chunk` saves the second read, the gzip and the stream of every chunk of zeros (most of a 32 GiB
+    store with a few GiB of data), asks for the sum while the range is the phone's most recent read, and a
+    stopped copy holds verified chunks only. `--verify end` is there to measure against on the phone.
+- **The progress file**, `OUT.part.progress`: text, a head (the file's path on the phone, its size, its
+  modification time, the chunk size), then a line appended per event and written out before the next step:
+  `copied INDEX LENGTH SHA256 BYTES-WRITTEN BYTES-OVER-ADB` (the sum as read back) and `verified INDEX SHA256`.
+  A line cut off by a kill does not count. A run that finds `OUT.part` and its progress file goes on at the
+  first chunk that is not done, with the chunk size the copy began with; chunks copied under `--verify end` and
+  not verified yet are verified, not copied again. `--restart` throws both away. A `.part` without a progress
+  file (the first port's) is begun again; a progress file that is not this tool's is refused. Only one run
+  writes a copy (`flock` on the progress file).
+- **Retries.** A chunk whose stream breaks, comes short or long, stands still for `--stall` seconds (120; 0:
+  never; it must be longer than the phone needs to hash one chunk), or whose sum differs is cleared (a hole is
+  punched over its range, or zeros are written where the file system punches none: what the broken attempt
+  wrote must not stay where the store has zeros) and copied again from its start, `--retries` times (5) with a
+  pause of `--backoff` seconds (2) that doubles, at most 30 s. Then the command ends with status 1 and says
+  which chunk failed, why, and that the same command goes on from there.
+- **Ctrl-C or SIGTERM** ends the chunk that is being copied and says how to go on; a SIGKILL leaves the same
+  state without the message.
+- **The store must not change.** Its size and modification time (`stat -c '%s %Y'`, one named file) are read
+  at the start, after every failed attempt and at the end. If they changed the command says so and stops,
+  `OUT.part` stays and is not renamed. A later run refuses to go on from a copy of a store that has another
+  size or time (`--restart`). A session that is open is refused before anything is read, as before.
+- **Speed.** Each chunk prints one line: its bytes, the bytes written, the bytes over adb, its time and MB/s
+  (of the store, and over adb), then the run so far. A retry prints the chunk, the error and the offset the
+  chunk starts again at. While a chunk is copied a line every 2 s. The last line (stdout):
+  `OUT: SIZE bytes, N of them written, M bytes over adb (T s, X MB/s, Y MB/s over adb); K chunk(s) of C MiB: A
+  copied, B of zeros not copied, R retried, every chunk's sha256 is the phone's`. `M` counts the streams that
+  broke too.
+
+```sh
+tools/oneios-tool/tests/phone/pull-resume.sh                 # the stand-in test; FAKE_PROC=stand-in for the Mac's mode
+SPEED=4096:280 tools/oneios-tool/tests/phone/pull-resume.sh   # also times a 4096 MiB store: one stream, --verify chunk, --verify end
+cargo test --manifest-path tools/oneios-tool/Cargo.toml -p oneios-phone pull   # the progress file's parser, the ranges
+```
+
+The test (`tests/phone/pull-resume.sh`, the stand-in phone with a busybox that breaks what the test asks for; a
+store of 40 MiB and 12345 bytes in 11 chunks of 4 MiB, 7 with data): a plain copy; `--chunk 1`, `64` and the
+default; a stream that breaks once, three times (also with adb ending with status 1), and more often than
+`--retries` (the command gives up, the next run goes on and does not read the chunks that were done); a whole
+stream of too few bytes; a run killed with SIGKILL, SIGTERM and SIGINT in the middle of a chunk and run again;
+a second run beside the first (refused); a stream that stalls; a chunk whose first byte is not the phone's
+(copied again; the byte the bad copy wrote where the store has a zero is gone), also under `--verify end`; a
+copy begun with `--verify end` and finished with `--verify chunk`; the store growing and the store's content
+changing during the copy; `--restart`; a `.part` without a progress file; a foreign progress file; the refusal
+while a session is open. After every copy that ends well: `cmp` with the phone's file, not more bytes on disk
+than the phone's file holds (`st_blocks`), no `.part` and no progress file left. Result, Linux x86_64 on btrfs,
+2026-11-13: 105 checks, `ALL OK`, with the host's `/proc` and with the stand-in's own (`FAKE_PROC=stand-in`).
+`tests/phone/modes.sh` does not run it (it runs `tests/phone/run.sh`, whose two checks of the first port's
+command are now of the ranged one). **Not measured:** the `SPEED=` run of the stand-in; the per-chunk lines of
+the 40 MiB test store say nothing about a phone.
+
+**To check on the phone, over wireless adb** (nothing of this is known):
+1. That KernelSU's busybox has `dd` with `bs=1M skip= count=` and `sha256sum`, and how fast its `sha256sum` is
+   (128 sums of 256 MiB; Android's own `sha256sum` may be faster: a guess).
+2. `oneios-tool phone pull-data data.img`, then the same with `--verify end`: the last line's time and MB/s of
+   each say which is faster there; whether 256 MiB is a good chunk (a break costs at most one chunk: about
+   2 min at 1.8 MB/s of a chunk that is all data).
+3. Break it on purpose (turn Wi-Fi off for some seconds; Ctrl-C) and run it again: it must go on.
+4. On the Mac's APFS: that `SEEK_DATA` after `F_FULLFSYNC` is what the file reads as (if not, the tool says so
+   once and reads every byte back), and the holes (`sparse.rs`'s macOS branch, still not run).
 
 ### The sparse copy (`sparse-write`, `pull-data`)
 

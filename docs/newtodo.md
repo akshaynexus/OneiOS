@@ -223,13 +223,22 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
    the xnuhost logs of every session of the day (`combo1`, `diag`, `c2`, `c3`, `c5` = the 15:35 boot), iOS's own
    log of the 14:12 session (`ios3.logarchive`, parsed `ios3-log.csv`), the baseline config and `phone-baseline.txt`.
 2. iOS's own log of a session: copy the Data store after the session (read only, no session running), fast:
-   `oneios-tool phone pull-data data.img` (gzip -1 on the phone, the zero runs as holes here, the length checked
-   against the phone's; `--ioslog` then reads the log out of the copy without a mount). By hand it is
+   `oneios-tool phone pull-data data.img` (`--ioslog` then reads the log out of the copy without a mount).
+   **Over wireless adb** the first port's one gzip stream broke twice on 2026-11-13 ("incomplete deflate stream"
+   after 1.6 and 0.6 of 32 GiB, about 1.8 MB/s, adb still connected) and began at zero each time. It now copies in
+   chunks of 256 MiB (`--chunk`), each one adb stream of a range of the one named file (`busybox dd ... skip=
+   count= | busybox gzip -1 -c`), checks each against the phone's SHA-256 of the same range (a chunk of zeros is
+   not copied at all), tries a broken chunk again (`--retries 5`), and keeps `data.img.part` and
+   `data.img.part.progress`: **when it stops, is killed or gives up, run the same command again and it goes on
+   at the first chunk that is not done** (`--restart` begins again; a store that changed since is refused). The
+   last line gives the time, the bytes over adb and the bytes written. This copy in chunks **has not run on the
+   phone yet** (stand-in test: `tools/oneios-tool/tests/phone/pull-resume.sh`); what to check there is in
+   `tools/oneios-tool/README.md` "The copy that goes on". The one stream by hand (no resume, no sums) is
    `adb exec-out "su -c '/data/adb/ksu/bin/busybox gzip -1 -c /data/local/tmp/oneios/data/data.img'" |
    oneios-tool phone sparse-write data.img --gunzip`. `sparse-write` replaced `gunzip -c | python3 -I
    sparsewrite.py data.img` (the script of 2026-11-12, kept as `tools/oneios-tool/tests/phone/sparsewrite.py`:
    6 min, 2.2 GB of blocks for the 32 GiB store): the same bytes, a quarter of the CPU, and fewer blocks on
-   Linux's file systems; its macOS part (APFS) and `pull-data` on the phone have not run yet
+   Linux's file systems; its macOS part (APFS) has not run yet
    (`tools/oneios-tool/README.md` "The sparse copy"). The way of 2026-11-12, by hand on the Mac: attach the copy
    read-only
    (`hdiutil attach -readonly -noverify -nobrowse -imagekey diskimage-class=CRawDiskImage -nomount`), mount the

@@ -179,10 +179,10 @@ check "pull-data" 0 "$W/data.img: 50331648 bytes, [0-9]+ of them written" phone 
 cmp -s "$W/data.img" "$S/data/data.img" && ok "pull-data: the copy is the phone's data.img" || bad "pull-data: the copy differs"
 blocks=$(stat -c %b "$W/data.img"); [ $((blocks * 512)) -lt $((2 << 20)) ] && ok "pull-data: zero runs are holes ($((blocks * 512)) bytes on disk of 50331648)" || bad "pull-data: not sparse" "$blocks blocks"
 [ ! -e "$W/data.img.part" ] && ok "pull-data: no .part left" || bad "pull-data: .part left"
-grep -q "gzip -1 -c /data/local/tmp/oneios/data/data.img" "$W/adb.log" && ok "pull-data: gzip -1 on the phone, one named file" || bad "pull-data: the command"
-# a store that is shorter than the phone says: the stand-in gzip cuts the stream
-printf '#!/bin/sh\n[ "$1" = gzip ] && { head -c 1000000 "$4" | gzip -1 -c; exit 0; }\nexec "$@"\n' > "$P/data/adb/ksu/bin/busybox"
-check "pull-data: fewer bytes than the phone's size" 1 "1000000 bytes came, the phone's data.img has 50331648" phone pull-data "$W/short.img"
+grep -q "busybox dd if=/data/local/tmp/oneios/data/data.img bs=1M skip=0 count=48 2>/dev/null | /data/adb/ksu/bin/busybox gzip -1 -c" "$W/adb.log" && ok "pull-data: a range of the one named file through gzip -1 on the phone (tests/phone/pull-resume.sh has the chunks, the retries and the resume)" || bad "pull-data: the command"
+# a stream of fewer bytes than its range: the stand-in gzip packs only the first of them
+printf '#!/bin/sh\n[ "$1" = gzip ] && { head -c 1000000 | gzip -1 -c; exit 0; }\nexec "$@"\n' > "$P/data/adb/ksu/bin/busybox"
+check "pull-data: fewer bytes than the range" 1 "the stream gave 1000000 bytes, the range has 50331648" phone pull-data "$W/short.img" --retries 0
 [ ! -e "$W/short.img" ] && [ -e "$W/short.img.part" ] && ok "pull-data: the short copy stays as .part" || bad "pull-data: the short copy's name"
 printf '#!/bin/sh\nexec "$@"\n' > "$P/data/adb/ksu/bin/busybox"
 if grep -Eqi 'find |ls -R|du |/sys/power|reboot' "$W/adb.log" "$W/root.log"; then bad "a tree walk, /sys/power or a restart was sent to the phone" "$(grep -Ehi 'find |ls -R|du |/sys/power|reboot' "$W/adb.log" "$W/root.log" | head -n 2)"
