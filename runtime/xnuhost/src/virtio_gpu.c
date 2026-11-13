@@ -27,6 +27,24 @@ enum {
   RESP_ERR_INVALID_CONTEXT_ID, RESP_ERR_INVALID_PARAMETER,
 };
 enum { FMT_BGRA = 1, FMT_BGRX = 2, FMT_ARGB = 3, FMT_XRGB = 4, FMT_RGBA = 67, FMT_XBGR = 68, FMT_ABGR = 121, FMT_RGBX = 134 };
+// Half floats (R,G,B,A, linear extended sRGB): xnuhost's own code, include/xnuhost/pixels.h.
+#define FMT_RGBA16F XH_VIRTIO_GPU_FORMAT_RGBA16F
+
+static bool format_known(uint32_t f)
+{
+  return f == FMT_BGRA || f == FMT_BGRX || f == FMT_ARGB || f == FMT_XRGB || f == FMT_RGBA || f == FMT_XBGR || f == FMT_ABGR ||
+         f == FMT_RGBX || f == FMT_RGBA16F;
+}
+
+// Bytes a pixel of a scanout format takes in guest memory.
+static unsigned format_bpp(uint32_t f) { return f == FMT_RGBA16F ? 8u : 4u; }
+
+// The display's pixels (display-format=): what a resource's host copy and a blob's flush are written in.
+static unsigned display_format(void)
+{
+  xh_display *d = xh_display_get();
+  return d && d->format ? d->format : XH_PIXELS_BGRX8;      // 0: a display made before formats (B,G,R,X)
+}
 
 typedef struct { uint32_t type, flags; uint64_t fence; uint32_t ctx; uint8_t ring, pad[3]; } gpu_hdr;
 typedef struct { uint32_t x, y, w, h; } gpu_rect;
@@ -38,7 +56,8 @@ enum { F_VIRGL = 1u << 0, F_RESOURCE_BLOB = 1u << 3, F_CONTEXT_INIT = 1u << 4, F
 #define MAX_BACKING 16384              // as MAX_BLOB_ENTRIES: a 2D surface of scattered 4 KiB pages (1440x3120 has 4388)
 typedef struct {
   uint32_t id, format, width, height;
-  uint8_t *pixels;                 // host copy, always B,G,R,X byte order
+  uint8_t *pixels;                 // host copy, in the display's pixels (dformat: B,G,R,X 8-bit or R,G,B,A half floats)
+  unsigned dformat, dbpp;
   gpu_entry *backing;
   unsigned nbacking;
 } resource;
@@ -133,6 +152,27 @@ static void convert(uint8_t *to, const uint8_t *from, uint32_t format, size_t pi
     break;
   default:                         // ABGR, XBGR
     for (size_t i = 0; i < pixels; i++, to += 4, from += 4) { to[0] = from[1]; to[1] = from[2]; to[2] = from[3]; to[3] = from[0]; }
+  }
+}
+
+// A row of a scanout format's pixels into the display's (display_format()). Half floats into half floats are copied;
+// into 8 bits they are encoded to sRGB and clamped (what is outside sRGB and above white is lost, as in the guest's
+// own CPU conversion); 8-bit pixels into half floats are decoded to linear light.
+static void convert_to(uint8_t *to, unsigned dformat, const uint8_t *from, uint32_t format, size_t pixels)
+{
+  if (format == FMT_RGBA16F) {
+    if (dformat == XH_PIXELS_RGBA16F) memcpy(to, from, pixels * 8);
+    else xh_pixels_rgba16f_to_8(to, from, pixels, 0);
+    return;
+  }
+  if (dformat != XH_PIXELS_RGBA16F) { convert(to, from, format, pixels); return; }
+  if (format == FMT_BGRA || format == FMT_BGRX) { xh_pixels_bgrx8_to_rgba16f(to, from, pixels); return; }
+  uint8_t row[4 * 256];                                // another byte order: through B,G,R,X, 256 pixels at a time
+  for (size_t done = 0; done < pixels;) {
+    size_t n = pixels - done < 256 ? pixels - done : 256;
+    convert(row, from + done * 4, format, n);
+    xh_pixels_bgrx8_to_rgba16f(to + done * 8, row, n);
+    done += n;
   }
 }
 
@@ -248,13 +288,16 @@ static uint32_t flush_blob(gpu_state *g, const blob *b, const gpu_rect *rect)
   // Rows straight from the guest's pages into the display's buffer, the blob's segments walked once for the whole
   // rectangle: rows lie at rising offsets. (Each row used to be read into a buffer of its own, the segment list searched
   // from its start for every row: 3120 rows of a 1440x3120 frame over about 1100 segments of 16 KiB pages.)
+  // A half-float scanout is 8 bytes a pixel in the guest; the display's pixels are d->format's (display-format=).
   uint32_t status = RESP_OK_NODATA;
   uint64_t t0 = flush_now_us();
-  unsigned seg = 0;
+  unsigned seg = 0, gbpp = format_bpp(g->scan.format), dformat = display_format(), dbpp = xh_pixels_bpp(dformat);
   uint64_t seg_start = 0;                            // the blob offset at which entries[seg] begins
   for (uint32_t y = 0; y < hgt && w && status == RESP_OK_NODATA; y++) {
-    uint64_t at = g->scan.offset + (uint64_t)(rect->y + y) * g->scan.stride + (uint64_t)rect->x * 4, left = (uint64_t)w * 4;
-    uint8_t *to = d->pixels + (size_t)(rect->y + y) * d->stride + (size_t)rect->x * 4;
+    uint64_t at = g->scan.offset + (uint64_t)(rect->y + y) * g->scan.stride + (uint64_t)rect->x * gbpp, left = (uint64_t)w * gbpp;
+    uint8_t *to = d->pixels + (size_t)(rect->y + y) * d->stride + (size_t)rect->x * dbpp;
+    uint8_t carry[8];                                // a pixel split between two segments
+    unsigned have = 0;
     if (at < seg_start) { seg = 0; seg_start = 0; }  // not expected: rows only rise
     while (left) {
       while (seg < b->nentries && at >= seg_start + b->entries[seg].length) seg_start += b->entries[seg++].length;
@@ -262,11 +305,21 @@ static uint32_t flush_blob(gpu_state *g, const blob *b, const gpu_rect *rect)
       uint64_t in = at - seg_start, n = b->entries[seg].length - in < left ? b->entries[seg].length - in : left;
       const uint8_t *from = xh_virtio_translate(b->entries[seg].addr + in, n);
       if (!from || (n & 3)) { status = RESP_ERR_INVALID_PARAMETER; break; }
-      convert(to, from, g->scan.format, (size_t)(n / 4));
-      to += n; at += n; left -= n;
+      uint64_t off = 0;
+      if (have) {
+        off = gbpp - have < n ? gbpp - have : n;
+        memcpy(carry + have, from, off);
+        have += (unsigned)off;
+        if (have == gbpp) { convert_to(to, dformat, carry, g->scan.format, 1); to += dbpp; have = 0; }
+      }
+      uint64_t whole = (n - off) / gbpp, rest = n - off - whole * gbpp;
+      convert_to(to, dformat, from + off, g->scan.format, (size_t)whole);
+      to += whole * dbpp;
+      if (rest) { memcpy(carry, from + off + whole * gbpp, rest); have = (unsigned)rest; }
+      at += n; left -= n;
     }
   }
-  flush_note(flush_now_us() - t0, (uint64_t)w * hgt * 4);
+  flush_note(flush_now_us() - t0, (uint64_t)w * hgt * gbpp);
   if (status == RESP_OK_NODATA && w && hgt) {
     xh_display_flush(rect->x, rect->y, w, hgt);
     frame_shown(g, b->entries, b->nentries);
@@ -432,10 +485,14 @@ static uint32_t command3d(gpu_state *g, const gpu_hdr *h, const uint8_t *body, s
     if (v[1] == 0) { g->scanout_resource = 0; g->scan.width = 0; return RESP_OK_NODATA; }
     blob *bl = blob_find(g, v[1]);
     if (!bl || !bl->entries) return RESP_ERR_INVALID_RESOURCE_ID;
-    if (v[4] != FMT_BGRA && v[4] != FMT_BGRX && v[4] != FMT_ARGB && v[4] != FMT_XRGB && v[4] != FMT_RGBA && v[4] != FMT_XBGR &&
-        v[4] != FMT_ABGR && v[4] != FMT_RGBX) return RESP_ERR_INVALID_PARAMETER;
-    if (!v[2] || !v[3] || v[2] > 16384 || v[3] > 16384 || v[6] < v[2] * 4 || !rect_ok(&rect, v[2], v[3]) ||
-        v[10] + (uint64_t)(v[3] - 1) * v[6] + (uint64_t)v[2] * 4 > bl->size) return RESP_ERR_INVALID_PARAMETER;
+    if (!format_known(v[4])) return RESP_ERR_INVALID_PARAMETER;
+    uint64_t row = (uint64_t)v[2] * format_bpp(v[4]);
+    if (!v[2] || !v[3] || v[2] > 16384 || v[3] > 16384 || v[6] < row || (v[6] % format_bpp(v[4])) || !rect_ok(&rect, v[2], v[3]) ||
+        v[10] + (uint64_t)(v[3] - 1) * v[6] + row > bl->size) return RESP_ERR_INVALID_PARAMETER;
+    static unsigned half_said;
+    if (v[4] == FMT_RGBA16F && g->scan.format != FMT_RGBA16F && half_said++ < 4)
+      LOGI("display: the guest scans out half floats (R,G,B,A 16F, %ux%u, stride %u) onto a %s frame", v[2], v[3], v[6],
+           xh_pixels_name(display_format()));
     g->scanout_resource = v[1];
     g->scan.width = v[2]; g->scan.height = v[3]; g->scan.format = v[4]; g->scan.stride = v[6]; g->scan.offset = v[10];
     return RESP_OK_NODATA;
@@ -487,12 +544,13 @@ static uint32_t command(gpu_state *g, const uint8_t *req, size_t size, uint8_t *
     memcpy(a, body, 16);
     if (!a[0] || find(g, a[0]) || (g->blobs && blob_find(g, a[0]))) return RESP_ERR_INVALID_RESOURCE_ID;
     if (!a[2] || !a[3] || a[2] > 16384 || a[3] > 16384) return RESP_ERR_INVALID_PARAMETER;
-    if (a[1] != FMT_BGRA && a[1] != FMT_BGRX && a[1] != FMT_ARGB && a[1] != FMT_XRGB && a[1] != FMT_RGBA &&
-        a[1] != FMT_XBGR && a[1] != FMT_ABGR && a[1] != FMT_RGBX) return RESP_ERR_INVALID_PARAMETER;
+    if (!format_known(a[1])) return RESP_ERR_INVALID_PARAMETER;
     resource *r = NULL;
     for (unsigned i = 0; i < MAX_RES && !r; i++) if (!g->res[i].id) r = &g->res[i];
     if (!r) return RESP_ERR_OUT_OF_MEMORY;
-    r->pixels = calloc((size_t)a[2] * a[3], 4);
+    r->dformat = display_format();
+    r->dbpp = xh_pixels_bpp(r->dformat);
+    r->pixels = calloc((size_t)a[2] * a[3], r->dbpp);
     if (!r->pixels) return RESP_ERR_OUT_OF_MEMORY;
     r->id = a[0]; r->format = a[1]; r->width = a[2]; r->height = a[3];
     return RESP_OK_NODATA;
@@ -559,13 +617,14 @@ static uint32_t command(gpu_state *g, const uint8_t *req, size_t size, uint8_t *
     resource *r = find(g, id);
     if (!r) return RESP_ERR_INVALID_RESOURCE_ID;
     if (!rect_ok(&rect, r->width, r->height) || !r->backing) return RESP_ERR_INVALID_PARAMETER;
-    uint8_t *row = malloc((size_t)rect.w * 4);
+    unsigned gbpp = format_bpp(r->format);
+    uint8_t *row = malloc((size_t)rect.w * gbpp);
     if (!row) return RESP_ERR_OUT_OF_MEMORY;
     uint32_t status = RESP_OK_NODATA;
     for (uint32_t y = 0; y < rect.h; y++) {
       // `offset` is where the rectangle's first pixel is in the backing; rows follow at the resource's stride.
-      if (!backing_read(r, offset + (uint64_t)y * r->width * 4, row, (uint64_t)rect.w * 4)) { status = RESP_ERR_INVALID_PARAMETER; break; }
-      convert(r->pixels + ((size_t)(rect.y + y) * r->width + rect.x) * 4, row, r->format, rect.w);
+      if (!backing_read(r, offset + (uint64_t)y * r->width * gbpp, row, (uint64_t)rect.w * gbpp)) { status = RESP_ERR_INVALID_PARAMETER; break; }
+      convert_to(r->pixels + ((size_t)(rect.y + y) * r->width + rect.x) * r->dbpp, r->dformat, row, r->format, rect.w);
     }
     free(row);
     return status;
@@ -581,12 +640,12 @@ static uint32_t command(gpu_state *g, const uint8_t *req, size_t size, uint8_t *
     if (!r) return RESP_ERR_INVALID_RESOURCE_ID;
     if (!rect_ok(&rect, r->width, r->height)) return RESP_ERR_INVALID_PARAMETER;
     xh_display *d = xh_display_get();
-    if (id == g->scanout_resource && d && d->pixels) {
+    if (id == g->scanout_resource && d && d->pixels && r->dbpp == xh_pixels_bpp(display_format())) {
       uint32_t w = rect.x < d->width ? (rect.w < d->width - rect.x ? rect.w : d->width - rect.x) : 0;
       uint32_t hgt = rect.y < d->height ? (rect.h < d->height - rect.y ? rect.h : d->height - rect.y) : 0;
       for (uint32_t y = 0; y < hgt && w; y++)
-        memcpy(d->pixels + (size_t)(rect.y + y) * d->stride + (size_t)rect.x * 4,
-               r->pixels + ((size_t)(rect.y + y) * r->width + rect.x) * 4, (size_t)w * 4);
+        memcpy(d->pixels + (size_t)(rect.y + y) * d->stride + (size_t)rect.x * r->dbpp,
+               r->pixels + ((size_t)(rect.y + y) * r->width + rect.x) * r->dbpp, (size_t)w * r->dbpp);
       if (w && hgt) xh_display_flush(rect.x, rect.y, w, hgt);
       frame_shown(g, r->backing, r->nbacking);
     }

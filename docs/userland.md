@@ -152,6 +152,7 @@ owner's IPSW (`out/kernel-inputs/24A446/devicetree.bin`, read locally, never com
 | Metal clients | `*` on 27 | the named list (`WidgetRenderer_Default`, `*Poster*`, `iconservicesagent`, `SBRendererService`); backboardd always has it |
 | Addon visible-check | `AGXMetalG17G.bundle` | the iPhone's AGX bundle name [U] |
 | Dynamic Island, always-on | - | follow the identity (`island-notch-location`, `oled-display` are in `/product`) [U] |
+| `/product` as the guest gets it | - | [F, 2026-11-13] not the profile's `[adt.product]` and not the IPSW tree's: xnuhost copies `/product` only from `<image>/identity.adt`, which no script writes (none in the PC's set; a `kernel.kc.adt` sidecar could carry one, none does), so the guest has `product-name`, `artwork-scale-factor` and `model` only (no `artwork-device-idiom`, `artwork-display-gamut`, `oled-display`, `island-notch-location`, ...). The profile says `artwork-display-gamut "sRGB"`, xnuhost's machine tree `P3` when an identity is given. `--set identity=out/kernel-inputs/24A446/devicetree.bin` is the A/B test (`kernel/patches/oneios-hosted/display/README.md`, "Colour, depth and the panel") |
 
 ### 5.1 The screen: native resolution, 120 Hz, UI scale 3 or 2
 

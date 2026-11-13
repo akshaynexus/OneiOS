@@ -21,8 +21,28 @@
 #include <unistd.h>
 
 static uint32_t W = 1440, H = 3120;     // the guest's frame: the panel's native mode
+static uint32_t FORMAT = XHD_FORMAT_BGRX, BPP = 4;
 static uint8_t *pixels;
 static volatile int interrupted;
+
+// The wide band (--format rgba16f): the lowest quarter of the frame, eight patches from the left: sRGB's red, Display
+// P3's red, sRGB's green, P3's green, sRGB's blue, P3's blue (as linear extended sRGB: components below 0 and above 1),
+// white at 1.0 and white at 2.0 (EDR). On a path that keeps wide colour each P3 patch is more saturated than the
+// sRGB one beside it; on one that clips to sRGB the two are the same. The 2.0 white is brighter than the 1.0 one only
+// where surfaceflinger gives the layer HDR headroom.
+static const float wide[8][3] = {
+  { 1, 0, 0 }, { 1.2249f, -0.0420f, -0.0197f }, { 0, 1, 0 }, { -0.2247f, 1.0419f, -0.0786f },
+  { 0, 0, 1 }, { 0, 0, 1.0979f }, { 1, 1, 1 }, { 2, 2, 2 },
+};
+
+// One pixel from 8-bit sRGB bytes (b, g, r) in the frame's format.
+static void put8(uint8_t *p, uint8_t b, uint8_t g, uint8_t r)
+{
+  if (FORMAT == XHD_FORMAT_BGRX) { p[0] = b; p[1] = g; p[2] = r; p[3] = 255; return; }
+  const uint16_t *t = xh_srgb8_to_half();
+  uint16_t px[4] = { t[r], t[g], t[b], 0x3c00u };
+  memcpy(p, px, 8);
+}
 static void on_signal(int n) { (void)n; interrupted = 1; }
 
 static double now(void)
@@ -38,28 +58,34 @@ static void background(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
   static const uint8_t bars[8][3] = { { 255, 255, 255 }, { 0, 255, 255 }, { 255, 255, 0 }, { 0, 255, 0 },
                                       { 255, 0, 255 }, { 0, 0, 255 }, { 255, 0, 0 }, { 40, 40, 40 } };
   for (uint32_t row = y; row < y + h && row < H; row++) {
-    uint8_t *p = pixels + (size_t)row * W * 4 + (size_t)x * 4;
-    for (uint32_t col = x; col < x + w && col < W; col++, p += 4) {
-      const uint8_t *c = bars[(uint64_t)col * 8 / W];
+    uint8_t *p = pixels + (size_t)row * W * BPP + (size_t)x * BPP;
+    for (uint32_t col = x; col < x + w && col < W; col++, p += BPP) {
       int edge = col < 2 || row < 2 || col >= W - 2 || row >= H - 2;
+      if (!edge && FORMAT == XHD_FORMAT_RGBA16F && row >= H - H / 4) {
+        const float *c = wide[(uint64_t)col * 8 / W];
+        uint16_t px[4] = { xh_half_from_float(c[0]), xh_half_from_float(c[1]), xh_half_from_float(c[2]), 0x3c00u };
+        memcpy(p, px, 8);
+        continue;
+      }
+      const uint8_t *c = bars[(uint64_t)col * 8 / W];
       uint8_t shade = (uint8_t)(128 + (uint64_t)row * 127 / H);      // darker at the top
-      p[0] = edge ? 255 : (uint8_t)(c[0] * shade / 255);
-      p[1] = edge ? 255 : (uint8_t)(c[1] * shade / 255);
-      p[2] = edge ? 255 : (uint8_t)(c[2] * shade / 255);
-      p[3] = 255;
+      if (edge) put8(p, 255, 255, 255);
+      else put8(p, (uint8_t)(c[0] * shade / 255), (uint8_t)(c[1] * shade / 255), (uint8_t)(c[2] * shade / 255));
     }
   }
 }
 
 static void box(uint32_t x, uint32_t y, uint32_t side)
 {
-  for (uint32_t row = y; row < y + side && row < H; row++)
-    memset(pixels + (size_t)row * W * 4 + (size_t)x * 4, 255, (size_t)(x + side <= W ? side : W - x) * 4);
+  for (uint32_t row = y; row < y + side && row < H; row++) {
+    uint8_t *p = pixels + (size_t)row * W * BPP + (size_t)x * BPP;
+    for (uint32_t col = x; col < x + side && col < W; col++, p += BPP) put8(p, 255, 255, 255);
+  }
 }
 
 static int usage(void)
 {
-  fprintf(stderr, "usage: displayctl test [--seconds N] [--size WxH] [--helper PATH] [-- helper options]\n");
+  fprintf(stderr, "usage: displayctl test [--seconds N] [--size WxH] [--format bgrx|rgba16f] [--helper PATH] [-- helper options]\n");
   return 2;
 }
 
@@ -75,6 +101,13 @@ int main(int argc, char **argv)
     if (!strcmp(argv[i], "--seconds")) seconds = atof(argv[++i]);
     else if (!strcmp(argv[i], "--size")) { if (sscanf(argv[++i], "%ux%u", &W, &H) != 2) return usage(); }
     else if (!strcmp(argv[i], "--helper")) snprintf(helper, sizeof helper, "%s", argv[++i]);
+    else if (!strcmp(argv[i], "--format")) {
+      const char *v = argv[++i];
+      if (!strcmp(v, "bgrx")) FORMAT = XHD_FORMAT_BGRX;
+      else if (!strcmp(v, "rgba16f")) FORMAT = XHD_FORMAT_RGBA16F;
+      else return usage();
+      BPP = xh_pixels_bpp(FORMAT);
+    }
     else return usage();
   }
   if (W < 16 || H < 16 || W > 8192 || H > 8192 || seconds <= 0 || seconds > 3600) return usage();
@@ -92,7 +125,7 @@ int main(int argc, char **argv)
   snprintf(session, sizeof session, "%s/displayctl.XXXXXX", tmp && *tmp ? tmp : "/data/local/tmp");
   if (!mkdtemp(session)) { fprintf(stderr, "displayctl: %s: %s\n", session, strerror(errno)); return 2; }
   snprintf(path, sizeof path, "%s/display.sock", session);
-  size_t bytes = (size_t)W * H * 4;
+  size_t bytes = (size_t)W * H * BPP;
   int memfd = xhd_memfd("displayctl-frame", bytes);
   int server = xhd_listen(path);
   pixels = memfd >= 0 ? mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, memfd, 0) : MAP_FAILED;
@@ -126,8 +159,8 @@ int main(int argc, char **argv)
     if (poll(&p, 1, 200) > 0) client = accept4(server, NULL, NULL, SOCK_CLOEXEC);
   }
   if (client < 0) { fprintf(stderr, "displayctl: the helper did not connect\n"); status = 1; goto out; }
-  if (xhd_send_hello(client, W, H, W * 4, memfd) || xhd_send_flush(client, 0, 0, W, H)) { perror("displayctl: hello"); status = 1; goto out; }
-  printf("displayctl: helper %d connected; %ux%u pattern for %.1f s\n", (int)child, W, H, seconds);
+  if (xhd_send_hello(client, W, H, W * BPP, FORMAT, memfd) || xhd_send_flush(client, 0, 0, W, H)) { perror("displayctl: hello"); status = 1; goto out; }
+  printf("displayctl: helper %d connected; %ux%u pattern in %s for %.1f s\n", (int)child, W, H, xh_pixels_name(FORMAT), seconds);
   fflush(stdout);
 
   // A white square that bounces; each step flushes where it was and where it is.

@@ -840,6 +840,15 @@ class `NativeAdrenoMetalDevice`, MinimumOSVersion 27.0), `NativeAdrenoMetal`, `l
 path by the plug-in), `oneios-target`. Both binaries are signed by `scripts/ios/ios-sign.py`;
 `NativeAdrenoMetal.build.json` beside the bundle records the SDK, the stubs' cache, the source pins, sizes and CDHashes.
 
+**Appended for backboardd** (`stage`, after the address check): `drivers/brightness/BacklightMode.inc` (BLControl,
+`docs/hardware.md` 7a) and, since 2026-11-13, `userland/metal/DisplayWide.inc`: when the kernel's boot arguments have
+`oneios-display-wide=1` (xnuhost's `display-format=rgba16f`), a constructor sets `CA_FORCE_FP16_FRAMEBUFFER=1` and
+writes that option's stored byte (`_ca_debug_options` + 128, `0x1e702516c` + the slide), so the render server's
+framebuffer is `RGhA` half floats and the display path keeps them whole
+(`kernel/patches/oneios-hosted/display/README.md`, "Colour, depth and the panel"). iOS's log then has `OneiOS display:
+half-float framebuffer asked (...)`. The headroom, threshold and virtualized overrides below stay as they are. Not
+built or compiled yet (the plug-in builds on the Mac).
+
 **The shared cache addresses.** Upstream's plug-in writes QuartzCore's options at fixed addresses of the iPad17,3
 24A446 cache, relative to `CARenderServerStart`. They were re-found in this guest's cache
 (`out/image/24A446/systemos.img`, cache UUID `77BC8C63-93DA-3E9B-BB9C-0BE2AF0C0E17`) and are recorded in

@@ -21,7 +21,8 @@
 # is scripts/ios/ios-sign.py (byte for byte Apple's codesign for a thin file; no bundle seal), strip and nm the linker's
 # siblings. On macOS ios-clang is Xcode's clang and ld, and xcrun's other answers are Xcode's; on Linux the cross toolchain.
 # The staged copies differ from upstream in the few lines `stage` prints. Before the compile, the plug-in's shared
-# cache addresses are replaced with this guest's (hooks/<product>-<build>.json); `finish` then marks the bundle with
+# cache addresses are replaced with this guest's (hooks/<product>-<build>.json) and two OneiOS files are appended for
+# backboardd (drivers/brightness/BacklightMode.inc; DisplayWide.inc: half floats with oneios-display-wide=1); `finish` then marks the bundle with
 # `oneios-target`, which is what lets userland/roottweak place it.
 #
 # Needs: scripts/setup/ios-toolchain.sh says "ok"; scripts/setup/get-references.sh (NativeMetal, NativeAdreno,
@@ -157,6 +158,10 @@ EOF
   # that runs in backboardd; the file is appended whole, so its constructor is in the plug-in's image.
   cat "$ROOT/drivers/brightness/BacklightMode.inc" >> "$R/drivers/AdrenoMetal/NativeAdrenoMetalPlugin.mm"
   say "staged NativeAdrenoMetalPlugin.mm: drivers/brightness/BacklightMode.inc appended (backboardd: initBLControl: mode 3 -> 1)"
+  # userland/metal/DisplayWide.inc (owner: display): with the kernel's oneios-display-wide=1 (xnuhost's
+  # display-format=rgba16f) backboardd's framebuffer is half floats ('RGhA'), which the display path then keeps whole.
+  cat "$HERE/DisplayWide.inc" >> "$R/drivers/AdrenoMetal/NativeAdrenoMetalPlugin.mm"
+  say "staged NativeAdrenoMetalPlugin.mm: userland/metal/DisplayWide.inc appended (backboardd: CA_FORCE_FP16_FRAMEBUFFER with oneios-display-wide=1)"
 }
 
 turnip() {

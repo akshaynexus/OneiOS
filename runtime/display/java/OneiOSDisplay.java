@@ -13,10 +13,15 @@ public final class OneiOSDisplay {
     private static native boolean nHello(long handle, int width, int height, int hz);
     private static native int[] nInfo(long handle);                    // width, height, stride, format
     private static native int[] nFit(int sw, int sh, int dw, int dh);  // x, y, w, h
-    private static native int nRun(long handle, Object surface, int format);
+    private static native int[] nBuffer(int frameFormat);              // buffer format, dataspace
+    private static native int nRun(long handle, Object surface, int format, int dataspace);
     private static native void nClose(long handle);
 
-    private static final int RGBX_8888 = 2, BGRA_8888 = 5;
+    private static final int RGBX_8888 = 2, BGRA_8888 = 5, RGBA_FP16 = 22;
+    private static final int FRAME_BGRX = 1, FRAME_RGBA16F = 2;        // the hello's formats (src/xhd.h)
+    // --dataspace's names and values (ADataSpace; src/xhd.h). -1: the frame format's own (auto).
+    private static final String[] DATASPACE_NAMES = {"auto", "unknown", "srgb", "p3", "scrgb", "scrgb-linear"};
+    private static final int[] DATASPACES = {-1, 0, 142671872, 143261696, 411107328, 406913024};
     private static final int TOP = Integer.MAX_VALUE - 1;
     private static Class<?> SC, TX;
 
@@ -31,13 +36,30 @@ public final class OneiOSDisplay {
 
     private static int usage() {
         log("usage: oneios-display (--session DIR | --socket PATH) [--takeover] [--wait SECONDS] [--logical WxH]"
-            + " [--hz N] [--format bgra|rgbx] [--no-projection]");
+            + " [--hz N] [--format bgra|rgbx] [--dataspace auto|unknown|srgb|p3|scrgb|scrgb-linear] [--no-projection]");
         return 2;
+    }
+
+    /** The value of a --dataspace name; -2 for a name that is not one. */
+    static int dataspace(String name) {
+        for (int i = 0; i < DATASPACE_NAMES.length; i++) if (DATASPACE_NAMES[i].equals(name)) return DATASPACES[i];
+        return -2;
+    }
+
+    /**
+     * The layer's buffer format for a frame format: the frame's own layout (B,G,R,A for 8-bit frames, or R,G,B,X when
+     * --format rgbx asks; RGBA_FP16 for half floats, which no option narrows: the copy does that only when the phone
+     * gives no such buffer). 0 for a frame format this helper does not know.
+     */
+    static int bufferFormat(int frameFormat, int asked) {
+        if (frameFormat == FRAME_RGBA16F) return RGBA_FP16;
+        if (frameFormat == FRAME_BGRX) return asked == RGBX_8888 ? RGBX_8888 : BGRA_8888;
+        return 0;
     }
 
     private static int run(String[] args) throws Exception {
         String socket = null, lib = null;
-        int wait = 30, hz = 0, format = BGRA_8888;
+        int wait = 30, hz = 0, format = BGRA_8888, dataspace = -1;
         boolean takeover = false, projection = true;
         int[] logical = null;
         for (int i = 0; i < args.length; i++) {
@@ -53,6 +75,7 @@ public final class OneiOSDisplay {
             else if (a.equals("--hz")) hz = Integer.parseInt(v);
             else if (a.equals("--logical")) { String[] p = v.split("x"); logical = new int[]{Integer.parseInt(p[0]), Integer.parseInt(p[1])}; }
             else if (a.equals("--format")) format = v.equals("rgbx") ? RGBX_8888 : BGRA_8888;
+            else if (a.equals("--dataspace")) { dataspace = dataspace(v); if (dataspace == -2) return usage(); }
             else return usage();
         }
         if (socket == null || lib == null) return usage();
@@ -70,7 +93,12 @@ public final class OneiOSDisplay {
         log("reporting the panel to xnuhost: " + panel[0] + "x" + panel[1] + " at " + panel[2] + " Hz");
         if (!nHello(handle, panel[0], panel[1], panel[2])) { nClose(handle); return 3; }
         int[] guest = nInfo(handle);
-        log("guest frame " + guest[0] + "x" + guest[1] + ", stride " + guest[2]);
+        int[] own = nBuffer(guest[3]);
+        format = bufferFormat(guest[3], format);
+        if (dataspace == -1) dataspace = own[1];
+        log("guest frame " + guest[0] + "x" + guest[1] + ", stride " + guest[2] + ", format " + guest[3]
+            + (guest[3] == FRAME_RGBA16F ? " (R,G,B,A half float, linear extended sRGB)" : " (B,G,R,X 8-bit sRGB)")
+            + "; layer buffers in format " + format + ", dataspace " + Integer.toHexString(dataspace));
         if (hz <= 0) hz = panel[2];
         int[] fit = nFit(guest[0], guest[1], panel[0], panel[1]);
         log("panel " + panel[0] + "x" + panel[1] + " at " + hz + " Hz; the frame at " + fit[0] + "," + fit[1] + " " + fit[2] + "x" + fit[3]);
@@ -112,7 +140,7 @@ public final class OneiOSDisplay {
             place(transaction, layer, TOP);
             tx(transaction, "apply", new Class<?>[]{});
             log("layer up");
-            result = nRun(handle, surface, format);
+            result = nRun(handle, surface, format, dataspace);
         } finally {
             for (Object gone : new Object[]{layer, back}) {
                 if (gone == null) continue;
@@ -295,6 +323,7 @@ public final class OneiOSDisplay {
         Object info;
         try { info = SC.getMethod("getDynamicDisplayInfo", long.class).invoke(null, id); }
         catch (NoSuchMethodException older) { info = SC.getMethod("getDynamicDisplayInfo", Class.forName("android.os.IBinder")).invoke(null, token); }
+        if (!colourLogged) { colourLogged = true; colour(info); }
         int active = info.getClass().getField("activeDisplayModeId").getInt(info);
         Object[] modes = (Object[]) info.getClass().getField("supportedDisplayModes").get(info);
         int count = modes.length;
@@ -312,6 +341,53 @@ public final class OneiOSDisplay {
         int[] picked = pick(ids, widths, heights, rates, active);
         if (picked == null) throw new IllegalStateException("no active mode");
         return picked;
+    }
+
+    private static boolean colourLogged;
+
+    /**
+     * What the panel says of its colours, read only (nothing is set): the colour mode One UI left it in, the modes
+     * it has, and its HDR capabilities (the luminance surfaceflinger plans with). A layer of a wide dataspace may
+     * make surfaceflinger pick another colour mode while the layer is shown; it goes back to its own choice when
+     * the layer is gone, and the return restarts surfaceflinger.
+     */
+    private static void colour(Object info) {
+        try {
+            int active = info.getClass().getField("activeColorMode").getInt(info);
+            int[] modes = (int[]) info.getClass().getField("supportedColorModes").get(info);
+            StringBuilder list = new StringBuilder();
+            for (int m : modes) list.append(list.length() > 0 ? "," : "").append(colourModeName(m));
+            String line = "panel colour mode " + colourModeName(active) + " (of " + list + ")";
+            try {
+                Object hdr = info.getClass().getField("hdrCapabilities").get(info);
+                if (hdr != null) {
+                    int[] types = (int[]) hdr.getClass().getMethod("getSupportedHdrTypes").invoke(hdr);
+                    float max = (Float) hdr.getClass().getMethod("getDesiredMaxLuminance").invoke(hdr);
+                    float average = (Float) hdr.getClass().getMethod("getDesiredMaxAverageLuminance").invoke(hdr);
+                    float min = (Float) hdr.getClass().getMethod("getDesiredMinLuminance").invoke(hdr);
+                    line += "; HDR types " + java.util.Arrays.toString(types) + ", luminance max " + max + " nits, max average "
+                        + average + ", min " + min;
+                }
+            } catch (Throwable noHdr) { line += "; HDR capabilities not readable (" + noHdr + ")"; }
+            log(line);
+        } catch (Throwable unavailable) {
+            log("the panel's colour modes are not readable (" + unavailable + ")");
+        }
+    }
+
+    /** Android's ColorMode values (graphics.common), by name where this helper knows them. */
+    static String colourModeName(int mode) {
+        switch (mode) {
+            case 0: return "NATIVE";
+            case 7: return "SRGB";
+            case 8: return "ADOBE_RGB";
+            case 9: return "DISPLAY_P3";
+            case 10: return "BT2020";
+            case 11: return "BT2100_PQ";
+            case 12: return "BT2100_HLG";
+            case 13: return "DISPLAY_BT2020";
+            default: return Integer.toString(mode);
+        }
     }
 
     /** The choice among the modes, apart from the framework (see mode()); null without the active mode. */

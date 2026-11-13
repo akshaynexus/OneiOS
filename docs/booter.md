@@ -40,7 +40,8 @@ xnuhost --selftest            # on the phone: page size, address bits, PAC keys 
 | `--image DIR` | required | the image set (`docs/image-format.md`) |
 | `--kernel FILE` | `DIR/kernel.kc`, else `DIR/kernel.macho` | the kernel collection: `MH_FILESET`, or an `MH_EXECUTE` kernel |
 | `FILE.trustcache`, `.vroot`, `.gpuaddon`, `.ramdisk`, `.adt` | optional | DarwinBoot's sidecars beside the kernel, same formats and checks |
-| `DIR/identity.adt` | optional | the device's own decoded device tree: model, target-type, board name and `/product` are taken from it |
+| `DIR/identity.adt` | optional | the device's own decoded device tree: model, target-type, board name and `/product` are taken from it. No script writes one (2026-11-13: `scripts/image/build.sh` does not, and the PC's set `out/image-pc/24A446` has none), so `/product` is only `product-name`, `artwork-scale-factor` and `model`: none of the iPhone's own `/product` (`artwork-display-gamut P3`, `oled-display`, `graphics-featureset-class APPLE10`, `ui-background-quality 100`, ...), which MobileGestalt answers from. `--set identity=out/kernel-inputs/24A446/devicetree.bin` (the decoded tree as it is) gives them for one run (`kernel/patches/oneios-hosted/display/README.md`, "What iOS reads about the panel") |
+| `--display-format bgrx\|rgba16f` (`display-format=`) | `bgrx` | the frame's pixels (section 2.8): 8-bit sRGB, or half floats that keep wide colour and EDR |
 | `DIR/xnuhost.conf` | optional | `key=value` lines: `boot-args`, `disk`, `disk-rw`, `data-store`, `scale`, `scale-fixup`, `text-fixup`, `ram`, `ram-percent`, `ram-host-floor`, `host-mem-log`, `ram-giveback`, `ram-prefault`, `ram-lock`, `ram-session-reserve`, `ram-unlock-below`; the command line wins |
 | `DIR/overlay/userland/xnuhost.conf` | optional | the same, written by the userland hook: `scale=3` or `scale=2`, the UI scale the image's Data seed was made for (`docs/userland.md` "The screen") |
 | `--width W --height H`, `--hz N` (or `width=`, `height=`, `hz=` in the image set's `xnuhost.conf`) | the display helper's report of the panel | the guest's display mode (section 2.8); for a PC run or another panel |
@@ -564,11 +565,29 @@ Linux's page cache and a sparse file: the store is a raw image.
   hold the panel (`oneos/interface.md` section 4), so KMS is not available and the only way to the glass is
   a root SurfaceControl layer, which needs the framework's classes (OneOS draws its boot status that way,
   with a dex run by `app_process`). xnuhost therefore keeps the frame in a memfd and serves it on
-  `<session>/display.sock` (`SOCK_SEQPACKET`): `hello {"XHD1", width, height, stride, format 1 = B,G,R,X}`
+  `<session>/display.sock` (`SOCK_SEQPACKET`): `hello {"XHD1", width, height, stride, format}`
   with the memfd as `SCM_RIGHTS`, then `flush {"XHDF", x, y, w, h}` per changed rectangle. The helper sends one
   message the other way, straight after it connects: `panel {"XHDP", width, height, hz, 0}`. The helper that
   owns the layer and copies from the memfd is `runtime/display` (`bin/oneios-display`, started by the fork's
   switch on One UI's side; its README has the phone test). Not run on a phone yet.
+- **The frame's pixels** (`display-format=`, `--display-format`; `include/xnuhost/pixels.h`, which the helper
+  includes too):
+
+  | `display-format` | hello `format` | Bytes a pixel | What the numbers are |
+  |---|---|---|---|
+  | `bgrx` (default) | 1 | 4 | B,G,R,X, 8 bits, sRGB-encoded, sRGB primaries: iOS's `BGRA` framebuffer (QuartzCore composites this display in sRGB, so Display P3's colours are clipped in the guest) |
+  | `rgba16f` | 2 | 8 | R,G,B,A IEEE half floats, linear light, sRGB primaries, extended range (below 0 and above 1: colours outside sRGB, EDR): iOS's `RGhA` framebuffer, Android's `RGBA_FP16` with the dataspace `SCRGB_LINEAR` |
+
+  With `rgba16f` xnuhost adds `oneios-display-wide=1` to the kernel's boot arguments (unless they have it), and the
+  guest's display hands half-float surfaces to the virtio scanout as they are, in xnuhost's own scanout format
+  `XH_VIRTIO_GPU_FORMAT_RGBA16F` (`0x52476841`, IOSurface's `RGhA`: virtio-gpu has no half-float format). The device
+  takes that format in `RESOURCE_CREATE_2D` and `SET_SCANOUT_BLOB` (8 bytes a pixel, the stride a whole number of
+  them) beside the eight 8-bit ones, and writes every flush in the frame's own format: half floats copied, 8-bit
+  pixels (the boot console) decoded to linear light, and on a `bgrx` frame half floats encoded to sRGB and clamped.
+  The log says `display: the frame's pixels: ...`. `rgba16f` needs `--display shm` (KMS takes 32-bit pixels), and
+  `display-capture.py` (PC) reads format 1 only. Host-tested (`make test`: the 2D and blob paths, a pixel split
+  between two blob segments); not run on a phone. Whether iOS then renders half floats is the Metal plug-in's
+  (`userland/metal/DisplayWide.inc`, built on the Mac).
 - **The mode is the one surfaceflinger runs the panel in.** The guest's frame (the boot framebuffer, the virtio-gpu
   scanout, `display.sock`'s hello, the touch range) is decided in this order, and each configured value wins on its own:
   1. `--width`, `--height`, `--hz`, else `width=`, `height=`, `hz=` in the image set's `xnuhost.conf` or its
@@ -585,7 +604,7 @@ Linux's page cache and a sparse file: the store is a raw image.
   The log says which: `display: the mode is the configured one ...`, `display: the display helper reports the panel at
   1440x3120, 120 Hz`, `display: the built-in panel's largest DRM mode is ...`, or `... were not read (...): 1440x3120 at
   120 Hz assumed`, then `display: shm, guest frame 1440x3120 at 120 Hz, @3x (480x1040 points)`. The stride of the frame
-  is the width times 4 (5760 bytes); the `stride` in the helper's `first frame posted` line is the layer buffer's, in
+  is the width times 4 (5760 bytes; 8 with `display-format=rgba16f`); the `stride` in the helper's `first frame posted` line is the layer buffer's, in
   pixels, and is whatever gralloc aligned the width to. Tested on the PC against a stand-in helper
   (`tests/test_display_mode.c`); not yet run on the phone.
 - **The UI scale** is `scale`: 3 (default, 480x1040 points) or 2 (720x1560 points), from `--scale`/`--set

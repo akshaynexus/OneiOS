@@ -11,4 +11,6 @@ native_legacy_display_static_init();native_gop_presenter_static_init();native_le
     if(kind<2)droidvm_virtio_gpu_boot_dirty();
 // (before anchor 5)
     if(accepted)native_legacy_swap_stage(0);
+// (before anchor 6)
+    offeredToVirtioDisplay=format==1 && droidvm_virtio_gpu_offer(display,memory,stride,width,height);
 // (the end)

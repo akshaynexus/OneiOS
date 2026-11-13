@@ -11,6 +11,8 @@ WARN := -Wall -Wextra -Werror
 CFLAGS ?= -O2 -g
 A := build/android
 H := build/host
+# The frame formats are xnuhost's (pixels.h): both sides of display.sock read the same header.
+XHD_H := src/xhd.h ../xnuhost/include/xnuhost/pixels.h
 
 all: $(A)/oneios-display $(A)/liboneios-display.so $(A)/oneios-display.dex $(A)/displayctl
 
@@ -18,12 +20,12 @@ $(A)/oneios-display: src/launcher.c
 	@mkdir -p $(A)
 	$(ANDROID_CC) -std=gnu11 $(CFLAGS) $(WARN) -static src/launcher.c -o $@
 # Dynamic: it is loaded into app_process and calls the NDK's native-window API.
-$(A)/liboneios-display.so: src/jni.c src/xhd.c src/xhd.h
+$(A)/liboneios-display.so: src/jni.c src/xhd.c $(XHD_H)
 	@mkdir -p $(A)
-	$(ANDROID_CC) -std=gnu11 $(CFLAGS) $(WARN) -fPIC -shared -Wl,-soname,liboneios-display.so src/jni.c src/xhd.c -landroid -o $@
-$(A)/displayctl: src/displayctl.c src/xhd.c src/xhd.h
+	$(ANDROID_CC) -std=gnu11 $(CFLAGS) $(WARN) -fPIC -shared -Wl,-soname,liboneios-display.so src/jni.c src/xhd.c -landroid -lm -o $@
+$(A)/displayctl: src/displayctl.c src/xhd.c $(XHD_H)
 	@mkdir -p $(A)
-	$(ANDROID_CC) -std=gnu11 $(CFLAGS) $(WARN) -static src/displayctl.c src/xhd.c -o $@
+	$(ANDROID_CC) -std=gnu11 $(CFLAGS) $(WARN) -static src/displayctl.c src/xhd.c -lm -o $@
 # No android.jar: the source reaches the framework by reflection only.
 $(A)/oneios-display.dex: java/OneiOSDisplay.java
 	@[ -n "$(D8)" ] || { echo "display: no d8 (Android SDK build-tools) under $(SDK)" >&2; exit 1; }
@@ -32,12 +34,12 @@ $(A)/oneios-display.dex: java/OneiOSDisplay.java
 	$(D8_ENV) $(D8) --release --min-api 30 --output $(A)/dex $(A)/classes/OneiOSDisplay.class
 	cp $(A)/dex/classes.dex $@
 
-$(H)/test_display: tests/test_display.c src/xhd.c src/xhd.h
+$(H)/test_display: tests/test_display.c src/xhd.c $(XHD_H)
 	@mkdir -p $(H)
-	$(CC) -std=gnu11 -O1 -g $(WARN) -Isrc -fsanitize=address,undefined tests/test_display.c src/xhd.c -lpthread -o $@
-$(H)/displayctl: src/displayctl.c src/xhd.c src/xhd.h
+	$(CC) -std=gnu11 -O1 -g $(WARN) -Isrc -fsanitize=address,undefined tests/test_display.c src/xhd.c -lpthread -lm -o $@
+$(H)/displayctl: src/displayctl.c src/xhd.c $(XHD_H)
 	@mkdir -p $(H)
-	$(CC) -std=gnu11 -O1 -g $(WARN) src/displayctl.c src/xhd.c -o $@
+	$(CC) -std=gnu11 -O1 -g $(WARN) src/displayctl.c src/xhd.c -lm -o $@
 
 # The choice among the panel's modes is plain Java: it runs on the host's JVM.
 $(H)/modes/TestModes.class: tests/TestModes.java java/OneiOSDisplay.java

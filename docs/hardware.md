@@ -1554,6 +1554,17 @@ Details and the phone test: `runtime/bridges/brightness/README.md`, `drivers/bri
   attaches to it; no reading has gone through, and whether CoreBrightness uses its events is [U]. A rear sensor is a poor
   input for auto-brightness in any case (dark when the phone lies face up).
 - iOS's `IOMFBBrightnessLevel` on the framebuffer is not handled here (the display driver is UniXNU-droidvm's).
+- **EDR and nits (fix-display-colour, 2026-11-13).** QuartzCore takes the display's EDR headroom and nits from the
+  brightness capabilities (`IOMFBDisplay::update_brightness_capabilities`: `MaxNits`, `MinNits`, `MaxNitsEDR`,
+  `EDRPotentialHeadroom`) [F, 24A446]. The real iPhone18,2 tree has them on `/backlight` and `/exbright` [F,
+  `out/kernel-inputs/24A446/devicetree.bin`, 16.16 numbers divided out]: `EDRPotentialHeadroom` 8.0,
+  `EDRReferenceHeadroom` 12.0, `edr-max-nits` 1600, `user-accessible-max-nits` 1060, `override-boot-brightness-nits`
+  80, `panel-gamma` 2.2, `LmaxProduct` 3000, `LminProduct` 10, `DBVMin` 117, `DBVMax` 2047. This service publishes
+  `BrightnessMilliNits` 0.038-500 nits and `LmaxProduct` 500 and no EDR key, and the Metal plug-in holds the headroom
+  at 1 in backboardd, so iOS renders no EDR here; with the 8-bit sRGB display path that is right. The S24 Ultra
+  panel's own luminance is in the display helper's `panel colour mode ...; HDR types ..., luminance max ...` line (not
+  read yet); EDR keys for this service wait for that number and the half-float path
+  (`kernel/patches/oneios-hosted/display/README.md`, "Colour, depth and the panel").
 
 ## 7b. Touch screen and buttons (fable-hid, 2026-11-11)
 

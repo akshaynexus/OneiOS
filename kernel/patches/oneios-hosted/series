@@ -219,3 +219,8 @@
 # instead of waiting for IOKit quiet, which comes only after driverkitd; "first ..." lines time the naming, the enable,
 # the first request, the power on, the first scan and join (net/README.md, "en0's name"). On the phone (2026-11-13) it did
 # not make Wi-Fi earlier: configd named en0 89 s after launchd with IOKit already quiet (0061 samples configd).
+# fix-display-colour (2026-11-13): no numbered patch, no XNU source changed: in the display archive (display/,
+# oneios-tool kernel gen display) LegacyDisplayProbe.cpp and DroidVMVirtioGpuDisplay.cpp are staged so that with
+# oneios-display-wide=1 (xnuhost's display-format=rgba16f) a half-float 'RGhA' frame goes to the virtio scanout as it
+# is (xnuhost's format 0x52476841); OneiOSDisplay.cpp logs each surface format the compositor swaps and the display
+# service's properties (display/README.md, "Colour, depth and the panel").

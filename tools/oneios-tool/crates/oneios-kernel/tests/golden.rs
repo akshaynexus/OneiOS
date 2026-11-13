@@ -78,6 +78,24 @@ fn the_edit_lists_write_what_the_python_functions_wrote() {
     assert_eq!(build_oneios_gpu::staged_3d_text(made_up("gpu3d")).unwrap(), expected("gpu3d"));   // no Python original
     assert!(build_oneios_gpu::staged_3d_text(made_up("gpu3d").repeat(2)).is_err());
     assert_eq!(build_oneios_display::staged_text(made_up("display")).unwrap(), expected("display"));
+    assert_eq!(build_oneios_display::staged_scanout(made_up("display_scanout")).unwrap(), expected("display_scanout"));
+}
+
+#[test]
+fn the_display_edits_fit_the_pinned_sources() {
+    // The edit lists against the real upstream files, where external/ has them (a checkout without the references
+    // skips this; the kernel build applies the same lists and stops on a missing anchor).
+    let package = repo().join("external/UniXNU-droidvm/package");
+    let (probe, scanout) = (package.join("LegacyDisplayProbe.cpp"), package.join("DroidVMVirtioGpuDisplay.cpp"));
+    if !probe.exists() || !scanout.exists() {
+        eprintln!("external/UniXNU-droidvm is not here: the display's edits were checked on the synthetic sources only");
+        return;
+    }
+    let staged = build_oneios_display::staged_text(std::fs::read_to_string(&probe).unwrap()).unwrap();
+    assert!(staged.contains("oneios_virtio_gpu_offer_format(display,memory,stride,width,height,format);"));
+    let staged = build_oneios_display::staged_scanout(std::fs::read_to_string(&scanout).unwrap()).unwrap();
+    assert_eq!(staged.matches("scanoutFormat(r)").count(), 3);                  // CREATE_2D and the two SET_SCANOUT_BLOBs
+    assert!(!staged.contains("r.width, r.height, 2, 0,") && staged.contains("format == 2 ? OneiOSHalf : 0};"));
 }
 
 #[test]
