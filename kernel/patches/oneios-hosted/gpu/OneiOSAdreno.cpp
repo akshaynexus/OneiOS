@@ -385,6 +385,399 @@ uint8_t tagAt(task_t task, uint64_t address)
     return TagOther;
 }
 }  // namespace blobs
+
+// Where a surface's pixels go (widgets, 2026-11-13). On the phone (2026-11-12 23:45) every widget was blank or white while
+// WidgetRenderer_Default had a Metal device (its plug-in loaded, AGXAccelerator opened 4 times, 28+3 MiB of blobs), and
+// nothing said where its drawing went: into IOSurfaces or not, done or not, read by the render server or not, and what
+// the pages held. The staged driver's hooks (staged/gpu.rs GPU3D) feed this trail; the GPU report prints it while it
+// changes, at most these lines each report (docs/gpu.md 5.1, "Where a surface's pixels go"):
+//   oneios-gpu-sync: 10 s: tickets +40 ended +40 (closed +0, not kept +0); CPU locks +12 (read-only +10, no wait +0): waited +2,
+//     gave up +0, mean 900 us, max ever 4000 us; reads that waited for writers +0, gave up +0, max ever 0 us
+//   oneios-gpu-surfaces: WidgetRenderer_ submits +40; writes +24 done +24 (closed +0) on 6 surfaces: 5 since read by
+//     another (backboardd), 1 by none, 0 read while written; reads +2: others' +0 (while written +0), with no GPU writer +2
+//   oneios-gpu-pixels: WidgetRenderer_ 6 surfaces (5 MiB): zero 0, white 1, flat 0, drawn 5; changed 3; pages of another
+//     process's surfaces 0 (-)
+//   oneios-gpu-locks: 10 s: SpringBoard 12 (GPU-written 3, read-only 10), WidgetRenderer_Default 2 (GPU-written 2, ...)
+// The surfaces lines are by IOSurface ID, from what each command buffer names as it commits (NativeMetal's surfacesync: the
+// surfaces it renders into or samples, and when it completed). The pixels lines are by blob: each IOSurface the client
+// imported for the GPU (CREATE_BLOB_USER over a mapping tagged VM_MEMORY_IOSURFACE), its guest pages read here, 8 pages
+// spread over it and 16 pixels in each: all zero (never written, or cleared to transparent black), white (every byte
+// 0xf0 or more), flat (one other value), drawn (anything else); "changed" since the last report. "pages of another
+// process's surfaces": the import's first page is the first page of an IOSurface another client imported (one physical
+// range seen by both), with the client named that most share with.
+extern "C" {
+extern volatile uint64_t droidvm_surface_stats[8], droidvm_surface_lock_options[4], droidvm_surface_read_waits[4];
+void proc_selfname(char *, int);
+uint64_t phystokv(uint64_t pa);                // arm_vm_init.c; the identity on the RAM window under xnuhost
+}
+namespace trail {
+enum : uint32_t { Buckets = 1024, Ways = 4, NoSlot = 0xff, PageCapacity = 2048, Samples = 8, Words = 16, Lockers = 8 };
+// An IOSurface the GPU used: its last use, the trail's sequence at its last GPU write done and at its last read by another
+// client than its writer, the client that wrote it last and the other that read it last, the writes begun and not ended,
+// and whether another client's read began while a write was in flight (bit 0).
+struct Surface { uint32_t id, seen; uint64_t wroteSeq, readSeq; uint32_t wroteAt; uint8_t writer, reader, inflight, flags; };
+struct Slot { uint64_t submits, writes, done, closedEnds, reads, readOthers, readDuring, readUnwritten; };
+struct Locker { char name[16]; uint32_t locks, gpuWritten, readOnly; };
+// An IOSurface import's pages: its blob, client, first page, the pages read for the report, and what they held last.
+struct Pages { uint32_t id; uint8_t slot, peer, kept, look; uint64_t bytes, first, hash, pa[Samples]; };
+Surface *surfaces;                 // Buckets x Ways, 128 KiB, at the first use
+Slot slots[64];                    // by client slot, since boot (the report prints the differences)
+Locker lockers[Lockers];           // since the last report
+uint32_t lockersOther, replaced;
+uint64_t sequence;
+IOSimpleLock *slock;               // surfaces, slots, lockers
+Pages *pages;                      // open addressing by blob id, 192 KiB, at the first import
+uint32_t pagesUsed, pagesUntracked;
+IOLock *plock;                     // pages: a lock that may be held while the report reads them (thread context only)
+bool surfacesReady()
+{
+    if (!slock) {
+        IOSimpleLock *made = IOSimpleLockAlloc();
+        if (made && !OSCompareAndSwapPtr(nullptr, made, reinterpret_cast<void *volatile *>(&slock))) IOSimpleLockFree(made);
+        if (!slock) return false;
+    }
+    if (!surfaces) {
+        Surface *t = static_cast<Surface *>(IOMallocZero(sizeof(Surface) * Buckets * Ways));
+        if (t && !OSCompareAndSwapPtr(nullptr, t, reinterpret_cast<void *volatile *>(&surfaces))) IOFree(t, sizeof(Surface) * Buckets * Ways);
+    }
+    return surfaces != nullptr;
+}
+bool pagesReady()
+{
+    if (!plock) {
+        IOLock *made = IOLockAlloc();
+        if (made && !OSCompareAndSwapPtr(nullptr, made, reinterpret_cast<void *volatile *>(&plock))) IOLockFree(made);
+        if (!plock) return false;
+    }
+    if (!pages) {
+        Pages *t = static_cast<Pages *>(IOMallocZero(sizeof(Pages) * PageCapacity));
+        if (t && !OSCompareAndSwapPtr(nullptr, t, reinterpret_cast<void *volatile *>(&pages))) IOFree(t, sizeof(Pages) * PageCapacity);
+    }
+    return pages != nullptr;
+}
+// slock held. The surface's entry, or with `make` a new one in place of its bucket's least recently used.
+Surface *surface(uint32_t id, uint32_t now, bool make)
+{
+    Surface *bucket = &surfaces[((id * 2654435761u) >> 22) * Ways], *pick = nullptr;
+    for (uint32_t w = 0; w < Ways; w++) {
+        if (bucket[w].id == id) return &bucket[w];
+        if (!pick || (pick->id && (!bucket[w].id || bucket[w].seen < pick->seen))) pick = &bucket[w];
+    }
+    if (!make) return nullptr;
+    if (pick->id) replaced++;
+    *pick = {id, now, 0, 0, 0, uint8_t(NoSlot), uint8_t(NoSlot), 0, 0};
+    return pick;
+}
+uint32_t pageHash(uint32_t id) { return (id * 2654435761u) >> 21 & (PageCapacity - 1); }
+// plock held.
+Pages *pagesOf(uint32_t id)
+{
+    for (uint32_t i = pageHash(id), n = 0; pages && n < PageCapacity; i = (i + 1) & (PageCapacity - 1), n++) {
+        if (pages[i].id == id) return &pages[i];
+        if (!pages[i].id) return nullptr;
+    }
+    return nullptr;
+}
+// plock held: the entry goes, the probe chains stay whole (backward shift).
+void erase(Pages *e)
+{
+    uint32_t i = uint32_t(e - pages), j = i;
+    for (;;) {
+        pages[i].id = 0;
+        for (;;) {
+            j = (j + 1) & (PageCapacity - 1);
+            if (!pages[j].id) { pagesUsed--; return; }
+            const uint32_t k = pageHash(pages[j].id);
+            if (i <= j ? (i < k && k <= j) : (i < k || k <= j)) continue;
+            break;
+        }
+        pages[i] = pages[j];
+        i = j;
+    }
+}
+// From oneios_gpu_blob_made: whether the import is an IOSurface's (only those stay).
+void kept(uint32_t id, bool iosurface)
+{
+    if (!plock || !pages) return;
+    IOLockLock(plock);
+    if (Pages *e = pagesOf(id)) {
+        if (iosurface) e->kept = 1; else erase(e);
+    }
+    IOLockUnlock(plock);
+}
+// From oneios_gpu_blob_gone.
+void gone(uint32_t id)
+{
+    if (!plock || !pages) return;
+    IOLockLock(plock);
+    if (Pages *e = pagesOf(id)) erase(e);
+    IOLockUnlock(plock);
+}
+// What the words read from an import's pages are: 0 all zero, 1 white (every byte 0xf0 or more), 2 one other value, 3 drawn.
+uint8_t classify(const uint32_t *w, uint32_t n)
+{
+    bool zero = true, white = true, flat = true;
+    for (uint32_t i = 0; i < n; i++) {
+        zero &= w[i] == 0;
+        white &= (w[i] & 0xf0f0f0f0u) == 0xf0f0f0f0u;
+        flat &= w[i] == w[0];
+    }
+    return zero ? 0 : white ? 1 : flat ? 2 : 3;
+}
+const char *slotName(uint32_t s) { return s < 64 && droidvm_virtgpu_client_memory[s].name[0] ? droidvm_virtgpu_client_memory[s].name : "-"; }
+// The sync line: the tunnel's own IOSurface counters (DroidVMVirtioGpu3D.cpp surfaceAccess, surfaceTrap, awaitWriters).
+void printSync(uint32_t every)
+{
+    static uint64_t was[8], wasOptions[4], wasReads[4];
+    uint64_t st[8], op[4], rd[4];
+    for (unsigned i = 0; i < 8; i++) st[i] = droidvm_surface_stats[i];
+    for (unsigned i = 0; i < 4; i++) { op[i] = droidvm_surface_lock_options[i]; rd[i] = droidvm_surface_read_waits[i]; }
+    if (!memcmp(st, was, sizeof st) && !memcmp(op, wasOptions, sizeof op) && !memcmp(rd, wasReads, sizeof rd)) return;
+    const uint64_t locks = (op[0] + op[1] + op[2] + op[3]) - (wasOptions[0] + wasOptions[1] + wasOptions[2] + wasOptions[3]);
+    const uint64_t waited = st[4] - was[4];
+    IOLog("oneios-gpu-sync: %u s: tickets +%llu ended +%llu (closed +%llu, not kept +%llu); CPU locks +%llu (read-only +%llu, no wait +%llu): "
+          "waited +%llu, gave up +%llu, mean %llu us, max ever %llu us; reads that waited for writers +%llu, gave up +%llu, max ever %llu us\n",
+          every, st[0] - was[0], st[1] - was[1], st[2] - was[2], st[3] - was[3], locks, (op[1] + op[3]) - (wasOptions[1] + wasOptions[3]),
+          (op[2] + op[3]) - (wasOptions[2] + wasOptions[3]), waited, st[5] - was[5], waited ? (st[6] - was[6]) / waited : 0, st[7],
+          rd[0] - wasReads[0], rd[1] - wasReads[1], rd[3]);
+    memcpy(was, st, sizeof was);
+    memcpy(wasOptions, op, sizeof wasOptions);
+    memcpy(wasReads, rd, sizeof wasReads);
+}
+// The surfaces lines (one per client that submitted or named a surface since the last report) and the CPU lockers.
+void printSurfaces(uint32_t every)
+{
+    static Slot was[64];
+    static uint32_t lastAt;
+    if (!slock || !surfaces) return;
+    const uint32_t now = blobs::secondsNow(), since = lastAt ? lastAt : (now > every ? now - every : 0);
+    lastAt = now;
+    struct Count { uint32_t written, reachedOther, notRead, during; uint8_t reader; };
+    Count *count = static_cast<Count *>(IOMallocZero(sizeof(Count) * 64));
+    if (!count) return;
+    Slot nowSlots[64];
+    Locker seen[Lockers];
+    uint32_t other, lost;
+    IOSimpleLockLock(slock);
+    for (uint32_t i = 0; i < Buckets * Ways; i++) {
+        const Surface &s = surfaces[i];
+        if (!s.id || s.writer >= 64 || !s.wroteAt || s.wroteAt < since) continue;
+        Count &c = count[s.writer];
+        c.written++;
+        if (s.readSeq > s.wroteSeq) { c.reachedOther++; c.reader = s.reader; } else c.notRead++;
+        if (s.flags & 1) c.during++;
+    }
+    memcpy(nowSlots, slots, sizeof nowSlots);
+    memcpy(seen, lockers, sizeof seen);
+    other = lockersOther; lost = replaced;
+    bzero(lockers, sizeof lockers);
+    lockersOther = 0;
+    IOSimpleLockUnlock(slock);
+    for (uint32_t s = 0; s < 64; s++) {
+        const Slot &n = nowSlots[s], &w = was[s];
+        if (n.submits == w.submits && n.writes == w.writes && n.reads == w.reads && n.done == w.done) continue;
+        const Count &c = count[s];
+        IOLog("oneios-gpu-surfaces: %.16s submits +%llu; writes +%llu done +%llu (closed +%llu) on %u surfaces: %u since read by another (%.16s), "
+              "%u by none, %u read while written; reads +%llu: others' +%llu (while written +%llu), with no GPU writer +%llu\n",
+              slotName(s), n.submits - w.submits, n.writes - w.writes, n.done - w.done, n.closedEnds - w.closedEnds, c.written, c.reachedOther,
+              c.reachedOther ? slotName(c.reader) : "-", c.notRead, c.during, n.reads - w.reads, n.readOthers - w.readOthers,
+              n.readDuring - w.readDuring, n.readUnwritten - w.readUnwritten);
+    }
+    memcpy(was, nowSlots, sizeof was);
+    IOFree(count, sizeof(Count) * 64);
+    char text[200];
+    size_t at = 0;
+    for (const Locker &l : seen) {
+        if (!l.name[0]) continue;
+        char one[80];
+        const int n = snprintf(one, sizeof one, "%.16s %u (GPU-written %u, read-only %u)", l.name, l.locks, l.gpuWritten, l.readOnly);
+        if (at && at + 2 + size_t(n) >= sizeof text) { IOLog("oneios-gpu-locks: %u s: %s\n", every, text); at = 0; }
+        at += snprintf(text + at, sizeof text - at, "%s%s", at ? ", " : "", one);
+    }
+    if (at || other) IOLog("oneios-gpu-locks: %u s: %s; other processes %u; surfaces forgotten for room %u\n", every, at ? text : "-", other, lost);
+}
+// The pixels lines: each client's IOSurface imports, what their pages hold. Printed for a client when its line changes.
+void printPixels()
+{
+    static uint64_t printed[64];
+    if (!plock || !pages) return;
+    struct Count { uint32_t surfaces, cls[4], changed, shared; uint64_t bytes; uint16_t peers[64]; };
+    Count *count = static_cast<Count *>(IOMallocZero(sizeof(Count) * 64));
+    if (!count) return;
+    uint32_t untracked;
+    IOLockLock(plock);
+    for (uint32_t i = 0; i < PageCapacity; i++) {
+        Pages &e = pages[i];
+        if (!e.id || !e.kept || e.slot >= 64) continue;
+        uint32_t words[Samples * Words], n = 0;
+        uint64_t hash = 1469598103934665603ull;
+        for (uint32_t k = 0; k < Samples; k++) {
+            const uint64_t pa = e.pa[k];
+            if (!pa || pa < gPhysBase || pa - gPhysBase > gPhysSize - 4096) continue;
+            const volatile uint32_t *page = reinterpret_cast<const volatile uint32_t *>(phystokv(pa & ~uint64_t(4095)));
+            for (uint32_t j = 0; j < Words; j++) {
+                words[n] = page[j * (4096 / 4 / Words) + (k & 3)];
+                hash = (hash ^ words[n]) * 1099511628211ull;
+                n++;
+            }
+        }
+        Count &c = count[e.slot];
+        c.surfaces++;
+        c.bytes += e.bytes;
+        c.cls[n ? classify(words, n) : 0]++;
+        if (e.look && e.hash != hash) c.changed++;
+        e.hash = hash;
+        e.look = 1;
+        if (e.peer < 64) { c.shared++; c.peers[e.peer]++; }
+    }
+    untracked = pagesUntracked;
+    IOLockUnlock(plock);
+    for (uint32_t s = 0; s < 64; s++) {
+        const Count &c = count[s];
+        uint32_t top = NoSlot;
+        for (uint32_t p = 0; p < 64; p++) if (c.peers[p] && (top == NoSlot || c.peers[p] > c.peers[top])) top = p;
+        uint64_t digest = c.surfaces;
+        for (uint32_t k = 0; k < 4; k++) digest = digest * 1000003u + c.cls[k];
+        digest = (digest * 1000003u + c.changed) * 1000003u + c.shared;
+        if (digest == printed[s]) continue;
+        printed[s] = digest;
+        if (!c.surfaces && !droidvm_virtgpu_client_memory[s].name[0]) continue;
+        IOLog("oneios-gpu-pixels: %.16s %u surfaces (%llu MiB): zero %u, white %u, flat %u, drawn %u; changed %u; pages of another process's "
+              "surfaces %u (%.16s)%s\n", slotName(s), c.surfaces, c.bytes >> 20, c.cls[0], c.cls[1], c.cls[2], c.cls[3], c.changed, c.shared,
+              top < 64 ? slotName(top) : "-", untracked ? "; table full: some imports not read" : "");
+    }
+    IOFree(count, sizeof(Count) * 64);
+}
+void print(uint32_t every)
+{
+    printSync(every);
+    printSurfaces(every);
+    printPixels();
+}
+}  // namespace trail
+// A command buffer names an IOSurface it renders into (write) or samples, as it commits (DroidVMVirtioGpu3D.cpp surfaceAccess).
+extern "C" void oneios_gpu_surface_use(uint32_t id, uint32_t write, uint32_t slot, uint64_t)
+{
+    using namespace trail;
+    if (!id || slot >= 64 || !surfacesReady()) return;
+    const uint32_t now = blobs::secondsNow();
+    IOSimpleLockLock(slock);
+    Surface *s = surface(id, now, true);
+    Slot &me = slots[slot];
+    s->seen = now;
+    if (write) {
+        me.writes++;
+        s->writer = uint8_t(slot);
+        if (s->inflight < 255) s->inflight++;
+    } else {
+        me.reads++;
+        if (s->writer == NoSlot) {
+            me.readUnwritten++;
+        } else if (s->writer != slot) {
+            me.readOthers++;
+            s->reader = uint8_t(slot);
+            s->readSeq = ++sequence;
+            if (s->inflight) { me.readDuring++; s->flags |= 1; }
+        }
+    }
+    IOSimpleLockUnlock(slock);
+}
+// The command buffer completed (ticket ended), or its connection closed (ticket 0): a write of the surface is done.
+extern "C" void oneios_gpu_surface_done(uint32_t id, uint32_t write, uint32_t slot, uint64_t ticket)
+{
+    using namespace trail;
+    if (!write || slot >= 64 || !slock || !surfaces) return;
+    const uint32_t now = blobs::secondsNow();
+    IOSimpleLockLock(slock);
+    slots[slot].done++;
+    if (!ticket) slots[slot].closedEnds++;
+    if (Surface *s = surface(id, now, false)) {
+        if (s->inflight) s->inflight--;
+        s->wroteSeq = ++sequence;
+        s->wroteAt = now;
+    }
+    IOSimpleLockUnlock(slock);
+}
+// A CPU lock of a surface (IOSurfaceRootUserClient's lock trap), in the locking process; only surfaces the GPU used.
+extern "C" void oneios_gpu_surface_lock(uint32_t id, uint32_t options)
+{
+    using namespace trail;
+    if (!slock || !surfaces) return;
+    char name[16] = "";
+    proc_selfname(name, sizeof name);
+    const uint32_t now = blobs::secondsNow();
+    IOSimpleLockLock(slock);
+    if (const Surface *s = surface(id, now, false)) {
+        Locker *l = nullptr;
+        for (Locker &k : lockers) {
+            if (!strncmp(k.name, name, sizeof k.name)) { l = &k; break; }
+            if (!k.name[0] && !l) l = &k;
+        }
+        if (l && !l->name[0]) strlcpy(l->name, name, sizeof l->name);
+        if (l) {
+            l->locks++;
+            if (s->writer != NoSlot) l->gpuWritten++;
+            if (options & 1) l->readOnly++;
+        } else {
+            lockersOther++;
+        }
+    }
+    IOSimpleLockUnlock(slock);
+}
+extern "C" void oneios_gpu_submit(uint32_t slot)
+{
+    if (slot < 64) __atomic_fetch_add(&trail::slots[slot].submits, 1, __ATOMIC_RELAXED);
+}
+// A test switch, off by default: oneios-gpu-read-wait=1 makes the render server's command buffers wait, as they name the
+// surfaces they sample, for other processes' GPU work begun before them that writes those surfaces (the driver's
+// awaitWriters, at most droidvm_surface_read_wait_ms: 100 ms), which a newer plug-in asks for itself and this pin never
+// does. KGSL runs the render server's queue ahead of the apps', so without it a composition can sample a widget's surface
+// before the widget's drawing into it has run. The waits are oneios-gpu-sync's "reads that waited for writers".
+extern "C" volatile int droidvm_virtgpu_compositor_pid;
+extern "C" bool oneios_gpu_reader_waits(int pid)
+{
+    static int on = -1;
+    if (on < 0) {
+        uint32_t value = 0;
+        PE_parse_boot_argn("oneios-gpu-read-wait", &value, sizeof value);
+        on = value != 0;
+        IOLog("oneios-gpu-read-wait: %s\n", on ? "on: the render server's reads wait for other processes' writes" : "off");
+    }
+    return on && pid > 0 && pid == droidvm_virtgpu_compositor_pid;
+}
+// A blob of the caller's own pages (CREATE_BLOB_USER), its guest physical segments {address, length, padding}: the pages the
+// report reads, and whether another client already imported the same first page.
+extern "C" void oneios_gpu_blob_segments(uint32_t id, uint32_t slot, uint64_t bytes, const void *list, uint32_t count)
+{
+    using namespace trail;
+    struct Segment { uint64_t address; uint32_t length, padding; };
+    if (!id || slot >= 64 || !count || !bytes || !pagesReady()) return;
+    const Segment *segment = static_cast<const Segment *>(list);
+    Pages p = {};
+    p.id = id; p.slot = uint8_t(slot); p.peer = uint8_t(NoSlot); p.bytes = bytes; p.first = segment[0].address;
+    // Samples pages spread over the blob, its first and last among them, found in one walk of the segments.
+    const uint64_t last = (bytes - 1) & ~uint64_t(4095);
+    uint64_t at = 0;
+    uint32_t i = 0;
+    for (uint32_t k = 0; k < Samples; k++) {
+        const uint64_t want = (last / 4096 * k / (Samples - 1)) * 4096;
+        while (i < count && at + segment[i].length <= want) at += segment[i++].length;
+        p.pa[k] = i < count ? segment[i].address + (want - at) : 0;
+    }
+    IOLockLock(plock);
+    for (uint32_t j = 0; j < PageCapacity; j++) {
+        if (pages[j].id && pages[j].kept && pages[j].first == p.first && pages[j].slot != slot) { p.peer = pages[j].slot; break; }
+    }
+    if (pagesUsed >= PageCapacity / 4 * 3) {
+        pagesUntracked++;
+    } else {
+        uint32_t j = pageHash(id);
+        while (pages[j].id && pages[j].id != id) j = (j + 1) & (PageCapacity - 1);
+        if (!pages[j].id) pagesUsed++;
+        pages[j] = p;
+    }
+    IOLockUnlock(plock);
+}
 extern "C" void oneios_gpu_blob_made(uint32_t id, uint32_t slot, uint64_t bytes, uint32_t kind, task_t task, uint64_t user)
 {
     using namespace blobs;
@@ -412,6 +805,7 @@ extern "C" void oneios_gpu_blob_made(uint32_t id, uint32_t slot, uint64_t bytes,
         table[i] = {id, now, 0, uint8_t(slot), uint8_t(kind), tag, 0, bytes};
     }
     IOSimpleLockUnlock(lock);
+    if (kind & KindWired) trail::kept(id, tag == TagIOSurface);     // the surface trail keeps the pages of IOSurface imports only
 }
 extern "C" void oneios_gpu_blob_closed(uint32_t id)
 {
@@ -425,6 +819,7 @@ extern "C" void oneios_gpu_blob_closed(uint32_t id)
 extern "C" void oneios_gpu_blob_gone(uint32_t id)
 {
     using namespace blobs;
+    trail::gone(id);          // before its pages go back (the driver unwires them after this hook)
     if (!lock) return;
     IOSimpleLockLock(lock);
     Entry *e = find(id);
@@ -570,6 +965,8 @@ void report(void *, wait_result_t)
             static uint64_t wasMade[64], wasGone[64];
             blobs::print(wasMade, wasGone);
         }
+        // Where the clients' IOSurface drawing goes (trail:: above): only what changed since the last report.
+        trail::print(every);
         // Who asked for a Metal device (read MetalPluginName), when that changed: with the clients line, a process that
         // asked and holds no GPU memory had its device refused or made none (its reason: the oneios-gpu-text lines).
         uint64_t asked = 0;

@@ -1,0 +1,72 @@
+--- a/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-13 12:00:00
++++ b/src/drm/drm2kgsl/drm2kgsl_renderer.c	2026-11-13 12:00:00
+@@ -884,6 +884,61 @@
+  * and import it into KGSL by user address.  Returns the KGSL memory id (0 on
+  * failure) and, on success, *out_memfd / *out_map / *out_map_size.
+  */
++/* ONEIOS (0007): what KGSL made of each import. A guest's pages are imported KGSL_MEMFLAGS_IOCOHERENT (the GPU snoops
++ * the CPUs' caches, so what one process's GPU writes and another process's GPU or CPU reads is the same memory with no
++ * cache maintenance anywhere in the guest), but KGSL drops the flag without a word where its MMU has no IO coherence:
++ * then a CPU write can sit in a cache the GPU never sees, and a GPU write can be overwritten by an older line the CPU
++ * writes back later (a surface the guest's kernel zeroed with the CPU, then drawn by the GPU: blank again). Each
++ * import's flags are read back with GPUOBJ_INFO, the first 256 and then every 64th; one line for the first import of
++ * each outcome, and the counts for gpu3d_kgsl.c's 10 s host line (drm2kgsl_renderer_import_stats). */
++static struct {
++   pthread_mutex_t lock;
++   uint64_t imports, checked, kept, dropped, plain, unreadable;
++   bool said[4];
++} g_imports = { .lock = PTHREAD_MUTEX_INITIALIZER };
++
++static void
++oneios_import_note(int fd, uint32_t id, uint32_t kgsl_flags)
++{
++   pthread_mutex_lock(&g_imports.lock);
++   const uint64_t n = ++g_imports.imports;
++   pthread_mutex_unlock(&g_imports.lock);
++   if (n > 256 && n % 64)
++      return;
++   struct kgsl_gpuobj_info info = { .id = id };
++   const bool read = !kgsl_ioctl(fd, IOCTL_KGSL_GPUOBJ_INFO, &info);
++   const bool asked = (kgsl_flags & KGSL_MEMFLAGS_IOCOHERENT) != 0;
++   const int outcome = !read ? 3 : !asked ? 2 : (info.flags & KGSL_MEMFLAGS_IOCOHERENT) ? 0 : 1;
++   static const char *const what[4] = { "kept IO coherence", "DROPPED IO coherence (the GPU does not snoop the CPUs' caches)",
++                                        "imported without IO coherence, as asked", "flags not readable" };
++   pthread_mutex_lock(&g_imports.lock);
++   g_imports.checked++;
++   g_imports.kept += outcome == 0;
++   g_imports.dropped += outcome == 1;
++   g_imports.plain += outcome == 2;
++   g_imports.unreadable += outcome == 3;
++   const bool say = !g_imports.said[outcome];
++   g_imports.said[outcome] = true;
++   pthread_mutex_unlock(&g_imports.lock);
++   if (say)
++      _drm_log(VIRGL_LOG_LEVEL_WARNING, "guest import: KGSL %s: asked flags 0x%x, now 0x%" PRIx64 " (cache mode %u)\n", what[outcome],
++               kgsl_flags, read ? (uint64_t)info.flags : 0, read ? (unsigned)((info.flags & KGSL_CACHEMODE_MASK) >> KGSL_CACHEMODE_SHIFT) : 0u);
++}
++
++void
++drm2kgsl_renderer_import_stats(uint64_t *imports, uint64_t *checked, uint64_t *kept, uint64_t *dropped, uint64_t *plain,
++                               uint64_t *unreadable)
++{
++   pthread_mutex_lock(&g_imports.lock);
++   *imports = g_imports.imports;
++   *checked = g_imports.checked;
++   *kept = g_imports.kept;
++   *dropped = g_imports.dropped;
++   *plain = g_imports.plain;
++   *unreadable = g_imports.unreadable;
++   pthread_mutex_unlock(&g_imports.lock);
++}
++
+ /* Import a dmabuf into KGSL, returning its GPU memory id (0 on failure). */
+ static uint32_t
+ kgsl_import_dmabuf(int fd, int dmabuf_fd, uint32_t kgsl_flags)
+@@ -903,6 +958,7 @@
+       return 0;
+    }
+ 
++   oneios_import_note(fd, req.id, kgsl_flags);
+    return req.id;
+ }
+ 

@@ -119,6 +119,8 @@ static struct {
   pthread_mutex_t lock;
   stat_ctx ctx[STAT_CTX];
   uint64_t since, render_n, render_sum, render_max, other_n, other_sum, submit_n, submit_sum, submit_max, blob_n, blob_sum, blob_max, holds, keepalives, udma_sum;
+  uint64_t dropped, plain, unreadable;       // the import line's last figures (0007)
+  bool imports_said;
 } st = { .lock = PTHREAD_MUTEX_INITIALIZER };
 
 static uint64_t now_us(void)
@@ -151,6 +153,17 @@ static void stat_report(uint64_t now)         // with st.lock held
         (unsigned long long)(st.blob_n ? st.udma_sum / st.blob_n : 0), (unsigned long long)(holds - st.holds), (unsigned long long)(keepalives - st.keepalives));
   st.holds = holds;
   st.keepalives = keepalives;
+  // KGSL's coherence of the guest's imports (drm2kgsl patch 0007): a line the first time, then only when an import
+  // lost its IO coherence, was imported without it, or could not be read back (docs/gpu.md 2.1, "0007").
+  uint64_t imports, checked, kept, dropped, plain, unreadable;
+  drm2kgsl_renderer_import_stats(&imports, &checked, &kept, &dropped, &plain, &unreadable);
+  if (checked && (!st.imports_said || dropped != st.dropped || plain != st.plain || unreadable != st.unreadable)) {
+    say(1, "gpu: KGSL imports %llu, read back %llu: IO-coherent %llu, coherence dropped by KGSL %llu, not coherent as asked %llu, "
+        "not readable %llu", (unsigned long long)imports, (unsigned long long)checked, (unsigned long long)kept,
+        (unsigned long long)dropped, (unsigned long long)plain, (unsigned long long)unreadable);
+    st.imports_said = true;
+    st.dropped = dropped; st.plain = plain; st.unreadable = unreadable;
+  }
   st.since = now;
   st.render_n = st.render_sum = st.render_max = st.other_n = st.other_sum = st.submit_n = st.submit_sum = st.submit_max = 0;
   st.blob_n = st.blob_sum = st.blob_max = st.udma_sum = 0;

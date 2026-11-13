@@ -17,4 +17,8 @@ int drm2kgsl_renderer_set_guest_blob_chunks(struct virgl_context *ctx, uint64_t 
 int drm2kgsl_renderer_attach_chunks(struct virgl_context *ctx, uint32_t res_id, const int *fds, const uint64_t *sizes, unsigned n);
 // patch 0005: how often the render server's clock hold started, and the keep-alive submissions it made, since the start.
 void drm2kgsl_renderer_hold_stats(uint64_t *holds, uint64_t *keepalives);
+// patch 0007: KGSL's imports since the start, those whose flags were read back (the first 256, then every 64th), and of
+// those: asked IO-coherent and kept it, asked and lost it (KGSL dropped it), asked without it, flags not readable.
+void drm2kgsl_renderer_import_stats(uint64_t *imports, uint64_t *checked, uint64_t *kept, uint64_t *dropped, uint64_t *plain,
+                                    uint64_t *unreadable);
 #endif

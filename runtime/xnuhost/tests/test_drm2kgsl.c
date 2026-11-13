@@ -13,6 +13,7 @@
 #define _GNU_SOURCE
 #endif
 #include "gpu3d.h"
+#include "oneios_drm2kgsl.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -31,9 +32,11 @@
 // ---- the stand-in -----------------------------------------------------------------------------------------------------
 #define VA_BASE 0x4000000000ull
 #define VA_END  0x8000000000ull
-typedef struct { uint32_t id; uint64_t base, size; bool vbo; } object;
+typedef struct { uint32_t id; uint64_t base, size, flags; bool vbo; } object;
 static object objects[256];
 static unsigned nobjects, next_id = 1, imports, frees;
+// As KGSL on an MMU without IO coherence (kgsl_memdesc_init): an import keeps every flag it asked but that one.
+static bool no_io_coherence;
 typedef struct { uint32_t vbo, child, op; uint64_t target, length, child_offset; unsigned call; } bound;
 static bound binds[256];
 static unsigned nbinds, bind_calls;
@@ -76,7 +79,7 @@ static int fake_kgsl(unsigned long request, void *arg)
     struct kgsl_gpuobj_info *i = arg;
     object *o = object_find(i->id);
     if (!o) { errno = ENOENT; return -1; }
-    i->gpuaddr = o->base; i->size = o->size;
+    i->gpuaddr = o->base; i->size = o->size; i->flags = o->flags;
     return 0;
   }
   case IOCTL_KGSL_GPUOBJ_IMPORT: {
@@ -85,6 +88,7 @@ static int fake_kgsl(unsigned long request, void *arg)
     off_t size = i->type == KGSL_USER_MEM_TYPE_DMABUF ? lseek(d->fd, 0, SEEK_END) : -1;
     if (size <= 0 || (i->flags & KGSL_MEMFLAGS_VBO)) { errno = EINVAL; return -1; }
     if (object_new((uint64_t)size, false, &i->id)) return -1;
+    object_find(i->id)->flags = no_io_coherence ? i->flags & ~(uint64_t)KGSL_MEMFLAGS_IOCOHERENT : i->flags;
     imports++;
     return 0;
   }
@@ -300,6 +304,45 @@ static int with_room(void)
   return 0;
 }
 
+// drm2kgsl patch 0007: each import's flags read back. A guest buffer asks IO coherence and keeps it; on a KGSL that drops
+// the flag (an MMU without IO coherence) the loss is counted and said; an attach by a second context asks none.
+typedef struct { uint64_t imports, checked, kept, dropped, plain, unreadable; } import_stats;
+static import_stats imports_now(void)
+{
+  import_stats s;
+  drm2kgsl_renderer_import_stats(&s.imports, &s.checked, &s.kept, &s.dropped, &s.plain, &s.unreadable);
+  return s;
+}
+
+static int coherence(void)
+{
+  CHECK(renderer());
+  context c, d;
+  CHECK(context_open(&c, 1, 1));
+  import_stats was = imports_now();
+  xh_gpu_entry pages = { .addr = RAM_PHYS + (1u << 20), .length = 0x4000 };
+  CHECK(guest_buffer(&c, 2, 1, c.slice + (16u << 20), 0x4000, &pages, 1) == 0);
+  import_stats now = imports_now();
+  CHECK(now.imports == was.imports + 1 && now.checked == was.checked + 1 && now.kept == was.kept + 1 && now.dropped == was.dropped &&
+        now.unreadable == was.unreadable);
+  no_io_coherence = true;
+  was = now;
+  xh_gpu_entry more = { .addr = RAM_PHYS + (2u << 20), .length = 0x4000 };
+  CHECK(guest_buffer(&c, 3, 2, c.slice + (32u << 20), 0x4000, &more, 1) == 0);
+  now = imports_now();
+  CHECK(now.imports == was.imports + 1 && now.dropped == was.dropped + 1 && now.kept == was.kept);
+  no_io_coherence = false;
+  CHECK(context_open(&d, 2, 11));
+  was = imports_now();
+  CHECK(gpu->attach(gpu, 2, 2, true) == 0);
+  now = imports_now();
+  CHECK(now.imports == was.imports + 1 && now.plain == was.plain + 1);
+  gpu->unref(gpu, 2); gpu->unref(gpu, 3); gpu->unref(gpu, 1); gpu->unref(gpu, 11);
+  gpu->ctx_destroy(gpu, 1);
+  gpu->ctx_destroy(gpu, 2);
+  return 0;
+}
+
 static bool scenario(const char *name, int (*run)(void))
 {
   fflush(stdout);
@@ -316,5 +359,6 @@ int main(void)
   close(node);
   bool ok = scenario("a VBO over the whole address range (the phone, runtime 0.1.3)", whole_range);
   ok = scenario("a VBO that leaves room; buffers past udmabuf's limits", with_room) && ok;
+  ok = scenario("each import's IO coherence read back (patch 0007)", coherence) && ok;
   return ok ? 0 : 1;
 }

@@ -164,6 +164,31 @@ fails, the plug-in reports no device and the process draws without the GPU (the 
 Each context's own line: `context xnu:NAME: GPU addresses [base, +N GB); N contexts hold M of 192 GiB`
 (drm2kgsl's debug log). Host tests: `test_drm2kgsl` and `test_gpu_leaks` pass with it; not yet run on the phone.
 
+### 2.4 `drm2kgsl/patches/0007-import-coherence-read-back.patch` (widgets, 2026-11-13)
+
+Nothing in the guest cleans or invalidates a cache for GPU memory: the guest's pages are imported into KGSL
+`KGSL_MEMFLAGS_IOCOHERENT` (upstream drm2kgsl's `kgsl_guest_memflags`, with `DRM2KGSL_NONCOHERENT` unset), so the GPU snoops the
+CPUs' caches, and an IOSurface one process's GPU writes is the same memory another process's GPU or CPU reads (the
+plug-in's own `sys_dcache_flush` of a surface is off on iOS 27: `NativeBridgeMetalFrontend.mm` `kSurfaceFlush`). KGSL
+drops that flag without saying so where its MMU has no IO coherence (`kgsl_memdesc_init`); then a CPU write can stay in
+a cache the GPU never reads, and a GPU write can be overwritten later by an older line a CPU writes back (a surface the
+guest's kernel zeroed with the CPU and an app then drew with the GPU would go blank again). Whether this KGSL keeps it
+has never been looked at. The patch reads each import's flags back (`GPUOBJ_INFO`: the first 256 imports, then every
+64th) and counts the outcomes: kept IO coherence, dropped by KGSL, imported without it as asked (drm2kgsl's attach of
+another context's dma-buf asks flags 0), not readable. Log: one drm2kgsl line for the first import of each outcome
+(`guest import: KGSL kept IO coherence: asked flags 0x8c000000, now 0x... (cache mode 3)`, or `... DROPPED IO coherence
+...`), and in the 10 s host report, the first time and again whenever a non-coherent count moves:
+
+```
+gpu: KGSL imports N, read back C: IO-coherent K, coherence dropped by KGSL D, not coherent as asked P, not readable U
+```
+
+`D` above 0 on the phone means guest memory is not coherent with the GPU: the fix would then be cache maintenance where
+the guest hands memory to the GPU (or `DRM2KGSL_NONCOHERENT` turned the other way), not more counters. Host test:
+`test_drm2kgsl`'s third scenario (the stand-in KGSL keeps or, as an MMU without IO coherence would, drops the flag; an
+attach asks none): built on the Linux PC (2026-11-13), not run there (no access to `/dev/udmabuf`, section 3); the Mac's
+container runs it. Not yet run on the phone.
+
 To change it: edit a copy of the pinned file, `diff -u` against the original into `drm2kgsl/patches/`, `make`.
 A new pin of virglrenderer that the patch no longer applies to stops the build (`patch -F0`).
 
@@ -428,6 +453,7 @@ thread; none was seen.) Boot arguments:
 | `droidvm-gpu-clients=a,b,...` or `*` | the processes besides `backboardd` that get a Metal device: the grant of the user client (DroidVMGpu.cpp `grantedProcesses`) and, since `0039`, the plug-in's `NativeAdrenoMetal.clients`, which the kernel writes beside the bundle at every boot from the same list (`oneios_gpu_client_list` in `gpu/OneiOSAdreno.cpp`). Forms: a name, `X*`, `*X*`, `@apps`, `*`. Not given: `*`, every process (since 2026-11-12, the owner's decision; before: `WidgetRenderer_Default,*Poster*,iconservicesagent,SBRendererService`, and SpringBoard, the apps, the keyboard and WebKit drew on the CPU). The default is in the kernel, not in xnuhost's boot arguments: the image's `overlay/userland/xnuhost.conf` carries its own `boot-args`, which replace xnuhost's default, so only a kernel default reaches every image without a new image or seed; empty: `backboardd` alone |
 | `oneios-gpu-plugin-clients=...` | a test: the plug-in's list alone (the processes it names ask for a device; the grant decides for the names it holds, the sandbox for the rest). Not given: the list above |
 | `vgpu-3d=1` | what `GETPARAM(DEFAULT_3D)` answers the plug-in (DroidVMVirtioGpu3D.cpp reads it with default 0; `vgpu-3d=0` also turns the driver off) |
+| `oneios-gpu-read-wait=1` | a test switch (widgets, 2026-11-13; off by default): the render server's command buffers wait, as they name the IOSurfaces they sample, for other processes' GPU work begun before them that writes those surfaces (the driver's own `awaitWriters`, at most 100 ms: what a newer plug-in asks for and this pin does not). One line at the render server's first surface ticket: `oneios-gpu-read-wait: on ...` or `off`; its waits are `oneios-gpu-sync`'s "reads that waited for writers" |
 | `oneios-adreno-selftest=1` | after the publish: IOKit's match of `IOAcceleratorES`, an in-kernel open with type `0x4149`, `GETPARAM(ABI_VERSION)` through the tunnel; two `oneios-adreno: selftest:` lines |
 
 **How iOS finds the plug-in (`0031-gpu-addon-mount.patch`).** Metal loads
@@ -560,7 +586,100 @@ The host's side, in xnuhost's log every 10 s while it changes (`virtio_gpu.c` `b
 MiB), made +A unref'd +B`. N against the guest's `oneios-gpu-memory` live count says whether the host keeps blobs the guest
 let go (N larger by more than the display's few 2D surfaces: a host leak); equal, the holding is the guest's.
 
-**The next phone boot (hang, 2026-11-13).** For the keyboard hang (`docs/newtodo.md` 11, 12): the image's
+**Where a surface's pixels go** (widgets, 2026-11-13). On the phone (2026-11-12 23:45) every widget was blank or white
+while `WidgetRenderer_Default[174]` had a Metal device (`library validation of NativeAdrenoMetal: error 0`,
+`libvulkan_freedreno.dylib: error 0`, `AGXAccelerator` opened 4 times, `WidgetRenderer_ 28+3 MiB` in the clients line).
+How a widget reaches the screen, read in 24A446 and in the plug-in (not seen running): `WidgetRenderer_Default` is a
+hidden app (`com.apple.chrono.WidgetRenderer-Default`, `WidgetRenderer.framework`) that hosts each widget's archived
+SwiftUI view in a scene SpringBoard shows; SwiftUI draws through RenderBox (`RenderBox hosting configured - async? %d,
+opaque: %d` in its log, or `RenderBox hosting disabled`), which renders with Metal in the widget renderer's own process
+into IOSurfaces (RenderBox's CAMetalLayer path; NativeMetal presents a drawable when its command buffer completes) or
+lets Core Animation draw; the render server (backboardd) then composites those IOSurfaces with its own Metal device. The
+plug-in makes a texture over an IOSurface by importing the surface's mapping in the process
+(`newTextureWithDescriptor:iosurface:plane:` -> a no-copy buffer -> `CREATE_BLOB_USER`, the caller's pages wired), so
+each process imports the same physical pages as a blob of its own (a resource of its own on the host, its own udmabufs
+over the same RAM memfd range, its own KGSL import): nothing is copied anywhere on this path, and nothing on it zeroes
+or clears a surface. The steps where the image can be lost, and the line that shows each (the staged driver's hooks,
+`staged/gpu.rs` `GPU3D`, `OneiOSAdreno.cpp` `trail::`, printed with the GPU report while they change):
+
+| Step | Line | What says the image went missing there |
+|---|---|---|
+| The widget renderer draws with Metal at all | `oneios-gpu-surfaces: WidgetRenderer_ submits +N; writes +W ...` | `submits` 0 (no GPU work); submits but `writes +0` (it renders into no IOSurface: private textures only, or Core Animation draws it) |
+| Its GPU work into a surface finishes | the same line: `done +D (closed +C)` | `done` far below `writes`, or only `closed` (the command buffers never complete) |
+| The pages of the surface get the pixels | `oneios-gpu-pixels: WidgetRenderer_ S surfaces (M MiB): zero Z, white W, flat F, drawn D; changed X` | its surfaces `zero` (the GPU wrote elsewhere, or not into a format the pages show: a texture the runtime keeps apart and never copies back), `white` (what it drew is white) |
+| The render server imports the same pages | `oneios-gpu-pixels: backboardd ...; pages of another process's surfaces N (WidgetRenderer_)` | `N` 0 while the widget renderer has surfaces: the render server never textures them, or gets other pages |
+| The render server reads the surface after the write | `oneios-gpu-surfaces: WidgetRenderer_ ... on S surfaces: R since read by another (backboardd), U by none, T read while written` | `R` 0 (no GPU read of them), `T` high (it samples them while the widget's GPU work is still writing: on KGSL the render server's queue runs first, and this plug-in pin never asks the kernel's `SurfaceAwaitWriters` wait) |
+| CPU access to GPU-drawn surfaces | `oneios-gpu-locks: 10 s: NAME n (GPU-written g, read-only r)` and `oneios-gpu-sync: ... CPU locks +L ... waited +A, gave up +B` | a snapshotter reading them (`gave up`: the lock waited 500 ms for GPU work that did not end) |
+| The host keeps the GPU coherent with the CPUs | `gpu: KGSL imports ... coherence dropped by KGSL D` (xnuhost, section 2.4) | `D` above 0 |
+
+The lines (examples, not from a run):
+
+```
+oneios-gpu-sync: 10 s: tickets +40 ended +40 (closed +0, not kept +0); CPU locks +12 (read-only +10, no wait +0): waited +2, gave up +0, mean 900 us, max ever 4000 us; reads that waited for writers +0, gave up +0, max ever 0 us
+oneios-gpu-surfaces: WidgetRenderer_ submits +40; writes +24 done +24 (closed +0) on 6 surfaces: 5 since read by another (backboardd), 1 by none, 0 read while written; reads +2: others' +0 (while written +0), with no GPU writer +2
+oneios-gpu-pixels: WidgetRenderer_ 6 surfaces (5 MiB): zero 0, white 1, flat 0, drawn 5; changed 3; pages of another process's surfaces 0 (-)
+oneios-gpu-pixels: backboardd 40 surfaces (90 MiB): zero 2, white 4, flat 3, drawn 31; changed 9; pages of another process's surfaces 33 (SpringBoard)
+oneios-gpu-locks: 10 s: SpringBoard 12 (GPU-written 3, read-only 10); other processes 0; surfaces forgotten for room 0
+```
+
+- `oneios-gpu-sync` is the tunnel's own IOSurface counters (`DroidVMVirtioGpu3D.cpp` `surfaceAccess`, `surfaceTrap`,
+  `awaitWriters`), which nothing printed before: tickets (one per command buffer that names surfaces) begun and ended,
+  ended because the connection closed, uses not kept (its table of 4096 full); CPU locks of IOSurfaces
+  (`IOSurfaceLock`) and how many waited for GPU work, gave up after `droidvm_surface_wait_ms` (500), their mean wait;
+  the render server's waits for other processes' writers (only a plug-in that asks for them: this pin does not).
+- `oneios-gpu-surfaces`, one line per client that submitted or named a surface since the last report, by IOSurface ID
+  (from what each command buffer names as it commits: NativeMetal's surfacesync, the surfaces it renders into and those
+  it samples): its submissions; its writes begun and ended; the distinct surfaces whose last write ended in the
+  interval, and of those how many another client read since (and who), none did, or another read while a write was in
+  flight; its own reads of other clients' surfaces (and of surfaces no GPU wrote: a CPU-drawn backing store).
+- `oneios-gpu-pixels`, one line per client whose figures changed, by blob: each IOSurface the client imported for the
+  GPU (`CREATE_BLOB_USER` over a mapping tagged `VM_MEMORY_IOSURFACE`: the "wired IOSurface" of `oneios-gpu-kinds`),
+  read here from its guest pages (`phystokv`, the identity on the RAM window): 8 pages spread over the surface and 16
+  pixels in each, all zero, white (every byte 0xf0 or more), one other value, or drawn; "changed" is the import whose
+  pixels differ from the last report's; "pages of another process's surfaces" is the import whose first page is the
+  first page of an IOSurface another client imported (one physical range seen by both), with the client most of them
+  share with. Up to 1536 imports are followed (`table full: some imports not read` when more are not).
+- `oneios-gpu-locks`: who locked GPU-used surfaces with the CPU in the interval (the first eight processes).
+
+A client slot is reused when its connection closes and another opens: a line names the slot's current process. What was
+checked (Linux PC, 2026-11-13): `kernel gen gpu` in a hosted kernel build compiled `OneiOSAdreno.cpp` with no warning
+and the staged driver with the hooks of the trail, and linked `liboneiosgpu.a`; the staged driver with the
+`oneios-gpu-read-wait` hook too, compiled alone with the build's own command for an iokit source (it was added after
+that build's tool was made); `cargo test -p oneios-kernel --test golden` 10 of 10. **Not done** (the work was paused):
+the whole kernel's link, the prelink (`kernel.kc`, audit, stubs check) and a PC boot with these hooks; qemu has no 3D, so
+a PC boot would only show that the kernel boots with them, none of these lines. Not yet run on the phone.
+
+**The next phone boot (widgets, 2026-11-13).** The kernel and runtime of this change, the image's `xnuhost.conf`
+`boot-args` as the baseline's plus `oneios-iouc=WidgetRenderer_Default,chronod` (0029: every IOSurface user-client call
+those two make whose answer changes, so a refused lookup or create shows). Unlock, look at a home screen page with
+widgets for a minute (add one from the gallery if none), swipe to it and away twice, and return. From xnuhost's log:
+`oneios-gpu-surfaces`, `oneios-gpu-pixels`, `oneios-gpu-locks`, `oneios-gpu-sync` (all of them), `oneios-gpu-clients`,
+`oneios-gpu-kinds` and `oneios-gpu-sizes` for `WidgetRenderer_` and `backboardd`, `oneios-gpu-text` and
+`oneios-gpu-open`/`oneios-gpu-plugin` for `WidgetRenderer_Default`, `oneios-iouc: WidgetRenderer_Default` and
+`chronod`, drm2kgsl's `guest import: KGSL ...` and the host's `gpu: KGSL imports ...`. From iOS's own log
+(`oneios-tool phone pull-data data.img`, then):
+
+```
+oneios-tool ioslog show data.img --boot last --proc WidgetRenderer_Default --type error,fault
+oneios-tool ioslog show data.img --boot last --proc WidgetRenderer_Default --grep 'native-metal|refused|Unsupported|444|_RB4|MTL|Metal|IOSurface|drawable'
+oneios-tool ioslog show data.img --boot last --proc WidgetRenderer_Default --grep 'RenderBox|Rendering view|placeholder|Placeholder|Archive was nil|Content load failed|Snapshot|archive'
+oneios-tool ioslog show data.img --boot last --proc chronod --grep 'placeholder|timeline|archive|snapshot|extension|reload|fail|error'
+oneios-tool ioslog show data.img --boot last --proc backboardd --grep 'native-metal|refused|Unsupported|IOSurface|surface import'
+oneios-tool ioslog show data.img --boot last --proc SpringBoard --grep 'widget|Widget|WidgetRenderer|scene|placeholder'
+oneios-tool ioslog show data.img --boot last --subsystem com.apple.chrono
+oneios-tool ioslog checks data.img --boot last
+```
+
+What each would mean, as guesses to test: `native-metal: ... Unsupported ... 444` or `_RB4` in the widget renderer is
+RenderBox drawing widgets into its own two-plane 4:4:4 IOSurfaces, which NativeMetal does not render into (Droid-VM's
+note in `build-adreno-metal-plugin.py`: the iPad's Weather widget showed rows of stray colour until RenderBox was told
+`MTLGPUFamilyApple2` by the caller's image path), with `oneios-gpu-pixels: WidgetRenderer_ ... zero` beside it; then
+the fix is the plug-in's (built on the Mac, a new trust list and image seed). `placeholder` / `Archive was nil` /
+`Content load failed` is the widget's content never reaching the renderer (chronod and the widget extensions: no GPU
+cause). Drawn widget surfaces (`drawn`) that backboardd shares the pages of and reads after the write, while the screen
+shows white, put the loss in the render server's composition. If `read while written` is well above 0, a second
+session with `oneios-gpu-read-wait=1` added says whether the order of the two processes' GPU work is the cause
+(widgets drawn with it, blank without). For the keyboard hang (`docs/newtodo.md` 11, 12): the image's
 `xnuhost.conf` `boot-args` as the baseline's, with its `oneios-ubt...` part replaced by
 
 ```

@@ -269,6 +269,29 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
       A second boot as the A/B of the disabled jobs: `oneios-enable-jobs=com.apple.analyticsd,com.apple.coreduetd,
       com.apple.siriknowledged,com.apple.modelmanagerd,com.apple.modelcatalogd,com.apple.intelligenceplatformd`
       (the kernel's buffer is 256 characters; analyticsd must stay in the list).
+13. **Every widget is blank or white** (23:45 boot) while `WidgetRenderer_Default[174]` has a Metal device (plug-in and
+    Turnip loaded, `AGXAccelerator` opened 4 times, `WidgetRenderer_ 28+3 MiB`). **Read, instrumented, not fixed
+    (2026-11-13, branch `fix-widgets`).** Read in 24A446, the plug-in and the kernel: the widget renderer hosts the
+    widgets' SwiftUI views; RenderBox draws them with Metal in that process into IOSurfaces (or lets Core Animation
+    draw), and backboardd composites the surfaces with its own device; each process imports a surface's own pages
+    (`CREATE_BLOB_USER`: wired, no copy, its own host resource and udmabufs over the same RAM range), and nothing on the
+    path copies, clears or zeroes a surface; the IOSurface mapping XNU makes for a second task shares the object
+    (`mach_make_memory_entry_share`). So no fault on our side was found by reading. New lines show where the image is
+    lost: the kernel's `oneios-gpu-surfaces` (who writes which IOSurface, whether the write finishes, whether
+    backboardd reads it after), `oneios-gpu-pixels` (what the pages of each process's IOSurface imports hold: zero,
+    white, flat, drawn; whether backboardd's imports are the widget renderer's pages), `oneios-gpu-locks`,
+    `oneios-gpu-sync`; xnuhost's `gpu: KGSL imports ...` (whether KGSL keeps the guest's memory IO-coherent; drm2kgsl
+    patch 0007). Guesses, in the order to test them: RenderBox drawing widgets into its own two-plane 4:4:4 surfaces
+    that NativeMetal does not render into (Droid-VM's iPad showed that until the plug-in told RenderBox
+    `MTLGPUFamilyApple2`), seen as `Unsupported ... 444` in the widget renderer's log with its surfaces `zero`;
+    widget content never reaching the renderer (`placeholder` in chronod's and the renderer's log: not the GPU);
+    backboardd sampling a widget's surface while it is still being drawn (`read while written`: this plug-in pin
+    never asks the kernel's `SurfaceAwaitWriters`; test switch `oneios-gpu-read-wait=1`, off by default). **Left, in
+    order:** (1) a whole hosted kernel build with the branch, the prelink (audit 0 failures, stubs check) and a PC boot
+    with `oneios-gpu-metal=1` (no panic; the work paused before the link); (2) the Mac's runtime and kernel for the
+    phone; (3) **on the phone:** the boot arguments, lines and searches of `docs/gpu.md` 5.1 "The next phone boot
+    (widgets)"; (4) the fix where those lines put the loss (the plug-in's RenderBox family answer, chronod, the read
+    order, or cache maintenance if KGSL drops coherence).
 
 ## Later
 

@@ -7,4 +7,23 @@ DroidVMClientMemory droidvm_virtgpu_client_memory[64];
         c->closed[c->closedCount++] = {*r, c->sequence};
 // (before anchor 3)
     countPages(c, r, -1);
+// (before anchor 4)
+volatile int droidvm_virtgpu_compositor_pid;
+// (before anchor 5)
+            gSurfaceUses[gSurfaceUseCount++] = {record.surface, record.written != 0, c, answer};
+// (before anchor 6)
+        if (gSurfaceUses[i].client == c && (!ticket || gSurfaceUses[i].ticket == ticket)) {
+// (before anchor 7)
+    droidvm_surface_lock_options[options & 3] = droidvm_surface_lock_options[options & 3] + 1;
+// (before anchor 8)
+    count(4);
+// (before anchor 9)
+    if (entries) IODeleteData(entries, Entry, entryCapacity);
+// (before anchor 10)
+    IOLockUnlock(lock);
+    return status;
+}
+}
+}
+// For the display: the holds taken so far
 // (the end)
