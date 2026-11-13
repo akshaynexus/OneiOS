@@ -1056,4 +1056,5 @@ and nits values: `display/README.md`, "Colour, depth and the panel". In the arch
 offer and DroidVMVirtioGpuDisplay.cpp's resources carry the scanout format: `staged/display.rs` `DISPLAY`, `SCANOUT`);
 `OneiOSDisplay.cpp` logs `oneios-display: half-float frames: ...`, the display service's properties once
 (`oneios-display: properties: ...`) and each surface format the compositor swaps (`oneios-display: the compositor
-swaps format 'BGRA' ...: taken`). Without the boot argument the frames take the path they took before.
+swaps format 'BGRA' ...: taken`). Without the boot argument the frames take the path they took before. Not compiled
+yet: the kernel build, prelink and a PC boot are the next step (`display/README.md`).

@@ -71,6 +71,7 @@ pub const SCANOUT: &[(&str, &str)] = &[
              "    return oneiosOffer(display, memory, stride, width, height, 1);\n",
              "}\n",
              "// OneiOS: the offer with the frame's NGP format (1 B,G,R,X; 2 half floats of linear light, LegacyDisplayProbe.cpp).\n",
+             "extern \"C\" bool oneios_virtio_gpu_offer_format(void *, IOMemoryDescriptor *, uint64_t, uint32_t, uint32_t, uint32_t);\n",
              "extern \"C\" bool oneios_virtio_gpu_offer_format(void *display, IOMemoryDescriptor *memory, uint64_t stride, uint32_t width,\n",
              "                                                uint32_t height, uint32_t format) {\n",
              "    return (format == 1 || format == 2) && oneiosOffer(display, memory, stride, width, height, format);\n",

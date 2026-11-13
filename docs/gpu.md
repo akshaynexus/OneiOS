@@ -713,7 +713,7 @@ writes that option's stored byte (`_ca_debug_options` + 128, `0x1e702516c` + the
 framebuffer is `RGhA` half floats and the display path keeps them whole
 (`kernel/patches/oneios-hosted/display/README.md`, "Colour, depth and the panel"). iOS's log then has `OneiOS display:
 half-float framebuffer asked (...)`. The headroom, threshold and virtualized overrides below stay as they are. Not
-built yet (the plug-in builds on the Mac).
+built or compiled yet (the plug-in builds on the Mac).
 
 **The shared cache addresses.** Upstream's plug-in writes QuartzCore's options at fixed addresses of the iPad17,3
 24A446 cache, relative to `CARenderServerStart`. They were re-found in this guest's cache

@@ -241,6 +241,13 @@ The real iPhone18,2 tree's panel and brightness values [F, 16.16 numbers divided
   can read), and `oneios-display: the compositor swaps format 'BGRA' (0x42475241, 0 planes, 1440x3120, stride 5760):
   8-bit B,G,R,A, sRGB; taken (reason 0)` once per surface format the render server swaps (`REFUSED` and reason 4 for
   a format this display does not take, such as `w40a`).
+- **Not compiled yet** (the work stopped on 2026-11-13 before its turn in the kernel-build queue): the archive's new
+  code (`OneiOSDisplay.cpp`, the staged edits of `staged/display.rs`) has run only through the generator's tests
+  (`cargo test -p oneios-kernel --test golden`: the edits apply to the pinned upstream sources); the next step is
+  `HOSTED_OUT=... XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`, the prelink (audit 0 failures, `stubs-check` 666
+  good) and a PC boot with `--display shm` that shows the new `oneios-display:` lines. `userland/metal/DisplayWide.inc`
+  has not been compiled either (the Mac's `userland/metal/build.sh`). At run time the default path does not change
+  (`oneios-display-wide` is 0 unless xnuhost's `display-format=rgba16f` passes it).
 - Not done: `w40a`/`b3a8` (10-bit XR) are not taken; no `IOMFBSupportsICC` is published (publishing `true` would
   select `w40a`, which is refused); the EDR headroom stays 1 (the plug-in, and no `MaxNitsEDR` from the backlight);
   the helper asks surfaceflinger for no HDR ratio; the identity tree is not in the image sets.
