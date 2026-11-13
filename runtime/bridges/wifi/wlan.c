@@ -390,7 +390,30 @@ static int radio_leave(void *ctx)
   return w->supplicant ? br_supplicant_leave(w->supplicant) : 0;
 }
 
-static const br_wifi_radio radio = { .scan = radio_scan, .join = radio_join, .leave = radio_leave, .link = radio_link };
+// The channels wlan0's radio may use: a split wiphy dump for wlan0 (NL80211_ATTR_SPLIT_WIPHY_DUMP, which newer
+// kernels need for the bands; they come over several messages), each message's bands read by br_wifi_nl_bands.
+struct channel_sink { struct ow_channel *out; unsigned count, max; };
+static void wiphy_attr(void *ctx, uint16_t type, const uint8_t *data, uint16_t size)
+{
+  struct channel_sink *c = ctx;
+  if (type == NL80211_ATTR_WIPHY_BANDS) c->count = br_wifi_nl_bands(data, size, c->out, c->count, c->max);
+}
+static int radio_channels(void *ctx, struct ow_channel *out, unsigned max)
+{
+  struct br_wlan *w = ctx;
+  uint8_t attrs[32];
+  size_t len = 0;
+  uint32_t index = (uint32_t)w->ifindex;
+  put_attr(attrs, &len, NL80211_ATTR_IFINDEX, &index, 4);
+  put_attr(attrs, &len, NL80211_ATTR_SPLIT_WIPHY_DUMP, NULL, 0);
+  struct channel_sink c = { out, 0, max };
+  int rc = genl_request(w, NL80211_CMD_GET_WIPHY, NLM_F_DUMP, attrs, len, w->family);
+  if (!rc) rc = genl_replies(w, wiphy_attr, &c);
+  return rc < 0 ? rc : (int)c.count;
+}
+
+static const br_wifi_radio radio = { .scan = radio_scan, .join = radio_join, .leave = radio_leave, .link = radio_link,
+                                     .channels = radio_channels };
 
 // The supplicant's verdicts (its looper thread): to the control thread.
 static void supplicant_event(void *ctx, int event, uint32_t status, uint32_t code)

@@ -130,6 +130,68 @@ bool br_wifi_nl_group(const uint8_t *attrs, size_t length, const char *name, uin
   return true;
 }
 
+
+// nl80211's numbers (linux/nl80211.h), so that this file needs no Linux header: NL80211_BAND_ATTR_FREQS, and of a
+// frequency NL80211_FREQUENCY_ATTR_FREQ, _DISABLED, _NO_IR (passive scan only), _RADAR (DFS), _NO_HT40_MINUS,
+// _NO_HT40_PLUS, _NO_80MHZ, _INDOOR_ONLY.
+enum { BAND_FREQS = 1, FREQ_FREQ = 1, FREQ_DISABLED = 2, FREQ_NO_IR = 3, FREQ_RADAR = 5, FREQ_NO_HT40_MINUS = 9,
+       FREQ_NO_HT40_PLUS = 10, FREQ_NO_80MHZ = 11, FREQ_INDOOR_ONLY = 14 };
+
+// Calls fn for each attribute of a nested attribute's payload (netlink's 4-byte alignment); false when cut short.
+static bool nl_each(const uint8_t *p, size_t length, bool (*fn)(void *ctx, uint16_t type, const uint8_t *data, uint16_t size), void *ctx)
+{
+  while (length >= 4) {
+    const uint16_t len = (uint16_t)(p[0] | p[1] << 8), type = (uint16_t)((p[2] | p[3] << 8) & 0x3fff);
+    if (len < 4 || len > length) return false;
+    if (!fn(ctx, type, p + 4, (uint16_t)(len - 4))) return false;
+    const size_t step = (len + 3u) & ~3u;
+    if (step >= length) return true;
+    p += step;
+    length -= step;
+  }
+  return true;
+}
+
+struct bands_sink { struct ow_channel *out; unsigned count, max; struct ow_channel ch; bool disabled, have; };
+
+static bool freq_attr(void *ctx, uint16_t type, const uint8_t *data, uint16_t size)
+{
+  struct bands_sink *s = ctx;
+  if (type == FREQ_FREQ && size == 4) { uint32_t f; memcpy(&f, data, 4); s->ch.freq_mhz = (uint16_t)f; s->have = true; }
+  else if (type == FREQ_DISABLED) s->disabled = true;
+  else if (type == FREQ_NO_IR) s->ch.flags |= OW_CH_PASSIVE;
+  else if (type == FREQ_RADAR) s->ch.flags |= OW_CH_RADAR;
+  else if (type == FREQ_INDOOR_ONLY) s->ch.flags |= OW_CH_INDOOR;
+  else if (type == FREQ_NO_HT40_MINUS || type == FREQ_NO_HT40_PLUS) s->ch.flags |= OW_CH_NO_HT40;   // [I] either side kept as "no 40 MHz"
+  else if (type == FREQ_NO_80MHZ) s->ch.flags |= OW_CH_NO_80MHZ;
+  return true;
+}
+static bool freq_entry(void *ctx, uint16_t type, const uint8_t *data, uint16_t size)
+{
+  struct bands_sink *s = ctx;
+  (void)type;
+  memset(&s->ch, 0, sizeof s->ch);
+  s->disabled = s->have = false;
+  if (!nl_each(data, size, freq_attr, s)) return false;
+  if (s->have && !s->disabled && s->count < s->max) s->out[s->count++] = s->ch;
+  return true;
+}
+static bool band_attr(void *ctx, uint16_t type, const uint8_t *data, uint16_t size)
+{
+  return type != BAND_FREQS || nl_each(data, size, freq_entry, ctx);
+}
+static bool band_entry(void *ctx, uint16_t type, const uint8_t *data, uint16_t size)
+{
+  (void)type;
+  return nl_each(data, size, band_attr, ctx);
+}
+
+unsigned br_wifi_nl_bands(const uint8_t *bands, size_t length, struct ow_channel *out, unsigned count, unsigned max)
+{
+  struct bands_sink s = { .out = out, .count = count, .max = max };
+  (void)nl_each(bands, length, band_entry, &s);   // what was read before a cut stays
+  return s.count;
+}
 // A DHCP message in an Ethernet frame (IPv4, UDP between ports 67 and 68, the BOOTP header and the magic cookie):
 // its type (option 53), the client's hardware address (chaddr), ciaddr and yiaddr, the requested address (option 50)
 // and the server's (option 54). For the log only: what the bridge carries is not changed.

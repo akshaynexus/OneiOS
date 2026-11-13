@@ -358,7 +358,7 @@ networks on 24A446, so its join details are the ones used) and iOSPlus10's 20H39
 - **The scan record is 2280 bytes on 24A446** [F, IO80211.framework's `__addScanResultToList`]: the 1164-byte
   record's fields at the same offsets (channel flags 0x0c, RSSI 0x16, capability 0x1a, rate count 0x22, SSID length
   0x60, SSID 0x61, flags 0x88, element length 0x8a, elements from 0x8c), a longer element area, and a tail the
-  framework also reads (an address at 0x8d0, a flag at 0x8d8, two 32-bit values at 0x8dc and 0x8e0, three bytes at
+  framework also reads (the BSS's TIMESTAMP at 0x8d0, 64-bit ns of the continuous clock: "Wi-Fi does not join" below; a flag at 0x8d8, two 32-bit values at 0x8dc and 0x8e0, three bytes at
   0x8e4 to 0x8e6; their meaning is not known). The driver gives a caller whose buffer is that large the whole
   record with a zero tail (SCAN_RESULT and CURRENT_NETWORK); a smaller buffer gets the 1164 bytes.
 - **The framework first tries a user client** [F, `Apple80211BindToInterfaceWithService`]: `IOServiceOpen` of type 0
@@ -419,7 +419,7 @@ absent: a reason not to run it on the phone as it is.
 
 ### Tested
 
-- Host (arm64 Linux container, `runtime/host-tests.sh`): `test_wifi` 153 checks (frame rules; the netlink group reader; the DHCP reader, with the REQUEST forms
+- Host (arm64 Linux container, `runtime/host-tests.sh`): `test_wifi` 162 checks (frame rules; the netlink group reader; the nl80211 band reader (`OW_CHANNELS`); the DHCP reader, with the REQUEST forms
   SELECTING, INIT-REBOOT, RENEWING and REBINDING, iOS's and another station's, and the log line of each; a 4000-byte coalesced
   IPv4 frame and a 3000-byte IPv6 one cut into three with right lengths, sequence numbers and checksums; the station
   against a fake radio; the AIDL parcels byte for byte; the join's plan for WPA2, WPA3, transition, WPA with TKIP,
@@ -613,6 +613,70 @@ path calls). Then:
   the Data volume is `/private/var`) and compare its SSIDs with the scan.
 Not checked without the phone: everything in this list; whether the phone's configd waits on the same thing the PC's
 does.
+
+### Wi-Fi does not join: every scan result filtered out (fix-wifi-join, 2026-11-13; partly done)
+
+**The phone** (c1223f8 session, iOS's own log): wifid knows 2 networks (`Fetched 2 known networks from the cache`),
+auto-join scans (`AUTO-JOIN: Discovering known networks (maxScanCycles=1, maxScanChannelCount=3, maxScanSSIDCount=9,
+minRSSI=-80)`), and CoreWiFi drops every result: `CWFFilteredScanResults ... All scan results are filtered out.
+mutableScanResults count: 0, scanResults count: 1..7` (32 times), `AUTO-JOIN: Scan Results (0)` (21) and `Scan Cache
+Results (0)` (12); also `Could not read APPLE80211_IOC_CHANNELS_INFO err=-3903` (13) and 17 wifid entries of the fault
+type (their messages were not read here).
+
+**Read in 24A446** (the dyld cache, with `ipsw dyld disass/xref/str` and `ipsw class-dump`; nothing of Apple's kept):
+- `_CWFFilteredScanResults` (CoreWiFi) drops a result for, in this order: `age` above the filter's `maximumAge` (when no
+  `minimumTimestamp`), `timestamp` below `minimumTimestamp`, `RSSI` below `minimumRSSI`, a channel (number and band) not
+  in `channels`, a FILS discovery frame, not in `includeScanResults`, a background scan result, a hidden network, BSS
+  type, SSID, short SSID, network-name prefix, the predicate, duplicates and the merge policy. Each reason has its own
+  line (`[corewifi] Filtering based on maxAge (...)` and so on) at the info level, so the phone's log, which keeps the
+  default level, does not have them.
+- `-[CWFScanResult timestamp]` is the scan record's `TIMESTAMP`; `-[CWFScanResult age]` is
+  `(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - timestamp) / 1000000` (ms).
+- IO80211.framework's `__addScanResultToList` reads `AGE` (32 bits) at 0x84 and **`TIMESTAMP` (64 bits) at 0x8d0** of the
+  2280-byte record (this doc called it "an address" before), plus a byte at 0x8d8 and 32 bits at 0x8dc when a
+  property of its own is set. Our driver leaves 0x8d0 zero, so every result's `age` is the phone's uptime.
+- Auto-join (`-[CWFAutoJoinManager __performScanWithChannelList:SSIDList:passive:dwellTime:maxCacheAge:cacheOnly:...]`)
+  calls `setMaximumAge:` on its filter twice right before `_CWFFilteredScanResults`.
+- So [I, strong; the info-level reason line would prove it]: **every result fails the `maxAge` filter because its
+  `TIMESTAMP` is 0**. The Settings list does not filter by age, which is why networks showed there.
+- `APPLE80211_IOC_CHANNELS_INFO` (207, refused by our driver): IO80211's `Apple80211GetWithIOCTL` reads a 10016-byte
+  record: the count (16 bits) at 0x0c, then per channel i (at most 400) the number at 0x32e+i, indoor-only 0x4be+i, DFS
+  0x64e+i, passive 0x7de+i, 40 MHz 0x96e+i, 80 MHz 0xafe+i (bytes), a 32-bit bitmap at 0x12d0+4i, a 6 GHz byte at
+  0x1aa0+i (`CHANNELINFO_BAND_NUM`: 1 with it, else 0 below channel 15 and 3 above). wifid reads CH_NUM, DFS,
+  BAND_NUM, 40MHZ and 80MHZ, and retries 6 times, 0.5 s apart, on EBUSY, ECONNREFUSED or -3905.
+- wifid's `sets 25 -> 102` is `APPLE80211_IOC_HOST_AP_MODE`, refused on purpose (see "en0 late").
+
+**Done here (host-tested, in the runtime):** the bridge sends the radio's channel list to the guest after `OW_HELLO`
+(`OW_CHANNELS`, `drivers/net/oneios_wifi_proto.h`): on the phone from nl80211 (a split `NL80211_CMD_GET_WIPHY` dump for
+wlan0, `br_wifi_nl_bands` in `frames.c`: each channel that is not disabled, with passive, radar, indoor-only, no-40
+and no-80 MHz flags), with `wifi=sim` a fixed list (38 channels). Log line: `wifi: N channels of the radio for the guest
+(F MHz to L MHz)`. The guest drivers of main ignore the message (an unknown type), so it is harmless until the driver
+below is in. `test_wifi`: 162 checks (the band parser on a constructed attribute tree, cut and split cases; the sim's
+channel message).
+
+**Not done: the guest driver's half** is in `kernel/patches/oneios-hosted/net/pending-scan-timestamp-channels.diff`
+(not built by anything; written against `OneiOSWifi.cpp` of this commit; **never compiled**: the box's kernel-build
+queue was full when the work stopped). It: stamps each BSS with the continuous-clock time the radio saw it
+(`mach_continuous_time` in ns minus the host's `age_ms`) and writes it at 0x8d0 of every 2280-byte `SCAN_RESULT`
+(and "now" for `CURRENT_NETWORK`); answers `CHANNELS_INFO` from the host's list (built-in list until one came);
+builds `SUPPORTED_CHANNELS` from the same list (active unless passive, DFS flag 0x100 on radar channels); logs
+`the host's channels: N, F MHz to L MHz`, `channels info: N channels (the host's|the built-in list)` and once per boot
+`scan record 1 (...): channel, flags, RSSI, noise, SNR, capability, beacon, BSSID, name length, rates, age, TIMESTAMP ..
+(.. ms before now), element bytes`; the log line buffer grows to 384 bytes.
+
+**Next, in order:**
+1. `git apply kernel/patches/oneios-hosted/net/pending-scan-timestamp-channels.diff`, delete the file, build
+   (`flock /tmp/oneios-kbuild.lock env HOSTED_OUT=... kernel/build-hosted.sh`; the archive is `oneios-tool kernel gen
+   net`), prelink (audit 0 failures, `stubs-check.py`), and boot the PC with `--set wifi=sim`: `scan record 1` must show
+   a TIMESTAMP a few ms before now, `channels info: 38 channels (the host's list)`, and wifid's log (`ioslog --proc wifid`)
+   `APPLE80211_IOC_CHANNELS_INFO returned 38 channels in list` instead of `Could not read`.
+2. On the phone: a join to a known network in range. Lines: `ONEIOS WIFI: scan record 1`, `wifi: N channels of the
+   radio`, `ONEIOS WIFI: join: ...`; in iOS's log `AUTO-JOIN: Scan Results (N)` with N > 0 and `Found matching network`.
+   If results are still filtered: turn on CoreWiFi's info level for the session (or read `oneios-tool ioslog show
+   --type info`, if the store keeps it) for the `Filtering based on ...` reason.
+3. The 17 fault entries of wifid: `ioslog show --proc wifid --type fault` (their messages); not looked at yet.
+4. configd's 22 s between `*STACK*` and en0's name (InterfaceNamer): the next boot's `oneios-ubt` reports of configd
+   (0061) name where its InterfaceNamer thread is in those seconds.
 
 ### Missing, unknown
 

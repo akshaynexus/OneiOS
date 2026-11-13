@@ -219,6 +219,52 @@ static void test_dhcp(void)
   CHECK(!br_wifi_dhcp(f, 14 + 20 + 8 + 239, &m));
 }
 
+// A netlink attribute (4-byte aligned) at the end of buf; returns where its payload starts, for a nested one.
+static size_t nla(uint8_t *buf, size_t *len, uint16_t type, const void *data, uint16_t size)
+{
+  const size_t at = *len;
+  buf[at] = (uint8_t)(4 + size); buf[at + 1] = (uint8_t)((4 + size) >> 8); buf[at + 2] = (uint8_t)type; buf[at + 3] = (uint8_t)(type >> 8);
+  if (size) memcpy(buf + at + 4, data, size);
+  *len = at + ((4u + size + 3u) & ~3u);
+  return at;
+}
+// Closes a nested attribute opened at `at`: its length is what was added after it.
+static void nla_end(uint8_t *buf, size_t len, size_t at) { buf[at] = (uint8_t)(len - at); buf[at + 1] = (uint8_t)((len - at) >> 8); }
+
+static void test_bands(void)
+{
+  // NL80211_ATTR_WIPHY_BANDS as the kernel writes it: band 0 (2.4 GHz) with three frequencies, one disabled and one
+  // passive; band 1 (5 GHz) with its bitrates first, then a DFS channel (passive, radar, indoor only, no 80 MHz) and
+  // one with no 40 MHz above it.
+  uint8_t b[512];
+  size_t len = 0;
+  uint32_t f;
+  size_t band = nla(b, &len, 0, NULL, 0), freqs = nla(b, &len, 1, NULL, 0), e;
+  e = nla(b, &len, 0, NULL, 0); f = 2412; nla(b, &len, 1, &f, 4); nla_end(b, len, e);
+  e = nla(b, &len, 1, NULL, 0); f = 2467; nla(b, &len, 1, &f, 4); nla(b, &len, 2, NULL, 0); nla_end(b, len, e);
+  e = nla(b, &len, 2, NULL, 0); f = 2472; nla(b, &len, 1, &f, 4); nla(b, &len, 3, NULL, 0); nla_end(b, len, e);
+  nla_end(b, len, freqs); nla_end(b, len, band);
+  band = nla(b, &len, 1, NULL, 0);
+  const uint8_t rates[8] = { 0 };
+  nla(b, &len, 2, rates, sizeof rates);
+  freqs = nla(b, &len, 1, NULL, 0);
+  e = nla(b, &len, 0, NULL, 0); f = 5260; nla(b, &len, 1, &f, 4); nla(b, &len, 3, NULL, 0); nla(b, &len, 5, NULL, 0); nla(b, &len, 14, NULL, 0);
+  nla(b, &len, 11, NULL, 0); nla_end(b, len, e);
+  e = nla(b, &len, 1, NULL, 0); f = 5745; nla(b, &len, 1, &f, 4); nla(b, &len, 10, NULL, 0); nla_end(b, len, e);
+  nla_end(b, len, freqs); nla_end(b, len, band);
+  struct ow_channel ch[8];
+  memset(ch, 0, sizeof ch);
+  unsigned n = br_wifi_nl_bands(b, len, ch, 0, 8);
+  CHECK(n == 4);
+  CHECK(ch[0].freq_mhz == 2412 && ch[0].flags == 0 && ch[1].freq_mhz == 2472 && ch[1].flags == OW_CH_PASSIVE);
+  CHECK(ch[2].freq_mhz == 5260 && ch[2].flags == (OW_CH_PASSIVE | OW_CH_RADAR | OW_CH_INDOOR | OW_CH_NO_80MHZ));
+  CHECK(ch[3].freq_mhz == 5745 && ch[3].flags == OW_CH_NO_HT40);
+  // A second message of a split dump appends; a full list stops; a cut band is left out, the bands before it stay.
+  CHECK(br_wifi_nl_bands(b, len, ch, 4, 6) == 6 && ch[5].freq_mhz == 2472);
+  CHECK(br_wifi_nl_bands(b, len, ch, 0, 2) == 2);
+  CHECK(br_wifi_nl_bands(b, len - 8, ch, 0, 8) == 2 && br_wifi_nl_bands(b, 3, ch, 0, 8) == 0);   // band 1 cut: band 0 stays
+}
+
 static void test_groups_segments(void)   // the netlink groups, the cut of coalesced frames
 {
   // A netlink multicast group as the kernel writes it (the id, then the name) and the other way round; another
@@ -280,7 +326,7 @@ static int fr_join(void *ctx, const struct ow_join *j, const br_wifi_bss *bss)
 }
 static int fr_leave(void *ctx) { ((fake_radio *)ctx)->leaves++; return 0; }
 static int fr_link(void *ctx, br_wifi_link *out) { *out = ((fake_radio *)ctx)->link; return 0; }
-static const br_wifi_radio fake = { fr_scan, fr_join, fr_leave, fr_link };
+static const br_wifi_radio fake = { fr_scan, fr_join, fr_leave, fr_link, NULL };
 
 static size_t guest_frame(uint8_t *f, uint16_t type, const void *payload, uint16_t n)
 {
@@ -424,7 +470,18 @@ static void test_sim(void)
   CHECK(net != NULL);
   if (!net) return;
   struct ow_hello hello = { OW_VERSION };
-  CHECK(br_wifi_sim_send(net, f, guest_frame(f, OW_HELLO, &hello, sizeof hello)) == 0 && s.count == 1 && host_message(&s, 0, &p, &n) == OW_STATE);
+  CHECK(br_wifi_sim_send(net, f, guest_frame(f, OW_HELLO, &hello, sizeof hello)) == 0 && s.count == 2 && host_message(&s, 0, &p, &n) == OW_STATE);
+  // Then the radio's channels: 13 of 2.4 GHz and 25 of 5 GHz, the DFS ones passive and radar.
+  CHECK(host_message(&s, 1, &p, &n) == OW_CHANNELS && n == sizeof(struct ow_channels) + 38 * sizeof(struct ow_channel));
+  if (n >= sizeof(struct ow_channels) + 38 * sizeof(struct ow_channel)) {
+    struct ow_channels head; struct ow_channel first, dfs, last;
+    memcpy(&head, p, sizeof head);
+    memcpy(&first, p + sizeof head, sizeof first);
+    memcpy(&dfs, p + sizeof head + 17 * sizeof dfs, sizeof dfs);              // the 18th: 5 GHz channel 52
+    memcpy(&last, p + sizeof head + 37 * sizeof last, sizeof last);
+    CHECK(head.count == 38 && first.freq_mhz == 2412 && first.flags == 0 && dfs.freq_mhz == 5260 && dfs.flags == (OW_CH_PASSIVE | OW_CH_RADAR) &&
+          last.freq_mhz == 5825 && last.flags == 0);
+  }
   memset(&s, 0, sizeof s);
   br_wifi_sim_send(net, f, guest_frame(f, OW_SCAN, NULL, 0));
   struct ow_bss b;
@@ -671,6 +728,7 @@ int main(void)
 {
   test_frames();
   test_dhcp();
+  test_bands();
   test_groups_segments();
   test_station();
   test_sim();
