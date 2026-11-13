@@ -6,7 +6,7 @@ is made by hand from `oneios_drivers_start()`, like the backlight.
 **On the phone once (the boot of 2026-11-12 23:45, on the charger, Full at 100 %):** xnuhost said `battery: on: ...
 plugged in` and iOS played the "plugged in" sound before the lock screen appeared; a real iPhone that boots on a
 charger does not. Why, and what changed: "The charging chime" below. `OneiOSBattery.cpp` compiles and links with the
-kernel's own flags (`drivers/build.py --check`, `kernel/build-hosted.sh`); what it publishes and when it tells powerd is
+kernel's own flags (`oneios-tool kernel drivers --check`, `kernel/build-hosted.sh`); what it publishes and when it tells powerd is
 `oneios_battery_props.h`, host-tested by `test_battery_props.c` (`drivers/tests/host.sh`: 21 checks).
 
 | iOS | Here |

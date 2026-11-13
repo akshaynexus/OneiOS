@@ -6,9 +6,9 @@
 #                                                              (exit 0) or `DIFFERENT: N` (exit 1); 20 s
 #   MAP=1 ...                                                  also every file's data regions (SEEK_DATA, SEEK_HOLE)
 #   SPEED=4096:280 ...                                         also the time of both on a stream of 4096 MiB with
-#                                                              about 280 MiB of data (mkstream.py phone), three ways
+#                                                              about 280 MiB of data (debug mkstream phone), three ways
 #
-# The streams (mkstream.py): `runs` (zero runs and data runs shorter than 4 KiB, between 4 KiB and 4 MiB, and
+# The streams (`oneios-tool debug mkstream`): `runs` (zero runs and data runs shorter than 4 KiB, between 4 KiB and 4 MiB, and
 # longer, on the edges of blocks and off them), `tail` (ends inside a block), `zero` (only zeros), `empty`,
 # `lastbyte` (a data byte at the very end), `dense` (no zero run), `phone` (64 MiB shaped like the Data store).
 # Each goes through the script, through `phone sparse-write`, and through gzip -1 and `phone sparse-write
@@ -19,13 +19,14 @@
 #
 # SPEED: the stream is written once as a sparse file (the reference of every timed copy's cmp), then timed (wall,
 #   MB/s of the stream, CPU of each process): from the generator through gzip -1 (the pipe of the phone:
-#   mkstream.py | gzip -1 -c | ...; and that source alone, which bounds both), from the packed stream (the reader
+#   debug mkstream | gzip -1 -c | ...; and that source alone, which bounds both), from the packed stream (the reader
 #   alone: the script needs gunzip -c in front), and from the sparse file with no gzip. The times mean something
 #   only on a machine that does nothing else: the load is printed. (The gzip pipe is not fed from the sparse
 #   file: reading 32 GiB of holes fills the page cache with zeros, and the next run pays for it.)
 #
 # Env: TOOL (the binary), WORK (the scratch folder, default out/sparse-compare of this checkout; it decides the
-# file system that is tested), PYTHON (default python3), KEEP=1 (keep the scratch folder).
+# file system that is tested), PYTHON (default python3: the frozen sparsewrite.py and this script's own file-system
+# and timing reads), KEEP=1 (keep the scratch folder).
 set -u
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "$HERE/../../../.." && pwd)
@@ -76,7 +77,7 @@ show() { # LABEL FILE
 # one NAME mkstream-args...
 one() {
   local name=$1 s=$W/$1; shift
-  "$PY" -I "$HERE/mkstream.py" "$@" > "$s.bin" || { bad "$name: mkstream.py"; return; }
+  "$TOOL" debug mkstream "$@" > "$s.bin" || { bad "$name: debug mkstream"; return; }
   local size; size=$(wc -c < "$s.bin" | tr -d ' ')
   local out
   out=$("$PY" -I "$HERE/sparsewrite.py" "$s.py.img" < "$s.bin" 2>&1) && [ "$out" = "bytes $size" ] && cmp -s "$s.py.img" "$s.bin" \
@@ -140,17 +141,17 @@ PYEOF
 if [ -n "${SPEED:-}" ]; then
   mib=${SPEED%%:*}; data=${SPEED#*:}; [ "$data" != "$SPEED" ] || data=$((mib * 7 / 100))
   echo "--- time: a stream of $mib MiB with about $data MiB of data; load:$(uptime | sed 's/.*load average[s]*://')"
-  "$PY" -I "$HERE/mkstream.py" phone "$mib" "$data" | "$TOOL" phone sparse-write "$W/speed.img" > /dev/null 2>&1 || bad "speed: the stream"
+  "$TOOL" debug mkstream phone "$mib" "$data" | "$TOOL" phone sparse-write "$W/speed.img" > /dev/null 2>&1 || bad "speed: the stream"
   SIZE=$(wc -c < "$W/speed.img" | tr -d ' ')
-  gen=("$PY" -I "$HERE/mkstream.py" phone "$mib" "$data")
+  gen=("$TOOL" debug mkstream phone "$mib" "$data")
   "${gen[@]}" | gzip -1 -c > "$W/speed.gz"
   show "the stream   " "$W/speed.img"
   echo "        packed with gzip -1: $(wc -c < "$W/speed.gz" | tr -d ' ') bytes"
   same() { cmp -s "$2" "$W/speed.img" && ok "speed: $1: the stream's bytes" || bad "speed: $1: not the stream"; show "$1" "$2"; rm -f "$2"; }
-  timed "mkstream.py | gzip -1 -c > /dev/null (the source)  " - -- "${gen[@]}" -- gzip -1 -c || bad "speed: the source"
-  timed "mkstream.py | gzip -1 -c | gunzip -c | sparsewrite.py" - -- "${gen[@]}" -- gzip -1 -c -- gunzip -c -- "$PY" -I "$HERE/sparsewrite.py" "$W/a.img" || bad "speed: the script through gzip"
+  timed "mkstream | gzip -1 -c > /dev/null (the source)     " - -- "${gen[@]}" -- gzip -1 -c || bad "speed: the source"
+  timed "mkstream | gzip -1 -c | gunzip -c | sparsewrite.py   " - -- "${gen[@]}" -- gzip -1 -c -- gunzip -c -- "$PY" -I "$HERE/sparsewrite.py" "$W/a.img" || bad "speed: the script through gzip"
   same "the script   " "$W/a.img"
-  timed "mkstream.py | gzip -1 -c | sparse-write --gunzip     " - -- "${gen[@]}" -- gzip -1 -c -- "$TOOL" phone sparse-write "$W/b.img" --gunzip --expect-size "$SIZE" || bad "speed: sparse-write through gzip"
+  timed "mkstream | gzip -1 -c | sparse-write --gunzip        " - -- "${gen[@]}" -- gzip -1 -c -- "$TOOL" phone sparse-write "$W/b.img" --gunzip --expect-size "$SIZE" || bad "speed: sparse-write through gzip"
   same "sparse-write " "$W/b.img"
   timed "gunzip -c < PACKED | sparsewrite.py                  " "$W/speed.gz" -- gunzip -c -- "$PY" -I "$HERE/sparsewrite.py" "$W/c.img" || bad "speed: the script from the packed stream"
   same "the script   " "$W/c.img"

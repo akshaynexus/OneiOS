@@ -1,6 +1,6 @@
 #!/bin/bash
 # Host test of the camera driver's pure parts (CI runs every executable */tests/host.sh). The kernel
-# sources themselves are compiled by drivers/tests/host.sh (drivers/build.py --check) where a kernel
+# sources themselves are compiled by drivers/tests/host.sh (`oneios-tool kernel drivers --check`) where a kernel
 # build is on the machine.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

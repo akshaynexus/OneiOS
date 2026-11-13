@@ -13,7 +13,7 @@
 //!
 //! What is read, and from where:
 //!
-//!   class, size, parent, vtable, slots   kernel/prelink/classes.py (still Python: run as a program, as the scripts
+//!   class, size, parent, vtable, slots   kernel/prelink/classes.py, now oneios-prelink's classes.rs (the scripts
 //!                                        ran it): the class's static initializer (metaclass object, name string,
 //!                                        parent metaclass, `mov w3, #size`), the getMetaClass function, the vtable
 //!                                        whose slot 7 points at it, each slot's authenticated fixup (target,
@@ -32,7 +32,7 @@
 //!
 //! The kernelcache is read with oneios-prelink's reader (the port of XnuPrelink's kc_image.py the scripts imported).
 
-use crate::gen::{self, fail};
+use crate::gen;
 use anyhow::{anyhow, Result};
 use oneios_common::pyjson::Value;
 use oneios_prelink::image::Image;
@@ -109,23 +109,12 @@ impl<'a> Cache<'a> {
     }
 }
 
-/// kernel/prelink/classes.py's record of `classes` (Name@bundle), through the temporary file the scripts used.
-pub fn class_record(root: &Path, args: &Args, kernelcache: &Path, out: &Path, classes: &[String]) -> Result<Value> {
-    let raw_record = out.with_extension("classes.tmp");
+/// The record of `classes` (Name@bundle) as kernel/prelink/classes.py wrote it (oneios-prelink's classes.rs; the
+/// scripts ran classes.py as a program and read the temporary file it wrote).
+pub fn class_record(root: &Path, args: &Args, kernelcache: &Path, _out: &Path, classes: &[String]) -> Result<Value> {
     let report = args.prelink_report.clone().unwrap_or_else(|| root.join("out/kernel/24A446/kernel.kc.prelink.json"));
-    let xnuprelink = args.xnuprelink.clone().unwrap_or_else(|| root.join("external/Droid-VM-UniXNU/kits/XnuPrelink"));
-    let mut command = vec!["python3".to_string(), "-I".into(), gen::s(&root.join("kernel/prelink/classes.py")), "--xnuprelink".into(),
-                           gen::s(&xnuprelink), "--kernelcache".into(), gen::s(kernelcache), "--prelink-report".into(), gen::s(&report),
-                           "--out".into(), gen::s(&raw_record)];
-    command.extend(classes.iter().cloned());
-    let result = gen::capture(&command, None, None)?;
-    eprint!("{}", result.stderr);
-    if result.code != 0 {
-        fail!("kernel/prelink/classes.py ended with status {}", result.code);
-    }
-    let record = gen::read_json(&raw_record)?;
-    std::fs::remove_file(&raw_record)?;
-    Ok(record)
+    let raw = oneios_common::Map::open(kernelcache)?;
+    oneios_prelink::classes::record(&raw, Some(&gen::s(&report)), classes)
 }
 
 /// One slot of classes.py's slot table as the layout records write it, with whether its target is the family's.

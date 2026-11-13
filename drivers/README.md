@@ -18,8 +18,8 @@ These sources are built into the kernel (not loaded later). Each talks to its ho
 ## Build
 
 ```sh
-drivers/build.py            # out/drivers/liboneiosdrivers.a + objects.json
-drivers/build.py --check    # compile only, a few seconds
+oneios-tool kernel drivers            # out/drivers/liboneiosdrivers.a + objects.json (the sources: drivers/sources.txt)
+oneios-tool kernel drivers --check    # compile only, a few seconds
 ```
 
 It needs the kernel build's compile records (`kernel/build-linux.sh` leaves them under

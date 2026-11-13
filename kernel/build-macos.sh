@@ -4,7 +4,7 @@
 #   scripts/bg.sh kernel kernel/build-macos.sh          (always in tmux)
 #   STAGE=prepare ...      sources, profile and the patched XNU tree only
 #   CLEAN=1 ...            remove the build tree first
-#   KDK_HEADERS=1 ...      add a headers-only KDKROOT (kernel/kdk-headers.py, about 200 headers read over HTTP from the
+#   KDK_HEADERS=1 ...      add a headers-only KDKROOT (`oneios-tool kernel kdk-headers`, about 200 headers read over HTTP from the
 #                          KDK of pins.sh; no 1.2 GB download). UniXNU's series replaces those headers with public
 #                          ones, so the default build needs no KDK; this is for comparing against Apple's.
 # Needs: macOS 27 with the Xcode of pins.sh (27.2) at /Applications/Xcode.app (XCODE_APP=...), the iphoneos SDK it ships, and
@@ -46,7 +46,7 @@ if [ "${KDK_HEADERS:-0}" = 1 ]; then
   export KDKROOT=${KDKROOT:-${KERNEL_OUT:-$ROOT/out/kernel}/kdk-25F84-headers}
   if [ ! -f "$KDKROOT/.kdk-headers" ]; then
     echo "build-macos: KDK headers -> $KDKROOT"
-    python3 -I "$ROOT/kernel/kdk-headers.py" --url "$KDK_URL" "$KDKROOT"
+    "$ONEIOS_TOOL" kernel kdk-headers --url "$KDK_URL" "$KDKROOT"
   fi
 else
   unset KDKROOT

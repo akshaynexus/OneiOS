@@ -29,7 +29,7 @@ command that no longer works, or a status that has moved on. If you are unsure w
 | What the OneOS fork reads or does (session ABI, stage layout, start/stop) | `oneos/interface.md` (and the fork's `docs/oneios.md`) |
 | A new reference repo or pin | `docs/references.md`, `scripts/setup/get-references.sh` |
 | A phone check tool's commands or output | its `README.md` "On the phone" section |
-| The Rust tools (`tools/oneios-tool`: sym, log, image, ioslog, prelink, kernel, phone, app, cycle), a comparison with the tool they replace | `tools/oneios-tool/README.md` (commands, the comparison and its result, crates), `tools/oneios-tool/todo_rust.md` (what is left), `docs/building.md` section 10 |
+| The Rust tools (`tools/oneios-tool`: sym, log, image, ioslog, prelink, kernel, package, phone, app, cycle, debug), a comparison with the tool they replace | `tools/oneios-tool/README.md` (commands, the comparison and its result, crates), `tools/oneios-tool/todo_rust.md` (what is left), `docs/building.md` section 10 |
 | The phone and app workflow (`oneios-tool phone`, `app`, `cycle`: a command, an option, a step, a phone rule) | `tools/oneios-tool/README.md` ("phone", "app", "cycle"), `docs/building.md` sections 6 and 7, and the stand-in phone's tests (`tools/oneios-tool/tests/phone`, `app`, `cycle`) |
 
 Write docs as facts: what it does, the exact commands, what was tested and what was not. Mark guesses as guesses.
@@ -39,7 +39,7 @@ The board (`docs/agents.md`) is for coordination between agents; it is **not** a
 
 - **No Apple files in git or in releases.** IPSWs, cryptexes, kernelcaches, kexts, `kernel.kc`, the image set and
   anything built from them stay in `out/` and `inputs/` (git-ignored). Releases carry only this project's own code.
-  `runtime/package.sh` refuses Apple files; never work around it.
+  `runtime/package.sh` refuses Apple files (`oneios-tool package`); never work around it.
 - **Shared checkout** (several agents commit to `main` here): commit with a pathspec only
   (`git commit -- <your paths>`), never `git add -A`; `git pull --rebase origin main` before `git push origin main`
   (if other agents' unstaged files block the rebase, fetch and rebase only when origin moved). Never commit another
@@ -63,7 +63,7 @@ The board (`docs/agents.md`) is for coordination between agents; it is **not** a
   `cycle`). Use adb, the shell scripts or other tools directly only when the CLI fails or lacks the command, then
   say so and fix or extend the CLI.
 - **No new Python.** Use `oneios-tool` (Rust) for every job it covers: `sym`, `sym kernel`, `log`, `ioslog`, `image`,
-  `prelink`, `kernel`, `phone`, `app`, `cycle`. A new tool, helper or test tool goes into `oneios-tool` (a command, or a
+  `prelink`, `kernel`, `package`, `phone`, `app`, `cycle`, `debug` (the tests' helpers). A new tool, helper or test tool goes into `oneios-tool` (a command, or a
   test in its crates) or plain POSIX shell. Python stays only as the frozen original that a Rust port is compared
   against until it is retired (`tools/oneios-tool/todo_rust.md` section 7 lists what is left), and an existing Python
   script runs only where no `oneios-tool` command does its job yet: say which one you ran.

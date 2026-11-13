@@ -38,7 +38,7 @@ something else (thermalmonitord) changed it. thermalmonitord is not disabled.
 
 ## Not proven
 
-- Nothing of this has run on the phone or in a PC boot: compiled (`drivers/build.py --check`), the host end and the
+- Nothing of this has run on the phone or in a PC boot: compiled (`oneios-tool kernel drivers --check`), the host end and the
   helper host-tested.
 - The helpers are not yet in any image (`docs/userland.md` section 7): until they are, the level is in the registry
   and the log, and iOS's frameworks still see nominal.

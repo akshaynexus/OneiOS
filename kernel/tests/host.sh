@@ -34,18 +34,17 @@ done
 [[ $XNU_COMMIT =~ ^[0-9a-f]{40}$ ]] || fail "XNU_COMMIT"
 ok "pins are full commits"
 
-if [ -x kernel/tests/series-check.py ]; then
-  python3 -I kernel/tests/series-check.py || fail "series"
-  ok "patch series and profile"
-fi
-# The build record writer is `oneios-tool kernel build-record` (kernel/build-record.py until 2026-11-13). Its
-# self-test runs here when the tool is built; `cargo test` in tools/oneios-tool runs the same checks and the frozen
-# record of the Python writer.
+# The series and profile checks are `oneios-tool kernel series-check` (kernel/tests/series-check.py until 2026-11-13),
+# and the build record writer is `oneios-tool kernel build-record` (kernel/build-record.py until then). Both run
+# here when the tool is built (CI builds it first); `cargo test` in tools/oneios-tool runs the record's checks and
+# the frozen record of the Python writer, tools/oneios-tool/tests/kernelpy the frozen cases of series-check.
 tool=${ONEIOS_TOOL:-tools/oneios-tool/target/release/oneios-tool}
 if [ -x "$tool" ]; then
+  "$tool" kernel series-check || fail "series"
+  ok "patch series and profile"
   "$tool" kernel build-record --self-test || fail "build record"
   ok "build record"
 else
-  echo "skipped: build record (no $tool: cargo build --release --manifest-path tools/oneios-tool/Cargo.toml)"
+  echo "skipped: patch series and profile, build record (no $tool: cargo build --release --manifest-path tools/oneios-tool/Cargo.toml)"
 fi
 echo "all $pass tests passed"

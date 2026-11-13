@@ -67,7 +67,7 @@ pub fn main() -> Result<()> {
     let here = ctx.repo.join("kernel/patches/oneios-hosted/audio");
     let package = ctx.repo.join("external/UniXNU-droidvm/package");
     let (transport, devices, start) = (package.join("DroidVMVirtioSnd.c"), package.join("DroidVMAudio.cpp"), here.join("OneiOSAudio.c"));
-    gen::need_files(&[ctx.repo.join("drivers/build.py"), transport.clone(), devices.clone(), start.clone(), package.join("DroidVMDmaRegion.h"),
+    gen::need_files(&[ctx.repo.join("drivers/sources.txt"), transport.clone(), devices.clone(), start.clone(), package.join("DroidVMDmaRegion.h"),
                       ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json"), ctx.records.join("osfmk/DEVELOPMENT/startup.o.json")],
                     |path| format!("build-oneios-audio: {} missing (scripts/setup/get-references.sh UniXNU-droidvm; kernel/fetch.sh)", path.display()))?;
     let out = gen::env("ONEIOS_AUDIO_OUT").map(|o| gen::pypath(&o)).unwrap_or_else(|| ctx.tree.join("build/oneios-audio"));

@@ -31,6 +31,8 @@ oneios-prelink = { path = "crates/oneios-prelink" }
 oneios-kernel = { path = "crates/oneios-kernel" }
 oneios-ioslog = { path = "crates/oneios-ioslog" }
 oneios-phone = { path = "crates/oneios-phone" }
+oneios-package = { path = "crates/oneios-package" }
+oneios-testkit = { path = "crates/oneios-testkit" }
 
 [profile.release]
 opt-level = 3

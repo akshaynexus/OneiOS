@@ -24,3 +24,11 @@ which = "8"
 wait-timeout = "0.2"
 # clang's ptrauth_string_discriminator: SipHash-2-4 with its fixed key.
 siphasher = "1"
+# series-check: the profiles and board.toml.
+toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
+# kdk-headers: the xar table of contents (zlib, XML), the pbzx chunks (xz), the HEAD request for the download's
+# final URL.
+flate2 = "1"
+roxmltree = "0.20"
+lzma-rs = "0.3"
+ureq = "2"

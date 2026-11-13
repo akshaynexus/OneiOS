@@ -17,7 +17,7 @@ and the third Linux round, the owner's queue of eight items:
 | 5 | APFS: decmpfs, the apfs-fuse backend | done (`687f0a7`): all 2,910 compressed files as apfs-fuse gives them |
 | 6 | `ioslog` in parallel | **not done**: the library's per-file entry point cannot be used from outside (section 5, "Parallel decoding"). The `sym --slide` question is settled (README "sym") |
 | 7 | `prelink`: the ten remaining steps | **done (fourth Linux round)**: all twelve steps byte for byte Python's on the pc and pc2 kernels (`kernel.kc` `ffbe95f7`, `cdd98e7e`; audit 2,711 paired, 93 on the stub, 0 failures; 666 good stubs); `PRELINK_IMPL=python\|rust` in `kernel/prelink/build.sh`, default `python` (README "prelink") |
-| 8 | Retire the replaced Python and shell code | **in work (fourth Linux round)**: the prelink's eleven Python steps are deleted (goldens in `tests/prelink/golden/`, `kernel/prelink/build.sh` is Rust only); section 7 has the state of the others |
+| 8 | Retire the replaced Python and shell code | **in work**: the prelink's steps, the kernel generators (group 1), the tests' helpers, the kernel's and the prelink's small scripts (group 2) and the package check are retired; section 7 has the table and what is left |
 
 **Rule until further notice: Python stays the default and the only path the builds use.** The switches that
 exist (`IMAGETOOL_IMPL` in `scripts/image/build.sh` and `verify.sh`, default `python`; `kernel-inputs.sh` takes
@@ -343,7 +343,7 @@ Open for prelink:
    kernels were compared (the Python steps must still exist there, or use the goldens once they are frozen).
 2. `matcher.rs`, `emit.rs` and `layout.rs` are ports of XnuPrelink at pin `9b950f2`. When the pin moves, port the
    change; `--xnuprelink` still supplies the fixtures and the files of the matcher signature.
-3. Not ported, on purpose: the Python tools `build.sh` does not run (`classes.py`, `unmapped.py`, `port-fixture.py`,
+3. (Ported and retired on 2026-11-13, section 7:) the Python tools `build.sh` does not run (`classes.py`, `unmapped.py`, `port-fixture.py`,
    `stubs-check.py`, `lead/imports.py`, `lead/between.py`): review helpers, run by hand.
 4. The methods `fileset_match.py` defines and never calls (`align_orders`, `validate_calls`, `validate_diversity`,
    `diversity_data`) are not in `matcher.rs`.
@@ -485,22 +485,54 @@ section 10 "Rust tools" and section 1 (`kernel-inputs.sh` without `lzfse`), `doc
 inputs' tools), `CLAUDE.md`'s table. Also written: `tests/compare-python.sh`, which runs every tool's comparison whose inputs are named. Not written:
 `kernel/prelink/README.md` (no prelink switch yet).
 
-## 7. Retiring the Python and shell tools (the owner's item 8): not started
+## 7. Retiring the Python and shell tools (the owner's item 8): the state on 2026-11-13
 
-Nothing was retired in the third round. The order the owner gave, for whoever does it:
-1. Freeze the Python reference as goldens under `tests/` (hashes, sizes and names only for anything made from
-   Apple's files) and switch the comparison scripts to them.
-2. Switch every caller: `scripts/image/{build.sh,verify.sh,kernel-inputs.sh}`, `kernel/prelink/build.sh`,
-   `scripts/debug`, `runtime`, `.github/workflows`, and what `grep` finds; drop `IMAGETOOL_IMPL` and `IM4P_TOOL`;
-   Rust becomes a build prerequisite and `build.sh` builds or finds `oneios-tool`.
-3. Delete the Python nothing else uses; one commit per retired tool; then the whole chain on the box.
-What can be retired today by the rule "1:1 or strictly better": `scripts/debug/dsc.py` (`sym`: 18 of 18 sets on
-the Mac and on Linux). `scripts/image/imagetool.py` cannot go whole: `check-ipsw`, `fetch`, `record-plain`,
-`aea-info`, `pack` and `verify` of a `.tar.zst` are not ported (the nine ported subcommands are 1:1, so
-`IMAGETOOL_IMPL=rust` can become the default once the owner says so). The prelink stays Python until its twelve
-steps are 1:1. `scripts/phone/stage.sh` stays until `oneios-tool phone` has run on the phone. Python that is not
-ported and stays: `userland/tweak`, `scripts/fetch`, `scripts/ios`, the display capture, `kernel/prelink/*.py`,
-`runtime/package/pack.py`, the tests' helpers under `tools/oneios-tool/tests/`.
+The rule (CLAUDE.md): no new Python; a Python script stays only as the frozen original a port is compared against,
+until it is retired. A retirement is: freeze the Python output as goldens under `tests/` (hashes, sizes and names
+only for anything made from Apple's files), switch every caller, delete the script, one commit per group with its
+docs. README has each group's comparison and result.
+
+| Group | Scripts | State |
+|---|---|---|
+| the symbolizer | `scripts/debug/dsc.py` | **retired** 2026-11-12 (`sym`) |
+| the prelink's steps | `kernel/prelink/STEP.py` (eleven), XnuPrelink's matcher and emitter | **retired** 2026-11-12 (`prelink`) |
+| 1: the kernel generators | `build-oneios-*.py` (nine), `kernel/build-record.py`, the two `layout.py`, `port-legacy-display.py` | **retired** 2026-11-13 (`kernel gen`, `build-record`, `layout`, `port-legacy-display`; section 8) |
+| the tests' helpers | `tests/ksym/{compare,kcmap,make-log}.py`, `tests/kernelgen/{kernel-diff,drivers-command}.py`, `tests/phone/mkstream.py` | **replaced** 2026-11-13 (`debug`, crate `oneios-testkit`; `drivers-command.py` went with `drivers/build.py`) |
+| 2: the kernel's and the prelink's small scripts | `kernel/hosted-fixup.py`, `kernel/kdk-headers.py`, `kernel/linux/iig-fix.py`, `kernel/tests/series-check.py`, `drivers/build.py`; `kernel/prelink/{classes,stubs-check,unmapped,port-fixture}.py`, `kernel/prelink/lead/{between,imports}.py` | **retired** 2026-11-13 (`kernel hosted-fixup\|kdk-headers\|iig-fix\|series-check\|drivers`, `prelink classes\|stubs-check\|unmapped\|port-fixture\|lead-between\|lead-imports`) |
+| 3: image, package, iOS-side helpers | `runtime/package/pack.py` | **retired** 2026-11-13 (`package`) |
+| 3 | `scripts/image/imagetool.py`: `check-ipsw`, `fetch`, `record-plain`, `aea-info`, `pack`, `verify` of an archive; `scripts/fetch/remotezip.py`; `scripts/serve/rangeserve.py`; `scripts/ios/{ios-sign,macho-check,make-tbds}.py`; `scripts/image/tests/*.py` | GROUP3STATE |
+| 4: the root tweaks | `userland/roottweak`, `userland/tweak`, `userland/tests/*.py` | **not started: the owner has not agreed** |
+
+Python that is left, and why:
+- `scripts/image/imagetool.py` and `scripts/image/tests/`: **the owner decides** when the image build's default
+  becomes Rust and the tool goes (it is the reference of `tests/image/parity.py` and `compare-python.sh`).
+- Group 4 (above).
+- `kernel/patches/oneios-hosted/display/display-capture.py`: a viewer for a PC boot, Linux only (section 8).
+- `tests/phone/sparsewrite.py`: the frozen original `phone sparse-write` is compared against.
+- Older rounds' test helpers: `tests/image/parity.py`, `tests/ioslog/{filters,mkapfs}.py`, `tests/sym/make-log.py`,
+  `tests/app/mkapk.py`, and inline `python3` lines in `tests/phone/{lib,run,sparse-compare}.sh`,
+  `tests/kernelgen/compare-python.sh`, `runtime/package/test.sh`, `scripts/image/{build,kernel-inputs}.sh`,
+  `scripts/fetch/fetch.sh` and `kernel/build-hosted.sh` (its two edits of the build's copy of `board.toml` and the
+  defconfig). Not new, and not in any group's list yet: the next round's.
+- Other projects' Python that the builds run as it is: UniXNU's driver and scripts, Droid-VM's
+  `build-droidvm-gpu.py`, xnu-linux-toolchain's `iig`.
+
+Open after group 2:
+1. **The Mac**: nothing of the helpers, group 2 or `package` was built or run on a Mac. `kernel/build-hosted.sh` now
+   runs `kernel hosted-fixup` there, `kernel/build-macos.sh` `kernel kdk-headers` with `KDK_HEADERS=1` (hdiutil over
+   HTTP: **never run in Rust**; the reader was compared on a made-up package only), `runtime/package.sh` `package
+   manifest` and `package archive`. `tests/kernelpy/compare-golden.sh` and `tests/packagepy/compare-golden.sh` run
+   on a Mac (made-up inputs); `tests/prelinkpy/compare-golden.sh` needs the kernelcache.
+2. `tests/kernelgen/golden/build/` (17 generated files) was never in git: `.gitignore`'s `build/` kept it out, so
+   `cargo test -p oneios-kernel` failed 4 tests on main and `compare-golden.sh` had no files to compare. The files
+   are committed now (copied from the worktree that made them, and checked: 17 of 17 are what a build of main
+   gives), with a `!` rule for the folder in `.gitignore`.
+3. The comments in `kernel/patches/oneios-hosted` sources and patches (0003: `kernel/hosted-fixup.py`; 0009:
+   `kernel/prelink/unmapped.py`), in `drivers/brightness/OneiOSALSDevice.cpp` (`drivers/build.py`) and the
+   evidence texts of `kernel/prelink/reviewed-24A446-v54.json` (`lead/imports.py`) and the records' "about" lines
+   (`classes.py`) still name the scripts: not changed (a changed source, patch or record changes a build's inputs).
+4. `drivers/sources.txt` is the drivers' list now. A branch that added a source to `drivers/build.py`'s `SOURCES`
+   must add its line there instead.
 
 ## 8. `kernel`: the board archive generators, the build record, the kernelcache records (group 1 of the Python retirement, 2026-11-13)
 
@@ -522,13 +554,9 @@ Open:
    come out the same as before; `compare-golden.sh WORK` after the Mac's build says whether the generated files are
    the frozen ones (the staged sources and the bindings do not depend on the host).
    On Linux both builds ran in the retired state (`build-hosted.sh`, `build-linux.sh`: README "kernel").
-2. **`drivers/build.py` stays Python** and `kernel gen board` runs it. `drivers_build.rs` is a second copy of its
-   `record` and `command`; `compare-python.sh ... compile-command` (while the script exists it always can run) and
-   a unit test compare them. Porting the script would end the copy: `drivers/build.py --check` is what the other
-   agents run after a driver change, so do it with them.
-3. `kernel/prelink/classes.py` stays Python (`kernel layout` runs it); `kernel/hosted-fixup.py`, the inline
-   `python3` of `kernel/build-hosted.sh` (the board.toml and defconfig edits) and UniXNU's driver are Python too:
-   the kernel build needs python3 either way.
+2. (closed 2026-11-13: `drivers/build.py` is `kernel drivers`, and `drivers_build.rs` its port, no second copy.)
+3. (closed 2026-11-13: `kernel/prelink/classes.py` and `kernel/hosted-fixup.py` are commands. The two inline
+   `python3` blocks of `kernel/build-hosted.sh` and UniXNU's driver are Python still: the kernel build needs python3.)
 4. The comments in `kernel/patches/oneios-hosted/*/*.cpp`, `*.h`, `*.inc`, in three patches (0005, 0008, 0022) and
    in the records' "about" lines still say `build-oneios-NAME.py`, `layout.py` and `port-legacy-display.py`: not
    changed, because a changed source or patch changes the build's inputs (the SHA-256 lists, the build id). Change
@@ -536,9 +564,7 @@ Open:
 5. `cargo clippy -p oneios-kernel -p oneios-tool`: three style warnings in the crate (`chunks_exact` with a constant
    size in `port_legacy_display.rs`, one each in `build_oneios_hid.rs` and `build_oneios_net.rs`); left, so that the
    sources are the ones the last kernel build compiled.
-6. `oneios-prelink` does not build alone (`cargo build -p oneios-prelink`: `toml::Table` needs toml's `serde`
-   feature, which only another crate of the workspace turns on), so neither does `-p oneios-kernel`, which uses its
-   kernelcache reader: build the workspace, or `-p oneios-kernel -p oneios-tool`.
+6. (closed 2026-11-13: `oneios-prelink` and `oneios-kernel` turn on toml's `serde` feature themselves.)
 
 ## Notes for the next agent
 

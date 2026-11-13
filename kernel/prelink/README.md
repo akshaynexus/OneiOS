@@ -35,8 +35,12 @@ Python original's description. The build takes 14 s (Python: about two minutes) 
 `llvm-nm`; `llvm-mc` only with `X18=1`. XnuPrelink's checkout (`external/XnuPrelink`, pin `9b950f2`) is still read
 for its reviewed fixtures and for the matcher signature (the SHA-256 over its matcher sources, written into the
 pairing and checked by the emitter); `matcher.rs`, `emit.rs` and `layout.rs` are ports of that pin and must follow
-it when it moves. Still Python, run by hand and not part of the build: `classes.py`, `unmapped.py`,
-`port-fixture.py`, `stubs-check.py`, `lead/imports.py`, `lead/between.py`.
+it when it moves. The tools run by hand, not part of the build, are commands too since 2026-11-13 (they were
+`classes.py`, `unmapped.py`, `port-fixture.py`, `stubs-check.py`, `lead/imports.py` and `lead/between.py`; their
+output is frozen in `tools/oneios-tool/tests/prelinkpy`): `oneios-tool prelink classes`, `prelink unmapped`,
+`prelink port-fixture`, `prelink stubs-check KERNEL.KC`, `prelink lead-imports [--add] [--kext ID]` and
+`prelink lead-between NAME_A NAME_B [--add [NOTE]]` (each takes its script's arguments; the two lead tools read the
+files of this checkout or of `--repo CHECKOUT`, and write `kernel/prelink/lead/lead-reviewed.json`).
 
 1. `prelink native-input`: the kernel's weak-lookup binds resolved to its own definitions (Linux's ld64 left one,
    `native_source_storage_start`; Xcode 27.2's ld leaves seven: the `boot_progress_*` and `boot_log_export_put`
@@ -67,8 +71,8 @@ it when it moves. Still Python, run by hand and not part of the build: `classes.
 
 Before step 2, `prelink merge-reviewed` merges the other agents' reviewed records into ours for the build (below).
 
-`port-fixture.py` carried 50 of XnuPrelink's reviewed iPad identities over (functions with the same bytes here);
-rerun it only when that fixture changes. `unmapped.py` names the original function behind a stub panic.
+`prelink port-fixture` (then `port-fixture.py`) carried 50 of XnuPrelink's reviewed iPad identities over (functions with the same bytes here);
+rerun it only when that fixture changes. `prelink unmapped` names the original function behind a stub panic.
 
 ## Which kexts (`prelink roots`)
 
@@ -93,11 +97,11 @@ driver that subclasses an original class (`IOMobileFramebufferLegacy`, `IOHIDDev
 in this kernelcache (next paragraph). The display's archive brings 428 branches into IOMobileGraphicsFamily and
 IOSurface (`native_original_branches`); both kexts are roots and keep their personalities.
 
-A driver that subclasses an original class needs that class's addresses in this kernelcache: `classes.py` reads
+A driver that subclasses an original class needs that class's addresses in this kernelcache: `oneios-tool prelink classes` reads
 them from the kexts' code (metaclass, size, parent, vtable and slots, constructors, destructors), and
 `classes-24A446-v54.json` has them for IOAESAccelerator, IOCryptoAccelerator, IOMobileFramebufferLegacy,
 IOHIDDevice, IOSurface, IOGPUDevice, IOGPU, IOAcceleratorES, IOGPUDeviceUserClient, and AGXG18P's AGXAccelerator
-and AGXDeviceUserClient (for reference: AGXG18P itself is left out of the collection). `classes.py` also reads an
+and AGXDeviceUserClient (for reference: AGXG18P itself is left out of the collection). `prelink classes` also reads an
 initializer that keeps the metaclass in a callee-saved register and passes it on as the next class's parent
 (IOAcceleratorES, then IOGPU; the parent of IOGPUDevice found this way is 256 bytes back at most and not checked).
 The lead's hosted AES archive (`kernel/patches/oneios-hosted/aes`, `0008-software-aes.patch`) is the worked
@@ -196,7 +200,7 @@ branches (that came in UniXNU/XnuPrelink `2b7baca`, "absolute adapter branches";
 | time | 45 s (cold, pairing included) | | about 80 s |
 
 Fewer stubs on the Mac is expected and **not yet a proof of better pairs**: Xcode's clang generates code closer to
-Apple's own kernel, so more functions match by shape. Nothing of this collection has run. `lead/imports.py` (the
+Apple's own kernel, so more functions match by shape. Nothing of this collection has run. `prelink lead-imports` (the
 import-order check below; now run from the repository, paths relative) on it: 63 adjacent names out of order, 57 of
 them `pure-leaf` pairs (bodies that return a constant, as before), and 6 others for the prelink's owner to look at:
 `OSDictionary` C1 before `dictEntry::compare` (2 kexts, an aliased constructor), `vfs_context_is_dataless_manipulator`
@@ -220,7 +224,7 @@ Both Mac collections were booted on the S24 Ultra with the Mac runtime 0.1.7-dev
    a branch to an absolute symbol has no record. Fixed by building with `external/XnuPrelink` at `9b950f2`.
    `build.sh` now also keys the reused pairing on XnuPrelink's `fileset_match.py` (the newer emitter refuses a
    pairing made by the older matcher: "Pairing predates the current matching checks").
-   `kernel/prelink/stubs-check.py KERNEL.KC` checks every stub against its `.original` (507 good on the Linux and the
+   `oneios-tool prelink stubs-check KERNEL.KC` checks every stub against its `.original` (507 good on the Linux and the
    `9b950f2` collection, 0 on the `b74ed7c` one).
 2. `eae11352...` (XnuPrelink `9b950f2`, the same kernel; all 507 stubs at their targets, 97 originals on the stub,
    10 data unpaired): 1.5 s in, after `BSD root`, the Data mount, the GPU add-on mount and `oneios-icons: the
@@ -228,7 +232,7 @@ Both Mac collections were booted on the S24 Ultra with the Mac runtime 0.1.7-dev
    kernel function from 0x20038daa8c`. `0xfffffff00a8daa8c` is in `com.apple.security.sandbox`'s `__TEXT_EXEC`,
    called from `mac_posixsem_check_create` <- `sem_open` <- `native_gpu_addon_prepare` <- `load_init_program`. So
    Sandbox's posix-semaphore check calls an original kernel function that the Mac pairing left on the panic stub
-   (the Linux pairing had it). Which one: `unmapped.py` on this collection. Not looked at further: the owner moved
+   (the Linux pairing had it). Which one: `prelink unmapped` on this collection. Not looked at further: the owner moved
    the audit of every import of the Mac collection against the Linux one to the agent `prelink`.
 
 The phone's baseline stays the Linux-built `kernel.kc` of 2026-11-11 until that audit is done
@@ -279,7 +283,7 @@ Per original import target of the 150-kext closure (functions and data):
   collection bound it to `_proc_self`, the Mac one to the stub.
 - **Panic 1** (`pc=0x20068c3c50`, frame `0xfffffff00d8c3c50`) is in none of the three: it is not an import of a kext
   but a branch of ours into one (the `IOAcceleratorES` constructor's `<stub>.original`), which XnuPrelink `b74ed7c` did
-  not relocate (above). `stubs-check.py` covers it.
+  not relocate (above). `prelink stubs-check` covers it.
 - **Why the Mac pairing lost (a)**: Apple's kernel inlines what the Xcode-built reference calls. `proc_self` and
   `get_bsdtask_info` carry Apple's inlined `zone_id_require` (the zone-index check), `clock_delay_until` the inlined
   `mach_absolute_time`, and the reference calls both; so their lengths differ from the reference's by more than the
@@ -315,8 +319,8 @@ Screen, where all of them were on the stub or unpaired too. That is the evidence
 - 8 are imported only by kexts that never start (personalities dropped: RTBuddy, AppleSEPManager, ApplePTD,
   AppleEmbeddedAudio, AppleHIDTransport, IOSerialFamily, AppleSMC).
 - 1 is `0xfffffe000b271b70` (above: the lead's record contradicted by the code).
-- 36 (functions and data) are not chosen yet: the names between their neighbours in the import tables are several (`imports.py` prints
-  them) and the code has not told them apart. A stub panic from one of these names it (`unmapped.py`); its pair goes
+- 36 (functions and data) are not chosen yet: the names between their neighbours in the import tables are several (`prelink lead-imports` prints
+  them) and the code has not told them apart. A stub panic from one of these names it (`prelink unmapped`); its pair goes
   into the list.
 
 ### A Linux-built kernel against the list (2026-11-12, pc-kernel)
@@ -335,7 +339,7 @@ names Xcode's kernel has and Linux's does not:
   to anything there, it fails). The Linux collection of 2026-11-11, which booted to the Home Screen, had it on the stub too.
 
 Result: `kernel.kc` `ffbe95f7...` (93,700,096 bytes; the pairing cold): 2,711 paired, 93
-on the stub (the 92 of the stub list and the `absent` one), 9 data unpaired, 0 audit failures; `stubs-check.py`: 666
+on the stub (the 92 of the stub list and the `absent` one), 9 data unpaired, 0 audit failures; `prelink stubs-check`: 666
 good, 0 bad. On an Xcode kernel the two entries bind as before. Not booted on the phone.
 
 ### On the phone (2026-11-12, prelink): the Mac collection boots to the Home Screen
@@ -381,7 +385,7 @@ the HMACs), `prelink audit` 3 s, the record and the chunk hashes 1 s.
   2026-11-11 were settled with the lead by the code (`0xfffffe000abd8788` is `lck_ticket_destroy`,
   `0xfffffe000ae04840` is `decmpfs_hides_xattr`, `0xfffffe000ade775c` tests I/O policy bit 15 and is bound to
   UniXNU's `vfs_context_iopolicy_unassigned_0x8000`; the lead dropped its records in `99fbf4b`).
-- **Import order** (the lead's `lead/imports.py`): a kext's `__auth_got` is sorted by imported symbol name, in runs
+- **Import order** (the lead's `prelink lead-imports`): a kext's `__auth_got` is sorted by imported symbol name, in runs
   (one per library it links). A paired name that sits out of order between two neighbours that are in order with
   each other is wrong, or an alias. On 2026-11-11 this check found 53 such names in the map. Corrected by reviewed
   records since: three of my own records, the vnode type tests, the publish notification symbols,
@@ -419,19 +423,19 @@ the HMACs), `prelink audit` 3 s, the record and the chunk hashes 1 s.
   kexts have no import on the stub now. Each record says what in the code decided among the names the import
   order allowed; none was reached by a caller in a boot of mine.
 - Pairing ahead of the boot: for an unpaired import, the names between its neighbours in every table that has it
-  are the candidates (`imports.py` prints them); the code picks among them. A boot on the PC costs about ten
+  are the candidates (`prelink lead-imports` prints them); the code picks among them. A boot on the PC costs about ten
   minutes to the first user process, so a batch is paired this way and then confirmed with one boot.
 
 ## What is not done
 
 - **The pairing is incomplete.** A kext call to an original kernel function with no pair goes to
-  `_unixnu_fileset_unmapped`, which panics with the caller; `unmapped.py ADDRESS` names it and its paired
+  `_unixnu_fileset_unmapped`, which panics with the caller; `prelink unmapped ADDRESS` names it and its paired
   neighbours, and the answer goes into the reviewed file. When the "from" address is inside our kernel, a kernel
   function made a virtual call on a kext's object: the slot names the method. Unpaired *data* keeps its
   collection address, which is some other object of our kernel: a wrong read, not a panic.
 - **Inferred pairs can be wrong** (2 % of the order pairs on known functions; three seen in the boot so far, each
   now a reviewed record). XnuPrelink's own order rule also made one (`lck_mtx_gate_close`). A strange fault in a
-  kernel function reached from a kext is worth one `unmapped.py --target` look at the caller's pair.
+  kernel function reached from a kext is worth one `prelink unmapped --target` look at the caller's pair.
 - The class list (`abi/original-classes.json` of the iPad profile); `x18` use in kexts is not checked by default
   (`X18=1 build.sh`, slow).
 - `prelink record` fails when `OUT` resolves outside the repository it runs from (a worktree with `out` as a symbolic

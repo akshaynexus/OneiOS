@@ -1,0 +1,19 @@
+[package]
+name = "oneios-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The helpers of the comparison scripts under tools/oneios-tool/tests (`oneios-tool debug NAME`). They were Python
+# scripts beside those tests until 2026-11-13; CLAUDE.md's rule is no new Python.
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+memmap2.workspace = true
+serde_json.workspace = true
+# Python's random.Random (MT19937): the sample of ksym-compare and the streams of mkstream are the ones the Python
+# helpers drew.
+rand_mt = "5"
+# fixture kdk-pkg: the xar table of contents (zlib) and a pbzx chunk (xz), as kdk-headers reads them.
+flate2 = "1"
+lzma-rs = "0.3"

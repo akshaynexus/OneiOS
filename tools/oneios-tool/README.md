@@ -12,13 +12,17 @@ script before it may replace it; the commands and the results are below. What is
 | `ioslog` | the manual steps of `docs/newtodo.md` "How to resume" step 2 (mount, copy, `unifiedlog_iterator`) | done; not run on the phone's Data store yet | yes on 7 archives: CSV byte for byte from a `.logarchive`, from a Data-store image and from a mounted volume |
 | `prelink` | the steps of `kernel/prelink/build.sh` | all 12 steps (`PRELINK_IMPL=rust`) | yes: every step's files and stdout byte for byte on two Linux-built kernels, `kernel.kc` `ffbe95f7...` and `cdd98e7e...` |
 | `kernel` | the board archive generators of the kernel build (`build-oneios-*.py`, nine), `kernel/build-record.py`, the two `layout.py` and `port-legacy-display.py` | all ported, and the scripts **retired 2026-11-13** (deleted, their outputs frozen in `tests/kernelgen/golden/`): the kernel builds run the commands | yes: every file of the nine archives byte for byte (261 files, one line of two `objects.json` aside), the build record, the three kernelcache records, and `kernel/build-hosted.sh` gives the same kernel either way but for the build time it carries (2,074 bytes of time stamps and the UUID; Linux, 2026-11-13) |
+| `kernel hosted-fixup`, `kdk-headers`, `iig-fix`, `series-check`, `drivers`; `prelink classes`, `stubs-check`, `unmapped`, `port-fixture`, `lead-between`, `lead-imports` | `kernel/hosted-fixup.py`, `kernel/kdk-headers.py`, `kernel/linux/iig-fix.py`, `kernel/tests/series-check.py`, `drivers/build.py`; `kernel/prelink/{classes,stubs-check,unmapped,port-fixture}.py`, `kernel/prelink/lead/{between,imports}.py` | all ported, and the scripts **retired 2026-11-13** (deleted, their output frozen in `tests/kernelpy/golden` and `tests/prelinkpy/golden`); **`kdk-headers` not run on a real Kernel Debug Kit or a Mac** | yes: 20 of 20 and 18 of 18 frozen cases, 10 of 10 on real inputs, and `kernel/build-hosted.sh` gives the same kernel but for the build time, the UUID and the `N_OSO` times (2,037 bytes; the section at the end) |
+| `package` | `runtime/package/pack.py` (the runtime package's Apple-file check, its manifest and archive) | ported, and the script **retired 2026-11-13**; `runtime/package.sh` and CI run the command | yes: 91 of 91 frozen cases (every refusal rule), `runtime/package/test.sh` 19 of 19 with the same output |
+| `debug` | the Python helpers of the tests (`tests/ksym/{compare,kcmap,make-log}.py`, `tests/kernelgen/{kernel-diff,drivers-command}.py`, `tests/phone/mkstream.py`) | done; the helpers deleted | yes: 24 of 24 comparisons, and each test before and after: the same output ("debug", below) |
 | `phone` | `scripts/phone/stage.sh`, the adb lines of `docs/building.md` section 6, the Mac's `sparsewrite.py` | written; **not run on the phone** (none on the box) | `stage` and `sums`: the same output and the same stage as `stage.sh` on a stand-in phone; 76 checks pass (`tests/phone/run.sh`); `sparse-write`: the bytes and length of `sparsewrite.py` on 7 streams and a 32 GiB one, not more blocks, a quarter of the CPU (`tests/phone/sparse-compare.sh`) |
 | `app` | the app lines of `docs/building.md` section 7 (new) | written; **the app was not built or installed with it** (the owner's decision for this box) | not applicable; 65 checks pass with a stand-in checkout, gradlew, gh and phone (`tests/app/run.sh`); `app version` runs on the real clone |
 | `cycle`, `phone log` | the test cycle of `docs/building.md` section 6 by hand (new) | written; **not run on the phone or with real builds** | not applicable; 90 checks pass with a stand-in checkout and phone (`tests/cycle/run.sh`) |
 
-**Python stays the default.** No build script calls `oneios-tool` unless it is asked to
+**The image build still uses the Python tool by default.** No image script calls `oneios-tool` unless it is asked to
 (`IMAGETOOL_IMPL=rust` for `scripts/image/build.sh` and `verify.sh`), but for the retired tools (`kernel/prelink/build.sh`
-and, since 2026-11-13, the kernel builds: `kernel`, below), and with one exception that changes no output:
+and, since 2026-11-13, the kernel builds, `runtime/package.sh` and the kernel's and the prelink's hand tools: "kernel",
+"package" and the group 2 section, below), and with one exception that changes no output:
 `scripts/image/kernel-inputs.sh` decodes the kernelcache with `oneios-tool image im4p` when the `lzfse` program is
 not installed, and checks the result against the SHA-256 the kernel profile pins.
 
@@ -98,6 +102,33 @@ Hand-written, and why:
 features to the whole binary, and with it macos-unifiedlogs writes the keys of a decoded state dump in insertion
 order where its own `unifiedlog_iterator` writes them sorted (found by `tests/ioslog/compare.sh`: one line of 1,012,281
 differed).
+
+## debug: the tests' helpers
+
+`oneios-tool debug NAME` (crate `crates/oneios-testkit`): what the comparison scripts under `tests/` need beside
+the tool itself. Five of them were Python scripts beside their tests until 2026-11-13 (CLAUDE.md: no new Python);
+each module has the script's name and description, takes what it took and prints what it printed.
+
+| Command | Was | Used by | The same as the script |
+|---|---|---|---|
+| `debug kcmap members\|forward\|own ...` | `tests/ksym/kcmap.py` | `ksym-make-log`, `ksym-compare` (the test's own reader of a collection, apart from the tool's) | stdout and status of the three subcommands on the `pc` and `pc2` pairs, and of a wrong command line: 7 of 7 |
+| `debug ksym-make-log KC KERNEL [--expect FILE]` | `tests/ksym/make-log.py` | `tests/ksym/compare.sh` | the log and the expect list, byte for byte, on both pairs: 4 of 4 |
+| `debug ksym-compare --tool ... --kc ... --kernel ... --log ... --ref ... --index ...` | `tests/ksym/compare.py` | `tests/ksym/compare.sh` | `compare.sh` on the `pc` pair before and after: the same output line for line (the scratch folder's name and the times aside), 57 `same` lines, 31,605 of 31,605 addresses twice, `PASS` |
+| `debug kernel-diff A.macho B.macho` | `tests/kernelgen/kernel-diff.py` | the check of two kernel builds ("kernel", below) | stdout and status on three pairs (two kernels of other sources, a kernel with itself, two sizes): 3 of 3 |
+| `debug mkstream KIND [MIB DATA]` | `tests/phone/mkstream.py` | `tests/phone/sparse-compare.sh` | the SHA-256 of every stream (`runs`, `tail`, `zero`, `empty`, `lastbyte`, `dense`, `phone 64 8`, `phone 300 40`, `phone 4096 280`) and the status of a wrong kind: 10 of 10; `sparse-compare.sh` before and after: 35 `ok` lines, the same output |
+| `debug stub-kc OUT GOOD BAD [NOTE]` | new | `tests/cycle/run.sh`, `tests/prelinkpy` | a made-up kernel collection for `prelink stubs-check` |
+
+The sample of `ksym-compare` and the streams of `mkstream` are the ones the Python helpers drew: `pyrandom.rs` is
+CPython's `random.Random` on the `rand_mt` crate's MT19937 (`random`, `getrandbits(32)`, `randrange`, `choice`,
+`choices`, `randbytes`; a unit test holds six values of CPython 3.14). The strings that named the scripts name the
+commands now (`3. ksym-make-log's list`, `kcmap with the segment's move`, the stand-in log's version line), so a
+stand-in log is not byte for byte the one `make-log.py` wrote; the 24 comparisons above were made before that change.
+
+Python left under `tests/`: `tests/phone/sparsewrite.py` (the frozen original `phone sparse-write` is compared
+against; `sparse-compare.sh` also has three inline `python3` reads of the file system and the clock beside it),
+`tests/image/parity.py`, `tests/ioslog/{filters.py,mkapfs.py}`, `tests/sym/make-log.py`, `tests/app/mkapk.py` (older
+rounds' helpers: not part of this change) and inline `python3` lines in `tests/phone/lib.sh`, `tests/phone/run.sh`
+and `tests/kernelgen/compare-python.sh`.
 
 ## ioslog: iOS's unified log from the phone's Data store
 
@@ -507,11 +538,11 @@ tools/oneios-tool/tests/ksym/compare.sh KC KERNEL [LOG]    # these files; LOG: a
 The reference is `llvm-symbolizer --inlining --no-demangle` (LLVM 23.1.4) on a dSYM that `dsymutil` makes from the
 same `xnu.macho` (5.6 s): LLVM's DWARF linker and reader against `addr2line` reading the object files through the
 debug map. The Mac's log and kernel of the 2026-11-12 panic are not on this box (and a Linux-built kernel has
-other addresses), so without `LOG` the script's log is a stand-in that `tests/ksym/make-log.py` writes from the
+other addresses), so without `LOG` the script's log is a stand-in that `oneios-tool debug ksym-make-log` writes from the
 two files: the panic's 17 functions in order, for each a return address after its `bl` to the function above it
 in the backtrace (else after the middle one of its calls), the pc on the first frame, the lr after
 `compute_iaj`'s call of the handler, both as running addresses with slide `0x2ff9000000`. The collection addresses
-come from the test's own reader (`tests/ksym/kcmap.py`: `struct` and `mmap`, no Mach-O library), not from the
+come from the test's own reader (`oneios-tool debug kcmap`, crate `oneios-testkit`: byte reads over a map, no Mach-O library), not from the
 tool. `handle_kernel_abort` is not a symbol of the Linux build (inlined into `sleh_synchronous`): 16 frame lines.
 
 Result on Linux x86_64 (2026-11-13), three pairs: `kernel.kc` `ffbe95f7` with `xnu.macho` `13ed0b70` (`pc`),
@@ -522,8 +553,8 @@ same on all three:**
 |---|---|
 | the log's 19 addresses (caller, pc, lr, 16 frames): function, file:line and every inlined frame against `llvm-symbolizer` | 19 of 19 the same, per pair (17 with file:line; `hosted_exception_upcall_entry` and `Call_continuation` are assembly: function + offset on both sides) |
 | the running pc and lr: collection address + slide = the log's address; the pc is the first frame's address | the same |
-| the kernel address and the function `make-log.py` wrote each address for | 19 of 19 |
-| each of the 17 functions' collection address three ways: the tool (`--symbol`), `kcmap.py` with the segment's move, the collection's own symbol table | 17 of 17 |
+| the kernel address and the function `debug ksym-make-log` wrote each address for | 19 of 19 |
+| each of the 17 functions' collection address three ways: the tool (`--symbol`), `debug kcmap` with the segment's move, the collection's own symbol table | 17 of 17 |
 | every instruction of those 17 functions (11,605) and 20,000 more addresses of `__TEXT_EXEC` | 31,605 of 31,605 the same; 31,062 to 31,065 with file:line, 9,542 to 9,682 of them in inlined code. With `SAMPLE=300000` on `pc`: 311,605 of 311,605 (91,504 in inlined code) |
 | the same again with the tool reading the dSYM (`--dsym`) instead of the debug map | the same numbers |
 | the collection alone (`--no-kernel`): function + offset from the symbols it keeps | 19 of 19 |
@@ -825,7 +856,7 @@ SPEED=4096:280 tools/oneios-tool/tests/phone/sparse-compare.sh   # also the time
   punch the short holes are allocated (23.1 MB for 3.4 MB of data in the first stream), with it exactly the
   pages that hold data are, and no punch is off a block's edge or past the file's end. (3) The zero check.
   (4) An error of the stream and one of the file. `cargo test -p oneios-phone` as a whole: 8 passed.
-- `sparse-compare.sh`: seven streams of `tests/phone/mkstream.py` (`runs`: zero runs and data runs shorter than
+- `sparse-compare.sh`: seven streams of `oneios-tool debug mkstream` (was `tests/phone/mkstream.py`; `runs`: zero runs and data runs shorter than
   4 KiB, between 4 KiB and 4 MiB, and longer; `tail`: ends inside a block; `zero`; `empty`; `lastbyte`: a data
   byte at the very end; `dense`; `phone`: 64 MiB shaped like the store) through the script, through
   `sparse-write`, and through `gzip -1` and `sparse-write --gunzip --expect-size`. Result, Linux x86_64 on btrfs,
@@ -835,11 +866,11 @@ SPEED=4096:280 tools/oneios-tool/tests/phone/sparse-compare.sh   # also the time
   checks): the script's copy holds 4.52 GB in 459 regions, `sparse-write`'s 2.18 GB in 3648.
 
 Speed (the same machine: i5-7500, 4 cores; other agents' builds ran most of the time, load 1 to 10, so wall times
-of one command moved by a third and more from run to run; CPU times did not). Two streams of `mkstream.py
+of one command moved by a third and more from run to run; CPU times did not). Two streams of `debug mkstream
 phone`: 32 GiB with 2.18 GB of data in 3648 runs (1.22 GB packed with `gzip -1`), and 4 GiB with 302 MiB of data
 (165 MB packed).
 
-| Reader | Fed the packed stream: wall, MB/s of the stream | CPU of the reader | Behind `mkstream.py \| gzip -1 -c`: wall |
+| Reader | Fed the packed stream: wall, MB/s of the stream | CPU of the reader | Behind `debug mkstream \| gzip -1 -c`: wall |
 |---|---|---|---|
 | 32 GiB: the source alone (`> /dev/null`) | | | 4 rounds: 49.6, 62.6, 52.6, 53.3 s |
 | 32 GiB: `gunzip -c \| sparsewrite.py` | 39.6 s, 868 MB/s | gunzip 11.5 s + python 10.6 s | 60.0, 72.7, 66.7, 66.3 s |
@@ -874,8 +905,10 @@ measured to get there:
 `oneios-tool cycle [options]`: one test cycle on the phone, eight steps in this order: `build`, `tests`, `stage`,
 `switch`, `watch`, `hold`, `return`, `collect`. `docs/building.md` section 6 has the table of what each does.
 **Not run on the phone, and not with the real build scripts**: tested with a stand-in checkout whose
-`kernel/build-hosted.sh`, `kernel/prelink/build.sh`, `stubs-check.py`, `runtime/package.sh` and
-`runtime/host-tests.sh` are stand-ins, and the stand-in phone.
+`kernel/build-hosted.sh`, `kernel/prelink/build.sh`, `runtime/package.sh` and
+`runtime/host-tests.sh` are stand-ins, and the stand-in phone. The stub check is the real one (`prelink stubs-check` of
+the same binary, since 2026-11-13), on a made-up collection of `oneios-tool debug stub-kc` (666 good stubs, or 660 good
+and 6 bad); the test before and after that change: 95 checks, the same lines.
 
 ```sh
 oneios-tool cycle --dry-run [...]                 # what each step would do; nothing is started, no adb call
@@ -1088,10 +1121,10 @@ stale (`stage_tool` in `kernel/lib/stage.sh`; `ONEIOS_TOOL=PATH` for another bin
 | `kernel build-record finish --host linux\|macos --work DIR --config NAME --out OUT [--repo CHECKOUT]`, `kernel build-record --self-test` | `kernel/build-record.py` | `build_record.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
 | `kernel layout hid\|net [--kernelcache KC] [--prelink-report JSON] [--out FILE] [--repo CHECKOUT]` | `.../hid/layout.py`, `.../net/layout.py` | `hid_layout.rs`, `net_layout.rs`, `layout.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
 | `kernel port-legacy-display [--kernelcache KC] [--fixture JSON] [--classes JSON] [--out FILE] [--repo CHECKOUT]` | `.../display/port-legacy-display.py` | `port_legacy_display.rs` | **retired 2026-11-13**: deleted, its output frozen in `tests/kernelgen/golden/` |
-| `kernel compile-command RECORD SOURCE OBJECT [--repo CHECKOUT]` | new | `drivers_build.rs` | the check that this crate's copy of `drivers/build.py`'s compile command is the script's |
+| `kernel compile-command RECORD SOURCE OBJECT [--repo CHECKOUT]` | new | `drivers_build.rs` | prints the compile command the archives are built with (it was the check of this crate's copy against `drivers/build.py`, which is retired: `drivers_build.rs` is the port now) |
 
 Shared: `gen.rs` (where a generator runs, Python's file and process calls as the scripts used them, the steps every
-script repeated), `drivers_build.rs` (`drivers/build.py`'s `record` and `command`), `macho_object.rs` (a compiled
+script repeated), `drivers_build.rs` (`drivers/build.py`: `record`, `command`, and since 2026-11-13 the whole script), `macho_object.rs` (a compiled
 object's symbols and the signed entries of a vtable), `staged/` (the edit lists of the staged sources).
 
 **`kernel gen NAME`** builds one board archive. UniXNU's driver runs it between the two kernel passes, in the build
@@ -1103,14 +1136,12 @@ tree, with `UNIXNU_DEVICE` set (and `ONEIOS_REPO`, which `kernel/build-hosted.sh
 `archive-NN-build-oneios-NAME.log`). A failure ends as the scripts' did: the message on stderr, status 1.
 
 What still runs Python, and why:
-- `drivers/build.py` (not one of the retired scripts: it builds `drivers/` on its own, `--check` included).
-  `kernel gen board` runs it as the script did, and the generators carry a copy of its two functions (`record`,
-  `command`) in `drivers_build.rs`. `tests/kernelgen/compare-python.sh ... compile-command` and the unit test
-  compare the copy with the script; a change of the script's rule must be made in both.
+- (`drivers/build.py` ran here until 2026-11-13: `kernel gen board` builds `drivers/` in-process now, with
+  `drivers_build.rs`, which is the script's port and no longer a copy of two of its functions: the group 2 section.)
 - Other projects' own scripts, run as they are: UniXNU's `scripts/prepare-storage-headers.py` (`gen storage`; the
   script imported it and called `prepare`, the command runs it as a program and reads the `headers.json` it writes,
   the same report) and Droid-VM's `build-droidvm-gpu.py`, cut before its accelerator step (`gen gpu`).
-- `kernel/prelink/classes.py` (`kernel layout`: the class reader, as the two scripts ran it).
+- (`kernel/prelink/classes.py` ran here until 2026-11-13: `kernel layout` calls `oneios-prelink`'s `classes.rs` now.)
 - `kernel/patches/oneios-hosted/display/display-capture.py` is kept as it is: it is no generator but a viewer for a
   PC boot ([docs/building.md](../../docs/building.md) section 5), Linux only (a `SOCK_SEQPACKET` socket with the
   frame's memfd passed over it), and the tool is to build and run on the Mac too.
@@ -1161,7 +1192,7 @@ retirement:
 | The retired state (the scripts deleted, `stage_tool` builds the binary) | `4a5b8868df0776a77520bb2514e62c19e319faa878091c8420fcb17a4fff1c8b` | `a84207f4a13cd9c1...` | 1032 s (the tool's own build included) |
 
 **The SHA-256 are not equal, and no two builds of this kernel are**: the file carries the time of its build.
-`tests/kernelgen/kernel-diff.py A B` names the place of every differing byte. Of the 2,074 that differ between the
+`oneios-tool debug kernel-diff A B` (was `tests/kernelgen/kernel-diff.py`) names the place of every differing byte. Of the 2,074 that differ between the
 first two kernels, 20 are the time in XNU's version string (`Thu Nov 12 23:53:46 IST 2026` and `Fri Nov 13 00:31:02 IST
 2026`, twice in `__TEXT,__const`), 16 are the link's `LC_UUID`, and 2,038 are the values of the symbol table's
 `N_OSO` entries (each object file's modification time); **nothing else differs**: every byte of code and data is the
@@ -1213,3 +1244,145 @@ with `std::os::unix`), and take the same tools the scripts took (`llvm-ar`, `llv
 commands (`build-hosted.sh` three times, `build-linux.sh` once), `compare-golden.sh`, `cargo test`. Not run on a Mac: the build of this crate, `kernel/build-hosted.sh` with
 the commands (Xcode 27.2), `kernel/build-macos.sh` with `kernel build-record`. `compare-python.sh` and `save-env.sh`
 are Linux scripts (`/proc`, `bwrap`).
+
+## The kernel's and the prelink's small scripts (group 2 of the Python retirement, 2026-11-13)
+
+Eleven more scripts are commands now, each a module named for its script, with the script's description as the
+module's header, the script's arguments, and its output byte for byte. All eleven are **retired** (deleted; their
+output frozen under `tests/kernelpy/golden` and `tests/prelinkpy/golden`), and the callers run the commands.
+
+| Command | Was (Python) | Module | Called by | Same output |
+|---|---|---|---|---|
+| `kernel hosted-fixup KERNEL` | `kernel/hosted-fixup.py` | `oneios-kernel/src/hosted_fixup.rs` | `kernel/build-hosted.sh` | yes: 3 frozen cases; the real kernel of a build (24,744,392 bytes, 7 sites): the same file and line |
+| `kernel kdk-headers [--url URL] [--dmg FILE] [--apple-kernel-h] OUTPUT` | `kernel/kdk-headers.py` | `kdk_headers.rs` | `kernel/build-macos.sh` (`KDK_HEADERS=1`) | yes on a made-up package: 4 frozen cases (the tree of headers, our `Kernel.h`, the stamp, `--apple-kernel-h` with its early stop, a package that is no xar). **Not run on a real Kernel Debug Kit, and not on a Mac** (hdiutil, the HEAD request) |
+| `kernel iig-fix PATH` | `kernel/linux/iig-fix.py` | `iig_fix.rs` | `kernel/linux/unixnu-layout.sh` | yes: 2 frozen cases; the Linux toolchain's real `iig`: the same file, and `unixnu-layout.sh` with the command gives the `iig` of the layout the script made |
+| `kernel series-check [--repo CHECKOUT]` | `kernel/tests/series-check.py` | `series_check.rs` | `kernel/tests/host.sh` | yes: 7 frozen cases (this checkout, and one thing broken per case: every message of the script but two); this checkout with `external/` beside it |
+| `kernel drivers [--records DIR] [--out DIR] [--check] [--repo CHECKOUT]` | `drivers/build.py` | `drivers_build.rs` (the generators' `record` and `command` were a copy of the script's: now the only one) | `kernel gen board` (in-process), `drivers/tests/host.sh`, the other agents after a driver change | yes: 4 frozen cases with a stand-in compiler; in a real kernel tree with the real compiler: `--check` and the whole build, all 16 objects byte for byte, `objects.json`, the archive's members, stdout, and the objects are the ones the kernel build itself made |
+| `prelink classes --xnuprelink DIR --kernelcache KC [--prelink-report JSON] --out FILE CLASS...` | `kernel/prelink/classes.py` | `oneios-prelink/src/classes.rs` | by hand; `kernel layout hid\|net` (in-process: it ran the script) | yes: 2 frozen cases on the real kernelcache, and the record of the eleven classes is the committed `kernel/prelink/classes-24A446-v54.json` byte for byte |
+| `prelink stubs-check KERNEL.KC` | `kernel/prelink/stubs-check.py` | `stubs_check.rs` | `oneios-tool cycle`, `tests/prelink/compare-golden.sh`, by hand | yes: 2 frozen cases on made-up collections (666 good; 660 good and 14 bad with the first ten listed); the two real collections `ffbe95f7` and `cdd98e7e`: `stubs: 666 good, 0 bad`, status 0 |
+| `prelink unmapped ...` | `kernel/prelink/unmapped.py` | `unmapped.rs` | by hand, after a stub panic | yes: 3 frozen cases on the real kernelcache (three original functions with `--target`; eight return addresses in a kext, as original and as linked addresses); with the disassembly's text too on this machine (llvm-mc 23.1.4) |
+| `prelink port-fixture ...` | `kernel/prelink/port-fixture.py` | `port_fixture.rs` | by hand, when XnuPrelink's fixture changes | yes: 3 frozen cases (50 of 154 functions carried over, 6 ambiguous; again on its own output; a reviewed file for another kernelcache) |
+| `prelink lead-between A B [--add [NOTE]] [--repo CHECKOUT]` | `kernel/prelink/lead/between.py` | `lead_between.rs`, `lead.rs` | by hand | yes: 3 frozen cases on the `pc` kernel's collection (a paired block; `--add` where the counts differ; `--add` that adds one record) |
+| `prelink lead-imports [--add] [--kext ID] [--repo CHECKOUT]` | `kernel/prelink/lead/imports.py` | `lead_imports.rs`, `lead.rs` | by hand | yes: 4 frozen cases on the `pc` kernel's collection (375 lines for every kext; one kext; `--add`: 2 records written, the same file; again after it) |
+
+```sh
+tools/oneios-tool/tests/kernelpy/compare-golden.sh                       # 20 cases: made-up inputs, no Apple file
+tools/oneios-tool/tests/prelinkpy/compare-golden.sh                      # 10 cases: the kernelcache alone
+tools/oneios-tool/tests/prelinkpy/compare-golden.sh PRELINK_OUT KERNEL   # + 8 cases: the lead tools, on a kernel's collection
+#   UPDATE=1: write the goldens from this run   IMPL=python: run the scripts (only at a commit that has them)
+```
+
+**How the goldens were frozen**: at the last state with both implementations, `IMPL=python UPDATE=1` wrote each
+golden from the Python scripts, and the same script then ran the commands against it. Result on Linux x86_64,
+2026-11-13: `kernelpy` **20 of 20** cases the same, `prelinkpy` **18 of 18** (10 on the kernelcache `349c4692...`,
+8 on the collection `ffbe95f7...` of the kernel `13ed0b70...`), and 18 of 18 again with `FULL=1` (llvm-mc's
+disassembly lines compared too, into a scratch golden). A case is the command's stdout, its stderr, its status and
+the SHA-256 of every file it wrote. `tests/kernelpy/compare-python.sh WORK ENVFILE` ran both side by side on the
+real inputs before the retirement (the drivers in a kernel tree, the fixup on a real kernel, the toolchain's `iig`,
+this checkout's series): **10 of 10** the same; it says "retired" now.
+
+What the goldens hold: `kernelpy/golden/cases.txt` is made from made-up inputs only (`oneios-tool debug fixture
+hosted-kernel|kdk-pkg`, `tests/kernelpy/fixtures/`: a made-up `iig`, the drivers' list as it was). The `prelinkpy`
+goldens are made from Apple's kernelcache and keep **names, addresses, sizes and SHA-256 only**: long outputs are
+hashed, `unmapped`'s disassembly is counted, and the code words `lead-between` prints for an unpaired function are
+taken out.
+
+Differences that are on purpose:
+- A wrong command line ends with clap's message and status 2 (the scripts: their docstring or a traceback, status
+  1 or 2). A failure the scripts met with a traceback (a missing file, a name that is paired with nothing, a
+  package shorter than a xar header) ends with one line and status 1.
+- `drivers`: the list of sources is `drivers/sources.txt` (`UNIVERSE PATH` per line), not a list in the tool: it
+  stays with the drivers, and a new driver is one line there. The generators' check that the checkout has
+  `drivers/build.py` is a check for `drivers/sources.txt` now.
+- `lead-imports`, `lead-between`: `--repo CHECKOUT` names the checkout whose files are read (the scripts took the
+  one they lay in). A pair of the matcher without a name (47 data pairs of `ffbe95f7`) is no name; where such a
+  target sits in a kext's import table, `lead-imports` stops with a message (the script: a TypeError).
+- `series-check` lists the patches that are not in the series by name (the script: in the folder's order).
+- `oneios-tool cycle` runs `prelink stubs-check` of its own binary; when stubs are bad its message is the count
+  line and the first three bad stubs (it was the output's last four lines, which had lost the count).
+
+**The kernel build with the commands** (`kernel/build-hosted.sh`, `HOSTED_OUT=pyp XNU_FILESET_REFERENCE=1`, from an
+empty tree both times, the same tree, Linux):
+
+
+| | `xnu.macho` (24,744,392 bytes) | `reference.macho` | Time |
+|---|---|---|---|
+| main `c1223f8` (`hosted-fixup.py`, `drivers/build.py` run by `kernel gen board`) | `fb290c4eddb0a19be0837773ec930a2b22d5d957aa8cea25247a240dd0d93992` | `6e58861659d31353...` | 985 s |
+| this branch (the commands; the five kernel scripts deleted) | `0608178d5a727008b2527257a0a6206d3292371ef4f7fa7f59702aafebd6fac4` | `aa0b6dee25949f5f...` | 1168 s |
+
+No two builds of this kernel have one SHA-256 (README "kernel", above). `oneios-tool debug kernel-diff` on the two:
+**2,037 bytes differ: 8 in the build's time in XNU's version string, 16 in the link's `LC_UUID`, 2,013 in the values
+of the symbol table's `N_OSO` entries; nothing else.** The same for the kernel before the fixup (2,037 bytes) and
+for the RELEASE reference (64 bytes: 8, 16 and 40). The ten archive folders are the same files in both builds (183
+files, `sha256sum`: 0 differ, `liboneiosdrivers.a`'s 16 objects among them), the build's step logs have the same
+names, and `hosted-fixup` printed the same line both times (7 sites, the same addresses). The Linux toolchain's
+layout was not rebuilt by these builds (it is shared on the box): `kernel/linux/unixnu-layout.sh` was run apart
+into a prefix of its own, and its `iig` is the shared layout's, which `iig-fix.py` had fixed.
+
+Checked on Linux only: everything above. Not run on a Mac: the crate's new modules, `kernel/build-hosted.sh` with
+`kernel hosted-fixup`, `kernel/build-macos.sh` with `kernel kdk-headers` (hdiutil and the HEAD request are the
+macOS path; ureq follows the redirect as urllib did, not tried), `kernel/prelink/build.sh` (unchanged by this
+group: it ran none of these scripts). Nothing Linux-only is used: `std`, `flate2`, `roxmltree`, `lzma-rs`, `ureq`
+(rustls), `regex`, `toml`; `llvm-nm` and `llvm-mc` come from `PATH` with Homebrew's keg-only LLVM added, as the
+scripts did. `tests/kernelpy/compare-golden.sh` takes its `kdk-headers` cases from the golden on macOS (hdiutil
+attaches no made-up image there).
+
+Python the kernel build still runs: UniXNU's own driver and scripts (`external/Droid-VM-UniXNU`: another project's),
+and the two inline `python3` blocks of `kernel/build-hosted.sh` that edit its copy of `board.toml` and the
+defconfig (not in this group's list; they change no file of this repository).
+
+## package: the runtime package's Apple-file check (group 3 of the Python retirement, 2026-11-13)
+
+`oneios-tool package check|manifest|archive` (crate `crates/oneios-package`, module `pack.rs`): what
+`runtime/package/pack.py` did for `runtime/package.sh`, with the script's three commands and arguments. **The
+script is retired** (deleted; its output frozen in `tests/packagepy/golden/cases.txt`), `runtime/package.sh` runs
+the command (it finds or builds the binary: `scripts/lib/oneios-tool.sh`), and CI builds the tool before the host
+tests and the package (`.github/scripts/setup-build.sh`: a current stable Rust, then `cargo build --release`; both
+workflows run that script).
+
+| Command | Does | Exit status |
+|---|---|---|
+| `package check STAGE` | refuses Apple files and anything the OneOS fork's unpacker rejects | 3 with `package: refused: ...` on stderr; 1 for a file that cannot be read |
+| `package manifest STAGE VERSION GIT_COMMIT GIT_DIRTY MIN_FORK PLACEHOLDER` | the same check, then `STAGE/runtime.json` (every file's size, SHA-256 and mode, set to 0755 or 0644) | 3 also without an executable `bin/xnuhost` |
+| `package archive STAGE MEMBERS MTIME OUT.tar` | the ustar archive of the listed files, owner 0:0, one time (where `tar` is not GNU tar) | 3 for a member that is no regular file |
+
+**It refuses exactly what the script refused.** Every rule, in the script's order, with the script's message:
+
+- By path: a link or special file; a path segment outside `[A-Za-z0-9_][A-Za-z0-9._+-]*`. These are found for the
+  whole stage before any name or content is looked at; a folder's own entries come before its folders (`os.walk`
+  with sorted names).
+- By content, whatever the name: every Mach-O magic (thin and fat, both widths, both byte orders); an Image4
+  container (a DER sequence with `IM4P`, `IMG4`, `IM4M` or `IM4R` in its first 24 bytes); `AEA1`; a UDIF trailer
+  (`koly` 512 bytes before the end, or at the start); `dyld`, and `NXSB` at offset 0 or 32.
+- A Mach-O is accepted only as the kernel that `kernel/` built: 64-bit little-endian, arm64, `MH_EXECUTE`, with
+  `NAME.build.json` beside it that says `builder` `oneios-kernel`, the file's SHA-256, `kernelcache_kexts_added`
+  and `prelinked` both `false` (the JSON value, nothing else), `apple_binary_inputs` and `restricted_sources` both
+  `[]`, and a `build_id`. A kernel collection (`MH_FILESET`) is refused with or without a record; a second kernel
+  is refused.
+- By name (lower case, 19 patterns): `kernelcache*`, `*cryptex*`, `*.ipsw`, `*.dmg`, `*.aea`, `*.img`, `*.simg`,
+  `*.erofs`, `*.im4p`, `*.img4`, `*.im4m`, `*.kc`, `*.trustcache`, `buildmanifest.plist`, `restore.plist`, `*.shsh*`,
+  `dyld_shared_cache*`, `*.kext`, `*.dext`.
+
+```sh
+tools/oneios-tool/tests/packagepy/compare-golden.sh     # 91 cases against pack.py's frozen output (made-up stages)
+runtime/package/test.sh                                 # 19 tests of the whole runtime/package.sh (needs the NDK)
+cargo test -p oneios-package                            # 6 tests: every rule and its message
+```
+
+Result on Linux x86_64, 2026-11-13: the golden was written with `IMPL=python UPDATE=1` from `pack.py`, then the
+command ran against it: **91 of 91 cases the same** (80 with status 3, 11 with status 0): 24 names, 14
+contents, 29 Mach-O and kernel-record cases, 10 paths, links and a pipe, 4 orders of two refusals, 6 manifests (the bytes of
+`runtime.json` three times, the modes it sets) and 4 archives (the tar's bytes: Python's `tarfile` in
+`USTAR_FORMAT`, a name of 126 bytes split into the prefix field). `runtime/package/test.sh` before and after: **19
+of 19, the same output** line for line (its lines carry each refusal's message).
+
+Differences that are on purpose: where the script ended with a Python traceback and status 1 (a file that is a
+Mach-O magic and under 16 bytes; a record that is JSON but no object), the command refuses with a message and
+status 3: no package either way. The text after `unreadable build record:` is this parser's, not Python's. A wrong
+command line: clap's message and status 2 (the script: its docstring, status 1).
+
+`pack.rs` uses `oneios-common`'s `pyjson` (the manifest's layout), `pyrepr` (the values in the messages) and `pytar`
+(tarfile's ustar block: it was `oneios-image/src/tar.rs`, moved so that both crates use one). Checked on Linux
+only; nothing Linux-only is used (`std::os::unix` for modes and links, as macOS has them). On macOS
+`runtime/package.sh` takes `package archive` instead of GNU tar: that path was compared with `pack.py archive` here
+(the 4 archive cases), not run on a Mac.
