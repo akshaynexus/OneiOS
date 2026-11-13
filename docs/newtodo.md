@@ -1,43 +1,106 @@
-# Paused work (2026-11-12): what is done, what is next, how to resume
+# Paused work (2026-11-13): what is done, what is next, how to resume
 
-The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the hand-over. Read it with
-`README.md` "Status", `docs/agents.md` (the board) and the docs it names. Facts marked **proven** ran on the phone
-(SM-S928B, KernelSU, One UI); **built** means pushed and host-tested, not run on the phone.
+The owner paused the work on 2026-11-13 at about 15:00 IST. This file is the hand-over. Two machines worked on it:
+the Mac (Xcode, the phone on its USB, the phone sessions) and a Linux PC (CachyOS, x86_64, 4 CPUs: the kernel, the
+runtime, `oneios-tool`, PC boots under qemu-aarch64). Read this with `README.md` "Status", `docs/agents.md` and the
+docs each item names. **Proven** = ran on the phone; **built** = compiled and host-tested, not run on the phone.
 
 ## State at the pause
 
-- `main` is at `2c7bbb5`. The build host is the Mac (Xcode 27.2, the NDK, Apple's `container` for the host tests).
-- The phone is in One UI ("One UI restored in place (Enforcing)" at 15:55:27), with root (KernelSU; root is not
-  persistent: a reboot needs a manual re-root by the owner). No session runs.
-- **Staged on the phone** (`/data/local/tmp/oneios/`): runtime 0.1.12-dev (from `7d6d6a3`), `kernel.kc` `2fdc2d16`
-  (from `7d6d6a3`, series through 0056), the image set of `7d6d6a3` (new `data.seed` `f201d6ca` with the Metal
-  plug-in `f3b2c620` and the camera plug-in `789bcb69`, their `owner-trust.json`), the app from the fork's
-  `f964d6e`, and the session scripts of `f964d6e`. The Data store is the one that boot made fresh (apps registered;
-  the LaunchServices database is kept from now on, 0043). `xnuhost.conf` is the baseline one plus
-  `oneios-ubt=SpringBoard,backboardd oneios-ubt-at=600 oneios-ubt-every=120`; the baseline file is
-  `out/session-logs/2026-11-12/baseline-conf/xnuhost.conf` (sha256 `01679caa...`).
-- **Not on the phone yet:** `2c7bbb5` (the display helper fix): the next runtime build has it.
-- The phone lock (`out/session-logs/2026-11-12/phone-lock.sh`) is held as `parent-hold`; the scratchpad it lived in
-  is temporary: a resumed session makes its own lock or none.
+- `main` holds everything below. Every open branch was merged in one integration tree, its kernel was built and
+  prelinked once (audit 0 failures, stubs 666 good), and the runtime host tests ran on it, then it went to `main`.
+- **Off by default on `main`** (merged so that nothing is lost, inert until turned on): the fixed RAM
+  (`ram-giveback=0`), the graceful return (`return-graceful-ms=`), the wide display path (`display-format=rgba16f`),
+  the bigger HID queue (`oneios-hid-queue-kib=`), the GPU read wait (`oneios-gpu-read-wait=1`), the stand-in
+  actuator (`haptics=sim`), the fork's USB repairs (the file `/data/local/tmp/oneios/usb-repair`), AAudio's low
+  latency (`ONEIOS_AUDIO_PERF=low`).
+- **On by default and new on `main`, none of it run on the phone yet:** the audio helper's lower latency (#21),
+  `pull-data` in chunks with resume and per-chunk sums (#25), the Wi-Fi scan TIMESTAMP and channel list (#22),
+  xnuhost's `usb:` lines (#24), the haptics, widget and display counters (#16, #17, #15), sRGB-tagged frames (#15).
+- **The phone:** on the Mac's side; last session `main` `c2d281a` (kernel.kc `1be6e0c9`, runtime 0.1.9-dev
+  `b2b59858`), the Data store kept (do not stage a new seed: a new seed starts the store over). Root is not
+  persistent: after a restart the owner roots it again.
+- **Machines:** the Linux PC has the NDK, Rust, libdispatch (kernel builds), qemu-aarch64, apfs-fuse, the IPSW in
+  `inputs/24A446`, a PC image set in `out/image-pc/24A446`. It has no Xcode (iOS-side code builds on the Mac only)
+  and no phone. Box-wide queues on the PC: kernel builds through `flock /tmp/oneios-kbuild.lock`, PC boots through
+  `flock /tmp/oneios-qemu.lock` with `--ram 4G` or less.
 
-## Proven on the phone (2026-11-12)
+## Done on 2026-11-12/13 (all on `main`)
 
-| Area | Result | Commits |
-|---|---|---|
-| Mac build | kernel, `kernel.kc` with the pair audit, runtime, image set, iOS code (Metal, camera), the app | 657e8e6, 365a24f, 89e4172, 1367a18 |
-| Boot | no panics; the Apple logo at about +50 s; apps on the Home Screen | 1eed3da |
-| Touch | works from the first swipe (Contact Identifier below 30: backboardd's `MAX_PATH_COUNT`); 0.7 ms scan to driver | a6346c1 |
-| Way back | the chord (rocker chatter), a return during the switch wins | fork 7839e4b, f964d6e |
-| CPU caps | One UI's caps lifted for a session and restored, `cpufreq_limit` too | fork 588b155, 20c6678 |
-| GPU | Metal for every process (`*`); render frames 2.1-2.3 ms, 228-284 per 10 s (15:35 boot) | 3e8a668, 0a2e084 |
-| Wi-Fi | scan (37-64 networks), join of an open network, the 540-byte join event (0049), DHCP: iOS got 172.20.4.69 | 9240f1a, 04ab894, a034098 |
-| Audio | iOS plays through the speaker (owner heard it) | 4947947, abacbe0, 5e426f3 |
-| Boot stalls | LaunchServices database kept (52 of 52 apps), analyticsd on, locationd's crash loop gone | 5134651, 292d64a |
-| Brightness | CoreBrightness now sends requests (`request 458 from backboardd {brightness-nits} -> level 65535`) | 7d6d6a3 |
-| Camera | `AppleH9CamIn` published, the plug-in mounted over `/System/Library/MediaCapture` (the app not tried) | 15467af |
-| Haptics | the Actuator audio device and `/product/haptics closed-loop = 1` published (not felt) | 5e426f3 |
+| PR | What |
+|---|---|
+| #1, #2 | the Rust port: `oneios-tool` (sym, log, image, ioslog, prelink; later phone, app, cycle) |
+| #3 | `sym kernel` and `log panic`: kernel panic frames named (per-segment kc→xnu.macho, physical aperture, DWARF) |
+| #4, #11 | the kernel patch generators, `build-record`, drivers, prelink helpers, package check, image pack/verify/fetch, rangeserve in Rust; the Python retired (1:1, goldens). CLAUDE.md: no new Python |
+| #5 | WebKit's crash loop: diagnosis (the CODE SIGNING line is normal; a919ff3 turned a kernel panic into a per-process crash) and a JIT test |
+| #6, #13, #25 | the sparse copy; ioslog reads a used Data store (checkpoint fallback, block checks); `pull-data` in chunks with resume |
+| #7 | battery: the first state carries no change message (the chime's real cause is elsewhere: item 4) |
+| #8, #10, #22 | Wi-Fi: a reserved unit for en0, the DHCP log fix, 0061 `oneios-ubt-count`, the scan TIMESTAMP at 0x8d0 and CHANNELS_INFO |
+| #9, #20 | Bluetooth: 0062 IOKit probe trace, `bluetooth=sim`, the reading of bluetoothd's VM path |
+| #12 | 0060: the lsd recovery file a killed session left is removed |
+| #14 | 0066: free-page runs; the thermal step no longer stacks P vCPUs; the GPU memory counters |
+| #15-#25 | the paused faults below (each partly done, safe, most of it off by default) |
+| OneOS #1 | the fork: USB state recorded at the switch, a USB watcher in the session, restored at the return |
 
-## Open faults, in order
+## Open work, in order (the detail of each is in the doc it names, and in "Fault detail" below)
+
+1. **The next phone boot** (one session answers most of the items below). Build from `main`. Boot arguments, in
+   the image's `xnuhost.conf`, beside the default ones:
+   `oneios-ubt=configd,wifid,logd,Spotlight,kbd,backboardd,Preferences,InputUI oneios-ubt-at=20 oneios-ubt-every=10
+   oneios-ubt-count=150 oneios-iouc=kbd,Spotlight,WidgetRenderer_Default,chronod oneios-sysfail=configd,kbd,Spotlight
+   oneios-hid-queue-kib=256 owner-hide-vmm=bluetoothd,BlueTool`. In the session: Wi-Fi with a known network in
+   range, type a Wi-Fi password for a minute, stay on a widget page, flip Bluetooth, tap keys with click sounds on,
+   plug and unplug USB, then return. After it: `oneios-tool phone pull-data data.img` and the searches of each item.
+2. **Wi-Fi joins** (`docs/hardware.md` 3): look for `ONEIOS WIFI: scan record 1 ... TIMESTAMP` a few ms before now,
+   `channels info: N channels (the host's list)`, then `join:`; in iOS's log `AUTO-JOIN: Scan Results (N>0)`.
+   Then configd's 22 s between `*STACK*` and en0 from the `oneios-ubt` samples, and wifid's 17 fault entries.
+3. **The keyboard stops after 3-4 characters** (`docs/newtodo.md` 12, PR #23): with `oneios-hid-queue-kib=256`,
+   `oneios-hid: touch screen: event queue 256 KiB` and `N dropped` 0; whether the whole UI or only the keys stop;
+   the MobileAsset lock line's errno, the error after InputUI's `Failed to access`. A/B boot:
+   `oneios-enable-jobs=com.apple.analyticsd,com.apple.coreduetd,com.apple.siriknowledged,com.apple.modelmanagerd,com.apple.modelcatalogd,com.apple.intelligenceplatformd`.
+4. **The chime** (`docs/hardware.md` 7c, PR #19): the host side of the graceful return is done. **Write the guest
+   power-off** behind `oneios_power_request()` (`drivers/bridge/OneiOSBridge.c`): a hosted patch (0059 is free)
+   that starts iOS's clean power-off as a power-button shutdown does, a halt, never a reboot. Then a PC boot with
+   `--set return-graceful-ms=10000`, then the phone; only then make 10000 the default.
+5. **Memory held fixed** (`docs/booter.md` 2.2 "Fixed RAM", PR #18): uncomment 0067 in the series, build, PC boot
+   before/after with `ram-giveback=0`, then the phone with `ram-giveback=0`; make it the default once the PC and
+   the phone are clean. GPU memory is the guest's own RAM, so no separate pool is needed (`docs/gpu.md` 2).
+6. **Haptics and the power key** (`docs/hardware.md` 5, PR #17): the counters show where a tap stops. PC boot with
+   `--set haptics=sim`; phone: `Actuator: user client N opened by audiomxd`, audiomxd's `actuator port` lines; the
+   power-key boot with `oneios-actuator=0`.
+7. **Blank widgets** (`docs/gpu.md` 5.1, PR #16): the `oneios-gpu-surfaces/pixels/locks/sync` lines and the host's
+   `gpu: KGSL imports` say where the image is lost; the four guesses and how to read them are there. The likely
+   fix (guess 1) is in the Metal plug-in: the Mac builds it, with a new trust list and seed.
+8. **Bluetooth** (`docs/hardware.md` 4, PR #20): with `owner-hide-vmm=bluetoothd,BlueTool`, does `Booting chipset`
+   appear; then what the non-VM path needs (likely an `AppleOLYHAL` with `HWIdentifiers`). Also the PC's
+   root-device stall with the Bluetooth driver on.
+9. **Display colour and blur** (`kernel/patches/oneios-hosted/display/README.md`, PR #15): on the phone
+   `displayctl test --format rgba16f` (a photo of the P3 patches), the compositor's swap format lines; the Mac
+   builds `userland/metal/DisplayWide.inc`; open: 10-bit `w40a`, EDR keys for the backlight, an `identity.adt` in
+   the image set. Ask the owner for real iPhone 18 Pro screenshots (Control Center over the Home Screen, Settings'
+   navigation bar over content).
+10. **Audio** (`docs/hardware.md` 6, PR #21): `latency about N ms` (about 100 expected, was 130-137), the owner's
+    click-recording test, then `oneios-audio-latency=` set from it and made the default.
+11. **USB and adb in a session** (`oneos/interface.md` 6a, PR #24, OneOS #1): first check the cable and the Mac's
+    port with One UI whole; a session with repairs off (plug, unplug, plug), then one with the `usb-repair` file.
+    The fork's three new app tests run first in its CI.
+12. **`pull-data` over wireless adb** (PR #25): the chunked copy has run on the stand-in only; check busybox's `dd`
+    and `sha256sum` on the phone, `--verify end` against `--verify chunk`, a break and a resume.
+13. **Slow Home Screen** (0060): `oneios-ls-state:` and `oneios-icons-state:` lines; lsd's fixed start work stays.
+14. **WebKit** (`docs/newtodo.md` 10): the WebContent crash report's exception type decides the fix.
+
+## Decisions waiting for the owner
+
+- `scripts/image/imagetool.py` and `scripts/fetch/remotezip.py` are unused on `main` (the Rust commands replace
+  them): delete them?
+- `userland/roottweak` (Python group 4): port it to Rust? A mistake changes the seed, so only with a byte-for-byte
+  seed comparison.
+- `scripts/ios/{ios-sign,macho-check,make-tbds}.py` are still Python (not ported yet).
+- The token for `gh`: rerunning a failed CI job needs **Actions: Read and write**.
+- The WebKit agent of 2026-11-12 ran on Opus 4.8, not 5.5 (PR #5: diagnosis and a test only). Redo it on 5.5?
+
+## Fault detail (written by each fault's agent; newest notes first in each)
+
 
 1. **Memory pressure stalls the UI** (15:35 boot, fresh store). The guest has 4,070 MiB; GPU blobs hold about
    1.6 GB and backboardd's share grows 760 -> 930 MiB in 30 s; swap does not work ("Failed to open swap file",
@@ -308,11 +371,11 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
 
 ## Later
 
-- **Rust tools:** branch `rustport` (sym, log, image done and compared; prelink and ioslog not started);
-  `tools/oneios-tool/todo_rust.md` there has the plan, the library rule (use libraries, keep only what is faster or
-  has no library: our APFS reader, the hashing, the sym index, the log analyzer) and the APFS decision.
-- The board's L1-L3 items (a direct KGSL path after measuring, the Rust ports, `min_runtime` in the image).
+- **Rust tools:** `tools/oneios-tool/todo_rust.md` section 7 lists the Python that is left and why; ioslog in
+  parallel waits for macos-unifiedlogs to open its oversize-string module.
+- The board's L1-L3 items (a direct KGSL path after measuring, `min_runtime` in the image).
 - Turnip sub-allocation and batched pipeline-cache writes (a plug-in rebuild with a new trust list).
+- The PC's root-device stall with the Bluetooth driver on (`docs/hardware.md` 4).
 
 ## How to resume
 
@@ -343,14 +406,17 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
    HighVolume,timesync}` and `db/uuidtext/*` into a `.logarchive`, and parse it with Mandiant's macos-unifiedlogs
    (`unifiedlog_iterator -m log-archive -i ARCHIVE -f csv -o OUT`).
 3. Build the set from `main` in a clean worktree (`git worktree add --detach out/parent-wt origin/main`, link
-   `external/`): `scripts/bg.sh k env HOSTED_OUT=prelink XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`, then
-   `env REFERENCE=out/kernel/current-hosted-prelink/reference.macho KERNEL=out/kernel/current-hosted-prelink/xnu.macho
-   kernel/prelink/build.sh` (the audit must show 0 failures), `runtime/package.sh VERSION`, the Metal and camera
-   plug-ins (`userland/metal/build.sh`, `userland/camera/build.sh`, with `out/ios27-tbd` linked), and the image
+   `external/`), on the Mac or the Linux PC (both build the kernel; Rust is a prerequisite: the scripts build
+   `oneios-tool` when it is missing): `scripts/bg.sh k flock /tmp/oneios-kbuild.lock env HOSTED_OUT=prelink
+   XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`, then `env REFERENCE=out/kernel/current-hosted-prelink/reference.macho
+   KERNEL=out/kernel/current-hosted-prelink/xnu.macho kernel/prelink/build.sh` (the audit must show 0 failures;
+   `oneios-tool prelink stubs-check` 666 good), `runtime/package.sh VERSION`; on the Mac only, the Metal and camera
+   plug-ins (`userland/metal/build.sh`, `userland/camera/build.sh`, with `out/ios27-tbd` linked); and the image
    (`env INPUTS=<main>/inputs/24A446 OUT=out/image scripts/image/build.sh --no-pack PROFILE`) only when the seed or
    the trust list changes (a new seed starts the phone's Data store over).
-4. Stage with `scripts/phone/stage.sh runtime DIR` / `image DIR` (docs/building.md, "Test cycle on the phone"), copy
-   the fork's `oneios_switch.sh`/`oneios_return.sh` into the stage when the app is not used, and start a session
-   with `busybox setsid sh /data/local/tmp/oneios/bin/oneios_root.sh switch 115 1`. End it with
-   `touch /data/local/tmp/oneios/session/return.request`. On the phone read named files only, never a tree walk of
-   sysfs or /proc (one panicked the phone's kernel on 2026-11-12).
+4. Stage and run through `oneios-tool` (CLAUDE.md's rule; `docs/building.md` sections 6-7): `oneios-tool phone
+   stage runtime DIR` / `stage image DIR`, `phone sums`, `app stage-scripts` when the app is not used, then
+   `phone switch`, `phone log --follow --save-auto`, `phone return` (or the whole of it: `oneios-tool cycle`).
+   The manual forms (`scripts/phone/stage.sh`, `oneios_root.sh switch <versionCode> 1`,
+   `touch .../session/return.request`) are the fallback when the CLI fails. On the phone read named files only,
+   never a tree walk of sysfs or /proc (one panicked the phone's kernel on 2026-11-12).
