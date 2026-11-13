@@ -974,7 +974,7 @@ the OS volume's files; the MobileGestalt table read from `libMobileGestalt.dylib
   thermal budget).
 
 **Where it stops is not known yet: the 23:45 log has no line between the "on" lines and the motor.** So every layer
-now counts (written 2026-11-13; the host side host-tested, the kernel side compiled only if the PR says so; not on the phone, no PC boot yet):
+now counts (2026-11-13: host-tested; the hosted kernel built on the Linux PC (`HOSTED_OUT=fixhap`) and prelinked, audit 0 failures, `stubs-check` 666 good; no PC boot, not on the phone):
 
 | Layer | Line | Says |
 |---|---|---|
