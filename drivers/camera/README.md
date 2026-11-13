@@ -3,7 +3,7 @@
 Owner: fable-camera. The whole path: `docs/hardware.md` section 7. Host: `runtime/bridges/camera`. iOS user space:
 `userland/camera`.
 
-**State (2026-11-12): compiles with the kernel's own compile records (`drivers/build.py --check`, 16 sources) and is
+**State (2026-11-12): compiles with the kernel's own compile records (`oneios-tool kernel drivers --check`, 16 sources) and is
 in the kernel of `HOSTED_OUT=cam`; never run.** The 2026-11-11 phone run had the transport up (`ONEIOS CAMERA: on: 3
 cameras`) and nothing in iOS reading it (`userland/camera/README.md`, "Where the camera broke").
 
@@ -29,4 +29,4 @@ protocol, which cannot be imitated; the camera enters through a plug-in in the c
   then `ONEIOS CAMERA: AppleH9CamIn published: ...`, and `ONEIOS CAMERA: user client opened by NAME` (the first 20).
 - The frame's `time` is `mach_absolute_time()` when the reader took it; the sensor's own time (host clock) is in
   `host_time_lo/hi` for intervals.
-- Build: in `../build.py`'s list; `../build.py --check` compiles all three. Test: `tests/host.sh` (CI).
+- Build: in `../sources.txt`; `oneios-tool kernel drivers --check` compiles all three. Test: `tests/host.sh` (CI).

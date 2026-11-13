@@ -139,10 +139,12 @@ cat > "$R/kernel/prelink/build.sh" <<'B'
 #!/bin/bash
 [ ! -e audit-fails ] || { echo "audit: 3 failures"; echo "prelink: the audit failed" >&2; exit 1; }
 mkdir -p out/kernel/24A446
-echo "collection of $(cat "$KERNEL") with $(basename "$REFERENCE")" > out/kernel/24A446/kernel.kc; echo hashes > out/kernel/24A446/kernel.kc.hashes
+# a made-up collection whose stubs `prelink stubs-check` reads: 666 good ones, or 6 of them bad
+if [ -e stubs-bad ]; then good=660 bad=6; else good=666 bad=0; fi
+"$(cat tool-path)" debug stub-kc out/kernel/24A446/kernel.kc $good $bad "collection of $(cat "$KERNEL") with $(basename "$REFERENCE")"; echo hashes > out/kernel/24A446/kernel.kc.hashes
 echo "audit: 2711 paired, 0 failures"; echo "prelink: out/kernel/24A446/kernel.kc"
 B
-printf 'import os\nprint("stubs: 660 good, 6 bad" if os.path.exists("stubs-bad") else "stubs: 666 good, 0 bad")\n' > "$R/kernel/prelink/stubs-check.py"
+echo "$TOOL" > "$R/tool-path"
 cat > "$R/runtime/package.sh" <<'B'
 #!/bin/bash
 d=$(mktemp -d); mkdir -p "$d/bin" out/release

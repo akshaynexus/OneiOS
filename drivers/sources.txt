@@ -1,0 +1,23 @@
+# The kernel-side drivers that go into liboneiosdrivers.a, in link order: UNIVERSE PATH (below drivers/).
+# `oneios-tool kernel drivers` compiles each with the command the XNU build recorded for a source of its universe
+# (tools/oneios-tool/crates/oneios-kernel/src/drivers_build.rs; this was the SOURCES list of drivers/build.py):
+#   mach    osfmk/DEVELOPMENT/startup.o.json
+#   bsd     bsd/DEVELOPMENT/kern_control.o.json
+#   iokit   iokit/DEVELOPMENT/IOPlatformExpert.cpo.json
+# A new driver source is one line here. Check a change with: oneios-tool kernel drivers --check
+mach   bridge/OneiOSBridge.c
+bsd    haptics/oneios_haptic.c
+iokit  haptics/OneiOSVibrator.cpp
+bsd    bluetooth/oneios_bt.c
+bsd    bluetooth/oneios_bt_h4.c
+bsd    bluetooth/oneios_bt_ios.c
+bsd    bluetooth/oneios_bt_ctl.c
+bsd    bluetooth/oneios_bt_dev.c
+bsd    bluetooth/oneios_bt_sk.c
+iokit  bluetooth/OneiOSBluetooth.cpp
+iokit  brightness/OneiOSBacklight.cpp
+iokit  battery/OneiOSBattery.cpp
+iokit  thermal/OneiOSThermal.cpp
+mach   camera/oneios_camera.c
+bsd    camera/oneios_camera_dev.c
+iokit  camera/OneiOSCameraService.cpp

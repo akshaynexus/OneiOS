@@ -38,7 +38,7 @@ Common pieces:
   (network, sound) use standard virtio devices instead.
 - **Tests**: `runtime/bridges/tests/host.sh` (CI runs it): 198 checks (and 48 in `brightness/`, 65 in `battery/`) with ASan and UBSan, the virtio devices driven
   through xnuhost's real transport (`runtime/xnuhost/src/virtio.c`) by a guest made of plain memory; then the Android
-  build. `drivers/build.py --check` compiles the kernel sources with the kernel build's own compile records
+  build. `oneios-tool kernel drivers --check` compiles the kernel sources with the kernel build's own compile records
   (xnu-12377, arm64e, `-Wall -Wextra -Werror`); the archive's 292 undefined symbols all resolve in `xnu.macho`.
 - **On the phone**: `runtime/bridges/build/android/bridgectl` (static) tries each bridge without xnuhost:
   `bridgectl cpu|haptic|haptic-pattern|bt|net|audio`. It is the first thing to run when the phone is attached.
@@ -315,7 +315,7 @@ by its own script), so iOS had no en0 in any boot. Now `build-hosted.sh` builds 
   `out/sources/IONetworkingFamily`), and the build checks those headers against the kernelcache's classes
   (`IONetworking-24A446-v54.json`, made by `oneios-tool kernel layout net`): 250 and 221 vtable slots, every slot's
   pointer-authentication discriminator, and whether its function is the family's or the kernel's. 159 original
-  functions are bound at their addresses in the collection through `.original` stubs (`stubs-check.py`: good).
+  functions are bound at their addresses in the collection through `.original` stubs (`prelink stubs-check`: good).
 - The Apple80211 requests and events of DroidVMWifi.inc (below), with its made-up station replaced: `SCAN_REQ` sends
   `OW_SCAN` and the records come back as `OW_BSS`; `ASSOCIATE` sends `OW_JOIN` and `ASSOCIATE_RESULT` follows
   `OW_JOIN_RESULT`; `DISASSOCIATE` sends `OW_LEAVE`; `OW_STATE` carries the link, the signal, the rate and the joined

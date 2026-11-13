@@ -26,6 +26,11 @@ mod manifest;
 mod profile;
 mod py;
 mod seed;
+mod aea;
+mod archive;
+mod ipsw;
+pub mod rangeserve;
+pub mod remotezip;
 mod tar;
 
 use oneios_common::pyjson::{self, Value};
@@ -83,12 +88,13 @@ Only in this tool (imagetool.py has no such command): read a volume without moun
     oneios-tool image apfs-checkpoints IMAGE                     every checkpoint of a store, and whether the container
                                                                  and each volume pass the checks at it
 
-Run by scripts/image/imagetool.py (python3, found beside this tool's repository or through IMAGETOOL_PY):
+The IPSW, the AEA header and the archive (ported on 2026-11-13; imagetool.py has the same commands):
     oneios-tool image check-ipsw PROFILE [--source URL|FILE]     compare the profile with the IPSW's directory and BuildManifest
     oneios-tool image fetch PROFILE INDIR [-j N] [--only ROLE,..] [--source URL|FILE]
     oneios-tool image aea-info FILE                              the key-service fields of an AEA header
     oneios-tool image pack SETDIR OUT.tar.zst                    the archive the OneOS fork imports, and OUT.tar.zst.sha256
     oneios-tool image verify SET.tar.zst                         the archive: its .sha256, the tar rules, every file
+    oneios-tool image record-plain INDIR ROLE PLAIN              after an AEA was decrypted: the plain image in inputs.json
 
 Formats: docs/image-format.md. The Rust port of scripts/image/imagetool.py: same output, byte for byte.
 ";
@@ -101,7 +107,7 @@ pub struct More {
     extra: Vec<String>,
 }
 
-/// The arguments of a command the Python tool runs, as they are.
+/// The arguments of a command that reads them as imagetool.py does: by position, its options by name.
 #[derive(clap::Args, Debug)]
 pub struct Raw {
     #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
@@ -232,15 +238,15 @@ pub enum Command {
     /// Only in this tool: every checkpoint of a store copied after use, and whether the container and each
     /// volume pass the checks at it
     ApfsCheckpoints { image: String },
-    /// (Python tool) compare the profile with the IPSW's directory and BuildManifest
+    /// Compare the profile with the IPSW's directory and BuildManifest
     CheckIpsw(Raw),
-    /// (Python tool) fetch the IPSW's members a profile names
+    /// Fetch the IPSW's members a profile names
     Fetch(Raw),
-    /// (Python tool) record a decrypted image in inputs.json
+    /// Record a decrypted image in inputs.json
     RecordPlain(Raw),
-    /// (Python tool) the key-service fields of an AEA header
+    /// The key-service fields of an AEA header
     AeaInfo(Raw),
-    /// (Python tool) the archive the OneOS fork imports
+    /// The archive the OneOS fork imports
     Pack(Raw),
 }
 
@@ -389,64 +395,37 @@ fn dispatch(command: Command) -> Result<(), Fail> {
                 let m = manifest::verify_dir(&set, quick)?;
                 return say(&manifest::ok_line(&m));
             }
-            let mut argv = vec!["verify".to_string(), set];
-            if quick {
-                argv.push("--quick".into());
-            }
-            argv.extend(more.extra);
-            python(&argv)
+            let _ = more;
+            say(&manifest::ok_line(&archive::verify_archive(&set)?))
         }
         Command::Im4p { input, out, .. } => say(&im4p::cmd(&input, &out)?),
         Command::ApfsLs { image, path, volume, newest, checkpoint, apfs } => apfs_tools::ls(&image, path.as_deref().unwrap_or(""), volume.as_deref(), apfs_tools::pick(newest, checkpoint), apfs),
         Command::ApfsCopy { image, src, dst, volume, newest, checkpoint, apfs } => apfs_tools::copy(&image, &src, &dst, volume.as_deref(), apfs_tools::pick(newest, checkpoint), apfs),
         Command::ApfsCheckpoints { image } => say(apfs::Container::open(&image, apfs::Pick::Newest)?.report().trim_end()),
-        Command::CheckIpsw(raw) => python_command("check-ipsw", raw),
-        Command::Fetch(raw) => python_command("fetch", raw),
-        Command::RecordPlain(raw) => python_command("record-plain", raw),
-        Command::AeaInfo(raw) => python_command("aea-info", raw),
-        Command::Pack(raw) => python_command("pack", raw),
-    }
-}
-
-fn python_command(name: &str, raw: Raw) -> Result<(), Fail> {
-    let mut argv = vec![name.to_string()];
-    argv.extend(raw.args);
-    python(&argv)
-}
-
-/// Where scripts/image/imagetool.py is: `IMAGETOOL_PY`, or `scripts/image/imagetool.py` in a folder above this
-/// program or above the working directory.
-fn python_tool() -> Option<std::path::PathBuf> {
-    if let Some(path) = std::env::var_os("IMAGETOOL_PY").filter(|p| !p.is_empty()) {
-        return Some(path.into());
-    }
-    let starts = [std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()), std::env::current_dir().ok()];
-    for start in starts.into_iter().flatten() {
-        for dir in start.ancestors() {
-            let tool = dir.join("scripts/image/imagetool.py");
-            if tool.is_file() {
-                return Some(tool);
-            }
+        Command::CheckIpsw(Raw { args }) => ipsw::cmd_check_ipsw(arg(&args, 0)?, opt(&args, "--source")?),
+        Command::Fetch(Raw { args }) => {
+            let jobs = match opt(&args, "-j")? {
+                Some(n) => py::int(n, 10).and_then(|n| usize::try_from(n).ok()).ok_or_else(|| crash!("invalid literal for int() with base 10: {}", py::repr_str(n)))?,
+                None => 8,
+            };
+            ipsw::cmd_fetch(arg(&args, 0)?, arg(&args, 1)?, jobs, opt(&args, "--only")?, opt(&args, "--source")?)
         }
+        Command::RecordPlain(Raw { args }) => ipsw::record_plain(arg(&args, 0)?, arg(&args, 1)?, arg(&args, 2)?),
+        Command::AeaInfo(Raw { args }) => aea::cmd_aea_info(arg(&args, 0)?).map(|_| ()),
+        Command::Pack(Raw { args }) => say(&format!("{}  {}", archive::pack(arg(&args, 0)?, arg(&args, 1)?)?, arg(&args, 1)?)),
     }
-    None
 }
 
-/// Hand a command this port does not have to the Python tool; its output and exit status become this program's.
-fn python(argv: &[String]) -> Result<(), Fail> {
-    use std::os::unix::process::CommandExt;
-    let _ = std::io::stdout().flush();
-    let Some(tool) = python_tool() else {
-        eprintln!(
-            "oneios-tool image: {} is not ported to Rust and scripts/image/imagetool.py was not found; \
-             set IMAGETOOL_PY to its path, or run it: python3 -I scripts/image/imagetool.py {}",
-            argv[0],
-            argv.join(" ")
-        );
-        std::process::exit(2);
-    };
-    let python = std::env::var_os("PYTHON").filter(|p| !p.is_empty()).unwrap_or_else(|| "python3".into());
-    let e = std::process::Command::new(&python).arg("-I").arg(&tool).args(argv).exec();
-    eprintln!("oneios-tool image: cannot run {} for {}: {e}", python.to_string_lossy(), argv[0]);
-    std::process::exit(2);
+
+/// `args[index]`: a missing one is Python's IndexError, which printed the usage.
+fn arg(args: &[String], index: usize) -> Result<&str, Fail> {
+    args.get(index).map(String::as_str).ok_or(Fail::Usage)
+}
+
+/// `args[args.index(name) + 1] if name in args`: the value after an option's first place.
+fn opt<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, Fail> {
+    match args.iter().position(|a| a == name) {
+        Some(at) => arg(args, at + 1).map(Some),
+        None => Ok(None),
+    }
 }

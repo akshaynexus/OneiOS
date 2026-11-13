@@ -4,7 +4,12 @@
 //!                            passes (board.toml [kernel] archives), in the build tree, with UNIXNU_DEVICE set.
 //!                            NAME: board, storage, aes, keystore, net, hid, audio, gpu, display
 //!   kernel build-record      the record of a finished VM kernel build (build-linux.sh, build-macos.sh)
-//!   kernel compile-command   drivers/build.py's compile command for a record, as this crate's copy makes it
+//!   kernel drivers           drivers/ of the repository into liboneiosdrivers.a (--check: compile only)
+//!   kernel compile-command   the compile command the archives are built with, for a record
+//!   kernel hosted-fixup      the post-link text fixes of the hosted kernel (kernel/build-hosted.sh)
+//!   kernel kdk-headers       a headers-only KDKROOT from a Kernel Debug Kit (kernel/build-macos.sh, KDK_HEADERS=1)
+//!   kernel iig-fix           the fixes of the Linux toolchain's iig (kernel/linux/unixnu-layout.sh)
+//!   kernel series-check      the checks of the series and the profiles that need no sources (kernel/tests/host.sh)
 //!   kernel layout hid|net    the record of the original classes a board driver subclasses, from the kernelcache
 //!   kernel port-legacy-display   the display's record: Droid-VM's reviewed iPad layout carried over to this kernelcache
 //!
@@ -27,10 +32,14 @@ pub mod class_record;
 pub mod drivers_build;
 pub mod gen;
 pub mod hid_layout;
+pub mod hosted_fixup;
+pub mod iig_fix;
+pub mod kdk_headers;
 pub mod layout;
 pub mod macho_object;
 pub mod net_layout;
 pub mod port_legacy_display;
+pub mod series_check;
 pub mod staged;
 
 use clap::{Subcommand, ValueEnum};
@@ -84,7 +93,21 @@ pub enum Command {
     },
     /// The display's record: Droid-VM's reviewed iPad layout carried over to this kernelcache and checked
     PortLegacyDisplay(port_legacy_display::Args),
-    /// The compile command the generators make from a compile record (a JSON list), for the check against drivers/build.py
+    /// drivers/ of the repository into one archive for the kernel link (was drivers/build.py)
+    Drivers(drivers_build::Args),
+    /// Post-link fixes of the hosted kernel's text, in place: mrs xN, MPIDR_EL1 -> ldr wN, [x18]
+    HostedFixup { kernel: PathBuf },
+    /// A headers-only KDKROOT for xnu-12377 from a Kernel Debug Kit
+    KdkHeaders(kdk_headers::Args),
+    /// Fix a copy of xnu-linux-toolchain's iig for xnu-12377's .iig files, in place
+    IigFix { path: PathBuf },
+    /// Checks of the kernel's series and profiles that need no sources (exit 1 with a line per failed check)
+    SeriesCheck {
+        /// This repository's checkout (default: the current directory)
+        #[arg(long)]
+        repo: Option<PathBuf>,
+    },
+    /// The compile command the board archives are built with, from a compile record (a JSON list)
     CompileCommand {
         /// A compile record of the kernel build (build/xnu/ios-obj/<CONFIG>/.../*.json)
         record: PathBuf,
@@ -125,6 +148,11 @@ pub fn main(command: Command) -> i32 {
         Command::Layout { which: Family::Net, args } => net_layout::main(args).map(|()| 0),
         Command::PortLegacyDisplay(args) => port_legacy_display::main(args).map(|()| 0),
         Command::CompileCommand { record, source, object, repo } => compile_command(record, source, object, repo).map(|()| 0),
+        Command::Drivers(args) => drivers_build::main(args).map(|()| 0),
+        Command::HostedFixup { kernel } => hosted_fixup::main(&kernel).map(|()| 0),
+        Command::KdkHeaders(args) => kdk_headers::main(args).map(|()| 0),
+        Command::IigFix { path } => iig_fix::main(&path).map(|()| 0),
+        Command::SeriesCheck { repo } => series_check::main(repo.as_deref()),
     };
     match result {
         Ok(status) => status,

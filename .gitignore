@@ -24,3 +24,6 @@ external/
 __pycache__/
 target/
 build/
+# (not a build output: the frozen generated files of the kernel generators; without this line the rule above kept
+# them out of git, and cargo test and tests/kernelgen/compare-golden.sh had nothing to compare with)
+!tools/oneios-tool/tests/kernelgen/golden/build/

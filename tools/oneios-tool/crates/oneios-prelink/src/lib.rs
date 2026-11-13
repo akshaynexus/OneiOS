@@ -9,20 +9,27 @@
 
 mod align;
 mod audit;
+pub mod classes;
 mod emit;
 mod hosted;
 mod kclasses;
+mod lead;
+mod lead_between;
+mod lead_imports;
 mod layout;
 pub mod image;
 mod matcher;
 mod merge_reviewed;
 mod native_input;
 mod plistpy;
+mod port_fixture;
 mod pyset;
 mod record;
 mod records;
 mod roots;
 mod structors;
+mod stubs_check;
+mod unmapped;
 mod vtables;
 
 /// `oneios-tool prelink`'s steps (clap): each takes the arguments of the Python step it replaces.
@@ -63,6 +70,18 @@ pub enum Command {
     Audit(audit::Args),
     /// record.py: the build record kernel.kc.build.json
     Record(record::Args),
+    /// classes.py: the layout of original classes in the kernelcache, for board drivers that subclass them
+    Classes(classes::Args),
+    /// stubs-check.py: every stub of the kernel branches to its .original symbol (exit 1 when one is bad)
+    StubsCheck { kc: String },
+    /// unmapped.py: name the original kernel function behind an "unmapped kernel function" panic
+    Unmapped(unmapped::Args),
+    /// port-fixture.py: carry XnuPrelink's reviewed function identities of the iPad kernelcache over to this one
+    PortFixture(port_fixture::Args),
+    /// lead/between.py: the original and the native functions between two paired ones, side by side
+    LeadBetween(lead_between::Args),
+    /// lead/imports.py: pair unknown kernel imports of the kexts by the order of each kext's import table
+    LeadImports(lead_imports::Args),
     /// Print the kernelcache SHA-256 a kernel profile pins ([kernel.prelink] kernelcache_sha256)
     Pin { profile: String },
     /// Print the matcher signature of an XnuPrelink checkout (what match writes into the map and emit checks)
@@ -120,6 +139,16 @@ pub fn main(command: Command) -> i32 {
             other => ("audit", other.map(|_| ())),
         },
         Command::Record(args) => ("record", record::run(args)),
+        // (the hand tools end with their own message, as the scripts' sys.exit(message) did)
+        Command::Classes(args) => return bare(classes::run(args)),
+        Command::StubsCheck { kc } => match stubs_check::main(&kc) {
+            Ok(status) => return status,
+            Err(e) => return bare(Err(e)),
+        },
+        Command::Unmapped(args) => return bare(unmapped::run(args)),
+        Command::PortFixture(args) => return bare(port_fixture::run(args)),
+        Command::LeadBetween(args) => return bare(lead_between::run(args)),
+        Command::LeadImports(args) => return bare(lead_imports::run(args)),
         Command::Pin { profile } => ("pin", pin(&profile)),
         Command::Signature { xnuprelink } => ("signature", matcher::matcher_signature(std::path::Path::new(&xnuprelink)).map(|s| println!("{s}"))),
     };
@@ -130,6 +159,17 @@ pub fn main(command: Command) -> i32 {
             1
         }
     }
+}
+
+/// The exit status of a hand tool: its message alone on stderr and 1, as the script it was ended.
+fn bare(result: anyhow::Result<()>) -> i32 {
+    result.map_or_else(
+        |e| {
+            eprintln!("{e:#}");
+            1
+        },
+        |()| 0,
+    )
 }
 
 fn pin(profile: &str) -> anyhow::Result<()> {

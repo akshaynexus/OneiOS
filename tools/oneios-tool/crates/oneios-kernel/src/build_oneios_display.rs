@@ -299,7 +299,7 @@ pub fn main() -> Result<()> {
     let sources = [display.join("NativeLegacyDisplay.cpp"), display.join("NativeLegacyRequest.h"), display.join("NativeGOPPresenter.cpp"),
                    display.join("NativeGOPWire.h"), display.join("NativeHalfCodes.h"), package.join("LegacyDisplayProbe.cpp"),
                    package.join("DroidVMVirtioGpuDisplay.cpp"), package.join("DroidVMVirtioGpu.h"), here.join("OneiOSDisplay.cpp"), abi_path.clone()];
-    let mut needed = vec![ctx.repo.join("drivers/build.py"), ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json")];
+    let mut needed = vec![ctx.repo.join("drivers/sources.txt"), ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json")];
     needed.extend(sources.iter().cloned());
     gen::need_files(&needed, |path| format!("build-oneios-display: {} missing (scripts/setup/get-references.sh NativeMobileDisplay UniXNU-droidvm; \
                                              {} is made by port-legacy-display.py)", path.display(), gen::name(&abi_path)))?;

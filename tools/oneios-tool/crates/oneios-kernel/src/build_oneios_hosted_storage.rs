@@ -36,7 +36,7 @@ pub fn main() -> Result<()> {
     let ctx = Ctx::new("build-oneios-hosted-storage", "run through kernel/build-hosted.sh")?;
     let sources = ctx.repo.join("kernel/patches/oneios-hosted/storage");
     let storage = ctx.tree.join("refer/IOStorageFamily");
-    for path in [storage.join("IOBlockStorageDevice.cpp"), sources.join("OneiOSHostedDisk.cpp"), ctx.repo.join("drivers/build.py"),
+    for path in [storage.join("IOBlockStorageDevice.cpp"), sources.join("OneiOSHostedDisk.cpp"), ctx.repo.join("drivers/sources.txt"),
                  ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json")] {
         if !path.exists() {
             fail!("build-oneios-hosted-storage: {} missing", path.display());

@@ -36,7 +36,7 @@ pub fn main() -> Result<()> {
     let ctx = Ctx::new("build-oneios-keystore", "run through the kernel build")?;
     let here = ctx.repo.join("kernel/patches/oneios-hosted/keystore");
     let component = ctx.repo.join("external/Droid-VM-UniXNU/drivers/AppleKeyStoreState/NativeKeyStoreEvents.cpp");
-    gen::need_files(&[ctx.repo.join("drivers/build.py"), component.clone(), ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json"),
+    gen::need_files(&[ctx.repo.join("drivers/sources.txt"), component.clone(), ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json"),
                       here.join("OneiOSKeyStore.cpp")],
                     |path| format!("build-oneios-keystore: {} missing (external/Droid-VM-UniXNU: git submodule update --init drivers/AppleKeyStoreState)",
                                    path.display()))?;

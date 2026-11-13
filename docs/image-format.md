@@ -292,11 +292,11 @@ The same commands on Linux and on macOS; neither needs root. `build.sh` picks th
 
 **The owners on macOS.** A volume a user attaches with owners honoured keeps root's folders closed to that user,
 and attaching as root needs `sudo`. So `build.sh` attaches with owners ignored and reads the real owner, group and
-mode of every entry below `/private/var` from the image itself: `imagetool.py` `ApfsTree` walks the volume's
+mode of every entry below `/private/var` from the image itself: `oneios-tool image` (its APFS reader; `imagetool.py`'s `ApfsTree` before 2026-11-13) walks the volume's
 file-system tree (inode, directory and xattr records; no file data). On a sealed volume that tree is hashed and its
 index entries number their children relative to the root's object id (24A446: root 1158, children 1158 + n). The
 copy stops if an entry's type, mode or xattr names differ between the mount and the records, or if an entry is in
-one and not in the other. `imagetool.py apfs-owners IMAGE [DIR]` prints what it reads.
+one and not in the other. `oneios-tool image apfs-owners IMAGE [DIR]` prints what it reads.
 
 **A store that was used: block 0 is old, and the newest checkpoint may be cut off.** The read-only images above are
 written once, so block 0's superblock is current and `apfs-info` and `apfs-owners` read it as it is (imagetool.py's

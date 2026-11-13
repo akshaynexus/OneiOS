@@ -51,6 +51,27 @@ enum Tool {
     App(oneios_phone::AppCli),
     /// One test cycle on the phone: build, tests, stage, switch, watch, hold, return, collect
     Cycle(oneios_phone::cycle::Args),
+    /// Single members of a ZIP (an IPSW) without downloading it: ls, cat, get, head (scripts/fetch/remotezip.py)
+    Remotezip {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Serve the files of one folder on 127.0.0.1 with byte ranges (scripts/serve/serve-image.sh)
+    Rangeserve {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// The runtime package (runtime/package.sh): check (no Apple file may go in), manifest, archive
+    Package {
+        #[command(subcommand)]
+        command: oneios_package::Command,
+    },
+    /// The helpers of the comparison scripts (tools/oneios-tool/tests): kcmap, ksym-make-log, ksym-compare,
+    /// kernel-diff, mkstream
+    Debug {
+        #[command(subcommand)]
+        command: oneios_testkit::Command,
+    },
 }
 
 fn main() {
@@ -71,6 +92,10 @@ fn main() {
             Tool::Phone(cli) => oneios_phone::main(cli),
             Tool::App(cli) => oneios_phone::app_main(cli),
             Tool::Cycle(args) => oneios_phone::cycle::main(args),
+            Tool::Remotezip { args } => oneios_image::remotezip::main(&args),
+            Tool::Rangeserve { args } => oneios_image::rangeserve::main(&args),
+            Tool::Package { command } => oneios_package::main(command),
+            Tool::Debug { command } => oneios_testkit::main(command),
         },
         Err(e) if !e.use_stderr() => {
             let _ = e.print();

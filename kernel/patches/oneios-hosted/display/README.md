@@ -29,7 +29,7 @@ The transport (`DroidVMVirtioGpu.cpp`) and the 3D half are in the GPU's archive 
 ## The class for this kernelcache (`oneios-tool kernel port-legacy-display`)
 
 Droid-VM's reviewed fixture (`legacy-display-24A446.json`) is for the iPad17,3 kernelcache of the same build.
-`kernel/prelink/classes.py` already reads the class from the iPhone18,2 one (`classes-24A446-v54.json`: 0x1dd8
+`oneios-tool prelink classes` already reads the class from the iPhone18,2 one (`classes-24A446-v54.json`: 0x1dd8
 bytes, 379 slots, as on the iPad). `oneios-tool kernel port-legacy-display` shows the family's code is the same code at another
 address and carries the reviewed meanings over; it fails rather than guess:
 
