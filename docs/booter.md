@@ -95,8 +95,28 @@ too: if `host MemAvailable` runs low in a session, lower `ram-percent` or raise 
 Log: standard error (the switch appends it to `session/xnuhost.log`). Lines `xnuhost I/E/D` are the host's,
 `guest` lines are the kernel's console, `xnuhost !!` lines come from signal context.
 
-Stop: `SIGTERM`, `SIGINT` or `SIGHUP`: tasks are killed, the Data store is synced, exit 0. Today the guest
-is not asked to shut down first (there is no guest to ask); APFS is crash-consistent, the store is synced.
+Stop: `SIGTERM`, `SIGINT` or `SIGHUP`: tasks are killed, the Data store is synced, exit 0.
+
+The return (graceful shutdown): a stop signal is how the fork returns to One UI (its `oneios_return.sh` sends
+`SIGTERM`, then `SIGKILL` after 20 s). With `return-graceful-ms` > 0 (**default 0 = the immediate kill as before**, because the guest
+half is not yet tested end to end; set it to e.g. 10000 to turn the wait on) and iOS up (a first frame has been
+shown), the first stop signal **asks iOS to shut itself down** first, so
+it saves what a clean power-off saves (SpringBoard's teardown persists its boot overlay for the next boot; without
+this, every session ends as a crash from iOS's view, and a boot on a charger plays the "plugged in" chime — see
+[hardware.md](hardware.md) 7c). xnuhost sends the ask on the bridge (`OB_CTL_SHUTDOWN`, the guest's bridge driver
+hands it to `oneios_power_request()`), keeps the vCPUs running, and waits up to `return-graceful-ms` (an absolute
+deadline). The wait ends at once on any of: iOS halting itself (its PSCI SYSTEM_OFF / halt — a restart in the window
+is taken as the return, not a re-exec), the deadline, a **second** return signal (the chord pressed again, which the
+fork turns into another `SIGTERM`), or a panic (it sets the stop directly). Then the stop runs exactly as before.
+The way back never depends on the guest acting: the deadline is ours and the fork's `SIGKILL` is the backstop under
+everything; a guest with no shutdown helper (or any image before this) simply reaches the deadline and is killed.
+Log: `return: graceful shutdown asked; iOS has up to N ms`, then `return: iOS shut down in N ms` or
+`return: graceful shutdown timed out after N ms; stopping`. State machine: `runtime/xnuhost/src/return.c`
+(unit-tested). **The guest half is the Mac's to build:** a guest helper that `oneios_power_request()` reaches which
+runs iOS's clean power-off (a halt, so xnuhost exits and the return completes, not a reboot). The host half above
+works and is tested without it; the end-to-end (iOS saving its overlay) is not yet verified. The kernel's own
+shutdown path does nothing to the host: a guest halt or PSCI SYSTEM_OFF/RESET only sets `xh_stop` (no `reboot(2)`,
+nothing under `/sys/power`; section 2.9), which the return completes.
 
 | Exit code | Meaning |
 | --- | --- |

@@ -24,6 +24,8 @@ typedef struct {
   br_thermal *thermal;                    // NULL: the thermal channel is not served (br_thermal_open)
 } br_bridge_config;
 xh_virtio *br_bridge_create(uint64_t base, unsigned spi, const br_bridge_config *config);
+// Sends the guest the graceful-shutdown ask (OB_CTL_SHUTDOWN) on the one bridge of this session. false: no bridge.
+bool br_bridge_request_shutdown(void);
 
 // "droidvm,net": virtio-net for en0 (VERSION_1 + MAC, 12-byte header, no offloads).
 // `net_open` makes the back end with the device's receive function (br_net_open_tap on the phone).

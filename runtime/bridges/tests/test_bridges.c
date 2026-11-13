@@ -532,6 +532,15 @@ static void test_bridge_device(const char *tmp)
   CHECK(reap(&g, OB_QUEUE_TX) == 0 && dev_radio.sends == 1);
   send_message(&g, 99, 1, NULL, 0);
 
+  // The return's graceful-shutdown ask: a host->guest control message with no payload, queued like any other. Drain
+  // anything the HCI section left (leaving one buffer posted), then the ask is the next message delivered.
+  int left;
+  do { post1(&g, OB_QUEUE_RX, rx[0], OB_MAX_MESSAGE, true); left = reap(&g, OB_QUEUE_RX); } while (left >= 0);
+  CHECK(br_bridge_request_shutdown());
+  CHECK(reap(&g, OB_QUEUE_RX) == 8);
+  memcpy(&header, rx[0], 8);
+  CHECK(header.channel == OB_CH_CONTROL && header.type == OB_CTL_SHUTDOWN && header.length == 0);
+
   // A reset stops the motor and releases the controller.
   vib.on_ms = 5000;
   send_message(&g, OB_CH_HAPTIC, OB_HAPTIC_VIB, &vib, sizeof vib);

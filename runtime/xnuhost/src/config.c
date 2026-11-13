@@ -24,6 +24,7 @@ void xh_config_defaults(xh_config *c)
   c->usb_log = -1;
   c->ram_giveback = c->ram_prefault = c->ram_lock = -1;
   c->ram_session_reserve = c->ram_unlock_below = -1;
+  c->return_graceful_ms = -1;
   strcpy(c->display, "shm");
   strcpy(c->gpu, "auto");
   c->input = true;
@@ -108,6 +109,7 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
   else if (!strcmp(key, "ram-lock")) { bool on; if (flag(value, &on)) return -1; c->ram_lock = on; }
   else if (!strcmp(key, "ram-session-reserve")) { uint64_t v = xh_parse_size(value, &ok); ok = ok && v < (1ull << 40); if (ok) c->ram_session_reserve = (int64_t)v; }
   else if (!strcmp(key, "ram-unlock-below")) { uint64_t v = xh_parse_size(value, &ok); ok = ok && v < (1ull << 40); if (ok) c->ram_unlock_below = (int64_t)v; }
+  else if (!strcmp(key, "return-graceful-ms")) { ok = number(value, 0, 120000, &c->return_graceful_ms); }
   else if (!strcmp(key, "width")) c->width = (unsigned)atoi(value);
   else if (!strcmp(key, "height")) c->height = (unsigned)atoi(value);
   else if (!strcmp(key, "hz")) { c->hz = (unsigned)atoi(value); ok = c->hz == 0 || (c->hz >= 24 && c->hz <= 240); }
@@ -311,6 +313,10 @@ int xh_config_finish(xh_config *c)
   if (c->ram_host_floor < 0) c->ram_host_floor = from_image.ram_host_floor < 0 ? (int64_t)XH_RAM_AUTO_FLOOR : from_image.ram_host_floor;
   if (c->host_mem_log < 0) c->host_mem_log = from_image.host_mem_log < 0 ? 30 : from_image.host_mem_log;
   if (c->usb_log < 0) c->usb_log = from_image.usb_log < 0 ? 3 : from_image.usb_log;
+  // Default 0 (today's immediate kill): the graceful path's guest half (iOS actually powering off) is not yet built
+  // or tested end to end, so it is off until the Mac/phone proves it. return-graceful-ms=N (or the image's
+  // xnuhost.conf) turns it on. The host state machine itself is tested (docs/booter.md "The return").
+  if (c->return_graceful_ms < 0) c->return_graceful_ms = from_image.return_graceful_ms < 0 ? 0 : from_image.return_graceful_ms;
   if (!*c->ram_meminfo) strcpy(c->ram_meminfo, *from_image.ram_meminfo ? from_image.ram_meminfo : "/proc/meminfo");
   // The RAM held fixed for the session (ramfix.c) with ram-giveback=0; the default is still 0058's way (ram-giveback=1):
   // the fixed RAM has run in the host tests and the test kernel only, not in a PC boot of iOS or on the phone.

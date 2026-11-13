@@ -70,6 +70,40 @@ static uint64_t reg_store[4], last_write_size;
 static uint64_t fake_read(void *o, uint64_t off, unsigned size) { (void)o; (void)size; return reg_store[off / 8 & 3] >> (off % 8 * 8); }
 static void fake_write(void *o, uint64_t off, unsigned size, uint64_t v) { (void)o; last_write_size = size; reg_store[off / 8 & 3] = v; }
 
+// The return's graceful-shutdown state machine (return.c): graceful done, timeout, panic during the wait, a second
+// request, and the immediate kill when the window is 0 or iOS is not yet up.
+static void test_return(void)
+{
+  xh_return_state st;
+
+  // Graceful: a return signal while iOS is up and the window is on -> wait; it ends when iOS stops itself (the loop
+  // exits on xh_stopping) before the deadline.
+  xh_return_init(&st);
+  CHECK(xh_return_on_signal(&st, 10000, true, 1000) == XH_RETURN_GRACEFUL && st.active && st.deadline_ms == 11000);
+  CHECK(!xh_return_expired(&st, 5000) && !xh_return_expired(&st, 10999));
+  CHECK(xh_return_elapsed_ms(&st, 4200) == 3200);
+
+  // Timeout: still waiting at the deadline -> stop.
+  CHECK(xh_return_expired(&st, 11000) && xh_return_expired(&st, 20000));
+
+  // A second return request during the wait -> stop now, whatever the clock says.
+  CHECK(xh_return_on_signal(&st, 10000, true, 5000) == XH_RETURN_STOP_SECOND);
+
+  // The window off (0) -> the immediate kill, as before; never a wait.
+  xh_return_init(&st);
+  CHECK(xh_return_on_signal(&st, 0, true, 1000) == XH_RETURN_STOP_NOW && !st.active);
+  CHECK(!xh_return_expired(&st, 1000000));
+
+  // iOS not up yet (no first frame) -> the immediate kill (nothing to shut down; the switch's dead-man may be returning).
+  xh_return_init(&st);
+  CHECK(xh_return_on_signal(&st, 10000, false, 1000) == XH_RETURN_STOP_NOW && !st.active);
+
+  // A panic during the wait is not a signal: the loop's xh_stop(PANIC) ends the wait at once, so the state machine is
+  // never asked again. The guard that a stopped-but-inactive state never looks expired:
+  xh_return_init(&st);
+  CHECK(!xh_return_expired(&st, 1000000) && xh_return_elapsed_ms(&st, 1000000) == 0);
+}
+
 static void test_mmio(void)
 {
   CHECK(xh_mmio_add(&(xh_mmio_region){ .base = 0x9000000, .size = 0x1000, .name = "fake", .read = fake_read, .write = fake_write }) == 0);
@@ -1770,6 +1804,7 @@ int main(void)
   xh_log_open(NULL, XH_LOG_ERROR);
   xh_virtio_translate = xh_ram;
   test_insn();
+  test_return();
   test_mmio();
   test_gic();
   test_sysreg();

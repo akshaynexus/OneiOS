@@ -159,6 +159,13 @@ is gone, writes the hardware's range; the return writes One UI's values back bef
 `oneios_return.sh` (run by the watcher, by Volume Up + Volume Down held 3 s, or by hand):
 
 1. `SIGTERM` to the xnuhost pid. xnuhost should flush `/data/data` and end its tasks; it has **20 s**.
+   **Default behaviour is unchanged** (immediate stop). A new setting `return-graceful-ms` (default 0; `docs/booter.md`
+   "The return") can, when turned on, make the first `SIGTERM` take up to that long before xnuhost stops: it asks iOS
+   to shut itself down first (so iOS saves what a clean power-off saves) and waits up to the limit, then stops as
+   before. When it is on, the fork still needs no change: the 20 s budget covers the default 10000, and a second
+   return — the Volume Up + Volume Down chord pressed again during the wait, which the fork turns into a second
+   `SIGTERM` — makes xnuhost stop at once. Keep the fork's SIGTERM-to-SIGKILL budget at or above the image's
+   `return-graceful-ms`; a shorter one has `SIGKILL` cut the shutdown short (still a correct, if abrupt, way back).
 2. `SIGKILL` to every process still in the namespace.
    **Asked of the fork, not in it yet (radio2, 2026-11-12):** after this step and before zygote, when
    `session/wifi.state` exists (xnuhost was killed before its own stop), run `runtime/bin/wifictl restore
