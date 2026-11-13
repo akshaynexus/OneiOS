@@ -790,6 +790,16 @@ decision, 2026-11-12: no pressure feedback, no cache cap, no change to XNU's fre
   renderer still holds its udmabuf stays held by Linux (the import pins it) and the guest's reuse gets a new page (a
   guest bug either way).
 
+## 0061-ubt-count.patch (fix-wifi-late-2, 2026-11-13)
+
+0026's user backtraces (`oneios-ubt=NAME,...`, `oneios-ubt-at=`, `oneios-ubt-every=`) as a sampler of a boot's first
+minutes: `oneios-ubt-count=N` stops after N reports (default 0: no end, as before), and each report now starts with
+`oneios-ubt: report K at +S s` (seconds after bsd_init's late start, where 0026's thread starts). Why: on the phone
+(2026-11-13, main c1223f8) configd named en0 89 s after launchd with IOKit already quiet, and what its threads did in
+those 89 s is not in xnuhost's log. For the next boot, in the image's `xnuhost.conf`: `oneios-ubt=configd,wifid
+oneios-ubt-at=20 oneios-ubt-every=10 oneios-ubt-count=18` (+20 s to +190 s); give each line's addresses to `oneios-tool
+sym` (`docs/hardware.md` 3, "en0 late"). Compiled in the Linux PC's kernel (`HOSTED_OUT=fixwifi`) and prelinked (`kernel.kc` `84d3304c`: audit 0 failures, `stubs-check.py` 666 good). Not on the phone.
+
 ## 0049-wifi-association-event.patch (radio2, 2026-11-12)
 
 `kev_post_msg` (bsd/kern/kern_event.c) refuses an event that does not fit one mbuf without a cluster (`MLEN`), with

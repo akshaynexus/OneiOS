@@ -511,7 +511,7 @@ and configd's source (configd's `Plugins/InterfaceNamer`, apple-oss-distribution
    which on the phone runs in the first two busy minutes (lsd, backboardd, iconservicesagent). [I] That driverkitd's
    time is the +130 s: the phone's log of that boot was not read here; the lines to read are below.
 
-**Fix (built, PC-booted, not on the phone):** the nub has `network-interface-unit-en = <0>` (32 bits), as the
+**Fix (merged in #8; on the phone on 2026-11-13 it did not make Wi-Fi earlier, below):** the nub has `network-interface-unit-en = <0>` (32 bits), as the
 iPhone's node, so InterfaceNamer names en0 as soon as the interface appears (`OneiOSWifi.cpp`, `net/README.md`, "en0's
 name"). InterfaceNamer still refuses the unit when its database has en0 at another registry path (`builtinAvailable`;
 configd then says `has reserved unit 0, but it's not available`). No XNU source changed, so no numbered patch.
@@ -540,24 +540,64 @@ far as naming):
 - driverkitd on 24A446 does not ask LaunchServices on this hardware (`Hardware does not support third party
   drivers`, `Using cached application list`, in its log of both PC boots), so lsd is not what it waits for.
 
-**What to read in the next phone boot's `xnuhost.log`:**
-- `ONEIOS WIFI: first naming (...): by configd[..], +S s ..., IOKit busy 1`: S a few seconds after configd's start and
-  busy 1 (before driverkitd) is the fix working; then `first enable (IFF_UP)`, `first Apple80211 request`, `first
-  power on`, `first scan request` within seconds, and `the interface is enabled (en0 is up)` well before +130 s.
-- `KextLog: driverkitd is active` (and `deferred rematching count N` just before it): when IOKit went quiet; with the
-  fix the naming no longer waits for it. The `oneios-iobusy: N s:` lines say whether the root was still busy.
-- If `first naming` comes with `IOKit busy 0` right after `KextLog: driverkitd is active`, the unit was refused: read
-  configd's log (below) for `has reserved unit 0, but it's not available`.
-- If en0 is named early but `first enable` or `first power on` still comes late, the wait is in wifid, not configd:
-  the `NAME[PID]` of those lines says who.
+**On the phone (2026-11-13 ~10:50, main c1223f8 with the fix, runtime 0.1.9-dev, `kernel.kc` `4b9a91ae`): the fix
+did not make Wi-Fi earlier.** Guest seconds: the driver's start 787.6, launchd 809.9, first frame 832.3; `first naming
+...: by configd[34], +111.079 s ..., IOKit busy 0` (898.7, launchd + 89 s), `first Apple80211 request: by configd[34],
++129.3 s`, `first enable (IFF_UP): by configd[34], +131.1 s` (918.8), `first scan request: by wifid[40], +200.8 s`
+(988.5), then scans of 20 to 39 networks (host error 0). The 0.1.8 boot had en0 up at +128 s. IOKit was already quiet
+at the naming, so in this boot InterfaceNamer did not wait for driverkitd: the wait is elsewhere in configd, before
+InterfaceNamer names en0 (configd's open source, `plugin_support.c` and `ifnamer.c` at its main branch, not 24A446's build: the plugin thread first loads every plugin
+bundle, dlopen()ing the ones that are not built in (IPConfiguration, EAPOLController and the others outside configd's
+binary), then calls the `load()` functions in its allow-list order, InterfaceNamer's first; that starts the
+`InterfaceNamer thread`, which reads `NetworkInterfaces.plist` (`*START*`), opens IONetworkStack (`*STACK*`), and names
+the interfaces that have arrived, while PreferencesMonitor's `load()` runs `__SCNetworkConfigurationUpgrade` on the
+plugin thread; the two share the SCPreferences locks). The PC shows the same shape, many times slower: configd spawned +834 s, named +1010 s, `IFF_UP` +1145 s,
+wifid's first request +1350 s, first scan +1775 s. What holds configd for those 89 s on the phone is not known yet [U];
+the next boot's lines below say it. No join came by +275 s; whether a known network was in range is open (the owner
+was asked; 35 networks against the hotel's 64).
 
-**In iOS's own log** (`oneios-tool ioslog show data.img --proc configd`, then `--proc driverkitd`, `--proc wifid`):
-configd's `InterfaceNamer` lines `addTimestamp: *START*`, `*STACK*`, `*QUIET*`, `*QUIET&NAMED*`, `waiting for quiet`,
-`has reserved unit 0`, `Assigned unit 0 (from database)`, `timed out waiting for IOKit to quiesce` and `Busy services
-:`; driverkitd's `Starting driverkitd`, `Hardware does not support third party drivers` (then no LaunchServices
-query) or `Retrieving applications from LaunchServices` (then it waits for lsd); wifid's first lines after its start.
-Not checked without the phone: driverkitd's start and send times there, whether the database's en0 entry has our
-registry path, and that nothing after the naming (wifid's own start, its preferences) adds a wait.
+**wifid's `sets 25` -> 102** is `APPLE80211_IOC_HOST_AP_MODE` (24A446's table; the PC's iOS log names it: `IOCTL
+type 25/'APPLE80211_IOC_HOST_AP_MODE', len[0] return -1`, the framework's `-3903`). 102 is `EOPNOTSUPP`: the driver
+refuses the access point modes on purpose (`kRefusedSets`, bit 25), and wifid goes on with its attach and scans after
+it (PC and phone). Right as it is.
+
+**Who brings en0 up and what starts a join** [F 24A446, PC boot]: configd's IPConfiguration sets `IFF_UP` (the
+`first enable` line names configd) after its first Apple80211 requests (`gets 12` CARD_CAPABILITIES, `gets 1` SSID),
+not wifid. wifid joins only by its auto-join: a network of its known-networks store
+(`/private/var/preferences/com.apple.wifi.known-networks.plist` on the Data volume) that the last scan has; with none
+in range it scans and does not join, which is iOS's normal behaviour. Its log says which (`AUTO-JOIN:` lines; the
+PC's first auto-join was `trigger=power_on`, then `Cancelled active auto-join request` with no known network). wifid
+also has an auto-join deferral (`AJDeferralTimer`, `in autojoin deferral period`, `Auto-join deferral is active, will
+not continue auto-join`) and first-unlock rules (`enabling autojoin before first unlock`): its log tells those apart.
+
+**For the next phone boot**, in the image's `xnuhost.conf` boot arguments: `oneios-ubt=configd,wifid oneios-ubt-at=20
+oneios-ubt-every=10 oneios-ubt-count=18` (hosted 0061: a report of every configd and wifid thread every 10 s from +20 s
+to +190 s after bsd_init, each headed `oneios-ubt: report K at +S s`), and `oneios-sysfail=configd` (0034: its failing
+path calls). Then:
+- `oneios-tool sym` on the `oneios-ubt: configd[34] thread ...` lines of the reports before `first naming`: the thread
+  named `InterfaceNamer thread` and configd's plugin thread show where they wait (an SCPreferences lock, a plugin's
+  `load()`, an IOKit call, a Mach message to another daemon); the same for wifid between `first enable` and `first
+  scan request`.
+- `xnuhost.log`: `first naming`, `first Apple80211 request`, `first enable`, `first scan request` against launchd's
+  start and the `oneios-ubt: report` times; `KextLog: driverkitd is active`; `wifi: join` / `ONEIOS WIFI: join:` if a
+  join comes.
+
+**Searches in iOS's own log** (`oneios-tool ioslog show data.img --boot last --sort ...`; the times of configd's
+`addTimestamp:` lines are its own clock, `CFAbsoluteTime`):
+- `--proc configd --grep 'addPlugin|loading |adding |load failed|InterfaceNamer|addTimestamp|STACK|QUIET|COMPLETE|reserved unit|Known interface|waiting for quiet|Assigned unit|lock held|lock delayed|Hardware model changed|Network configuration|currentSetExists'`:
+  when configd started, when InterfaceNamer started (`*START*`), when it had the stack (`*STACK*`), when en0 was named,
+  and which SCPreferences lock was held for how long.
+- `--proc configd --grep 'IPConfiguration|en0|DHCP|link'`: when IPConfiguration started the en0 service and brought
+  it up.
+- `--proc wifid --grep 'Now attempting to add AirPort Interface|WiFi network interface added|AUTO-JOIN|deferral|Deferral|first unlock|First unlock|known network|KnownNetwork|power|Power|scan'`:
+  when wifid took en0, why its first scan came 70 s after `IFF_UP`, and what its auto-join found (a known network in
+  range or none).
+- `--proc wifid --type error,fault` and `--proc airportd`: anything that failed.
+- The known networks themselves: copy `/private/var/preferences/com.apple.wifi.known-networks.plist` out of the Data
+  volume (`oneios-tool image apfs-copy --volume 2 --newest data.img /preferences/com.apple.wifi.known-networks.plist DIR`:
+  the Data volume is `/private/var`) and compare its SSIDs with the scan.
+Not checked without the phone: everything in this list; whether the phone's configd waits on the same thing the PC's
+does.
 
 ### Missing, unknown
 
