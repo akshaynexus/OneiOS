@@ -85,8 +85,9 @@ void xh_impl_mmio_write(struct xh_cpu *cpu, uint64_t phys, uint32_t size, uint64
 int64_t xh_impl_ram_discard(struct xh_cpu *cpu, uint64_t phys, uint64_t size)
 {
   (void)cpu;
-  // The pages go back to Linux and read as zero afterwards, in every mapping of them (discard.c).
-  return xh_ram_discard_fd(g_mem.fd, g_mem.phys, g_info.ram_phys, g_info.ram_size, phys, size, g_info.host_page_size);
+  // The pages go back to Linux and read as zero afterwards, in every mapping of them (discard.c); refused while the RAM
+  // is held fixed for the session (ramfix.c).
+  return xh_ram_discard_host((g_info.features & XH_FEATURE_RAM_FIXED) != 0, g_mem.fd,g_mem.phys, g_info.ram_phys, g_info.ram_size, phys, size, g_info.host_page_size);
 }
 
 uint32_t xh_impl_text_fixup(struct xh_cpu *cpu, void *text, uint64_t size) { (void)cpu; return xh_text_fixup(text, size); }

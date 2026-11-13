@@ -1006,6 +1006,26 @@ MiB as 52,602 runs in 822 batches: every run one 4 KiB page (this kernel's page)
 - **Not run on the phone.** What to read there: the fourth `oneios-mem:` line's per MiB on a CPU and by the clock, and
   `runs` against `batches` (0058's were 64 runs a batch).
 
+## 0067-ram-fixed.patch (fix-fixed-memory, 2026-11-13; written, NOT in the series, never compiled)
+
+**0058's give-back becomes the host's choice.** With xnuhost's `ram-giveback=0` the RAM is held fixed for the session
+(`docs/booter.md` 2.2, "Fixed RAM"), and the host says so with `XH_FEATURE_RAM_FIXED` (bit 3 of `xh_info.features`, added
+to the kernel's copy of `hostcall.h`). The patch: `hosted_fr_giveback`, set once in `hosted_free_report_start` from that bit
+(`oneios-free-report-giveback=1` gives back anyway, `=0` never); the reporting loop runs only with it. The free queues keep
+0058's order (freed pages first) and the `oneios-mem:` lines stay; with give-back off, their "given back" count is the
+free pages never touched since boot (released at startup). A new start line: `oneios-mem: free pages given back to the
+host: no (the host holds the RAM fixed); the free queues take the pages iOS freed first (0058)`.
+
+- **State.** Written by hand against `vm_resident.c` after 0066 (taken from the hang agent's work tree; 0066's hunk
+  reverses cleanly on it) and `hostcall.h` after 0003. Not compiled: the build queue was not reached before the
+  handoff. To finish: uncomment it in `series`, `HOSTED_OUT=fixmem` build, prelink (audit 0 failures, stubs-check), a PC
+  boot with `--set ram-giveback=0` (the start line above; no `ram_discard` refusals in xnuhost's `memory: fixed RAM` line).
+- **Without it** xnuhost's `ram-giveback=0` still works: the first `ram_discard` of 0058/0066 gets -EPERM and the kernel
+  stops for the boot (`oneios-mem: ram_discard(...) failed: -1; free pages are no longer given back`); one batch's pages
+  go back to the head of the free queue.
+- **0058/0066 now:** give-back is xnuhost's default still (`ram-giveback=1`) until the fixed RAM has run on a PC boot and
+  the phone; then it becomes opt-in.
+
 ## gpu/: the blobs' kinds and ages, `oneios-cpu`'s span (hang, 2026-11-13; the archive, not a numbered patch)
 
 No XNU source changes, so no patch in the series: `oneios-tool kernel gen gpu` compiles a staged

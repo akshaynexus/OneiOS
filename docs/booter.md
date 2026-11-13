@@ -41,7 +41,7 @@ xnuhost --selftest            # on the phone: page size, address bits, PAC keys 
 | `--kernel FILE` | `DIR/kernel.kc`, else `DIR/kernel.macho` | the kernel collection: `MH_FILESET`, or an `MH_EXECUTE` kernel |
 | `FILE.trustcache`, `.vroot`, `.gpuaddon`, `.ramdisk`, `.adt` | optional | DarwinBoot's sidecars beside the kernel, same formats and checks |
 | `DIR/identity.adt` | optional | the device's own decoded device tree: model, target-type, board name and `/product` are taken from it |
-| `DIR/xnuhost.conf` | optional | `key=value` lines: `boot-args`, `disk`, `disk-rw`, `data-store`, `scale`, `scale-fixup`, `text-fixup`, `ram`, `ram-percent`, `ram-host-floor`, `host-mem-log`; the command line wins |
+| `DIR/xnuhost.conf` | optional | `key=value` lines: `boot-args`, `disk`, `disk-rw`, `data-store`, `scale`, `scale-fixup`, `text-fixup`, `ram`, `ram-percent`, `ram-host-floor`, `host-mem-log`, `ram-giveback`, `ram-prefault`, `ram-lock`, `ram-session-reserve`, `ram-unlock-below`; the command line wins |
 | `DIR/overlay/userland/xnuhost.conf` | optional | the same, written by the userland hook: `scale=3` or `scale=2`, the UI scale the image's Data seed was made for (`docs/userland.md` "The screen") |
 | `--width W --height H`, `--hz N` (or `width=`, `height=`, `hz=` in the image set's `xnuhost.conf`) | the display helper's report of the panel | the guest's display mode (section 2.8); for a PC run or another panel |
 | `--scale 2\|3` (`--set scale=2`) | the image set's, else 3 | the UI scale: pixels per point |
@@ -55,13 +55,17 @@ xnuhost --selftest            # on the phone: page size, address bits, PAC keys 
 | `--set ram-host-floor=SIZE` | 1.5G | what `ram=auto` always leaves the host |
 | `--set host-mem-log=SECONDS` | 30 | a `memory: host MemAvailable` line every so often; 0 = only at the start and the stop |
 | `--set ram-meminfo=FILE` | `/proc/meminfo` | where `ram=auto` reads `MemTotal` and `MemAvailable` (tests) |
+| `--set ram-giveback=0\|1` | 1 | 0: the RAM is **held fixed for the session** (section 2.2, "Fixed RAM": prefaulted, locked where Linux allows, no free pages given back). 1: 0058's way (faulted in as used, free pages given back). Off by default until it has run on a PC boot of iOS and on the phone |
+| `--set ram-prefault=0\|1`, `ram-lock=0\|1` | 1, 1 (with `ram-giveback=0`) | prefault the whole memfd on a nice-19 thread; `mlock` it while prefaulting (all or nothing) |
+| `--set ram-session-reserve=SIZE` | 1G | with `ram-giveback=0`: `ram=auto` takes no more than `MemAvailable` at the start less this, and the lock is tried only if the RAM fits in it |
+| `--set ram-unlock-below=SIZE` | 256M | with the RAM locked: the host's `MemAvailable` under this (read once a second) unlocks it once for the rest of the session; 0 = never |
 
 **The guest's RAM (`ram=auto`, the owner's decision of 2026-11-12: iOS gets at least 90% of the phone's RAM).**
 In a session One UI's apps and system_server are gone, so the host needs little: the guest gets
 `min(ram-percent% of MemTotal, MemTotal - ram-host-floor)`, rounded down to 256 MiB. On a 12 GB phone (MemTotal
 about 11.2 GiB, an assumed figure until the first log line from the phone) that is the floor's 9.5 GiB (9728 MiB); 90%
 would be 10.0 GiB. A host where that leaves the guest less than 1 GiB is refused (exit 2, "give --ram SIZE"); a host
-with no `/proc/meminfo` gets the old 4 GiB. The RAM is a memfd that is never populated or locked: the host gives it
+with no `/proc/meminfo` gets the old 4 GiB. By default the RAM is a memfd that is never populated or locked (`ram-giveback=0` holds it fixed instead: section 2.2, "Fixed RAM"): the host gives it
 pages only as the guest touches them (`ram_discard` gives them back). The log says what was chosen, and then what the
 host has left:
 
@@ -171,7 +175,55 @@ multiple of 2 MiB away from the link base, which is the slide the kernel finds w
   `include/xnuhost/free_report.h`, which the kernel carries as a copy (the host tests check they are one file). Run on
   the PC at `ram=auto` (14,080 MiB): the host held 4,973 MiB after 16.5 min instead of 12,266 MiB, with XNU's own
   view of its memory unchanged. A task that still has the page mapped (an unmap xnuhost has queued, 2.6) loses it in
-  the punch and cannot run before the queue is carried out (test kernel). Not run on the phone.
+  the punch and cannot run before the queue is carried out (test kernel). Not run on the phone. With `ram-giveback=0`
+  (below) every `ram_discard` is refused with -EPERM.
+- **Fixed RAM (`ram-giveback=0`, `src/ramfix.c`, fix-fixed-memory, 2026-11-13; off by default).** The owner's requirement:
+  iOS's RAM must not grow and shrink during a session. The phone's c2d281a session showed why: the memfd was faulted in
+  bit by bit (4,904 -> 6,010 -> 6,254 MiB), 527 MiB of free pages given back in 22,688 calls, then 669 MiB of it swapped
+  out by the host (zram) with the host's MemAvailable at 842 MiB: every step a fault in a vCPU or a task. With
+  `ram-giveback=0`:
+  - xnuhost sets `XH_FEATURE_RAM_FIXED` in `xh_info.features` and refuses `ram_discard` (-EPERM, counted). A kernel
+    without 0067 stops giving back after the first refusal (0058's "free pages are no longer given back"); 0067 (written,
+    not yet in the series) never asks and keeps 0058's free-queue order (freed pages first: it costs nothing, and where the
+    lock fails it keeps iOS on pages the host has kept resident).
+  - A thread `xnuhost-ram` (SCHED_OTHER, nice 19, never realtime) prefaults the whole memfd in 16 MiB steps from the
+    moment it is mapped, while the boot goes on: `mlock` of each step (which faults it in and locks it), or, when the
+    lock is off or failed, one read per host page (a read of a hole through the shared mapping allocates a zeroed page;
+    not `fallocate`, whose pages stay "not up to date" and are not counted by `mincore`). The lock is all or nothing: on
+    the first failure (EPERM: no CAP_IPC_LOCK; ENOMEM: RLIMIT_MEMLOCK or no memory) what was locked is unlocked, the
+    rest is prefaulted unlocked, the errno is logged, the boot goes on. The lock is tried only if the RAM fits in the
+    host's MemAvailable less `ram-session-reserve`.
+  - `ram=auto` adds a third bound: `MemAvailable` at the start less `ram-session-reserve` (1 GiB: the iOS tasks' page
+    tables, KGSL's own memory, the display helper and the daemons that stay), so a RAM held from the start fits beside
+    what the host keeps running. The phone's c2d281a numbers suggest the host needed far more than the 1.5 GiB floor
+    beside a 6.3 GiB guest [inference: the session's MemTotal and start MemAvailable were not in the notes]; the next
+    phone boot's `ram=auto` line says which bound decides.
+  - The valve: while locked, the thread reads MemAvailable once a second; under `ram-unlock-below` (256 MiB) it unlocks
+    the RAM once (the host may swap it again, today's way; nothing is given back) and logs it.
+  - **The way back (safety).** xnuhost runs as root in cgroup `oneios_session` with `oom_score_adj` 500 (unchanged). If
+    the host runs short with the RAM locked, the kernel first reclaims the other processes (file cache, then their
+    anonymous pages to zram: surfaceflinger, the HALs, the fork's watcher may slow down; daemons at -1000 are never
+    killed); lmkd has no registered process to kill once system_server is gone; the kernel's OOM killer then picks the
+    largest badness, xnuhost (the whole RAM is its RSS, plus adj 500), and the watcher returns to One UI, the existing
+    safe failure. The valve is there so that this thrash phase is not reached in the first place. The return frees
+    everything at once: the memfd's last mapping and descriptor go with xnuhost, the task factory and the tasks (the
+    exit or the cgroup kill; mlock ends with the mapping), before the watcher's wait returns (the host test kills a
+    child holding 256 MiB and checks Shmem falls back). Nothing is written outside the process: no rlimit, no cgroup
+    file (`memory.swap.max` of `oneios_session` would be a fork-side backup), no sysctl.
+  - Log: `memory: the guest's RAM is held for the session: N MiB, prefaulted on a thread at nice 19 ..., locked as it goes
+    (mlock)|why not; RLIMIT_MEMLOCK .., CAP_IPC_LOCK .., cgroup .. (memory.max .., memory.high .., memory.swap.max ..)`,
+    then `memory: the guest's RAM is held: N MiB prefaulted in T ms, locked (mlock: the host cannot swap it)|not locked
+    (mlock: ERRNO; the host may swap it)`, and every host-mem-log seconds a third `memory:` line: `memory: fixed RAM:
+    held and locked; prefaulted N of N MiB, locked L MiB (VmLck; host Mlocked M MiB); give-back refused C calls; since the
+    last line: host swap-ins +I, swap-outs +O pages, xnuhost major faults +F[; KGSL: name value, ...]` (KGSL's files under
+    `/sys/class/kgsl/kgsl/proc/PID`, as KGSL prints them: the host's own GPU memory for xnuhost). At the stop:
+    `memory: the guest's RAM: N MiB held to the end, L MiB of it locked; the exit gives all of it back to the host`.
+  - Tested: the host tests (`test_ramfix`: prefault keeps every byte, a lock failing part way with ENOMEM and at once
+    with EPERM falls back and unlocks, a real lock within the PC's 8 MiB RLIMIT_MEMLOCK shows in VmLck and the valve
+    undoes it, past the limit a clean fallback, the thread, the refusal, the return; the sizing in `test_config`), and
+    the test kernel under qemu-aarch64 (`make check-arm64`'s second boot runs with `ram-giveback=0`: the refusal, the
+    prefault, the sizing line; on the PC mlock fails with ENOMEM: RLIMIT_MEMLOCK 8 MiB, no root). **Not run:** a PC
+    boot of iOS with it, the kernel 0067, the phone (where xnuhost is root: the lock itself).
 - **The kernel's own address space** outside the window (zones, kalloc, stacks, IOKit buffers) is a
   no-access reservation from the end of the RAM, rounded up to 1 GiB, to `0x3c00000000`
   (`xh_info.kva_base/kva_size`). `kernel_map(va, size, prot, phys)` maps RAM pages into it and

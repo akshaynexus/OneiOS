@@ -134,6 +134,8 @@ struct xh_info {
 #define XH_FEATURE_PAC          (1ull << 0)   // paca/pacg: arm64e runs; one key set for kernel and tasks
 #define XH_FEATURE_TASKS        (1ull << 1)   // the task trap layer works on this host (seccomp, memfd)
 #define XH_FEATURE_PAC_KEYS_OFF (1ull << 2)   // PR_PAC_SET_ENABLED_KEYS: plain arm64 tasks can run
+#define XH_FEATURE_RAM_FIXED    (1ull << 3)   // the RAM is held for the whole session (ram-giveback=0): ram_discard
+                                              // is refused (-EPERM); a kernel gives no free pages back (0067)
 
 // ---- calls from the host into the kernel --------------------------------------------------------
 struct xh_upcalls {
@@ -185,7 +187,9 @@ struct xh_vector {
   // errno otherwise. Afterwards the range reads as zero in every mapping (the window, every task that maps it; a
   // task's mapping is not removed, its next access gets the new page) and the host holds no memory for it until it
   // is touched again (a read through a shared mapping fills it too). Kernel 0058's free-page reporting calls it for
-  // pages on XNU's free queue only (free_report.h); xnuhost counts it for its `memory:` log line.
+  // pages on XNU's free queue only (free_report.h); xnuhost counts it for its `memory:` log line. When info->features
+  // has XH_FEATURE_RAM_FIXED (the default since 2026-11-13: the RAM is held for the whole session) every call is
+  // refused with -EPERM and counted; kernel 0067 then does not call it.
   int64_t  (*ram_discard)(struct xh_cpu *, uint64_t phys, uint64_t size);
   // User text, exactly once per page of original text, before it is mapped executable: `mrs xN,
   // TPIDRRO_EL0` becomes `mrs xN, TPIDR_EL0` (the TSD base), `mrs xN, TPIDR_EL0` becomes `mov xN, #0`

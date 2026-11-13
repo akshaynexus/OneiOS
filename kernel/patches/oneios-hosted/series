@@ -201,6 +201,15 @@
 # free_report_runs.h). A fourth oneios-mem: line splits the give-back time: lock waits, taking, host calls, putting back,
 # the thread's own CPU time, per MiB. Numbered 0066 to stay clear of the 0059-0065 other agents have open.
 0066-free-page-runs.patch
+# fix-fixed-memory (2026-11-13): the host holds the guest's RAM fixed for the session (xnuhost ram-giveback=0, the
+# default: prefaulted at the start, locked where Linux allows) and says so with XH_FEATURE_RAM_FIXED in xh_info's
+# features (osfmk/arm64/hosted/hostcall.h). Then 0058/0066 give nothing back; the free queues keep 0058's order (pages
+# iOS freed first) and the oneios-mem: lines stay. oneios-free-report-giveback=1 gives back anyway, =0 never. A start
+# line: "oneios-mem: free pages given back to the host: no (the host holds the RAM fixed); ...".
+# NOT IN THE SERIES YET (2026-11-13 handoff): written against the tree after 0066 (its vm_resident.c hunk applies there),
+# never compiled. Uncomment after a kernel build, the prelink and a PC boot. Without it, xnuhost's ram-giveback=0 still
+# holds the RAM: the kernel's first ram_discard gets -EPERM and 0058 stops giving back for the boot.
+#0067-ram-fixed.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # oneios-tool kernel gen net), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and

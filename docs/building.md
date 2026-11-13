@@ -184,7 +184,7 @@ below (the same counts):
 |---|---|
 | `runtime/build.sh out/stage-linux` (clean tree) | 15 files: 14 in `bin/` (13 arm64 ELF and `oneios-net.sh`) and `lib/oneios-display.dex`; xnuhost 4,198,048 bytes, with drm2kgsl (3.4 MB of it is `task.c`'s state `T` in `.data`: it has initialisers, so it is not `.bss`) |
 | loader | 160 checks, 0 failed |
-| xnuhost | 13263 checks, 0 failed; display mode 5 scenarios, 0 failed; image set 37 checks, 0 failed; `check-arm64` under qemu-aarch64 `TESTKERNEL: all passed` and the restart test (8 restarts, then exit 3). **Not run here:** drm2kgsl, the leak test and test_xnuhost's udmabuf import ("no /dev/udmabuf here (Permission denied)"): the box's `/dev/udmabuf` is `root:kvm 0660` with an ACL for the seat's user only (`sddm`); LeakSanitizer itself works here. Giving the user access (the `kvm` group, or the seat) is a root step |
+| xnuhost | 13263 checks, 0 failed (13782 on 2026-11-13 with the fixed RAM's tests, fix-fixed-memory; `check-arm64`'s second boot now runs with `ram-giveback=0`); display mode 5 scenarios, 0 failed; image set 37 checks, 0 failed; `check-arm64` under qemu-aarch64 `TESTKERNEL: all passed` and the restart test (8 restarts, then exit 3). **Not run here:** drm2kgsl, the leak test and test_xnuhost's udmabuf import ("no /dev/udmabuf here (Permission denied)"): the box's `/dev/udmabuf` is `root:kvm 0660` with an ACL for the seat's user only (`sddm`); LeakSanitizer itself works here. Giving the user access (the `kvm` group, or the seat) is a root step |
 | display | 72 checks, 0 failed; mode choice 5 checks, 0 failed |
 | bridges | 204 checks, 0 failed; wifi 132 checks, 0 failed; `test-binder` 38 checks (the Bluetooth HAL client) and 35 (the Wi-Fi supplicant client), 0 failed; brightness 74 checks, 0 failures; battery 57 checks, 0 failures; thermal 56 checks, 0 failed; audio helper 4051 checks, 0 failed; Android build ok |
 | camera | 131 checks, 0 failed; Android build ok |
@@ -317,7 +317,7 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   splits the give-back's time (`give-back time T ms: lock waits ..., host calls ...; on a CPU U ms; per MiB ...`);
   `oneios-free-report-run=1 oneios-free-report-batch=64` gives back the way 0058 did, and
   `oneios-free-report-stress=1 oneios-free-report-hysteresis=1` makes a PC boot give back all the time (how 0066 was
-  measured). xnuhost's second `memory:` line says how much of the guest's RAM the PC itself swapped out.
+  measured). xnuhost's second `memory:` line says how much of the guest's RAM the PC itself swapped out. `--set ram-giveback=0` holds the RAM fixed instead ([booter.md](booter.md) 2.2, "Fixed RAM"; off by default, not yet run in a PC boot of iOS): prefaulted on a thread, no give-back; on this PC the `mlock` fails with ENOMEM (RLIMIT_MEMLOCK 8 MiB, not root) and the RAM is prefaulted unlocked, which the log says.
 - `oneios-data-wait=3000`: under qemu the first boot spends minutes re-deriving the shared cache's 4 KiB code
   hashes (emulated SHA); the committed default (300 s) is for the phone.
 - `hosted_mapcheck=1` (boot argument, debugging only): the kernel records every page it maps into and unmaps
