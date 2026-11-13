@@ -177,11 +177,23 @@
 # head, given-back ones at its tail. oneios-free-report=0: off (stock order). An oneios-mem: line every 30 s says what
 # XNU sees of its memory. The decisions: osfmk/arm64/hosted/free_report.h = runtime/xnuhost/include/xnuhost/free_report.h.
 0058-free-page-report.patch
+# boot: LaunchServices' and the icon store's state before launchd (oneios-ls-state:, oneios-icons-state: lines), and a
+# recovery file a killed session left beside lsd's database goes (oneios-ls-recovery=0 keeps it): with it lsd throws the
+# database 0043 kept away and registers every app again, and every drawn icon's validation token changes, so
+# iconservicesagent draws them all again. A guess for the phone's slow Home Screen of 2026-11-12 23:45 (lsd 90% for the
+# first minute, iconservicesagent 115%), not proven: the lines say. oneios-store-report=0: the whole step off.
+0060-ls-boot-state.patch
 # fix-wifi-late-2: 0026's user backtraces as a sampler of a boot's first minutes. oneios-ubt-count=N stops after N
 # reports (default 0: no end, as before), and each report starts with "oneios-ubt: report K at +S s" (seconds after
 # bsd_init's late start). For configd's ~89 s between launchd and en0's name (phone, 2026-11-13): oneios-ubt=configd,wifid,logd
 # oneios-ubt-at=20 oneios-ubt-every=10 oneios-ubt-count=18. Numbered 0061 (other agents hold 0059-0060, 0062-0069).
 0061-ubt-count.patch
+# bluetooth: how a daemon looks for its hardware (bluetoothd ran on the phone, 2026-11-12 23:45, and never opened the
+# transport). Boot argument oneios-iokit=NAME[,NAME...] (default bluetoothd,BlueTool; - for none): one oneios-iokit:
+# line per distinct IOKit matching lookup, matching notification, registry path, property read (name, plane, entry),
+# user client open and kernel control looked up by name (CTLIOCGINFO), again when its answer changes and at the 16th,
+# 64th, 256th asking; at most 800 lines. A debugging aid, nothing else changes.
+0062-iokit-hardware-probe-trace.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # oneios-tool kernel gen net), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and

@@ -383,7 +383,7 @@ compiles it; `build/oneios-gpu/adreno/status.json` says which). No kernel patch 
 
 **The binding.** Apple's `AGXG18P` is not in the collection, so the names `AGXAccelerator` and `AGXDeviceUserClient`
 are free. The parent is `IOAcceleratorES` of `com.apple.iokit.IOGPUFamily` (a root of `kernel.kc`), read from the
-iPhone18,2 kernelcache by `kernel/prelink/classes.py`: metaclass `0xfffffe000b976c78`, 136 bytes, 168 slots of which
+iPhone18,2 kernelcache by `oneios-tool prelink classes`: metaclass `0xfffffe000b976c78`, 136 bytes, 168 slots of which
 only 0, 1 and 7 are its own (so a plain `IOService`, as `OriginalAcceleratorABI.h` declares and as on the iPad);
 the protected constructor at `0xfffffe000a04bc50` and the base destructor at `0xfffffe000a04bcc0` (0x78 and 8
 before the complete destructor; read from the code: the constructor calls IOService's with the caller's metaclass

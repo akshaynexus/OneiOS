@@ -1,0 +1,438 @@
+diff --git a/bsd/kern/kern_control.c b/bsd/kern/kern_control.c
+--- a/bsd/kern/kern_control.c
++++ b/bsd/kern/kern_control.c
+@@ -146,6 +146,10 @@
+ static int ctl_bind(struct socket *, struct sockaddr *, struct proc *);
+ static int ctl_connect(struct socket *, struct sockaddr *, struct proc *);
+ static int ctl_disconnect(struct socket *);
++#if XNU_HOSTED
++/* OneiOS hosted (0062): iokit/Kernel/IOUserClient.cpp, oneios-iokit= */
++extern void hosted_iokit_ctl_lookup(const char *name, int error, uint32_t id);
++#endif
+ static int ctl_ioctl(struct socket *so, u_long cmd,
+     caddr_t __sized_by(IOCPARM_LEN(cmd)) data,
+     struct ifnet *ifp, struct proc *p);
+@@ -1482,6 +1486,10 @@
+ 			error = ENOENT;
+ 		}
+ 		lck_mtx_unlock(&ctl_mtx);
++#if XNU_HOSTED
++		/* OneiOS hosted (0062): a traced process's lookup of a kernel control by name (bluetoothd's UART.SK) */
++		hosted_iokit_ctl_lookup(ctl_info.ctl_name, error, error == 0 ? ctl_info.ctl_id : 0);
++#endif
+ 
+ 		if (error == 0) {
+ 			bcopy(&ctl_info, data, sizeof(ctl_info));
+diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
+--- a/iokit/Kernel/IOUserClient.cpp
++++ b/iokit/Kernel/IOUserClient.cpp
+@@ -2728,6 +2728,219 @@
+ 	return internal_io_service_match_property_table(service, matching, matchingCnt, matches);
+ }
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0062), a debugging aid: how a named process looks for its hardware. Boot argument
++ * oneios-iokit=NAME[,NAME...] (the process's short name); without it bluetoothd and BlueTool are traced
++ * (oneios-iokit=- traces nothing). One line per distinct request of a process: a matching lookup, a matching
++ * notification, a registry path, a property read (by name and plane), a user client open, a kernel control looked up
++ * by name; again when its answer changes and at the 16th, 64th, 256th, ... asking (a polling loop shows), at most 800:
++ *   oneios-iokit: bluetoothd[74] match {IONameMatch=bluetooth} -> AppleARMIODevice "bluetooth"
++ *   oneios-iokit: bluetoothd[74] property "transport-encoding" (IODeviceTree, recursive) of "bluetooth" -> found (call 1)
++ *   oneios-iokit: bluetoothd[74] match {IONameMatch=AppleOLYHAL} -> none (call 16)
++ * The question it answers: what a daemon that never opens its transport looked for and did not find.
++ */
++static char hosted_iokit_names[128];
++static int hosted_iokit_state = -1;
++static uint32_t hosted_iokit_lines;
++struct hosted_iokit_entry { uint64_t key; uint32_t calls; int32_t last; };
++static struct hosted_iokit_entry hosted_iokit_table[1024];
++
++static bool
++hosted_iokit_traced(char *name, size_t size)
++{
++	if (hosted_iokit_state < 0) {
++		if (!PE_parse_boot_argn("oneios-iokit", hosted_iokit_names, sizeof(hosted_iokit_names))) {
++			strlcpy(hosted_iokit_names, "bluetoothd,BlueTool", sizeof(hosted_iokit_names));
++		}
++		hosted_iokit_state = hosted_iokit_names[0] && strcmp(hosted_iokit_names, "-") && strcmp(hosted_iokit_names, "0");
++	}
++	if (hosted_iokit_state == 0) {
++		return false;
++	}
++	name[0] = 0;
++	proc_name(proc_selfpid(), name, (int)size);
++	size_t length = strlen(name);
++	for (const char *at = hosted_iokit_names; *at;) {
++		const char *end = strchr(at, ',');
++		size_t n = end ? (size_t)(end - at) : strlen(at);
++		if (n == length && !strncmp(at, name, n)) {
++			return true;
++		}
++		at += n + (end ? 1 : 0);
++	}
++	return false;
++}
++
++/* The request's text (without its answer) and its answer: a line when it is new, when the answer changed, or at the
++ * 16th, 64th, 256th, ... asking. A racy table is fine: a lost count or a doubled line at worst. */
++static void
++hosted_iokit_say(const char *name, const char *request, int answer, const char *answer_text)
++{
++	uint64_t key = 1469598103934665603ULL ^ (uint64_t)proc_selfpid();
++	for (const char *c = request; *c; c++) {
++		key = (key ^ (uint8_t)*c) * 1099511628211ULL;
++	}
++	struct hosted_iokit_entry *e = NULL;
++	for (unsigned i = 0; i < 1024; i++) {
++		struct hosted_iokit_entry *t = &hosted_iokit_table[(key + i) % 1024];
++		if (t->key == key || t->key == 0) {
++			if (t->key == 0) {
++				t->key = key; t->calls = 0; t->last = ~answer;
++			}
++			e = t;
++			break;
++		}
++	}
++	uint32_t calls = e ? ++e->calls : 1;
++	bool say = e == NULL || e->last != answer || (calls >= 16 && (calls & (calls - 1)) == 0 && (__builtin_ctz(calls) & 1) == 0);
++	if (e) {
++		e->last = answer;
++	}
++	if (say && hosted_iokit_lines < 800) {
++		hosted_iokit_lines++;
++		IOLog("oneios-iokit: %s[%d] %s -> %s (call %u)\n", name, proc_selfpid(), request, answer_text, calls);
++	}
++}
++
++/* A matching dictionary in one line: string values as they are, numbers, nested dictionaries one level. */
++static void
++hosted_iokit_dict(const OSDictionary *dict, char *out, size_t size, int depth)
++{
++	OSCollectionIterator *iter = dict ? OSCollectionIterator::withCollection(dict) : NULL;
++	strlcat(out, "{", size);
++	bool first = true;
++	if (iter) {
++		const OSSymbol *key;
++		while ((key = OSDynamicCast(OSSymbol, iter->getNextObject())) && strlen(out) + 8 < size) {
++			OSObject *v = dict->getObject(key);
++			char value[96] = "?";
++			OSString *s;
++			OSNumber *n;
++			OSDictionary *d;
++			OSData *data;
++			if (!first) {
++				strlcat(out, " ", size);
++			}
++			first = false;
++			strlcat(out, key->getCStringNoCopy(), size);
++			strlcat(out, "=", size);
++			if ((s = OSDynamicCast(OSString, v))) {
++				strlcpy(value, s->getCStringNoCopy(), sizeof(value));
++			} else if ((n = OSDynamicCast(OSNumber, v))) {
++				snprintf(value, sizeof(value), "%llu", n->unsigned64BitValue());
++			} else if (OSDynamicCast(OSBoolean, v)) {
++				strlcpy(value, v == kOSBooleanTrue ? "true" : "false", sizeof(value));
++			} else if ((data = OSDynamicCast(OSData, v))) {
++				snprintf(value, sizeof(value), "<%u bytes>", data->getLength());
++			} else if ((d = OSDynamicCast(OSDictionary, v)) && depth == 0) {
++				hosted_iokit_dict(d, out, size, 1);
++				value[0] = 0;
++			} else if (OSDynamicCast(OSArray, v)) {
++				snprintf(value, sizeof(value), "[%u]", OSDynamicCast(OSArray, v)->getCount());
++			}
++			strlcat(out, value, size);
++		}
++		iter->release();
++	}
++	strlcat(out, "}", size);
++}
++
++static void
++hosted_iokit_service_text(IORegistryEntry *entry, char *out, size_t size)
++{
++	if (!entry) {
++		strlcpy(out, "none", size);
++		return;
++	}
++	snprintf(out, size, "%s \"%s\"", entry->getMetaClass()->getClassName(), entry->getName() ? entry->getName() : "?");
++}
++
++static void
++hosted_iokit_match(const char *what, const OSDictionary *dict, IORegistryEntry *found, IOReturn ret)
++{
++	char name[33];
++	if (!hosted_iokit_traced(name, sizeof(name))) {
++		return;
++	}
++	char request[320], answer[96];
++	strlcpy(request, what, sizeof(request));
++	strlcat(request, " ", sizeof(request));
++	hosted_iokit_dict(dict, request, sizeof(request), 0);
++	if (ret != kIOReturnSuccess && !found) {
++		snprintf(answer, sizeof(answer), "none (0x%x)", ret);
++	} else {
++		hosted_iokit_service_text(found, answer, sizeof(answer));
++	}
++	hosted_iokit_say(name, request, found ? (int)(uintptr_t)found->getRegistryEntryID() : -1 - (ret != kIOReturnSuccess), answer);
++}
++
++static void
++hosted_iokit_path(const char *path, IORegistryEntry *found)
++{
++	char name[33];
++	if (!hosted_iokit_traced(name, sizeof(name))) {
++		return;
++	}
++	char request[320], answer[96];
++	snprintf(request, sizeof(request), "path \"%s\"", path);
++	hosted_iokit_service_text(found, answer, sizeof(answer));
++	hosted_iokit_say(name, request, found ? 1 : 0, answer);
++}
++
++static void
++hosted_iokit_property(io_object_t object, const char *plane, const char *property, uint32_t options, kern_return_t ret)
++{
++	char name[33];
++	if (!hosted_iokit_traced(name, sizeof(name))) {
++		return;
++	}
++	IORegistryEntry *entry = OSDynamicCast(IORegistryEntry, object);
++	char request[320], where[96], answer[48];
++	hosted_iokit_service_text(entry, where, sizeof(where));
++	snprintf(request, sizeof(request), "property \"%s\" (%s%s) of %s", property, plane && plane[0] ? plane : "no plane",
++	    (options & kIORegistryIterateRecursively) ? ", recursive" : "", where);
++	if (ret == kIOReturnSuccess) {
++		strlcpy(answer, "found", sizeof(answer));
++	} else {
++		snprintf(answer, sizeof(answer), "not found (0x%x)", ret);
++	}
++	hosted_iokit_say(name, request, ret, answer);
++}
++
++static void
++hosted_iokit_open(io_object_t object, uint32_t type, IOReturn ret)
++{
++	char name[33];
++	if (!hosted_iokit_traced(name, sizeof(name))) {
++		return;
++	}
++	char request[160], where[96], answer[32];
++	hosted_iokit_service_text(OSDynamicCast(IORegistryEntry, object), where, sizeof(where));
++	snprintf(request, sizeof(request), "open %s type %u", where, type);
++	snprintf(answer, sizeof(answer), "0x%x", ret);
++	hosted_iokit_say(name, request, ret, answer);
++}
++
++extern "C" void hosted_iokit_ctl_lookup(const char *control, int error, uint32_t id);
++extern "C" void
++hosted_iokit_ctl_lookup(const char *control, int error, uint32_t id)
++{
++	char name[33];
++	if (!hosted_iokit_traced(name, sizeof(name))) {
++		return;
++	}
++	char request[160], answer[48];
++	snprintf(request, sizeof(request), "kernel control \"%.96s\"", control);
++	if (error) {
++		snprintf(answer, sizeof(answer), "not registered (errno %d)", error);
++	} else {
++		snprintf(answer, sizeof(answer), "id %u", id);
++	}
++	hosted_iokit_say(name, request, error, answer);
++}
++#endif /* XNU_HOSTED */
++
+ static kern_return_t
+ internal_io_service_get_matching_services(
+ 	mach_port_t main_port,
+@@ -2750,6 +2963,9 @@
+ 		IOTaskRegistryCompatibilityMatching(current_task(), dict);
+ 		*existing = IOUserIterator::withIterator(IOService::getMatchingServices( dict ));
+ 		kr = kIOReturnSuccess;
++#if XNU_HOSTED
++		hosted_iokit_match("match all", dict, NULL, *existing ? kIOReturnSuccess : kIOReturnNotFound);
++#endif
+ 	} else {
+ 		kr = kIOReturnBadArgument;
+ 	}
+@@ -2833,6 +3049,9 @@
+ 		IOTaskRegistryCompatibilityMatching(current_task(), dict);
+ 		*service = IOService::copyMatchingService( dict );
+ 		kr = *service ? kIOReturnSuccess : kIOReturnNotFound;
++#if XNU_HOSTED
++		hosted_iokit_match("match", dict, OSDynamicCast(IORegistryEntry, *service), kr);
++#endif
+ 	} else {
+ 		kr = kIOReturnBadArgument;
+ 	}
+@@ -2963,6 +3182,13 @@
+ 
+ 		notify = IOService::addMatchingNotification( sym, dict,
+ 		    &userNotify->_handler, userNotify );
++#if XNU_HOSTED
++		{
++			char what[64];
++			snprintf(what, sizeof(what), "notify %s", notification_type);
++			hosted_iokit_match(what, dict, NULL, notify ? kIOReturnSuccess : kIOReturnUnsupported);
++		}
++#endif
+ 		if (notify) {
+ 			*notification = userNotify;
+ 			userNotify->setNotification( notify );
+@@ -3431,6 +3657,9 @@
+ 		OSSafeReleaseNULL(matching);
+ 		OSSafeReleaseNULL(objects[1]);
+ 	}
++#if XNU_HOSTED
++	hosted_iokit_path(path, entry);
++#endif
+ 
+ 	*registry_entry = entry;
+ 
+@@ -3484,6 +3713,9 @@
+ 	if ((KERN_SUCCESS == err) && (KERN_SUCCESS == res)) {
+ 		entry = IORegistryEntry::fromPath(cpath);
+ 		res = entry ? kIOReturnSuccess : kIOReturnNotFound;
++#if XNU_HOSTED
++		hosted_iokit_path(cpath, entry);
++#endif
+ 	}
+ 
+ 	if (map_data) {
+@@ -3680,6 +3912,10 @@
+ }
+ 
+ /* Routine io_registry_entry_get_property */
++#if XNU_HOSTED
++#define is_io_registry_entry_get_property_bytes hosted_impl_is_io_registry_entry_get_property_bytes
++static
++#endif
+ kern_return_t
+ is_io_registry_entry_get_property_bytes(
+ 	io_object_t registry_entry,
+@@ -3751,9 +3987,24 @@
+ 
+ 	return ret;
+ }
++#if XNU_HOSTED
++#undef is_io_registry_entry_get_property_bytes
++/* 0062: the property read, traced (oneios-iokit=) */
++kern_return_t
++is_io_registry_entry_get_property_bytes(io_object_t registry_entry, io_name_t property_name, io_struct_inband_t buf, mach_msg_type_number_t *dataCnt)
++{
++	kern_return_t ret = hosted_impl_is_io_registry_entry_get_property_bytes(registry_entry, property_name, buf, dataCnt);
++	hosted_iokit_property(registry_entry, NULL, property_name, 0, ret);
++	return ret;
++}
++#endif
+ 
+ 
+ /* Routine io_registry_entry_get_property */
++#if XNU_HOSTED
++#define is_io_registry_entry_get_property hosted_impl_is_io_registry_entry_get_property
++static
++#endif
+ kern_return_t
+ is_io_registry_entry_get_property(
+ 	io_object_t registry_entry,
+@@ -3797,8 +4048,23 @@
+ 
+ 	return err;
+ }
++#if XNU_HOSTED
++#undef is_io_registry_entry_get_property
++/* 0062: the property read, traced (oneios-iokit=) */
++kern_return_t
++is_io_registry_entry_get_property(io_object_t registry_entry, io_name_t property_name, io_buf_ptr_t *properties, mach_msg_type_number_t *propertiesCnt)
++{
++	kern_return_t ret = hosted_impl_is_io_registry_entry_get_property(registry_entry, property_name, properties, propertiesCnt);
++	hosted_iokit_property(registry_entry, NULL, property_name, 0, ret);
++	return ret;
++}
++#endif
+ 
+ /* Routine io_registry_entry_get_property_recursively */
++#if XNU_HOSTED
++#define is_io_registry_entry_get_property_recursively hosted_impl_is_io_registry_entry_get_property_recursively
++static
++#endif
+ kern_return_t
+ is_io_registry_entry_get_property_recursively(
+ 	io_object_t registry_entry,
+@@ -3845,6 +4111,17 @@
+ 
+ 	return err;
+ }
++#if XNU_HOSTED
++#undef is_io_registry_entry_get_property_recursively
++/* 0062: the property read, traced (oneios-iokit=) */
++kern_return_t
++is_io_registry_entry_get_property_recursively(io_object_t registry_entry, io_name_t plane, io_name_t property_name, uint32_t options, io_buf_ptr_t *properties, mach_msg_type_number_t *propertiesCnt)
++{
++	kern_return_t ret = hosted_impl_is_io_registry_entry_get_property_recursively(registry_entry, plane, property_name, options, properties, propertiesCnt);
++	hosted_iokit_property(registry_entry, plane, property_name, options, ret);
++	return ret;
++}
++#endif
+ 
+ /* Routine io_registry_entry_get_properties */
+ kern_return_t
+@@ -3986,6 +4263,10 @@
+ }
+ 
+ /* Routine io_registry_entry_get_property_bin_buf */
++#if XNU_HOSTED
++#define is_io_registry_entry_get_property_bin_buf hosted_impl_is_io_registry_entry_get_property_bin_buf
++static
++#endif
+ kern_return_t
+ is_io_registry_entry_get_property_bin_buf(
+ 	io_object_t registry_entry,
+@@ -4085,6 +4366,17 @@
+ 
+ 	return err;
+ }
++#if XNU_HOSTED
++#undef is_io_registry_entry_get_property_bin_buf
++/* 0062: the property read, traced (oneios-iokit=) */
++kern_return_t
++is_io_registry_entry_get_property_bin_buf(io_object_t registry_entry, io_name_t plane, io_name_t property_name, uint32_t options, mach_vm_address_t buf, mach_vm_size_t *bufsize, io_buf_ptr_t *properties, mach_msg_type_number_t *propertiesCnt)
++{
++	kern_return_t ret = hosted_impl_is_io_registry_entry_get_property_bin_buf(registry_entry, plane, property_name, options, buf, bufsize, properties, propertiesCnt);
++	hosted_iokit_property(registry_entry, plane, property_name, options, ret);
++	return ret;
++}
++#endif
+ 
+ /* Routine io_registry_entry_get_property_bin */
+ kern_return_t
+@@ -4628,6 +4920,10 @@
+ }
+ #endif
+ 
++#if XNU_HOSTED
++#define is_io_service_open_extended hosted_impl_is_io_service_open_extended
++static
++#endif
+ kern_return_t
+ is_io_service_open_extended(
+ 	io_object_t _service,
+@@ -4890,6 +5186,17 @@
+ 
+ 	return err;
+ }
++#if XNU_HOSTED
++#undef is_io_service_open_extended
++/* 0062: the user client open, traced (oneios-iokit=) */
++kern_return_t
++is_io_service_open_extended(io_object_t _service, task_t owningTask, uint32_t connect_type, NDR_record_t ndr, io_buf_ptr_t properties, mach_msg_type_number_t propertiesCnt, kern_return_t * result, io_object_t *connection)
++{
++	kern_return_t ret = hosted_impl_is_io_service_open_extended(_service, owningTask, connect_type, ndr, properties, propertiesCnt, result, connection);
++	hosted_iokit_open(_service, connect_type, ret == KERN_SUCCESS ? *result : ret);
++	return ret;
++}
++#endif
+ 
+ /* Routine io_service_close */
+ kern_return_t

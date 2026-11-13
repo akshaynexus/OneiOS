@@ -44,7 +44,8 @@ scripts/image/kernel-inputs.sh "$P"                 # Apple's kernelcache and de
                                                     # (without inputs/24A446/ it fetches only those, 24 MB)
 ```
 
-`kernel-inputs.sh` decodes the two IM4P members (the kernelcache's payload is LZFSE) with `imagetool.py im4p` when the
+`kernel-inputs.sh` decodes the two IM4P members (the kernelcache's payload is LZFSE) with `oneios-tool image im4p` (since
+2026-11-13 always; before, `imagetool.py im4p` when the
 `lzfse` program is on `PATH`, and otherwise with `oneios-tool image im4p` (LZFSE by the `lzfse_rust` crate, no other
 program; build it with `cargo build --release --manifest-path tools/oneios-tool/Cargo.toml`, section 10).
 `IM4P_TOOL=PATH` names a `oneios-tool` binary and makes it the decoder in either case. Whichever ran, the script then
@@ -324,7 +325,7 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   thread, with the thread's return addresses up its frame pointers where the host can read the task's memory (on
   the phone; under qemu-user it cannot, and only pc and lr are shown). Seen on the Linux PC on 2026-11-13 (qemu-aarch64
   11.1.3, a boot 30 minutes in, the pid from `xnuhost.pid`): `qemu: uncaught target signal 3 (Quit) - core dumped` and the
-  boot ended, so there it costs the boot (cause not looked into); `oneios-ubt=` is the safe way. `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
+  boot ended, so there it costs the boot (cause not looked into; another such boot left a 470 MB `qemu_xnuhost_*.core` in the working directory, exit 131); `oneios-ubt=` is the safe way. `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
 - A user process that dies: the kernel logs its registers and a backtrace (`sheng-exc`, `sheng-ubt` lines) for the
   processes named in the boot argument `sheng-exc-name=SpringBoard,backboardd,...` (default: backboardd, chronod,
   liveactivitiesd; launchd always). `oneios-tool sym ADDR...` names those addresses in the image set's dyld
@@ -338,6 +339,14 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   late"). On that 4-CPU PC under other agents' load configd reached the naming 13-26 minutes into the boot, so give
   such a boot `timeout` 4000 s or more; iOS's own log can be read from the running boot's `data.img`
   (`oneios-tool ioslog show ... --proc configd`), not always after a `timeout` kill.
+- Bluetooth on the PC: add `--set bluetooth=sim`: a stand-in controller (`runtime/bridges/bt/hci_sim.c`) behind the
+  bridge channel, with the bridges off; `/bluetooth` gets transport-encoding 1 as with the phone's HAL. xnuhost logs
+  `bluetooth: on: a stand-in controller (bluetooth=sim)`, then `bluetooth: sim: the stand-in controller is on` when
+  bluetoothd connects, and with `-v` each command (`bluetooth: sim: command 0x0c03, ...`). The guest's lines start
+  with `ONEIOS BT:`; the IOKit lookups of bluetoothd and BlueTool are `oneios-iokit:` lines (hosted 0062, on by default
+  for those two; `oneios-iokit=NAME,...` for others). bluetoothd's own lines are in iOS's log after the run:
+  `oneios-tool ioslog show out/run/data/data.img --proc bluetoothd` (section 10). A first boot on the 4-CPU PC
+  reached bluetoothd about 30 minutes in (2026-11-13).
 - Touch and keys on the PC: add `--input-script runtime/xnuhost/tools/input-demo.script` (keep `--no-input`: the
   evdev reader would open the PC's own devices). The script gives xnuhost's input device a panel's axes and, once
   the guest's driver runs it, repeats a tap, a swipe up from the bottom edge and the three side keys
@@ -421,14 +430,14 @@ $T cycle --only return,collect --name NAME                 # end a session that 
 
 | Step | What it does |
 |---|---|
-| `build` | Only what changed. The hosted kernel (`scripts/bg.sh cycle-kernel env HOSTED_OUT=NAME XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`) when `--kernel-out NAME` is given and `xnu.macho` is older than the newest file of `kernel/patches/oneios-hosted` (or missing). The collection (`kernel/prelink/build.sh` with `KERNEL=` and `REFERENCE=` of that tree) when the kernel is newer than `out/kernel/24A446/kernel.kc`; **the cycle stops unless the build ends with status 0 (the audit: 0 failures) and `stubs-check.py` says `0 bad`**. The runtime (`runtime/package.sh V`, unpacked into `out/cycle/runtime-V`) with `--runtime-version V`; `--runtime DIR` takes one that is built. The image parts (`kernel.kc`, `kernel.kc.hashes`; not `manifest.json` or `xnuhost.conf`: `out/image/24A446` is the Mac's own set, not the phone's) are gathered in `out/cycle/image`; `--image DIR` takes a folder instead, which is also where iOS plug-ins built elsewhere go. The iOS plug-ins build on macOS only (`--force plugins`). The app: its source's version is said; `--force app` runs `app build` and `app install`. `--force kernel,prelink,...` builds a part whatever its state. Long builds run in tmux and the cycle waits for their exit code |
+| `build` | Only what changed. The hosted kernel (`scripts/bg.sh cycle-kernel env HOSTED_OUT=NAME XNU_FILESET_REFERENCE=1 kernel/build-hosted.sh`) when `--kernel-out NAME` is given and `xnu.macho` is older than the newest file of `kernel/patches/oneios-hosted` (or missing). The collection (`kernel/prelink/build.sh` with `KERNEL=` and `REFERENCE=` of that tree) when the kernel is newer than `out/kernel/24A446/kernel.kc`; **the cycle stops unless the build ends with status 0 (the audit: 0 failures) and `oneios-tool prelink stubs-check` says `0 bad`**. The runtime (`runtime/package.sh V`, unpacked into `out/cycle/runtime-V`) with `--runtime-version V`; `--runtime DIR` takes one that is built. The image parts (`kernel.kc`, `kernel.kc.hashes`; not `manifest.json` or `xnuhost.conf`: `out/image/24A446` is the Mac's own set, not the phone's) are gathered in `out/cycle/image`; `--image DIR` takes a folder instead, which is also where iOS plug-ins built elsewhere go. The iOS plug-ins build on macOS only (`--force plugins`). The app: its source's version is said; `--force app` runs `app build` and `app install`. `--force kernel,prelink,...` builds a part whatever its state. Long builds run in tmux and the cycle waits for their exit code |
 | `tests` | `--tests`: `runtime/host-tests.sh`; a failure stops the cycle before the phone is touched |
 | `stage` | `phone sums`, then `stage image` with only the files whose SHA-256 differs from the phone's and `stage runtime` when a file of it differs, then `phone sums` again, which must equal the local hashes (`sums.txt`). Files staged with no `manifest.json` of their own get one made from the phone's (`phone manifest`); then `phone image-check`. `data.seed` is never staged |
 | `switch` | First the way back: root, no session, `oneios_return.sh`, `oneios_switch.sh` and `bin/oneios_root.sh` staged, no import in progress (`runtime.new`, `image.new`), and the root script's preflight says `ready 1`. Then `phone switch` |
 | `watch` | Reads `session/xnuhost.log`'s new lines every 2 s, and after a switch only once the file changed at or after the phone's second of the switch (until the switch replaces it, about 40 s in, it is the last session's: its first-frame line made the watch say "ready after 0 s", 2026-11-12) and prints each marker once with its time: xnuhost, kernel, darwin, bsd-root, init, launchd, backboardd, SpringBoard, ready (the first frame), PANIC, end. On a panic, when the session ends by itself, or after `--ready-timeout` (300 s) without the first frame: straight to the return, and the cycle's status is 1 |
 | `hold` | `--hold S` seconds, else until Ctrl-C. Ctrl-C returns, unless `--stay`, which leaves the session open (end it with `phone return` or `cycle --only return,collect`). A panic or the session's own end during the hold returns |
 | `return` | `session/return.request`, then waits (180 s) for `One UI restored` in what `return.log` gained |
-| `collect` | `out/session-logs/DATE/NAME/`: `xnuhost.log`, the last 2000 lines of `switch.log` and `return.log`, `return.outcome`, `sums.txt`, and `summary.md` (versions, hashes, each step's time and result, the markers with their times, the panics, the way back). `--pull-data` adds the Data store's copy and `ioslog` |
+| `collect` | `out/session-logs/DATE/NAME/`: `xnuhost.log`, the last 2000 lines of `switch.log` and `return.log`, `return.outcome`, `sums.txt`, and `summary.md` (versions, hashes, each step's time and result, the markers with their times, the panics, the way back). `--pull-data` adds the Data store's copy and `ioslog`. The summary's result line names every step its Steps table has as failed (`every step that ran ended well` only when none did), and a failed `collect` ends the cycle with status 1. A run that did not watch (`--only return,collect` after `--only stage,switch,watch` with the same `--name`) reads the markers from the saved `xnuhost.log` (this folder's copy, else the phone's `session/xnuhost.log`) and says so |
 
 A cycle takes one phone lock (`out/phone.lock` of the main checkout, also from a worktree) and refuses when
 another cycle holds it. That lock is this tool's own: **the coordinator's `phone-lock.sh` is still the lock between
@@ -475,8 +484,8 @@ restore the baseline (`phone-baseline.txt` next to that script) before you relea
    adb exec-out "su -c 'cat /data/local/tmp/oneios/session/xnuhost.log'" > out/phone-baseline/DATE/sessionN-xnuhost.log
    ```
 
-   A panic: the kernel's frames are unslid collection addresses; `python3 kernel/prelink/stubs-check.py KC` and
-   `kernel/prelink/unmapped.py` name what the collection got wrong. `adb logcat` on this phone is bind-mounted over by
+   A panic: the kernel's frames are unslid collection addresses; `oneios-tool prelink stubs-check KC` and
+   `oneios-tool prelink unmapped` name what the collection got wrong. `adb logcat` on this phone is bind-mounted over by
    the owner's ksud: read logcat from a private mount namespace
    (`/data/adb/ksu/bin/busybox unshare -m --propagation private sh -c 'umount /system/bin/logcat; logcat -d'`).
 4. **Measure** beside the session, read only: `scripts/phone/survey.sh session > out/phone-baseline/DATE/X.txt`
@@ -525,7 +534,7 @@ Each tool's README has its exact commands and what a pass looks like. **None of 
 
 **Getting the image set onto the phone:** it is about 11 GB and never published. Serve it from the PC privately
 over several Cloudflare quick tunnels at once, so a download manager fetches it in parallel parts from all of them
-(the server, `scripts/serve/rangeserve.py`, binds 127.0.0.1 and answers byte ranges; Python's `http.server` does not):
+(the server, `oneios-tool rangeserve` (`scripts/serve/rangeserve.py` until 2026-11-13), binds 127.0.0.1 and answers byte ranges; Python's `http.server` does not):
 
 ```sh
 scripts/serve/serve-image.sh out/image/OneiOS_iOS27.0.1_24A446_iPhone18-2.tar.zst 4   # 4 tunnels; prints the URLs
@@ -677,7 +686,9 @@ what was changed for the iPhone's shared cache and what is verified: [gpu.md](gp
 `scripts/debug/dsc.py`, deleted 2026-11-12), `log` (reads an xnuhost session log), `image` (`scripts/image/imagetool.py`), `ioslog` (iOS's
 own unified log out of a copy of the phone's Data store, without a mount) and `prelink` (all twelve steps of
 `kernel/prelink/build.sh`, behind `PRELINK_IMPL=rust`), and `kernel` (the kernel build's own steps: the
-board archive generators `kernel gen NAME`, the build record, the records made from the kernelcache). Since the third Linux round also `phone` (the adb
+board archive generators `kernel gen NAME`, the build record, the records made from the kernelcache, and since 2026-11-13
+the drivers' build, the fixup of the linked kernel, the series check and the KDK headers), `package` (the runtime package's
+Apple-file check, manifest and archive) and `debug` (the tests' helpers). Since the third Linux round also `phone` (the adb
 workflow of section 6: status, stage, sums, switch, return, log, the Data store's copy), `app` (the fork's app of
 section 7: version, doctor, build, install, stage-scripts) and `cycle` (one test cycle: build, tests, stage, switch, watch, hold, return, collect).
 **None of the three has run on the real phone yet**: sections 6 and 7 show the CLI first and, as the fallback, the
@@ -701,14 +712,17 @@ Rust 1.95 or newer (apk-info-zip 1.1.1 needs 1.95; built with 1.98.0 and 1.99.1)
 (macos-unifiedlogs, pinned by commit in `Cargo.lock`). Linux x86_64 and macOS arm64. `oneios-tool --help` and
 `oneios-tool TOOL --help` list every command and option (one clap layout for all tools).
 
-**The builds use the Python tools.** Where a Rust tool can be chosen, Python is the default:
+**The image scripts, the kernel builds, the prelink and the runtime package run no Python tool of this repository any more** (still Python: `scripts/ios/`, the root tweaks):
+run the Rust tool only:
 
 | Script | Switch | Effect |
 |---|---|---|
-| `scripts/image/build.sh`, `scripts/image/verify.sh` | `IMAGETOOL_IMPL=rust` (default `python`), `ONEIOS_TOOL=PATH` | `oneios-tool image` runs profile, apfs-info, apfs-owners, hashes, tree-copy, seed-pack, manifest and the set folder's verify; pack and the archive's verify stay with the Python tool. Same files, byte for byte (README "image") |
+| `scripts/image/build.sh`, `verify.sh`, `kernel-inputs.sh`, `scripts/fetch/fetch.sh` | none: Rust only since 2026-11-13 (`ONEIOS_TOOL=PATH` for another binary; `IMAGETOOL_IMPL` is gone; `scripts/image/imagetool.py` stays in the tree, unused, until the owner decides) | `oneios-tool image` runs every subcommand, `check-ipsw`, `fetch`, `record-plain`, `aea-info`, `pack` and the archive's `verify` too. Before that day: `oneios-tool image` runs profile, apfs-info, apfs-owners, hashes, tree-copy, seed-pack, manifest and the set folder's verify; pack and the archive's verify stay with the Python tool. Same files, byte for byte (README "image") |
 | `scripts/image/kernel-inputs.sh` | none needed; `IM4P_TOOL=PATH` forces it | without the `lzfse` program the kernelcache is decoded by `oneios-tool image im4p`; the result is checked against the pinned SHA-256 either way (section 1) |
 | `kernel/build-hosted.sh`, `kernel/build-linux.sh`, `kernel/build-macos.sh` | none: Rust only since 2026-11-13 (`ONEIOS_TOOL=PATH` for another binary) | the board archives (`storage`, `board`, `aes`, `keystore`, `net`, `hid`, `audio`, `gpu`, `display`) are built by `oneios-tool kernel gen NAME`, which UniXNU's driver runs from `board.toml`, and the VM kernel's build record by `oneios-tool kernel build-record`; the Python generators were deleted after every file they write was compared byte for byte, and their outputs are frozen in `tests/kernelgen/golden/` (README "kernel") |
 | `kernel/prelink/build.sh` | none: Rust only since 2026-11-12 (`ONEIOS_TOOL=PATH` for another binary) | `oneios-tool prelink` runs all twelve steps; the Python steps were deleted after every step's output was compared byte for byte, and their outputs are frozen as hashes (`tests/prelink/compare-golden.sh`). 14 s instead of two minutes |
+| `runtime/package.sh` (and CI) | none: Rust only since 2026-11-13 (`ONEIOS_TOOL=PATH` for another binary) | `oneios-tool package check\|manifest\|archive`: the Apple-file check, `runtime.json`, the archive without GNU tar; `runtime/package/pack.py` was deleted after 91 frozen cases and the 19 package tests gave the same |
+| `kernel/tests/host.sh`, `drivers/tests/host.sh`, by hand | none | `oneios-tool kernel series-check`, `kernel drivers --check`, `kernel hosted-fixup`, `kernel kdk-headers`, `kernel iig-fix`, `prelink classes\|stubs-check\|unmapped\|port-fixture\|lead-between\|lead-imports`: the scripts of those names were deleted on 2026-11-13 (README, the group 2 section) |
 
 `oneios-tool image seed-pack` writes `data.seed`'s members in parallel, each at its own offset (the same bytes as
 `imagetool.py`'s; the SHA-256 is the one the trust list pins). `ONEIOS_IMAGE_TIMING=1` prints each phase's time;
@@ -723,10 +737,16 @@ oneios-tool ioslog boots data.img                                   # which boot
 oneios-tool ioslog show data.img --boot last --proc backboardd      # text; -f csv|jsonl -o FILE for a file
 oneios-tool ioslog checks data.img                                  # counts of the known problems' lines, last boot
 oneios-tool ioslog save data.img out/session.logarchive             # the .logarchive the manual steps made
+oneios-tool image apfs-checkpoints data.img                         # the store's checkpoints: which pass the checks, and why the others do not
 ```
 
-Tested on stand-in images and on Mandiant's test archives (CSV byte for byte what `unifiedlog_iterator` writes);
-**not yet run on a Data store from the phone** (README "ioslog": what was compared and what was not).
+Every `ioslog` command says on stderr which checkpoint of the store it read (`... is read at checkpoint xid N ...`)
+and which newer ones it skipped and why: a store copied from the phone ends with a killed kernel, so its block 0
+is old and its newest checkpoint may be half written. `--checkpoint XID` reads one checkpoint, `--block0` block
+0's state. Tested on stand-in images (among them stores whose newest checkpoint is cut off), on Mandiant's test
+archives (CSV byte for byte what `unifiedlog_iterator` writes) and on a Data store that iOS's own APFS wrote on
+the PC. The first run on the phone's store (2026-11-13) failed with `short read at 1152903912689233920`: fixed
+(README "The APFS reader"); **the phone's own store has not been read again since** (it stays on the Mac).
 
 A kernel panic of a session (`panic(cpu N caller 0x...)`, the fault's pc and lr, the `frame 0x...` lines), named in
 the `kernel.kc` that ran and the `xnu.macho` it was prelinked from: member and segment, function + offset,

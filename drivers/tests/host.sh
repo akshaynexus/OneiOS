@@ -12,7 +12,10 @@ ${CC:-cc} -std=c11 -Wall -Wextra -Werror brightness/test_bl_request.c -lm -o "${
 ${CC:-cc} -std=c11 -Wall -Wextra -Werror -Ibridge battery/test_battery_props.c -o "${TMPDIR:-/tmp}/oneios-test-battery-props.$$" && "${TMPDIR:-/tmp}/oneios-test-battery-props.$$"; rc=$?; rm -f "${TMPDIR:-/tmp}/oneios-test-battery-props.$$"; [ $rc = 0 ]
 ${CC:-cc} -std=c11 -Wall -Wextra -Werror -D_DEFAULT_SOURCE haptics/test_actuator.c -lm -o "${TMPDIR:-/tmp}/oneios-test-actuator.$$" && "${TMPDIR:-/tmp}/oneios-test-actuator.$$"; rc=$?; rm -f "${TMPDIR:-/tmp}/oneios-test-actuator.$$"; [ $rc = 0 ]
 if ls ../out/kernel/unixnu/oneios/*/oneios/tree/build/xnu/ios-obj/*/osfmk/DEVELOPMENT/startup.o.json >/dev/null 2>&1; then
-  ./build.py --check
+  # (drivers/build.py until 2026-11-13; the list of sources is drivers/sources.txt)
+  tool=${ONEIOS_TOOL:-../tools/oneios-tool/target/release/oneios-tool}
+  [ -x "$tool" ] || { echo "drivers: no $tool (cargo build --release --manifest-path tools/oneios-tool/Cargo.toml)" >&2; exit 1; }
+  "$tool" kernel drivers --check --repo ..
 else
   echo "drivers: no kernel build records here: compile check skipped"
 fi

@@ -1,4 +1,5 @@
 # Pull requests and pushes: script checks, the host tests, and a runtime package built with the pinned NDK.
+# oneios-tool (Rust) is built first: the package's Apple-file check and the kernel's series check are its commands.
 # Nothing of Apple's is downloaded here: no IPSW, no KDK, no kernelcache. The kernel is built by
 # kernel/build-linux.sh or kernel/build-macos.sh on a developer's machine (kernel/README.md).
 name: ci
@@ -25,7 +26,7 @@ jobs:
           git ls-files -z '*.sh' | xargs -0 -n1 bash -n
           git ls-files -z '*.py' | xargs -0 python3 -m py_compile
           shellcheck -S error $(git ls-files 'kernel/*.sh' 'runtime/*.sh' '.github/*.sh')
-      - name: NDK 28.2.13676358 and the Rust target
+      - name: NDK 28.2.13676358, the Rust target and oneios-tool
         run: .github/scripts/setup-build.sh
       - name: Host tests
         run: |

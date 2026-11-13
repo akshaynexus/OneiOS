@@ -1,0 +1,14 @@
+[package]
+name = "oneios-package"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# `oneios-tool package`: the checks, the manifest and the archive of the runtime package (runtime/package.sh; was
+# runtime/package/pack.py). The Apple-file check of every release is here: src/pack.rs.
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+sha2.workspace = true
+# Python's json layout (runtime.json), repr() in the refusals, tarfile's ustar block (the archive).
+oneios-common.workspace = true

@@ -108,7 +108,7 @@ pub fn main() -> Result<()> {
     let software_aes = ctx.repo.join("external/Droid-VM-UniXNU/drivers/SoftwareAES");
     let keys = ctx.repo.join("external/UniXNU-droidvm/package/SoftwareAESKeys.inc");
     let classes = here.join("IOAESAccelerator-24A446-v54.json");
-    gen::need_files(&[ctx.repo.join("drivers/build.py"), software_aes.join("NativeAES.cpp"), software_aes.join("OriginalAESABI.h"), keys.clone(),
+    gen::need_files(&[ctx.repo.join("drivers/sources.txt"), software_aes.join("NativeAES.cpp"), software_aes.join("OriginalAESABI.h"), keys.clone(),
                       ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json"), here.join("OneiOSSoftwareAES.cpp")],
                     |path| format!("build-oneios-aes: {} missing (external/Droid-VM-UniXNU: git submodule update --init drivers/SoftwareAES; \
                                     scripts/setup/get-references.sh UniXNU-droidvm)", path.display()))?;

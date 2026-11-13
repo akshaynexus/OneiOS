@@ -450,8 +450,12 @@ changes). Bluetooth (`--bluetooth`,
 bluetoothd's H4 UART transport, which on iOS 27 is a Skywalk pipe: [hardware.md](hardware.md) section 4; transport-speed 3000000, the address of `/mnt/vendor/efs/bluetooth/bt_addr`);
 `virtual` gives iOS none (encoding 10, the guest driver hides the nub); the default `auto` is `hidl` when the bridges
 are on and hwservicemanager returns `android.hardware.bluetooth@1.x::IBluetoothHci/default` at the start (asked once
-and let go; the HAL is opened only when bluetoothd connects), else `virtual`. One log line says which:
-`bluetooth: on: the phone's controller through its HAL 1.1, address ...` or `bluetooth: off (...)` with the reason.
+and let go; the HAL is opened only when bluetoothd connects), else `virtual`. `sim` (a boot with no phone, the PC):
+a stand-in controller (`runtime/bridges/bt/hci_sim.c`) behind the same bridge channel and the same `/bluetooth` node
+(transport-encoding 1, the made-up address of `/chosen mac-address-bluetooth0`); with the bridges off xnuhost makes a
+bridge device that serves only it. One log line says which:
+`bluetooth: on: the phone's controller through its HAL 1.1, address ...`, `bluetooth: on: a stand-in controller
+(bluetooth=sim), address ...` or `bluetooth: off (...)` with the reason.
 The network (`wifi=` in `xnuhost.conf`, `--set wifi=...`): `auto`, the default, makes the phone's wlan0 the guest's
 en0 (`br_wlan_prepare`, [hardware.md](hardware.md) section 3): the `net` window's virtio-net device carries wlan0's
 address in its configuration, its frames go to and from wlan0 by AF_PACKET, and the guest driver's station messages

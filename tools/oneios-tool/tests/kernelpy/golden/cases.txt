@@ -1,0 +1,249 @@
+== hosted-fixup: a made-up kernel
+hosted-fixup: 3 MPIDR_EL1 reads now read the vCPU index: 0xfffffff007004000 0xfffffff007004008 0xfffffff007004010
+status 0
+sha256 b1d98561966280f265d2186de15229094d28cd6b56dae833e992d5d09e65632a kernel.macho
+== hosted-fixup: the fixed kernel again
+hosted-fixup: 0 MPIDR_EL1 reads now read the vCPU index
+status 0
+sha256 b1d98561966280f265d2186de15229094d28cd6b56dae833e992d5d09e65632a kernel.macho
+== hosted-fixup: a file that is no kernel
+stderr: hosted-fixup: not an arm64 MH_EXECUTE kernel
+status 1
+sha256 2ecd5a10f965c28038c2474f29b25f3842fe925d7f91664deca6674d20affe56 text
+== iig-fix: a made-up iig
+status 0
+sha256 4ea437083c9eadf6b3db7c34675ffa2cea3bf4864d3b54ef61fe3253b35e28f9 iig
+== iig-fix: the fixed copy is refused
+stderr: iig-fix: iig changed:         part = part.strip()
+stderr:         if not part or part == '
+status 1
+sha256 4ea437083c9eadf6b3db7c34675ffa2cea3bf4864d3b54ef61fe3253b35e28f9 iig
+== series-check: this checkout's series and profiles (no external/ beside them)
+status 0
+== series-check: a patch listed twice
+stderr: series-check: a patch is listed twice in the board series
+status 1
+== series-check: a listed patch missing, a patch not listed
+stderr: series-check: series: 9997-missing.patch missing
+stderr: series-check: 9999-not-listed.patch is not in the series
+status 1
+== series-check: an entry outside the pinned repositories, an external patch that is not at the pin
+stderr: series-check: series: ../../../../external/SomethingElse/a.patch is not a patch of a pinned external repository
+stderr: series-check: series: ../../../../external/Droid-VM-UniXNU/made-up/not-there.patch does not exist at the pin
+status 1
+== series-check: two bad defconfig lines
+stderr: series-check: defconfig: bad line 'CONFIG_XNU_MADE_UP=maybe'
+stderr: series-check: defconfig: bad line 'CONFIG_OTHER=y'
+status 1
+== series-check: another product, build and arch in the OS profile, another pin, another profile in board.toml
+stderr: series-check: OS profile: not arm64e on xnu-12377.121.6
+stderr: series-check: OS profile: the identity is not iPhone18,2
+stderr: series-check: OS profile [ipsw] build = '24A000', the image profile says '24A446'
+stderr: series-check: pins.sh XNU_COMMIT differs from the OS profile
+stderr: series-check: board.toml os_profile is not the OS profile
+status 1
+== series-check: another chip in the image profile
+stderr: series-check: OS profile [ipsw] chip_id = 33104, the image profile says 1
+status 1
+== kdk-headers: the SDK payload's headers and our Kernel.h
+kdk-headers: KDK_SDK.pkg/Payload: 5 headers
+kdk-headers: wrote our System/Library/KernelSupport/CoreEntitlements/V2/Kernel.h (3 members)
+status 0
+sha256 fbbc0b4ddd158d72724e0b22ea3555f42949cae5edd49e2b91f3b3c2757b0ec1 ./.kdk-headers
+sha256 b03f953ef2011e66c72f5a42450774b2378fd6b57568963ddd0ba5411e0772e1 ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/CodeSignature/Entitlements.h
+sha256 d43304e6ece1f569036a534e9c879d85216615bbe519d7ae14dbff53b4b6f2d2 ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/CoreEntitlements/V2/API.h
+sha256 f0d41f67dfe9c8dc6b1719693cf262a6c6b3eb8daa01be0dae5eac2d629a853e ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/CoreEntitlements/V2/Acceleration.h
+sha256 b075e3440818aefe5243ca8831b7e7d76f0778598ca775f8d7c309b15ce0986e ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/TrustCache/API.h
+sha256 647ca3ec89e695c6cd84d627f42f340637d09ef4987fe7de82a23c01d35c5b3d ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/TrustedExecutionMonitor/API.h
+sha256 6a7ccad2887d5d07ff503bcb5d37eb3b625a4bad97875c5f50428fed444347a5 ./System/Library/KernelSupport/CoreEntitlements/V2/Kernel.h
+== kdk-headers: the same image again
+kdk-headers: W/kdk/out is up to date
+status 0
+sha256 fbbc0b4ddd158d72724e0b22ea3555f42949cae5edd49e2b91f3b3c2757b0ec1 ./.kdk-headers
+sha256 b03f953ef2011e66c72f5a42450774b2378fd6b57568963ddd0ba5411e0772e1 ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/CodeSignature/Entitlements.h
+sha256 d43304e6ece1f569036a534e9c879d85216615bbe519d7ae14dbff53b4b6f2d2 ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/CoreEntitlements/V2/API.h
+sha256 f0d41f67dfe9c8dc6b1719693cf262a6c6b3eb8daa01be0dae5eac2d629a853e ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/CoreEntitlements/V2/Acceleration.h
+sha256 b075e3440818aefe5243ca8831b7e7d76f0778598ca775f8d7c309b15ce0986e ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/TrustCache/API.h
+sha256 647ca3ec89e695c6cd84d627f42f340637d09ef4987fe7de82a23c01d35c5b3d ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/TrustedExecutionMonitor/API.h
+sha256 6a7ccad2887d5d07ff503bcb5d37eb3b625a4bad97875c5f50428fed444347a5 ./System/Library/KernelSupport/CoreEntitlements/V2/Kernel.h
+== kdk-headers: --apple-kernel-h (the KDK payload read up to its Kernel.h)
+kdk-headers: KDK_SDK.pkg/Payload: 5 headers
+kdk-headers: KDK.pkg/Payload: 1 headers
+status 0
+sha256 160f171f37c2b6a06fc528284e473b796264b50ebf9e2e7ded7b908b31f0424c ./.kdk-headers
+sha256 b03f953ef2011e66c72f5a42450774b2378fd6b57568963ddd0ba5411e0772e1 ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/CodeSignature/Entitlements.h
+sha256 d43304e6ece1f569036a534e9c879d85216615bbe519d7ae14dbff53b4b6f2d2 ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/CoreEntitlements/V2/API.h
+sha256 f0d41f67dfe9c8dc6b1719693cf262a6c6b3eb8daa01be0dae5eac2d629a853e ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/CoreEntitlements/V2/Acceleration.h
+sha256 b075e3440818aefe5243ca8831b7e7d76f0778598ca775f8d7c309b15ce0986e ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/TrustCache/API.h
+sha256 647ca3ec89e695c6cd84d627f42f340637d09ef4987fe7de82a23c01d35c5b3d ./System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform/TrustedExecutionMonitor/API.h
+sha256 da4c3b49ebe34fe21f05c7041277808d084a8e8f724fd231c2399f6659c54392 ./System/Library/KernelSupport/CoreEntitlements/V2/Kernel.h
+== kdk-headers: a package that is no xar
+stderr: not a xar archive
+status 1
+== drivers: --check
+drivers: bridge/OneiOSBridge.c
+drivers: haptics/oneios_haptic.c
+drivers: haptics/OneiOSVibrator.cpp
+drivers: bluetooth/oneios_bt.c
+drivers: bluetooth/oneios_bt_h4.c
+drivers: bluetooth/oneios_bt_ios.c
+drivers: bluetooth/oneios_bt_ctl.c
+drivers: bluetooth/oneios_bt_dev.c
+drivers: bluetooth/oneios_bt_sk.c
+drivers: bluetooth/OneiOSBluetooth.cpp
+drivers: brightness/OneiOSBacklight.cpp
+drivers: battery/OneiOSBattery.cpp
+drivers: thermal/OneiOSThermal.cpp
+drivers: camera/oneios_camera.c
+drivers: camera/oneios_camera_dev.c
+drivers: camera/OneiOSCameraService.cpp
+drivers: 16 sources compile against W/records
+status 0
+== drivers: the archive and objects.json
+drivers: bridge/OneiOSBridge.c
+drivers: haptics/oneios_haptic.c
+drivers: haptics/OneiOSVibrator.cpp
+drivers: bluetooth/oneios_bt.c
+drivers: bluetooth/oneios_bt_h4.c
+drivers: bluetooth/oneios_bt_ios.c
+drivers: bluetooth/oneios_bt_ctl.c
+drivers: bluetooth/oneios_bt_dev.c
+drivers: bluetooth/oneios_bt_sk.c
+drivers: bluetooth/OneiOSBluetooth.cpp
+drivers: brightness/OneiOSBacklight.cpp
+drivers: battery/OneiOSBattery.cpp
+drivers: thermal/OneiOSThermal.cpp
+drivers: camera/oneios_camera.c
+drivers: camera/oneios_camera_dev.c
+drivers: camera/OneiOSCameraService.cpp
+drivers: W/drivers-out/liboneiosdrivers.a (N bytes)
+status 0
+sha256 5bc3b3753e4cadb315335c886fdafee918903dfb34a7691b4b0f10b926e38c17 ./OneiOSBacklight.cpp.o
+sha256 2dd0769ea32b239a0195ee590b73c769d4c16717bfe729bcf21a4c2b30765597 ./OneiOSBattery.cpp.o
+sha256 673fbb57d01c9a1cd1ee55c6b3d3e31003dfb36c5c64146ac5fa8d8258730e32 ./OneiOSBluetooth.cpp.o
+sha256 9a9c2e579fb62f2011931b9baab4fdb1789551eec7adf4066b37f28a1cbd1b32 ./OneiOSBridge.c.o
+sha256 e6c2b545d78fc980b229dc116f9af35993ab77dde52e3fbdf624d791c34b7277 ./OneiOSCameraService.cpp.o
+sha256 7e5d43c327f0c5de35739d2a77766c4c2ec1e56c93df6354fe3923f5ec0b1402 ./OneiOSThermal.cpp.o
+sha256 3fcf9551b8d0ea2b85fff04014766322a9a4b29d3443900054794b624f90d78a ./OneiOSVibrator.cpp.o
+sha256 d24800cf95a3f4a93ca8c2d3d32226c7cd6c89e86ee4de9918749fc417f2b362 ./oneios_bt.c.o
+sha256 89b0a3a7c5f7bcd001e56afdf5414be1c5f7ed8d1883f7ccbd65c6930a3657d9 ./oneios_bt_ctl.c.o
+sha256 a412d4199510d1839b36b71641b9338b052cbe01c1260f53eab17e1b1ebb786b ./oneios_bt_dev.c.o
+sha256 51bcc4937810579b18c2bd5da47267c1c4bb4bacf8a1318fb0d19e04f57012a1 ./oneios_bt_h4.c.o
+sha256 ad8dce53d6517d7ff2df7fe5e40947b0c827d2b9468eb5b4bdf7f8f2e1e2d30a ./oneios_bt_ios.c.o
+sha256 946638d9a882f497976de1384eda8e336a9fa85af56247c8ac71946cfccaa42a ./oneios_bt_sk.c.o
+sha256 5db01a862ca1eefbe3b6ca8cc5e638ccd7c31f971ee3e45f4926c4cdb37e7320 ./oneios_camera.c.o
+sha256 76cb4e7ef78f5adb52b82f4fe30d248a77e5ea66e8a98a39c3e541ceec2d626f ./oneios_camera_dev.c.o
+sha256 7a560e3980811f3cab8a9d4a6b7bfd22163f49f8e62c7789f05233d09aa50212 ./oneios_haptic.c.o
+{
+  "records": "W/records",
+  "sources": [
+    {
+      "path": "drivers/bridge/OneiOSBridge.c",
+      "universe": "mach",
+      "sha256": "63da5de3b40269a07f121e2ff14d08f03d342818490713c6f068bd2246e87daf"
+    },
+    {
+      "path": "drivers/haptics/oneios_haptic.c",
+      "universe": "bsd",
+      "sha256": "2d333d6c062fcf5fa7a258e28471ace4229d0ded1f7fff9cdd7c6ac0cadb237a"
+    },
+    {
+      "path": "drivers/haptics/OneiOSVibrator.cpp",
+      "universe": "iokit",
+      "sha256": "b8d1555bd4ee31ec5e27f4df227556c103c4ff57a6fefd92d148e82e7387842c"
+    },
+    {
+      "path": "drivers/bluetooth/oneios_bt.c",
+      "universe": "bsd",
+      "sha256": "380255f066b485b04c7e0f3bc4806ec1da071add130570ca2c8fe33e458dc23d"
+    },
+    {
+      "path": "drivers/bluetooth/oneios_bt_h4.c",
+      "universe": "bsd",
+      "sha256": "781cd7d9a13c0a0fdcfab716919ca8d1c91d8b66ac48a483699b73f29d938634"
+    },
+    {
+      "path": "drivers/bluetooth/oneios_bt_ios.c",
+      "universe": "bsd",
+      "sha256": "4c6f7a6da8f834c6c4a40cae81ec42f04df5251e4737e7a1a622f5e1bf3b0878"
+    },
+    {
+      "path": "drivers/bluetooth/oneios_bt_ctl.c",
+      "universe": "bsd",
+      "sha256": "3bc72f2942c26db03543c52ccf3076fb885914c301ea0f95f4dc4ea8429c858b"
+    },
+    {
+      "path": "drivers/bluetooth/oneios_bt_dev.c",
+      "universe": "bsd",
+      "sha256": "a10435e2299e4cbd287e3555201f4d66ae8ab34a34fcff1ac80bf187285b16a1"
+    },
+    {
+      "path": "drivers/bluetooth/oneios_bt_sk.c",
+      "universe": "bsd",
+      "sha256": "86d074903200840550e629fa6629796ae12350f6d971cf0338f0d74b2031d2f5"
+    },
+    {
+      "path": "drivers/bluetooth/OneiOSBluetooth.cpp",
+      "universe": "iokit",
+      "sha256": "50333ea4bba659b4da5d8be2973b47b4b412521370bef2957667d68d424c9b4b"
+    },
+    {
+      "path": "drivers/brightness/OneiOSBacklight.cpp",
+      "universe": "iokit",
+      "sha256": "75e24e186cab1d7a33e947c21323a3219d0c755af36446b4a79d3afb04dbcd01"
+    },
+    {
+      "path": "drivers/battery/OneiOSBattery.cpp",
+      "universe": "iokit",
+      "sha256": "9baa1c6c6e4e2b07c15a209bba300eac96ccb2a4e48c8de1a4b199447d8cde6d"
+    },
+    {
+      "path": "drivers/thermal/OneiOSThermal.cpp",
+      "universe": "iokit",
+      "sha256": "03248e21a280e3205b6ec14976630789023211a7eece085cd5de06a039e851ad"
+    },
+    {
+      "path": "drivers/camera/oneios_camera.c",
+      "universe": "mach",
+      "sha256": "ee6c4c7a34670bb5c1825ae8ecece5724f8165ce94c8b724eccea8dc917d2bf2"
+    },
+    {
+      "path": "drivers/camera/oneios_camera_dev.c",
+      "universe": "bsd",
+      "sha256": "f7c07be14f73c8526af020496f55f34413acae2179b53a06894eb3e952f7776f"
+    },
+    {
+      "path": "drivers/camera/OneiOSCameraService.cpp",
+      "universe": "iokit",
+      "sha256": "49f14e66d4af3c69b418b138e54894e72a922550968532c833c44192f52d7191"
+    }
+  ]
+}
+members:
+OneiOSBridge.c.o
+oneios_haptic.c.o
+OneiOSVibrator.cpp.o
+oneios_bt.c.o
+oneios_bt_h4.c.o
+oneios_bt_ios.c.o
+oneios_bt_ctl.c.o
+oneios_bt_dev.c.o
+oneios_bt_sk.c.o
+OneiOSBluetooth.cpp.o
+OneiOSBacklight.cpp.o
+OneiOSBattery.cpp.o
+OneiOSThermal.cpp.o
+oneios_camera.c.o
+oneios_camera_dev.c.o
+OneiOSCameraService.cpp.o
+== drivers: a source that does not compile
+drivers: bridge/OneiOSBridge.c
+drivers: haptics/oneios_haptic.c
+drivers: haptics/OneiOSVibrator.cpp
+drivers: bluetooth/oneios_bt.c
+stderr: oneios_bt_h4.c:1: error: made-up
+stderr: drivers: bluetooth/oneios_bt_h4.c did not compile
+status 1
+== drivers: no records
+stderr: drivers: no XNU build records (build the kernel first: scripts/bg.sh kernel kernel/build-linux.sh), or pass --records
+status 1

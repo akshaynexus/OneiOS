@@ -2,6 +2,8 @@
 //! module writes (`pyjson`), so a Rust step can replace a Python step and leave the same file.
 
 pub mod pyjson;
+pub mod pyrepr;
+pub mod pytar;
 
 use anyhow::{Context, Result};
 use std::fs::File;

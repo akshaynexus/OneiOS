@@ -1,15 +1,49 @@
-//! drivers/build.py's two functions the board archive generators used (they imported the script as a module):
-//! `record`, a compile record of the first kernel pass, and `command`, the recorded compile command with another
-//! source and output and the board's warnings.
+//! `oneios-tool kernel drivers [--records DIR] [--out DIR] [--check] [--repo CHECKOUT]` (was drivers/build.py,
+//! retired 2026-11-13): builds OneiOS's kernel-side drivers (the repository's drivers/) into one archive for the
+//! kernel link.
 //!
-//! drivers/build.py itself stays (it builds drivers/ on its own, `--check` included, and
-//! build_oneios_board runs it): this is a second copy of the rule. `oneios-tool kernel compile-command` prints
-//! this copy's command, and tests/kernelgen/drivers-command.sh compares it with the script's.
+//! Each source is compiled with the command the XNU build recorded for a source of the same universe (the build
+//! leaves one JSON record per object under build/xnu/ios-obj/<CONFIG>/), with the source and output replaced and
+//! the board's warning options, the way UniXNU-droidvm's ipados27/scripts/build-droidvm-devices.py builds its
+//! device sources:
+//!
+//!   mach    record osfmk/DEVELOPMENT/startup.o.json              (bridge/OneiOSBridge.c, camera/oneios_camera.c)
+//!   bsd     record bsd/DEVELOPMENT/kern_control.o.json           (haptics/*.c, bluetooth/*.c, camera/oneios_camera_dev.c)
+//!   iokit   record iokit/DEVELOPMENT/IOPlatformExpert.cpo.json   (the .cpp sources)
+//!
+//! The sources and their universes are drivers/sources.txt (the script's SOURCES list: it stays with the drivers,
+//! so that a new driver is one line there and no change of this tool).
+//!
+//! --records  default: the newest build under out/kernel/unixnu/oneios/*/oneios/tree/build/xnu/ios-obj/*
+//! --out      default: out/drivers  ->  liboneiosdrivers.a, objects.json (path and SHA-256 of each source)
+//! --check    compile only (no archive): the syntax and type check of a change, a few seconds
+//!
+//! The archive enters the kernel through CONFIG_XNU_EXTRA_LD_ARCHIVES (kernel/README.md, "Linking a board
+//! archive"); oneios_drivers_start() is its one entry point. No Apple file is read or written.
+//!
+//! `record` and `command` are also what the board archive generators use (the scripts imported drivers/build.py
+//! as a module); `oneios-tool kernel compile-command` prints `command`'s result for a record.
 
-use crate::gen::{read_text, resolve, s};
-use anyhow::{anyhow, Result};
+use crate::gen::{self, fail, read_text, resolve, s};
+use anyhow::{anyhow, Context, Result};
 use oneios_common::pyjson::{self, Value};
 use std::path::{Path, PathBuf};
+
+#[derive(clap::Args)]
+pub struct Args {
+    /// The kernel build's compile records (default: the newest build under out/kernel/unixnu)
+    #[arg(long)]
+    records: Option<PathBuf>,
+    /// Where the objects, the archive and objects.json go (default: out/drivers)
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// Compile only (no archive)
+    #[arg(long)]
+    check: bool,
+    /// This repository's checkout (default: the current directory)
+    #[arg(long)]
+    repo: Option<PathBuf>,
+}
 
 /// `RECORDS[universe]`: the record whose command a source of that universe is compiled with.
 pub fn record_name(universe: &str) -> &'static str {
@@ -19,6 +53,71 @@ pub fn record_name(universe: &str) -> &'static str {
         "iokit" => "iokit/DEVELOPMENT/IOPlatformExpert.cpo.json",
         other => panic!("no compile record for the universe {other}"),
     }
+}
+
+/// drivers/sources.txt: `UNIVERSE PATH` per line (the path below drivers/), `#` starts a comment.
+pub fn sources(here: &Path) -> Result<Vec<(String, String)>> {
+    let list = here.join("sources.txt");
+    let mut out = Vec::new();
+    for line in read_text(&list)?.lines().map(|l| l.split('#').next().unwrap_or("").trim()).filter(|l| !l.is_empty()) {
+        match line.split_whitespace().collect::<Vec<_>>()[..] {
+            [universe @ ("mach" | "bsd" | "iokit"), name] => out.push((universe.to_string(), name.to_string())),
+            _ => fail!("drivers: {}: not `mach|bsd|iokit PATH`: {line}", list.display()),
+        }
+    }
+    Ok(out)
+}
+
+/// The newest kernel build's records under the checkout's out/kernel (by the time of its startup.o.json).
+fn find_records(root: &Path) -> Option<PathBuf> {
+    let subfolders = |dir: PathBuf| std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path());
+    subfolders(root.join("out/kernel/unixnu/oneios"))
+        .flat_map(|profile| subfolders(profile.join("oneios/tree/build/xnu/ios-obj")))
+        .filter_map(|config| Some((std::fs::metadata(config.join(record_name("mach"))).ok()?.modified().ok()?, config)))
+        .max_by_key(|(time, _)| *time)
+        .map(|(_, config)| config)
+}
+
+/// Compile every source of drivers/ with its universe's record; then (without `check`) the archive and objects.json.
+pub fn build(here: &Path, records: &Path, out: &Path, check: bool) -> Result<()> {
+    gen::mkdirs(&out.join("objects"))?;
+    let (mut objects, mut listing) = (Vec::new(), Value::list());
+    for (universe, name) in sources(here)? {
+        let rec = record(records, record_name(&universe))?;
+        let src = here.join(&name);
+        let dst = out.join("objects").join(format!("{}.o", gen::name(Path::new(&name))));
+        let result = gen::capture(&command(here, &rec, &src, &dst), Some(Path::new(&rec.directory)), Some(600))?;
+        if result.code != 0 {
+            eprint!("{}", result.stderr);
+            fail!("drivers: {name} did not compile");
+        }
+        objects.push(dst);
+        listing.push(gen::source_entry(format!("drivers/{name}"), Some(&universe), &src)?);
+        println!("drivers: {name}");
+    }
+    if check {
+        println!("drivers: {} sources compile against {}", objects.len(), records.display());
+        return Ok(());
+    }
+    let archive = out.join("liboneiosdrivers.a");
+    gen::archive(&archive, &objects)?;
+    let mut value = Value::dict();
+    value.set("records", s(records));
+    value.set("sources", listing);
+    gen::write_json(&out.join("objects.json"), &value, 2)?;
+    println!("drivers: {} ({} bytes)", archive.display(), std::fs::metadata(&archive).with_context(|| s(&archive))?.len());
+    Ok(())
+}
+
+pub fn main(args: Args) -> Result<()> {
+    let here = here(&args.repo.unwrap_or_else(|| PathBuf::from(".")))?;
+    let root = here.parent().ok_or_else(|| anyhow!("{} has no directory", here.display()))?;
+    // (pathlib drops a trailing separator: the path is printed and recorded as the script did)
+    let records = args.records.map(|r| gen::pypath(&s(&r))).or_else(|| find_records(root));
+    let Some(records) = records.filter(|r| r.join(record_name("mach")).is_file()) else {
+        fail!("drivers: no XNU build records (build the kernel first: scripts/bg.sh kernel kernel/build-linux.sh), or pass --records");
+    };
+    build(&here, &records, &args.out.map_or_else(|| root.join("out/drivers"), |o| gen::pypath(&s(&o))), args.check)
 }
 
 pub struct Record {
@@ -47,8 +146,7 @@ pub fn parse_record(text: &str) -> Result<Record> {
 
 /// `HERE` of drivers/build.py: `Path(__file__).resolve().parent`, the real path of the repository's drivers/.
 pub fn here(repo: &Path) -> Result<PathBuf> {
-    let script = resolve(&repo.join("drivers/build.py"));
-    script.parent().map(Path::to_path_buf).ok_or_else(|| anyhow!("{} has no directory", script.display()))
+    Ok(resolve(&repo.join("drivers")))
 }
 
 /// The recorded compile command with another source and output, and the board's warnings.

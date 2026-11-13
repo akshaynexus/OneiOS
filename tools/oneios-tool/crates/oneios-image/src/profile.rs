@@ -270,7 +270,7 @@ impl Profile {
 }
 
 /// `input_name(m)`: the file name of a member in inputs/<build>/ (AEA members: the decrypted image, without .aea).
-fn input_name(m: &Value) -> String {
+pub(crate) fn input_name(m: &Value) -> String {
     let name = py::basename(m.get("path").and_then(Value::as_str).unwrap_or(""));
     if py::truthy(m.get("aea")) {
         let cut = name.char_indices().rev().nth(3).map_or(0, |(i, _)| i);

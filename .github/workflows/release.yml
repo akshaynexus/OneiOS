@@ -1,6 +1,7 @@
 # A tag vN.N.N (or vN.N.N-suffix, a pre-release) on main: build the runtime package with the pinned NDK and
 # attach it and its .sha256 to the GitHub release of that tag (docs/releases.md).
-# The release holds OneiOS's own code only; nothing of Apple's is downloaded or uploaded here.
+# The release holds OneiOS's own code only; nothing of Apple's is downloaded or uploaded here. runtime/package.sh
+# refuses Apple files with `oneios-tool package` (Rust; .github/scripts/setup-build.sh builds it).
 name: release
 on:
   push:
@@ -27,7 +28,7 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_SHA is not on main"; exit 1; }
           echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
       - run: .github/scripts/check-tracked-files.sh
-      - name: NDK 28.2.13676358 and the Rust target
+      - name: NDK 28.2.13676358, the Rust target and oneios-tool
         run: .github/scripts/setup-build.sh
       - name: Sources the runtime links (Droid-VM's virglrenderer for drm2kgsl, the 3D GPU)
         # Without this checkout xnuhost and gpuctl build 2D-only and say so at run time (runtime 0.1.1's GPU check

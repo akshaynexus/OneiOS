@@ -11,7 +11,8 @@ clap.workspace = true
 # The kernelcache's __PRELINK_INFO (an XML property list) and the kernel profile (TOML), as roots.py reads them
 # with plistlib and tomllib.
 plist = { version = "1", default-features = false }
-toml = { version = "1", default-features = false, features = ["std", "parse"] }
+# "serde": toml::Table (the crate builds alone with it; before, only another crate of the workspace turned it on)
+toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
 # Maps that keep Python's dict order (the pairs, the symbol table, the fixup chains): later steps iterate them.
 indexmap = "2"
 rayon.workspace = true

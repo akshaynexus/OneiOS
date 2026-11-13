@@ -10,9 +10,11 @@
 #   scripts/               runtime/scripts/* (session helpers), when there are any
 #   kernel/                the XNU built by kernel/ (out/kernel/current, or KERNEL_DIR), with its build record
 #   NOTICE, LICENSE        licences; the APSL notice when a kernel is inside
-# Nothing of Apple's goes in: package/pack.py refuses firmware names and containers, and any Mach-O that is
+# Nothing of Apple's goes in: `oneios-tool package` (tools/oneios-tool/crates/oneios-package; it was package/pack.py
+# until 2026-11-13) refuses firmware names and containers, and any Mach-O that is
 # not our own source-built XNU (docs/releases.md).
-# Build hosts: Linux x86_64 and macOS (runtime/host.mk).
+# Build hosts: Linux x86_64 and macOS (runtime/host.mk). Needs Rust (cargo) for oneios-tool, which is built when it
+# is missing or older than its sources (scripts/lib/oneios-tool.sh; ONEIOS_TOOL=PATH names another binary).
 # Env: ANDROID_NDK_ROOT (default $HOME/Android/Sdk/ndk/28.2.13676358, on macOS $HOME/Library/Android/sdk/ndk/...;
 #      the revision is checked; runtime/build.sh gets it as NDK unless NDK is set), ANDROID_API (35),
 #      KERNEL_DIR, OUT_DIR (out/release), SOURCE_DATE_EPOCH (default: the commit time),
@@ -24,11 +26,14 @@ VERSION=${1:-}
 if ! [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.]*)?$ ]]; then
   echo "usage: runtime/package.sh VERSION   (N.N.N or N.N.N-suffix; got '${VERSION}')" >&2; exit 2
 fi
-for tool in python3 zstd tar git; do
+for tool in zstd tar git; do
   command -v "$tool" >/dev/null || { echo "package: missing host tool $tool" >&2; exit 1; }
 done
+# oneios-tool: the checks, the manifest and (without GNU tar) the archive are its `package` commands.
+. "$ROOT/scripts/lib/oneios-tool.sh"
+oneios_tool "$ROOT"
 # Linux and macOS: sha256sum where there is one (macOS 15 and newer have it), else shasum -a 256; GNU tar, else
-# pack.py archive (the same ustar layout; macOS's tar is bsdtar, which has no --mtime).
+# `oneios-tool package archive` (the same ustar layout; macOS's tar is bsdtar, which has no --mtime).
 if command -v sha256sum >/dev/null; then SHA256=(sha256sum); else SHA256=(shasum -a 256); fi
 tar --version 2>/dev/null | grep -q 'GNU tar' && GNU_TAR=1 || GNU_TAR=0
 OUT=${OUT_DIR:-$ROOT/out/release}
@@ -87,12 +92,12 @@ if [ -d "$ROOT/runtime/scripts" ] && [ -n "$(ls -A "$ROOT/runtime/scripts")" ]; 
   done
 fi
 
-# 3. The kernel, when one was built: only the native XNU and its record (pack.py checks the record).
+# 3. The kernel, when one was built: only the native XNU and its record (`package manifest` checks the record).
 KERNEL_DIR=${KERNEL_DIR:-$ROOT/out/kernel/current}
 HAVE_KERNEL=0
 if [ -f "$KERNEL_DIR/xnu.macho" ] && grep -q '"releasable": false' "$KERNEL_DIR/xnu.macho.build.json" && [ "${REQUIRE_KERNEL:-0}" != 1 ]; then
   # A local build that links a source that may not be redistributed (its record says which): it stays out, and the
-  # package is runtime only. REQUIRE_KERNEL=1 makes this an error instead (pack.py refuses the kernel).
+  # package is runtime only. REQUIRE_KERNEL=1 makes this an error instead (`package manifest` refuses the kernel).
   echo "package: the kernel at $KERNEL_DIR is not releasable (see its build record): runtime only"
 elif [ -f "$KERNEL_DIR/xnu.macho" ]; then
   HAVE_KERNEL=1
@@ -121,7 +126,7 @@ if [ -n "${PACKAGE_EXTRA_DIR:-}" ]; then cp -R "$PACKAGE_EXTRA_DIR/." "$STAGE/";
 COMMIT=$(git -C "$ROOT" rev-parse HEAD)
 DIRTY=0
 [ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no -- runtime kernel)" ] || DIRTY=1
-python3 -I "$ROOT/runtime/package/pack.py" manifest "$STAGE" "$VERSION" "$COMMIT" "$DIRTY" \
+"$ONEIOS_TOOL" package manifest "$STAGE" "$VERSION" "$COMMIT" "$DIRTY" \
   "$(tr -d ' \n' < "$ROOT/runtime/package/min-oneos-fork")" "$PLACEHOLDER"
 
 # 6. The archive: runtime.json first, then the rest sorted; fixed owner and time, so the same inputs give the same bytes.
@@ -131,7 +136,7 @@ if [ "$GNU_TAR" = 1 ]; then
   tar -C "$STAGE" --format=ustar --no-recursion --owner=0 --group=0 --numeric-owner --mtime="@$SOURCE_DATE_EPOCH" \
     -T "$WORK/members" -cf "$WORK/$NAME.tar"
 else
-  python3 -I "$ROOT/runtime/package/pack.py" archive "$STAGE" "$WORK/members" "$SOURCE_DATE_EPOCH" "$WORK/$NAME.tar"
+  "$ONEIOS_TOOL" package archive "$STAGE" "$WORK/members" "$SOURCE_DATE_EPOCH" "$WORK/$NAME.tar"
 fi
 zstd -q -19 -f -o "$OUT/$NAME.tar.zst" "$WORK/$NAME.tar"
 ( cd "$OUT" && "${SHA256[@]}" "$NAME.tar.zst" > "$NAME.tar.zst.sha256" )

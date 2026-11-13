@@ -53,7 +53,7 @@ patched tree with one commit per patch, for writing patches), `kernel/tests/host
    corecrypto (see "Releases").
 6. The board's own archives, built between the two kernel passes by `oneios-tool kernel gen board` (`tools/oneios-tool`, Rust:
    the kernel scripts build it when it is missing or stale and put it on `PATH`; it was `device/scripts/build-oneios-board.py`) and
-   force-loaded through `CONFIG_XNU_EXTRA_LD_ARCHIVES`: `liboneiosdrivers.a` (`drivers/build.py`: the bridge
+   force-loaded through `CONFIG_XNU_EXTRA_LD_ARCHIVES`: `liboneiosdrivers.a` (`oneios-tool kernel drivers`, the list `drivers/sources.txt`: the bridge
    transport, haptics, Bluetooth; 9 sources) and `liboneiosboard.a` (Droid-VM's `DroidVMCpufreq.c`, unchanged).
    `oneios_board_late_start()` (`oneios-board-start.patch`), called from `bsd_init` after the storage hook, runs
    `droidvm_cpufreq_attach()` and `oneios_drivers_start()`. The build record lists the ten sources.
@@ -96,12 +96,12 @@ Needs macOS 27 with **Xcode 27.2** at `/Applications/Xcode.app` (`XCODE_APP=`; a
 `plutil`, `codesign`, `ld64` and `mig`, and macOS has `/bin/csh`. UniXNU's driver takes its macOS path
 (`scripts/unixnu/kernel.py`: Xcode's clang, the iphoneos SDK). Two Mac rules that Linux gets from
 `linux/clang-wrapper`'s `-w`: `XNU_BUILD_WERROR=0` for xnu's sources, and `CCC_OVERRIDE_OPTIONS='# +-Wno-error'` for
-the board's archive builders, which replay the compile records with `-Werror` (`drivers/build.py`): Xcode 27.2 warns
+the board's archive builders, which replay the compile records with `-Werror` (`oneios-tool kernel drivers`): Xcode 27.2 warns
 on Apple's own `EXTERNAL_HEADERS/corecrypto/ccchacha20poly1305.h` (`-Wextern-c-compat`). The warnings stay in the
 archive logs.
 
 `build-macos.sh` exports `MACOS_VERSION=26.5` (the macOS release of xnu-12377.121.6) and checks it against the OS
-profile. `KDK_HEADERS=1` adds a headers-only `KDKROOT` (`kdk-headers.py`: about 200 headers of KDK 26.5.2 25F84 read
+profile. `KDK_HEADERS=1` adds a headers-only `KDKROOT` (`oneios-tool kernel kdk-headers`: about 200 headers of KDK 26.5.2 25F84 read
 over HTTP, no 1.2 GB download), as iOSPlus10's `scripts/ios26/build-kernel.sh` does; off by default because UniXNU's
 series replaces those headers with public ones.
 

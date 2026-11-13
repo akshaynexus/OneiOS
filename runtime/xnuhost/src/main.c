@@ -210,6 +210,18 @@ static bool net_up;
 static bool wifi_up;                // wlan0 is the guest's en0 (runtime/bridges/wifi)
 
 static void bridge_log(int level, const char *line) { xh_log(level == 0 ? XH_LOG_ERROR : level == 1 ? XH_LOG_INFO : XH_LOG_DEBUG, "%s", line); }
+
+// bluetooth=sim: the guest's /bluetooth node as with the phone's controller (H4, transport 1), with a made-up address
+// that the stand-in controller (runtime/bridges/bt/hci_sim.c) reports too.
+static void bt_sim_on(xl_machine *m)
+{
+  m->bt_transport = 1;
+  m->bt_speed = 3000000;
+  xl_machine_mac(m, 0, m->bt_mac);
+  br_hci_sim_set_address(m->bt_mac);
+  LOGI("bluetooth: on: a stand-in controller (bluetooth=sim), address %02x:%02x:%02x:%02x:%02x:%02x; no radio, no HAL",
+       m->bt_mac[0], m->bt_mac[1], m->bt_mac[2], m->bt_mac[3], m->bt_mac[4], m->bt_mac[5]);
+}
 // cpu-pin (default on): vCPU `vcpu`'s one host CPU, the rank-th CPU of its plan's mask among the vCPUs of its kind (so
 // the vCPUs of a kind take different CPUs while there are enough). The iOS thread a vCPU runs goes on the same CPU:
 // the hand-off between them is then a switch on one core, not a wake-up of another (docs/booter.md 2.6a: 3 us for a
@@ -416,7 +428,7 @@ static int boot(void)
 
     // Bluetooth: the phone's controller through its HAL (hidl), or none (virtual). auto: hidl when the HAL is
     // registered; the HAL itself is opened only when bluetoothd connects.
-    bool hidl = !strcmp(config.bluetooth, "hidl");
+    bool hidl = !strcmp(config.bluetooth, "hidl"), sim = !strcmp(config.bluetooth, "sim");
     int hal = 0;
     if (!strcmp(config.bluetooth, "auto")) { hal = br_hci_hidl_probe(); hidl = hal > 0; }
     haptic = br_haptic_open(NULL);
@@ -425,11 +437,13 @@ static int boot(void)
     battery = br_battery_open(NULL);
     thermal = br_thermal_open(NULL);
     if (thermal) br_thermal_on_cap(thermal, thermal_step, NULL);
-    br_bridge_config bridge = { .haptic = haptic, .hci_factory = hidl ? br_hci_open_hidl : NULL, .brightness = brightness, .battery = battery,
-                                .thermal = thermal };
+    br_bridge_config bridge = { .haptic = haptic, .hci_factory = hidl ? br_hci_open_hidl : sim ? br_hci_open_sim : NULL,
+                                .brightness = brightness, .battery = battery, .thermal = thermal };
     bool have_bridge = br_bridge_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &bridge) != NULL;
     if (have_bridge) kinds[ndev++] = XL_DEV_BRIDGE;
-    if (hidl && have_bridge) {
+    if (sim && have_bridge) bt_sim_on(&machine);
+    else if (sim) LOGI("bluetooth: off: no bridge device for the stand-in controller's packets");
+    else if (hidl && have_bridge) {
       // The phone's controller, H4 over the bridge. bluetoothd's encodings (24A446, read from the binary): 1 H4,
       // 2 H4DS, 3 H4BC, 10 virtual. Plain H4 is the one UniXNU carries to this bluetoothd over the same Skywalk UART
       // pipe (drivers/bluetooth/oneios_bt_sk.c); the boot argument bt-transport-override=N tries another.
@@ -489,6 +503,16 @@ static int boot(void)
     br_net_open_fn sim = br_wifi_sim_prepare(net.guest_mac);
     if (sim && br_virtio_net_create_backend(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &net, sim, br_wifi_sim_send))
       kinds[ndev++] = XL_DEV_NET;
+  }
+
+  // bluetooth=sim with the bridges off (a PC boot): a bridge device that serves only the stand-in controller.
+  if (!config.bridges && !strcmp(config.bluetooth, "sim") && ndev < XL_MAX_DEVICES) {
+    br_log_sink = bridge_log;
+    br_bridge_config bridge = { .hci_factory = br_hci_open_sim };
+    if (br_bridge_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, &bridge)) {
+      kinds[ndev++] = XL_DEV_BRIDGE;
+      bt_sim_on(&machine);
+    } else LOGI("bluetooth: off: no bridge device for the stand-in controller's packets");
   }
 
   // clusters=EEPPPPPP: the cluster types by hand (a bench run with no host topology to plan from).

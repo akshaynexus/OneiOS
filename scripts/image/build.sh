@@ -14,47 +14,17 @@
 #                          the volumes' files are already readable here (mounted by other means, or a
 #                          fixture): do not mount the images. With --os-root, apfs-fuse/hdiutil is not needed
 # Env: INPUTS (default inputs/<build>), OUT (default out/image).
-#      IMAGETOOL_IMPL=python|rust   which image tool does the work (default python: scripts/image/imagetool.py).
-#                          rust: tools/oneios-tool's `oneios-tool image` runs profile, apfs-info, tree-copy,
-#                          seed-pack, manifest and the set folder's verify; it writes the same files, byte for
-#                          byte, in less time (docs/building.md "Rust tools"). pack and the archive's verify stay
-#                          with the Python tool. Build it first:
-#                            cargo build --release --manifest-path tools/oneios-tool/Cargo.toml
-#      ONEIOS_TOOL         the Rust binary (default tools/oneios-tool/target/release/oneios-tool)
-#
-# What it makes:
-#   os.img, systemos.img, app.img   the decrypted OS, SystemOS and AppOS images, byte for byte (raw APFS
-#                                   containers, read-only, mounted by the guest kernel's own APFS)
-#   *.hashes                        the SHA-256 of each 1 MiB chunk of an image, for checks while it is read
-#   trust/                          the three trust caches and root hashes, as shipped
-#   data.seed                       what the guest's Data volume starts from: the OS volume's /private/var
-#                                   after the userland hook, with owners and modes kept
-#   overlay/                        files the userland hook adds for the runtime (this project's own)
-#   kernel.kc                       the kernel collection (from the kernel build)
-#   manifest.json                   every file's size and SHA-256
-#
-# Nothing here needs root (only --seed apfs, which needs macOS and sudo).
-# Linux: the volumes are read through apfs-fuse (FUSE, read-only), with their owners.
-# macOS: the volumes are attached read-only with hdiutil, owners ignored (a user's attach shows every file as
-#   the user's own and lets the user read it); the owners of /private/var are read from the OS image's APFS
-#   records (imagetool.py tree-copy --owners-from) and checked entry by entry against the mounted volume.
+#      ONEIOS_TOOL=PATH    the image tool's binary. The tool is `oneios-tool image` (tools/oneios-tool, Rust: built when
+#                          it is missing or older than its sources, scripts/lib/oneios-tool.sh). It replaced
+#                          scripts/image/imagetool.py here on 2026-11-13 (the same files, byte for byte:
+#                          tools/oneios-tool/README.md "image"); that script is still in the tree, unused.
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-TOOL=$ROOT/scripts/image/imagetool.py
-IMPL=${IMAGETOOL_IMPL:-python}
-RTOOL=${ONEIOS_TOOL:-$ROOT/tools/oneios-tool/target/release/oneios-tool}
 die() { echo "build: $*" >&2; exit 1; }
-# tool SUBCOMMAND ARGS...: the image tool. With IMAGETOOL_IMPL=rust the subcommands oneios-tool has itself go to
-# it; the rest (pack, verify of the archive) stay with the Python tool.
-tool() {
-  if [ "$IMPL" = rust ]; then
-    case "$1" in
-    profile|apfs-info|apfs-owners|hashes|tree-copy|seed-pack|manifest) "$RTOOL" image "$@"; return ;;
-    verify) if [ -d "$2" ]; then "$RTOOL" image "$@"; return; fi ;;
-    esac
-  fi
-  python3 -I "$TOOL" "$@"
-}
+# tool SUBCOMMAND ARGS...: the image tool.
+. "$ROOT/scripts/lib/oneios-tool.sh"
+oneios_tool "$ROOT" || die "the image tool is oneios-tool (Rust): cargo build --release --manifest-path tools/oneios-tool/Cargo.toml"
+tool() { "$ONEIOS_TOOL" image "$@"; }
 
 kernel= no_kernel=0 hook= no_hook=0 seed=tar pack=1 profile= os_root= sys_root= app_root=
 while [ $# -gt 0 ]; do
@@ -81,7 +51,7 @@ OS=$(uname -s)
 # ---- tools first: one line that names everything missing
 missing=()
 need() { command -v "$1" >/dev/null 2>&1 || missing+=("$1${2:+ ($2)}"); }
-need python3 "3.11 or newer"
+need python3 "3.11 or newer: the hook's record and the seed's record are written with it"
 [ "$pack" = 0 ] || need zstd
 case "$OS" in
 Linux)
@@ -97,11 +67,6 @@ Darwin)
 esac
 [ ${#missing[@]} = 0 ] || die "missing tools: $(IFS=';'; echo "${missing[*]}" | sed 's/;/; /g')"
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' || die "missing tools: python3 3.11 or newer (this one is $(python3 -V 2>&1))"
-case "$IMPL" in
-python) ;;
-rust) [ -x "$RTOOL" ] || die "IMAGETOOL_IMPL=rust: no $RTOOL (build it: cargo build --release --manifest-path tools/oneios-tool/Cargo.toml; or set ONEIOS_TOOL)" ;;
-*) die "IMAGETOOL_IMPL is python or rust, not $IMPL" ;;
-esac
 
 eval "$(tool profile "$profile" --shell)"
 IN=${INPUTS:-$ROOT/inputs/$P_BUILD}

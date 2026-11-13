@@ -69,6 +69,16 @@ static struct {
 	uint64_t n_tx, n_rx;
 } sk = { .spec = { 2048, 16, 16 } };
 
+/* the calling process's name, for a log line */
+static const char *
+sk_who(void)
+{
+	static char who[24];
+
+	proc_selfname(who, sizeof(who));
+	return who;
+}
+
 static void
 sk_termios_default(void)
 {
@@ -594,6 +604,9 @@ sk_ctl_getopt(kern_ctl_ref ref __unused, u_int32_t unit __unused, void *unitinfo
 	lck_mtx_unlock(&sk_lock);
 	if (e == ENOPROTOOPT) {
 		OBT_SAY("sk: socket option 0x%x asked: not one this control has\n", (uint32_t)opt);
+	} else if ((uint32_t)opt == SK_GET_UUID) {
+		/* the step between the channel's specification and os_channel_create: where a stop after "channel of" is */
+		OBT_SAY("sk: %s[%d] asks the channel's UUID: %d\n", sk_who(), proc_selfpid(), e);
 	}
 	return e;
 }

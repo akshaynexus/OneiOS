@@ -1,7 +1,9 @@
 #!/bin/bash
 # The Python scripts this compares with were retired on 2026-11-13 (the result: tools/oneios-tool/README.md
 # "kernel"; the frozen output: compare-golden.sh). At commit a5b2d95, the last with every script, all of it runs;
-# since then only `compile-command` can (drivers/build.py stays), and a retired name says so and ends with status 2.
+# since then a retired name says so and ends with status 2. The last one, `compile-command`, could run while
+# drivers/build.py was there: that script was retired the same day (tests/kernelpy; its command for a made-up record
+# is frozen in golden/synthetic/command.*.json, which `cargo test` checks).
 #
 # The board archive generators: `oneios-tool kernel gen NAME` against the Python script it replaces, in the tree of
 # a finished hosted kernel build. Each generator runs twice in the same place (the Python script, then the Rust
@@ -14,12 +16,13 @@
 #             (its tree/ holds the first pass's compile records and the sources the archives are built from)
 #   ENVFILE   the environment of one archive step of that build: /proc/PID/environ of a `build-oneios-*.py` process,
 #             saved while the build ran (tests/kernelgen/save-env.sh NAME OUTDIR does that)
-#   NAME      board storage aes keystore net hid audio gpu display, or one of the names below (default: compile-command)
+#   NAME      board storage aes keystore net hid audio gpu display, or one of the names below
 #             build-record      kernel/build-record.py against `oneios-tool kernel build-record`: --self-test, and
 #                               `finish` on WORK into two scratch folders (the record, series.txt, the kernel, the
 #                               link and stdout compared)
 #             compile-command   drivers/build.py's command() against `oneios-tool kernel compile-command`
-#                               (drivers-command.py), for a C and a C++ source with each of WORK's three records
+#                               (tests/kernelgen/drivers-command.py, deleted with drivers/build.py), for a C and a
+#                               C++ source with each of WORK's three records
 #             layout-hid, layout-net, port-legacy-display   (not in the default list) the records made from the
 #                               kernelcache: hid/layout.py, net/layout.py and display/port-legacy-display.py against
 #                               `oneios-tool kernel layout hid|net` and `kernel port-legacy-display`.
@@ -42,7 +45,8 @@ TOOL=${ONEIOS_TOOL:-$ROOT/tools/oneios-tool/target/release/oneios-tool}
 SCRATCH=${SCRATCH:-$ROOT/out/kernelgen-compare}
 [ -x "$TOOL" ] || { echo "compare-python: no $TOOL (cargo build --release --manifest-path tools/oneios-tool/Cargo.toml)" >&2; exit 2; }
 [ -d "$TREE/build/xnu" ] && [ -s "$ENVFILE" ] || { echo "compare-python: $TREE has no build, or $ENVFILE is empty" >&2; exit 2; }
-# (the default was every generator, build-record and compile-command while the scripts were there)
+# (the default was every generator, build-record and compile-command while the scripts were there; then
+# compile-command alone, until drivers/build.py went too)
 [ $# -gt 0 ] || set -- compile-command
 H=$ROOT/kernel/patches/oneios-hosted
 
@@ -110,6 +114,7 @@ compare_build_record() {
 
 # drivers/build.py's command() against this crate's copy.
 compare_compile_command() {
+  [ -f "$ROOT/drivers/build.py" ] || { echo "compare-python: drivers/build.py is not there (retired: tests/kernelpy/compare-golden.sh)" >&2; exit 2; }
   local records=$TREE/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837 same=yes count=0 name source py rs
   for name in osfmk/DEVELOPMENT/startup.o.json bsd/DEVELOPMENT/kern_control.o.json iokit/DEVELOPMENT/IOPlatformExpert.cpo.json; do
     for source in /some/where/a.c /some/where/B.cpp; do

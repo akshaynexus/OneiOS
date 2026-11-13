@@ -13,7 +13,9 @@
 # cycle: --dry-run (nothing started, no adb call); a whole cycle (kernel, prelink with the stubs check, runtime
 # package, host tests, stage of only what differs, switch, markers, hold, return, the folder with summary.md); a
 # second cycle that stages nothing; a panic, a boot that never gets ready, Ctrl-C in the hold with and without
-# --stay; an audit failure and bad stubs stop it before the phone is touched; no switch without the return script,
+# --stay; a failed collect step (summary.md's head names it, status 1); a split run (`--only stage,switch,watch`,
+# then `--only return,collect` with the same name: the summary reads the markers from the saved xnuhost.log and
+# says so); an audit failure and bad stubs stop it before the phone is touched; no switch without the return script,
 # during an import, or when the preflight refuses; one phone lock. Every case ends the stand-in session it left
 # (end_case), and at the end, a failure or Ctrl-C none is left running (lib.sh's traps).
 # Env: TOOL, KEEP=1 (keep out/rustport-cycle), FAKE_PROC=host|stand-in (as tests/phone/run.sh).
@@ -137,10 +139,12 @@ cat > "$R/kernel/prelink/build.sh" <<'B'
 #!/bin/bash
 [ ! -e audit-fails ] || { echo "audit: 3 failures"; echo "prelink: the audit failed" >&2; exit 1; }
 mkdir -p out/kernel/24A446
-echo "collection of $(cat "$KERNEL") with $(basename "$REFERENCE")" > out/kernel/24A446/kernel.kc; echo hashes > out/kernel/24A446/kernel.kc.hashes
+# a made-up collection whose stubs `prelink stubs-check` reads: 666 good ones, or 6 of them bad
+if [ -e stubs-bad ]; then good=660 bad=6; else good=666 bad=0; fi
+"$(cat tool-path)" debug stub-kc out/kernel/24A446/kernel.kc $good $bad "collection of $(cat "$KERNEL") with $(basename "$REFERENCE")"; echo hashes > out/kernel/24A446/kernel.kc.hashes
 echo "audit: 2711 paired, 0 failures"; echo "prelink: out/kernel/24A446/kernel.kc"
 B
-printf 'import os\nprint("stubs: 660 good, 6 bad" if os.path.exists("stubs-bad") else "stubs: 666 good, 0 bad")\n' > "$R/kernel/prelink/stubs-check.py"
+echo "$TOOL" > "$R/tool-path"
 cat > "$R/runtime/package.sh" <<'B'
 #!/bin/bash
 d=$(mktemp -d); mkdir -p "$d/bin" out/release
@@ -223,6 +227,36 @@ kill -INT $cpid; wait $cpid; st=$?
 check "cycle: no switch into an open session" 1 "a session is open: return to One UI first" cycle --only switch --name open
 out=$(cycle --only return,collect --name back 2>&1); st=$?
 [ $st = 0 ] && no_session "$P" && grep -q "One UI restored" "$D/back/summary.md" && ok "cycle --only return,collect: ends the session that was left open" || bad "cycle --only return,collect" "status $st"
+end_case
+
+# ---- summary.md says what its Steps table says, and a run that did not watch says where its markers are from
+# (the phone, 2026-11-13: "every step that ran ended well" above `collect | failed: ioslog boots ended with status 1`,
+# and "Markers: none seen" in the summary of `--only return,collect` after `--only stage,switch,watch`)
+# a failed collect step: the stand-in's data.img is no APFS store, so --pull-data's `ioslog boots` ends with status 1
+out=$(cycle --skip build,tests,stage --hold 0 --pull-data --name failcollect 2>&1); st=$?
+M=$D/failcollect/summary.md
+[ $st = 1 ] && printf '%s\n' "$out" | grep -q "oneios-tool cycle: collect: ioslog boots ended with status 1" && no_session "$P" \
+  && ok "cycle: a failed collect step ends the cycle with status 1 (after the return), and says which step" || bad "cycle: a failed collect step" "status $st: $(printf '%s' "$out" | tail -n 3 | tr '\n' '|')"
+grep -Eq "^\| collect \| [0-9.]+ \| failed: ioslog boots ended with status 1 \|" "$M" && grep -q "the result: \*\*failed step\*\*: collect (ioslog boots ended with status 1)$" "$M" && ! grep -q "ended well" "$M" \
+  && ok "summary.md: the head names the step the Steps table has as failed (collect), not 'every step that ran ended well'" || bad "summary.md: the head of a failed collect" "$(grep -E 'the result|collect' "$M" | tr '\n' '|')"
+grep -Eq "^\| watch \| [0-9.]+ \| ok \|" "$M" && grep -Eq "^\| return \| [0-9.]+ \| ok \|" "$M" && grep -Eq "^- \+[0-9]+ s ready: " "$M" && [ -s "$D/failcollect/xnuhost.log" ] && cmp -s "$D/failcollect/data.img" "$S/data/data.img" \
+  && ok "summary.md: the steps before it are ok, the markers are the watch's, the logs and the store's copy are in the folder" || bad "summary.md: the rest of a failed collect" "$(grep -E '^\| ' "$M" | tr '\n' '|')"
+grep -Eq "^\| watch \| [0-9.]+ \| failed: the boot did not reach its first frame \(watch: a panic before the first frame\) \|" "$D/panic/summary.md" && grep -q "; \*\*failed step\*\*: watch$" "$D/panic/summary.md" \
+  && ok "summary.md of the panic: the watch step is failed in the table and named in the head" || bad "summary.md of the panic: the watch step" "$(grep -E 'the result|watch' "$D/panic/summary.md" | tr '\n' '|')"
+end_case
+# a split run: watch in one run, return and collect in the next, the same name
+out=$(cycle --only stage,switch,watch --name split 2>&1); st=$?
+[ $st = 0 ] && has_session "$P" && [ ! -e "$D/split/summary.md" ] && printf '%s\n' "$out" | grep -Eq "ready after [0-9]+ s" \
+  && ok "cycle --only stage,switch,watch: the boot is watched, the session stays open, no summary yet" || bad "cycle --only stage,switch,watch" "status $st: $(printf '%s' "$out" | tail -n 3 | tr '\n' '|')"
+out=$(cycle --only return,collect --name split 2>&1); st=$?
+M=$D/split/summary.md
+[ $st = 0 ] && no_session "$P" && grep -q "the result: every step that ran ended well$" "$M" && grep -Eq "^\| return \| [0-9.]+ \| ok \|" "$M" && ! grep -q "^| watch " "$M" \
+  && ok "cycle --only return,collect with the same name: returns and writes the summary (no watch step in its table)" || bad "cycle --only return,collect of a split run" "status $st: $(printf '%s' "$out" | tail -n 3 | tr '\n' '|')"
+grep -q "^The watch step did not run in this run (the boot was watched by an earlier run, or not at all): the markers were read from \`xnuhost.log\` in this folder (the collect step's copy of the phone's \`session/xnuhost.log\`)\.$" "$M" && ! grep -q "none seen" "$M" \
+  && ok "summary.md of a run that did not watch: says so, and where the markers were read from" || bad "summary.md of a split run: where the markers are from" "$(grep -A3 '^## Markers' "$M" | tr '\n' '|')"
+miss=""; for want in "^- kernel: " "^- launchd: " "^- backboardd: " "^- SpringBoard: " "^- ready: .*guest ready: first frame" "^- end: .*xnuhost I exit 0"; do grep -Eq "$want" "$M" || miss="$miss $want"; done
+[ -z "$miss" ] && [ "$(grep -c '^- backboardd: ' "$M")" = 1 ] && [ "$(sed -n '/^## Markers/,/^## Panics/p' "$M" | grep -c '^- ')" = "$("$TOOL" phone log --markers 2>/dev/null | wc -l)" ] \
+  && ok "summary.md of a split run: the markers of the saved xnuhost.log, each stage once (as phone log --markers has them)" || bad "summary.md of a split run: the markers" "missing:$miss; $(sed -n '/^## Markers/,/^## Panics/p' "$M" | cut -c1-50 | tr '\n' '|')"
 end_case
 
 # ---- what stops a cycle before the phone is touched, or before the switch
