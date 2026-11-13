@@ -428,9 +428,8 @@ Open, in order:
 2. On the Mac: `tests/ioslog/compare.sh out/session-logs/2026-11-12/ios3.logarchive`, and `ioslog show` of it
    against `ios3-log.csv` (the same only if that file was made by `unifiedlog_iterator` at commit `3d5b27a`).
 3. `checks`: its patterns are the texts the notes quote; run it on a real log and correct them.
-4. `ioslog pull`: copy `data.img` from the phone (`adb exec-out "su -c 'cat ...'"`, only when `pidof xnuhost` is
-   empty, free disk checked, written sparsely in the tool: skip all-zero 4 MiB blocks with a seek). Not written:
-   no phone on the Linux PC. Until then `docs/newtodo.md`'s adb line.
+4. `ioslog pull`: written as `phone pull-data OUT [--ioslog]` (section 6; gzip -1 on the phone, refused beside a
+   session, zero blocks not written: `sparse.rs`). Not run on the phone. The free disk is not checked.
 5. An `Info.plist` in the saved archive, if Apple's `log show --archive` is wanted on it.
 6. **Done (third Linux round): the APFS reader reads compressed files** (decmpfs: zlib, LZVN, LZFSE and LZBITMAP,
    inline and in the resource fork; `flate2`, `lzfse_rust`, `zbitmap`; no decoder of our own). All 2,910 compressed
@@ -468,6 +467,16 @@ Open, in order:
 4. `phone status`'s `session:` line is this tool's own test (stage.sh's: the pid file and /proc); the fork's
    `@@RESULT session` line beside it is the root script's (its control folder). They can differ for a moment
    around a switch.
+5. **The sparse copy on the Mac's APFS** (`sparse.rs`; README "The sparse copy"). Done on Linux (2026-11-13):
+   holes of the file system's block on tmpfs and btrfs, the same bytes as `sparsewrite.py` on 7 streams and on a
+   32 GiB one, a quarter of its CPU. Written from the documentation and **not run**: the macOS branch (APFS
+   fills a hole shorter than about 16 MiB in front of a write; `F_PUNCHHOLE` after the write gives it back). On
+   the Mac: `cargo test -p oneios-phone sparse -- --nocapture` (prints each file's data regions and blocks with
+   the punch on and off, and what 1000 punches cost) and `MAP=1 SPEED=4096:280 tests/phone/sparse-compare.sh`.
+   If a punched hole does not stay a hole, or a punch is slow, `ONEIOS_SPARSE_PUNCH=0` is the script's behaviour;
+   then correct the test's macOS expectations and `hole_block`. ext4 and f2fs through the kernel were not run on
+   the Linux box either (a mount needs root); the phone's own file system does not matter (the copy is read
+   there, written here).
 
 ## Docs
 

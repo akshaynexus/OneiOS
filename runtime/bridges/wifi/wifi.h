@@ -30,8 +30,31 @@ bool br_wifi_to_guest(const uint8_t *frame, size_t length, const uint8_t mac[6])
 typedef void (*br_wifi_segment_fn)(void *ctx, const uint8_t *frame, size_t length);
 size_t br_wifi_segment(const uint8_t *frame, size_t length, uint16_t mss, bool coalesced, br_wifi_segment_fn fn, void *ctx);
 
-// A DHCP message: its type, the address it gives and the server's (frames.c). For the log.
-bool br_wifi_dhcp(const uint8_t *frame, size_t length, uint8_t *type, uint8_t address[4], uint8_t server[4]);
+// A DHCP message as the log names it (frames.c): whose it is (the client's hardware address), what it asks or gives.
+// A REQUEST never has a yiaddr: the address it asks for is option 50 (SELECTING, INIT-REBOOT) or its ciaddr (RENEWING,
+// REBINDING), and only a SELECTING REQUEST names the server (option 54).
+typedef struct {
+  uint8_t type;                     // option 53: 1 DISCOVER, 2 OFFER, 3 REQUEST, 4 DECLINE, 5 ACK, 6 NAK, 7 RELEASE, 8 INFORM
+  uint8_t client[6];                // chaddr
+  uint8_t ciaddr[4], yiaddr[4];
+  uint8_t requested[4];             // option 50; 0.0.0.0 when absent
+  uint8_t server[4];                // option 54; 0.0.0.0 when absent
+  bool has_requested, has_server;
+  bool ip_broadcast;                // sent to 255.255.255.255 (a REBINDING REQUEST is; a RENEWING one goes to the server)
+} br_wifi_dhcp_msg;
+bool br_wifi_dhcp(const uint8_t *frame, size_t length, br_wifi_dhcp_msg *out);
+// A REQUEST's state (RFC 2131 4.3.2): "SELECTING", "INIT-REBOOT", "RENEWING", "REBINDING"; "" for other messages.
+const char *br_wifi_dhcp_request_kind(const br_wifi_dhcp_msg *m);
+// The address a message is about: a REQUEST's or DECLINE's (option 50, else ciaddr), a RELEASE's or INFORM's ciaddr,
+// a server's answer's yiaddr.
+void br_wifi_dhcp_address(const br_wifi_dhcp_msg *m, uint8_t out[4]);
+// A message a client sends (DISCOVER, REQUEST, DECLINE, RELEASE, INFORM), not a server's answer.
+bool br_wifi_dhcp_from_client(const br_wifi_dhcp_msg *m);
+// The log line of a message that crossed the bridge (wlan.c), without the "wifi: DHCP: " prefix. from_guest: iOS sent
+// it. BR_WIFI_DHCP_OTHER: a message from the radio whose client is not mac (another station's broadcast; wlan.c counts
+// those and logs only the first); BR_WIFI_DHCP_IOS: iOS's own exchange.
+enum { BR_WIFI_DHCP_IOS = 1, BR_WIFI_DHCP_OTHER = 2 };
+int br_wifi_dhcp_describe(const br_wifi_dhcp_msg *m, bool from_guest, const uint8_t mac[6], char *out, size_t size);
 
 // One multicast group of a generic netlink family (the attributes nested in one entry of CTRL_ATTR_MCAST_GROUPS):
 // true and its id when its name is `name`. The kernel writes the id before the name.

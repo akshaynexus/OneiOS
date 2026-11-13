@@ -290,6 +290,62 @@ static void test_unmap_race(uint64_t task, uint64_t a, uint64_t code_va, uint64_
   check(H->thread_destroy(C0, b) == 0, "unmap race: the second thread destroyed");
 }
 
+// WebKit's JIT (MAP_JIT) at the host-call level: a page is writable through one mapping and executable through
+// another of the same physical page (the "separated W^X heaps" WebKit uses on a host with no APRR/SPRR: real
+// hardware here has none). The thread writes an instruction sequence through the read-write alias, does the i-cache
+// maintenance an arm64 JIT must, and branches to the read-execute alias. The page is executed as it was written:
+// the two aliases share the physical page (two task_map mmaps of one RAM offset), and a store through the writable
+// one is seen by an instruction fetch through the executable one. 0067 (fault 10): the hosted layer carries no
+// per-thread W^X (one Linux process cannot give two threads different permissions of one page), so WebKit must not
+// take the per-thread path; this checks the aliasing path it does take.
+static void test_jit(void)
+{
+  uint64_t task = 0, thread = 0;
+  int64_t rc = H->task_create(C0, &task);
+  if (rc < 0) { put("SKIP jit: task_create returned "); hex((uint64_t)rc); put("\n"); return; }
+  // The writer stub (verified encodings): write "mov x0,#0x5a; brk #1" through x1 (the RW alias), clean and
+  // invalidate the two code words for the exec alias in x2, then branch to it.
+  uint64_t jcode_pa = page_alloc(), jit_pa = page_alloc();
+  uint32_t *jc = (uint32_t *)(uintptr_t)kva(jcode_pa);
+  jc[0] = 0x52816805; jc[1] = 0x72ba5005; jc[2] = 0xb9000025;      // mov w5,#0xb40; movk w5,#0xd280,lsl16; str w5,[x1]
+  jc[3] = 0x52800405; jc[4] = 0x72ba8405; jc[5] = 0xb9000425;      // mov w5,#0x20;  movk w5,#0xd420,lsl16; str w5,[x1,#4]
+  jc[6] = 0xd50b7b22; jc[7] = 0x91001046; jc[8] = 0xd50b7b26;      // dc cvau,x2; add x6,x2,#4; dc cvau,x6
+  jc[9] = 0xd5033b9f; jc[10] = 0xd50b7522; jc[11] = 0xd50b7526;    // dsb ish; ic ivau,x2; ic ivau,x6
+  jc[12] = 0xd5033b9f; jc[13] = 0xd5033fdf; jc[14] = 0xd61f0040;   // dsb ish; isb; br x2
+  H->text_fixup(C0, jc, 15 * 4);
+  const uint64_t jcode_va = 0x100000000ull, exec_va = 0x180000000ull, write_va = 0x1c0000000ull;
+  // The JIT page in one task_map must be read, write and execute at once (MAP_JIT's W+X reservation: the host must
+  // allow a W+X mapping of the RAM memfd).
+  check(H->task_map(C0, task, write_va, 0x4000, XH_PROT_READ | XH_PROT_WRITE | XH_PROT_EXEC, jit_pa) == 0,
+        "jit: task_map of a W+X page (MAP_JIT)");
+  check(H->task_map(C0, task, exec_va, 0x4000, XH_PROT_READ | XH_PROT_EXEC, jit_pa) == 0,
+        "jit: the same physical page mapped read-execute at a second address (the W^X alias)");
+  check(H->task_map(C0, task, jcode_va, 0x4000, XH_PROT_READ | XH_PROT_EXEC, jcode_pa) == 0, "jit: the writer stub mapped");
+  if (H->thread_create(C0, task, &thread) != 0) { check(0, "jit: thread_create"); H->task_destroy(C0, task); return; }
+  static struct xh_user_state st;
+  struct xh_trap trap;
+  zero(&st, sizeof st);
+  st.pc = jcode_va;
+  st.x[1] = write_va;
+  st.x[2] = exec_va;
+  int k = -1;
+  int64_t r;
+  while ((r = H->thread_run(C0, thread, &st, &trap)) == 0 && trap.kind == XH_TRAP_INTERRUPT) irq_upcall(C0, NULL);
+  if (r == 0) k = (int)trap.kind;
+  if (!(k == XH_TRAP_BRK && st.x[0] == 0x5a && st.pc == exec_va + 4)) {
+    put("  jit: kind "); hex((uint64_t)(uint32_t)k); put(" x0 "); hex(st.x[0]); put(" pc "); hex(st.pc);
+    put(" jit_pa[0] "); hex(*(volatile uint32_t *)(uintptr_t)kva(jit_pa)); put("\n");
+  }
+  check(k == XH_TRAP_BRK && st.x[0] == 0x5a && st.pc == exec_va + 4,
+        "jit: code written through the RW alias runs through the RX alias (x0 = 0x5a at the brk)");
+  // The kernel's own view of the page sees the thread's JIT store too (shared memory, as copyio would read it).
+  check(*(volatile uint32_t *)(uintptr_t)kva(jit_pa) == 0xd2800b40,
+        "jit: the thread's store through the RW alias is in the kernel's view of the page");
+  check(H->thread_destroy(C0, thread) == 0, "jit: thread_destroy");
+  check(H->task_unmap(C0, task, exec_va, 0x4000) == 0 && H->task_unmap(C0, task, write_va, 0x4000) == 0, "jit: unmap the aliases");
+  check(H->task_destroy(C0, task) == 0, "jit: task_destroy");
+}
+
 static void test_tasks(void)
 {
   uint64_t task = 0, thread = 0;
@@ -750,6 +806,7 @@ void kernel_main(const struct boot_args *args, const struct xh_vector *vector, s
   }
   check(H->wall_time(cpu) > 1700000000ull, "wall_time");
   test_tasks();
+  test_jit();
   // boot-args "testkernel-bench" (`make bench-arm64`): the trap path's costs, after the checks.
   for (const char *c = args->command_line; *c; c++) {
     static const char want[] = "testkernel-bench";
