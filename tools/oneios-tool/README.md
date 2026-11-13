@@ -1281,7 +1281,10 @@ object's symbols and the signed entries of a vtable), `staged/` (the edit lists 
 
 Since 2026-11-13 (hang) `kernel gen gpu` also compiles a staged copy of UniXNU-droidvm's `DroidVMVirtioGpu3D.cpp`
 (`build/oneios-gpu/staged/`, edit list `staged/gpu.rs` `GPU3D`: three weak hooks that hand each blob's creation, deferred
-close and release to `OneiOSAdreno.cpp`'s GPU memory report, `docs/gpu.md` 5.1). This list has no Python original:
+close and release to `OneiOSAdreno.cpp`'s GPU memory report, `docs/gpu.md` 5.1; since the widgets work of the same day
+five more: each IOSurface use a command buffer names and its end, each CPU lock of a surface, each submission, and the
+physical segments of each blob of the caller's own pages, for the report's surface trail, `docs/gpu.md` 5.1 "Where a
+surface's pixels go", and a sixth for the test switch `oneios-gpu-read-wait`). This list has no Python original:
 its made-up source and the expected result are written by hand (`tests/kernelgen/golden/synthetic/gpu3d.in`, `.out`),
 checked by `the_edit_lists_write_what_the_python_functions_wrote`. Run on the Linux PC: `cargo test -p oneios-kernel
 -p oneios-tool --release --test golden`, 6 of 10 pass, the edit lists among them; the 4 others read

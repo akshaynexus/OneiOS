@@ -59,4 +59,42 @@ pub const GPU3D: &[(&str, &str)] = &[
     ("    countPages(c, r, -1);\n",
      concat!("    countPages(c, r, -1);\n",
              "    if (oneios_gpu_blob_gone) oneios_gpu_blob_gone(r.id);\n")),
+    // The surface trail (widgets, 2026-11-13; docs/gpu.md 5.1 "Where a surface's pixels go"): each IOSurface use a command
+    // buffer names as it commits (surface ID, written or read, the client's slot, its ticket), each use ended (the
+    // command buffer completed, or ticket 0: the connection closed), each CPU lock of a surface (IOSurfaceRootUserClient's
+    // lock trap, in the locking process), each submission by client, and the guest physical segments of each blob of the
+    // caller's own pages (CREATE_BLOB_USER), so OneiOSAdreno.cpp can tell which process's imports share pages and read
+    // what the pages hold. Weak, as above.
+    ("volatile int droidvm_virtgpu_compositor_pid;\n",
+     concat!("volatile int droidvm_virtgpu_compositor_pid;\n",
+             "// OneiOS: the surface trail (OneiOSAdreno.cpp trail::).\n",
+             "void oneios_gpu_surface_use(uint32_t, uint32_t, uint32_t, uint64_t) __attribute__((weak));\n",
+             "void oneios_gpu_surface_done(uint32_t, uint32_t, uint32_t, uint64_t) __attribute__((weak));\n",
+             "void oneios_gpu_surface_lock(uint32_t, uint32_t) __attribute__((weak));\n",
+             "void oneios_gpu_submit(uint32_t) __attribute__((weak));\n",
+             "void oneios_gpu_blob_segments(uint32_t, uint32_t, uint64_t, const void *, uint32_t) __attribute__((weak));\n",
+             "bool oneios_gpu_reader_waits(int) __attribute__((weak));\n")),
+    // A test switch (oneios-gpu-read-wait=1, off by default): the render server's command buffer waits, as it names the
+    // surfaces it samples, for the other processes' GPU work begun before it that writes them (the kernel's own
+    // awaitWriters, which this plug-in pin never asks for), at most droidvm_surface_read_wait_ms (100).
+    ("    IOLockUnlock(lock);\n    return status;\n}\n}\n}\n// For the display: the holds taken so far",
+     concat!("    IOLockUnlock(lock);\n",
+             "    if (!status && head.count && oneios_gpu_reader_waits && oneios_gpu_reader_waits(c->pid)) awaitWriters(c, answer);\n",
+             "    return status;\n}\n}\n}\n// For the display: the holds taken so far")),
+    ("            gSurfaceUses[gSurfaceUseCount++] = {record.surface, record.written != 0, c, answer};\n",
+     concat!("            gSurfaceUses[gSurfaceUseCount++] = {record.surface, record.written != 0, c, answer};\n",
+             "            if (oneios_gpu_surface_use) oneios_gpu_surface_use(record.surface, record.written != 0, c->slot, answer);\n")),
+    ("        if (gSurfaceUses[i].client == c && (!ticket || gSurfaceUses[i].ticket == ticket)) {\n",
+     concat!("        if (gSurfaceUses[i].client == c && (!ticket || gSurfaceUses[i].ticket == ticket)) {\n",
+             "            if (oneios_gpu_surface_done) oneios_gpu_surface_done(gSurfaceUses[i].surface, gSurfaceUses[i].write, c->slot, ticket);\n")),
+    ("    droidvm_surface_lock_options[options & 3] = droidvm_surface_lock_options[options & 3] + 1;\n",
+     concat!("    droidvm_surface_lock_options[options & 3] = droidvm_surface_lock_options[options & 3] + 1;\n",
+             "    if (oneios_gpu_surface_lock) oneios_gpu_surface_lock(uint32_t(surface), uint32_t(options));\n")),
+    ("    count(4);\n",
+     concat!("    count(4);\n",
+             "    if (oneios_gpu_submit) oneios_gpu_submit(c->slot);\n")),
+    // Only the caller's own pages (r.wired), only once the host took the blob (status 0 here is the CreateBlob's answer).
+    ("    if (entries) IODeleteData(entries, Entry, entryCapacity);\n",
+     concat!("    if (!status && entries && r.wired && oneios_gpu_blob_segments) oneios_gpu_blob_segments(r.id, c->slot, r.size, entries, entryCount);\n",
+             "    if (entries) IODeleteData(entries, Entry, entryCapacity);\n")),
 ];

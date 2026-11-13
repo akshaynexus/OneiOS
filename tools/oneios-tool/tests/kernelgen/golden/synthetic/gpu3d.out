@@ -17,4 +17,36 @@ void oneios_gpu_blob_gone(uint32_t) __attribute__((weak));
 // (before anchor 3)
     countPages(c, r, -1);
     if (oneios_gpu_blob_gone) oneios_gpu_blob_gone(r.id);
+// (before anchor 4)
+volatile int droidvm_virtgpu_compositor_pid;
+// OneiOS: the surface trail (OneiOSAdreno.cpp trail::).
+void oneios_gpu_surface_use(uint32_t, uint32_t, uint32_t, uint64_t) __attribute__((weak));
+void oneios_gpu_surface_done(uint32_t, uint32_t, uint32_t, uint64_t) __attribute__((weak));
+void oneios_gpu_surface_lock(uint32_t, uint32_t) __attribute__((weak));
+void oneios_gpu_submit(uint32_t) __attribute__((weak));
+void oneios_gpu_blob_segments(uint32_t, uint32_t, uint64_t, const void *, uint32_t) __attribute__((weak));
+bool oneios_gpu_reader_waits(int) __attribute__((weak));
+// (before anchor 5)
+            gSurfaceUses[gSurfaceUseCount++] = {record.surface, record.written != 0, c, answer};
+            if (oneios_gpu_surface_use) oneios_gpu_surface_use(record.surface, record.written != 0, c->slot, answer);
+// (before anchor 6)
+        if (gSurfaceUses[i].client == c && (!ticket || gSurfaceUses[i].ticket == ticket)) {
+            if (oneios_gpu_surface_done) oneios_gpu_surface_done(gSurfaceUses[i].surface, gSurfaceUses[i].write, c->slot, ticket);
+// (before anchor 7)
+    droidvm_surface_lock_options[options & 3] = droidvm_surface_lock_options[options & 3] + 1;
+    if (oneios_gpu_surface_lock) oneios_gpu_surface_lock(uint32_t(surface), uint32_t(options));
+// (before anchor 8)
+    count(4);
+    if (oneios_gpu_submit) oneios_gpu_submit(c->slot);
+// (before anchor 9)
+    if (!status && entries && r.wired && oneios_gpu_blob_segments) oneios_gpu_blob_segments(r.id, c->slot, r.size, entries, entryCount);
+    if (entries) IODeleteData(entries, Entry, entryCapacity);
+// (before anchor 10)
+    IOLockUnlock(lock);
+    if (!status && head.count && oneios_gpu_reader_waits && oneios_gpu_reader_waits(c->pid)) awaitWriters(c, answer);
+    return status;
+}
+}
+}
+// For the display: the holds taken so far
 // (the end)

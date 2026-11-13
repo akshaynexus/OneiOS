@@ -726,7 +726,8 @@ In order. 1-3 are the kernel agent's with this ABI; the rest are split as noted.
    from virtio-input, AppleKeyStoreState and SoftwareAES in the kernel.
 7. **SpringBoard**: Metal. virtio-gpu 3D: the DRM native context (capset 6) with drm2kgsl on
    `/dev/kgsl-3d0` in-process, blob resources over the RAM memfd through `/dev/udmabuf` (several udmabufs for a
-   blob past 64 MiB or 1024 runs of pages, the phone's limits; `docs/gpu.md` section 2), per-ring fences;
+   blob past 64 MiB or 1024 runs of pages, the phone's limits; `docs/gpu.md` section 2), per-ring fences; each KGSL
+   import's IO coherence read back and logged (`gpu: KGSL imports ...`, drm2kgsl patch 0007, `docs/gpu.md` 2.4);
    guest side UniXNU-droidvm's `DroidVMVirtioGpu3D.cpp` and the Metal plugin. `virtio_gpu.c` is 2D only.
 8. Then: the bridges' first run on the phone (network, sound, haptics, Bluetooth are wired and untested),
    battery, a guest-initiated shutdown on `SIGTERM`, the uid drop and trap batching.
