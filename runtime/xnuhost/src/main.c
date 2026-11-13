@@ -225,16 +225,14 @@ static void bt_sim_on(xl_machine *m)
 // cpu-pin (default on): vCPU `vcpu`'s one host CPU, the rank-th CPU of its plan's mask among the vCPUs of its kind (so
 // the vCPUs of a kind take different CPUs while there are enough). The iOS thread a vCPU runs goes on the same CPU:
 // the hand-off between them is then a switch on one core, not a wake-up of another (docs/booter.md 2.6a: 3 us for a
-// system call there and back against 30 us across cores). Otherwise the plan's whole mask.
+// system call there and back against 30 us across cores). Otherwise, and whenever a thermal step leaves fewer CPUs
+// than vCPUs of the kind (br_cpu_pin_mask; before 2026-11-13 they were stacked rank % CPUs, three to a core at
+// "trapping"), the plan's whole mask.
 static uint64_t place_mask(unsigned vcpu)
 {
   uint64_t mask = __atomic_load_n(&cpu_plan.v[vcpu].affinity, __ATOMIC_ACQUIRE);     // the thermal step may narrow it
   if (!config.cpu_pin || !mask) return mask;
-  unsigned rank = 0;
-  for (unsigned j = 0; j < vcpu; j++) rank += cpu_plan_base.v[j].type == cpu_plan_base.v[vcpu].type;
-  unsigned k = rank % (unsigned)__builtin_popcountll(mask);
-  for (unsigned i = 0; i < 64; i++) if (mask >> i & 1 && k-- == 0) return 1ull << i;
-  return mask;
+  return br_cpu_pin_mask(&cpu_plan, &cpu_plan_base, vcpu);
 }
 static void place(int tid, unsigned vcpu)
 {
@@ -722,6 +720,19 @@ static void host_memory_tick(bool now)
        "in %llu calls (%llu failed, %llu ms)", (unsigned long long)(available >> 20), (unsigned long long)(total >> 20),
        (unsigned long long)(held >> 20), (unsigned long long)(g_mem.size >> 20), (unsigned long long)(bytes >> 20),
        (unsigned long long)calls, (unsigned long long)failed, (unsigned long long)(ns / 1000000));
+  // Where the host's memory is besides (2026-11-13): the guest's RAM that the host swapped out (zram on the phone: every
+  // touch of such a page is a fault in a vCPU or a task that decompresses it), the host's swap in use, and its page
+  // tables (each iOS task is a Linux process mapping the memfd). st_blocks counts a swapped page as held; mincore
+  // does not count it as in RAM. A second line, so that the one above keeps its form for the log tools.
+  uint64_t in_ram = xh_ram_resident(g_mem.host, g_mem.size, (uint64_t)sysconf(_SC_PAGESIZE));
+  uint64_t swap_total = 0, swap_free = 0, tables = 0;
+  (void)xh_meminfo_value(config.ram_meminfo, "SwapTotal", &swap_total);
+  (void)xh_meminfo_value(config.ram_meminfo, "SwapFree", &swap_free);
+  (void)xh_meminfo_value(config.ram_meminfo, "PageTables", &tables);
+  LOGI("memory: the guest's RAM: %llu MiB in the host's RAM, %llu MiB swapped out by the host; host swap %llu of %llu MiB used, "
+       "page tables %llu MiB", (unsigned long long)(in_ram >> 20), (unsigned long long)((held > in_ram ? held - in_ram : 0) >> 20),
+       (unsigned long long)((swap_total > swap_free ? swap_total - swap_free : 0) >> 20), (unsigned long long)(swap_total >> 20),
+       (unsigned long long)(tables >> 20));
 }
 
 int main(int argc, char **argv)

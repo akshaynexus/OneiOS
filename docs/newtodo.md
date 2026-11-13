@@ -101,6 +101,15 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
      kernel's GPU report's clients line (own vs wired MiB for backboardd) and sizes line ("64+" count) every 10 s
      across the 30 s of growth, and `m2v-mem.txt` in backboardd's temporary folder on the Data volume (copied with the
      logarchive procedure below); then the fix goes where the number is (iOS side: built on the Mac).
+     **2026-11-13 (hang, branch `fix-ui-hang-memory`): the holder is in backboardd itself, which of its memory is not
+     known yet.** The phone's `blobs +182 closed +17` per 10 s means the client does not close them (the kernel frees
+     what is closed, at once or after the client's fenced work; the host frees at `RESOURCE_UNREF`): read end to end,
+     `docs/gpu.md` 5.1 "Who keeps a blob, and who frees it". Wired memory falling back when the UI settles fits the
+     plug-in's 2 s trim of empty blocks, so the growth while busy is not yet a leak. New counters, so the next log names
+     the kind: `oneios-gpu-kinds:` and `oneios-gpu-ages:` per client (own blobs in the task or the kernel, mappable or
+     not; wired by the mapping's VM tag: IOSurface, malloc, other; sizes under 1 MiB; ages; closed blobs still held and
+     the oldest wait), and xnuhost's `gpu: 10 s: host blobs N (M MiB), made +A unref'd +B` against the guest's live count.
+     No plug-in change is written: which plug-in object to change waits for those lines.
 2. **The power key does nothing in iOS** since the haptics change (15:35 boot): the presses reach backboardd (34 HID
    events, 0 dropped) but no `request_power_change`. **Read in 24A446 (2026-11-12, `docs/hardware.md` 5, "The power
    key since the Actuator"):** ButtonResolver's AOP interface waits for Haptics.framework's button haptics loader and
@@ -183,6 +192,32 @@ The owner paused the work on 2026-11-12 at about 15:55 IST. This file is the han
       names the failing check (file/line are in the `brk` operands). Also read xnuhost.log for the `deferred map ...
       prot 7 failed` line. The `IOUC RootDomainUserClient failed MACF in process pid 282, MobileSafari` line is a
       separate sandbox/entitlement denial for the IOPMrootDomain user client; harmless to JIT, noted for the hang.
+11. **iOS hangs while the keyboard is up (typing a Wi-Fi password, 2026-11-13 10:2x-10:47, main `c1223f8`).** The
+    guest ran on; frames stopped (`30 s: flushes 10`), backboardd's GPU memory grew 783+147 -> 1232+202 MiB in 80 s,
+    the host had 672 MiB available, the thermal step was 2 (trapping), Spotlight, kbd, Preferences and backboardd
+    were the busiest. Read and changed on `fix-ui-hang-memory` (built and tested on the PC; not on the phone):
+    - **The thermal step stacked three P vCPUs on a core** (proven from the code and the log's `0x60`): step 2 lost the
+      E cores it means to add, and cpu-pin put six P vCPUs on two cores. Fixed: `0x63`, and no pinning when a kind
+      has fewer cores than vCPUs (`runtime/bridges/thermal/README.md`, "Fixed 2026-11-13"). The cores each step allows
+      are unchanged.
+    - **`oneios-cpu:` divided by the nominal 10 s** (proven from the code): a late report thread (a stall) inflated
+      every share [inference: the four busiest added up to 1,440 % of a CPU on eight vCPUs at +1119]. It now divides by
+      the measured time and says the seconds.
+    - **kernel_task's share is likely mostly idle threads** [inference] (oneios-perf on the PC: `oneios-perf: kernel_task: ... 686% of a vCPU;
+      most: idle #4 ...`, 198 of 206 s idle threads): the phone's 340 % is not work until the perf line's `most:`
+      names a thread that is not `idle`.
+    - **0058's give-back took 131 s in the guest for 205 MiB** (0.57 s of it in xnuhost): every run was one 4 KiB
+      page. Hosted 0066 takes long runs and larger batches and splits the time
+      (`kernel/patches/oneios-hosted/README.md`, 0066).
+    - **The host's memory**: a second `memory:` line says how much of the guest's RAM the host swapped out (zram),
+      the host's swap and page tables [guess, not measured: with 672 MiB available, Linux swapping guest pages
+      would give the 0.4-0.95 s faults and interrupts of perf at 1174].
+    - Guessed, not proven: kbd and Spotlight spin on work this guest cannot do fast (the keyboard's language model
+      and Spotlight's queries without the Neural Engine) or on GPU work that waits behind backboardd's; the keyboard
+      not responding (fault 12) is the same load. **On the phone next:** the boot arguments and log searches of
+      `docs/gpu.md` 5.1 "The next phone boot (hang)".
+12. **The keyboard often does not come up or does not answer** (23:45 and 23:15 boots: kbd 24-40 %, Spotlight 96-102 %,
+    `5105 HID events queued ... 6 dropped`). Not read past fault 11's load; the same samples and searches decide.
 
 ## Later
 

@@ -485,7 +485,11 @@ surface); those pages belong to the surface and are counted again wherever it is
 MiB per process; the memory line comes whenever the live counts change, the clients line too.
 
 **Who keeps a still screen drawing.** `oneios-cpu: 10 s: backboardd[53] 62%, SpringBoard[30] 35%, ... (all 140%)`, every
-report: the eight busiest processes in the interval, as a percentage of one CPU, from each task's recorded user and system time.
+report: the eight busiest processes in the interval, as a percentage of one CPU, from each task's recorded user and system time,
+over the time measured since the last report (its seconds start the line; before 2026-11-13 the nominal 10 s, which a
+late report in a stall inflated: 1,440 % on eight vCPUs). `kernel_task` likely includes its idle threads [inference: `oneios-perf`'s
+`kernel_task: ... most:` counts them as kernel_task's, 198 of 206 s on the PC; this line was not seen on the PC, which
+has no GPU report]: a high share there is not work until `most:` names a thread that is not `idle`.
 The phone's run of 2026-11-11 drew 40-58 frames a second for ten minutes with nobody touching the lock screen, from the lock
 screen's first frame until the first SpringBoard (pid 30) aborted; after its restart the same screen drew 0 a second and
 frames came only with touches. Before iconservicesagent had a GPU device (an earlier boot) the screen idled. Which process
@@ -497,6 +501,80 @@ The sizes line (one per client, with the clients line) counts live blobs by size
 buffers, so growth in "64+" is the runtime's pools (empty blocks it keeps, trimmed after 2 s idle, `NativeBridgeMetalFrontend.mm`
 `watchIdleMemory`) and growth below it is resources (windows, textures). The plug-in's own pool report (`/private/var/ngpu/debug/client-mem`)
 writes `m2v-mem.txt` in the process's temporary folder on the guest's Data volume, which nothing reads out of a phone session yet.
+(The runtime's pooled blocks start at 4 MiB and double with the pool up to 64 MiB, NativeMetal `bridge/patches/0013`, so a
+pool's first blocks are in the 4-32 MiB columns too.)
+
+**Who keeps a blob, and who frees it** (read 2026-11-13, hang). A blob's life, from the top:
+
+| Holder | What it keeps | When it lets go |
+|---|---|---|
+| Core Animation (backboardd's render server) and the app | its `MTLTexture`s, `MTLBuffer`s, render targets, its own texture caches; the `IOSurface`s of every window it composites | its own policy: on memory pressure (iOS's, inside the guest), when the layer goes |
+| NativeMetal (`NativeBridgeMetalFrontend.mm`) | every imported IOSurface while anything in the process still retains it (`gHeldImports`) | the next import, a command buffer's completion, or a memory-pressure rise (`watchImportPressure`) |
+| metal2vulkan (`memory.rs` pools) | the blocks resources are placed in (dedicated allocations for large ones) and up to two empty blocks a pool | an empty block after 2 s (`watchIdleMemory`), every kept block on a pressure rise; never while placements live in it |
+| Turnip (`tu_knl_darwin.cc`) | a freed BO until its fence is done (the retire queue), then in its BO cache: at most 16 MiB of BOs up to 1 MiB and 96 MiB of larger ones (`TU_DARWIN_BO_CACHE_SMALL_MB`, `TU_DARWIN_BO_CACHE_MB`) | past the budgets, oldest first: the close below |
+| the kernel (`DroidVMVirtioGpu3D.cpp`) | a closed blob while the client still has fenced work made before the close ("deferred", "waiting") | at the client's next method or fence wait once that work is done (`reapPending`); every blob at the connection's close |
+| xnuhost (`virtio_gpu.c`, `gpu3d_kgsl.c`, drm2kgsl) | the resource, its udmabufs and KGSL's import of them | at `RESOURCE_UNREF`: detached from every context (drm2kgsl unbinds and frees the GPU object), the chunks closed |
+
+So "blobs +N closed +M" with N far above M (the phone, 2026-11-12 23:45: backboardd +182, closed +17 in 10 s) means the
+client has not closed them: the holder is in the process (Core Animation, NativeMetal, metal2vulkan or Turnip's cache, the
+last bounded at 112 MiB), not the kernel or the host. Two lines per client name which of its memory it is (2026-11-13; the
+gpu archive's staged `DroidVMVirtioGpu3D.cpp`, `tools/oneios-tool/crates/oneios-kernel/src/staged/gpu.rs` `GPU3D`, and
+`OneiOSAdreno.cpp` `blobs::`), printed with the sizes lines for each client that made or let go of a blob in the interval
+or still has closed ones held:
+
+```
+oneios-gpu-kinds: backboardd own task 900 (700 MiB), kernel 2 (1), mappable 650; wired IOSurface 80 (140 MiB), malloc 3 (2), other 1 (1); made +182 gone +17
+oneios-gpu-ages: backboardd <16K 600, <64K 300, <256K 200, <1M 92; age <10 s 120, <1 min 300, <10 min 500, older 72; held closed 3 (1 MiB, oldest 2 s)
+```
+
+- "own task" / "kernel": this driver's pages for the blob (Turnip's BOs), in the client's task or (where that failed) the
+  kernel's map; "mappable": those made with the blob flag `USE_MAPPABLE`, what the CPU writes (command streams, shared and
+  staging buffers, descriptor sets) against GPU-only images.
+- "wired": the caller's own pages (`CREATE_BLOB_USER`) by the VM tag of its mapping at that address: `IOSurface`
+  (`VM_MEMORY_IOSURFACE`, an imported surface), `malloc` (a no-copy buffer over malloc'd memory) and the rest.
+- The small sizes (under 1 MiB, where the phone's growth was), the ages of every live blob (from its creation), and "held
+  closed": blobs closed while the client's work was in flight, with the oldest such wait. Up to 24,576 live blobs are
+  followed (`table full` says when more are not counted).
+- How to read them: small "own task" blobs, mostly mappable and growing in the older columns, are kept BOs (command streams
+  or descriptor pools the runtime keeps, or Turnip's cache past its budget: a bug there); unmappable ones of a few MiB are
+  textures Core Animation keeps; "wired IOSurface" growing is surfaces kept imported; "held closed" with an oldest age of
+  minutes is GPU work that never finishes (a fence lost). A burst that the next quiet 10 s returns ("gone" catching up with
+  "made", the counts falling) is a busy UI, not a leak.
+
+The host's side, in xnuhost's log every 10 s while it changes (`virtio_gpu.c` `blob_note`): `gpu: 10 s: host blobs N (M
+MiB), made +A unref'd +B`. N against the guest's `oneios-gpu-memory` live count says whether the host keeps blobs the guest
+let go (N larger by more than the display's few 2D surfaces: a host leak); equal, the holding is the guest's.
+
+**The next phone boot (hang, 2026-11-13).** For the keyboard hang (`docs/newtodo.md` 11, 12): the image's
+`xnuhost.conf` `boot-args` as the baseline's, with its `oneios-ubt...` part replaced by
+
+```
+oneios-ubt=Spotlight,kbd,backboardd oneios-ubt-at=300 oneios-ubt-every=10 oneios-ubt-count=150 oneios-iouc=kbd,Spotlight oneios-sysfail=kbd,Spotlight
+```
+
+(`oneios-ubt-count` is 0061's, on `fix-wifi-late-2`: without it the samples go on every 10 s to the end). Then unlock,
+open Settings > Wi-Fi, tap a network and type its password for a minute, and return. From xnuhost's log, the lines
+from 2 minutes before the keyboard to the return: `oneios-gpu-memory`, `oneios-gpu-clients`, `oneios-gpu-sizes`,
+`oneios-gpu-kinds`, `oneios-gpu-ages` (backboardd, Spotlight, kbd, Preferences), `gpu: 10 s: host blobs`, `gpu: 10 s
+host:`, `display: ... flushes`, `oneios-cpu:`, `oneios-perf:` (all of its lines, with `kernel_task: ... most:`),
+`oneios-mem:` (four lines), both `memory:` lines, `thermal:`, `input: touch:`, `oneios-ubt:` (each report's lines;
+name a thread's addresses with `oneios-tool sym ADDR...`, then `--slide`), `oneios-iouc: kbd`/`Spotlight`,
+`oneios-sysfail: kbd`/`Spotlight`. From iOS's own log (`oneios-tool phone pull-data data.img`, then, with `--boot last`
+and `--since`/`--until` around the keyboard):
+
+```
+oneios-tool ioslog show data.img --boot last --proc kbd --type error,fault
+oneios-tool ioslog show data.img --boot last --proc kbd --grep 'ANE|Espresso|E5RT|e5rt|[Nn]eural|LanguageModel|[Mm]odel|timeout|retry'
+oneios-tool ioslog show data.img --boot last --proc Spotlight --type error,fault
+oneios-tool ioslog show data.img --boot last --proc Spotlight --grep 'ANE|Espresso|E5RT|MTL|Metal|GPU|embedding|query|index|timeout|retry'
+oneios-tool ioslog show data.img --boot last --proc InputUI --grep '[Kk]eyboard|session|timeout|fail'
+oneios-tool ioslog show data.img --boot last --proc SpringBoard --grep 'UIKeyboard|RemoteKeyboard|[Kk]eyboardArbiter|InputUI|focus'
+oneios-tool ioslog show data.img --boot last --proc Preferences --grep '[Kk]eyboard|password|join|timeout'
+oneios-tool ioslog show data.img --boot last --proc backboardd --grep '[Kk]eyboard|IOSurface|texture|memory|watchdog|hang|stall'
+oneios-tool ioslog show data.img --boot last --subsystem com.apple.TextInput
+oneios-tool ioslog show data.img --boot last --proc kernel --grep 'memorystatus|jetsam|idle_demotion|stuck'
+oneios-tool ioslog checks data.img --boot last
+```
 
 The phone's numbers before this split (backboardd 20 -> 383 -> 431 -> 460 -> 543 -> 925 MiB in 16 min, 2026-11-11) mixed both
 kinds; the steps at 543 and 925 came after SpringBoard restarts (it aborted on `processIdentity`, not a GPU fault). The

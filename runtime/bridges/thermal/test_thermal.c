@@ -157,8 +157,25 @@ static void test_masks(void)
   plan = base;
   br_cpu_plan_cap(&plan, &base, &t, 1);
   CHECK(plan.v[0].affinity == 0x03 && plan.v[2].affinity == 0x7c && plan.v[7].affinity == 0x7c);
+  // step 2: the P vCPUs on cpu5-6 and the E cores (they lost the E cores before 2026-11-13: 0x60), the E vCPUs on theirs
+  br_cpu_plan_cap(&plan, &base, &t, 2);
+  CHECK(plan.v[0].affinity == 0x03 && plan.v[1].affinity == 0x03 && plan.v[2].affinity == 0x63 && plan.v[7].affinity == 0x63);
+  br_cpu_plan_cap(&plan, &base, &t, 3);
+  CHECK(plan.v[0].affinity == 0x03 && plan.v[7].affinity == 0x03);
+  // cpu-pin: one core each while the kind's vCPUs fit the mask, else the whole mask (never three to a core)
   br_cpu_plan_cap(&plan, &base, &t, 0);
   CHECK(plan.v[7].affinity == 0xfc);
+  CHECK(br_cpu_pin_mask(&plan, &base, 0) == 0x01 && br_cpu_pin_mask(&plan, &base, 1) == 0x02);
+  CHECK(br_cpu_pin_mask(&plan, &base, 2) == 0x04 && br_cpu_pin_mask(&plan, &base, 7) == 0x80);
+  uint64_t seen = 0;
+  for (unsigned i = 2; i < 8; i++) seen |= br_cpu_pin_mask(&plan, &base, i);
+  CHECK(seen == 0xfc);                                      // six P vCPUs, six P cores, each its own
+  br_cpu_plan_cap(&plan, &base, &t, 1);                       // five P cores for six P vCPUs
+  CHECK(br_cpu_pin_mask(&plan, &base, 2) == 0x7c && br_cpu_pin_mask(&plan, &base, 0) == 0x01);
+  br_cpu_plan_cap(&plan, &base, &t, 2);
+  CHECK(br_cpu_pin_mask(&plan, &base, 7) == 0x63 && br_cpu_pin_mask(&plan, &base, 1) == 0x02);
+  CHECK(br_cpu_pin_mask(&plan, &base, 8) == 0);
+  br_cpu_plan_cap(&plan, &base, &t, 0);
   // pinned: each vCPU's own core when the step allows it, the step's CPUs when it does not
   CHECK(br_cpu_plan_make(&t, 8, true, &base) == 0);
   plan = base;

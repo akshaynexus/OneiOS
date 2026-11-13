@@ -3,8 +3,9 @@
 //! The hosted kernel's GPU archive, built between the two kernel passes from the compile records of the first:
 //!
 //!   build/oneios-gpu/liboneiosgpu.a    OneiOSGpu.cpp (the patch folder: oneios_gpu3d_start) and Droid-VM's virtio-gpu 3D
-//!                                      kernel driver, unchanged: UniXNU-droidvm package/DroidVMVirtioGpu.cpp and
-//!                                      DroidVMVirtioGpu3D.cpp, with NativeAdreno's DroidVMVirtgpuABI.h
+//!                                      kernel driver: UniXNU-droidvm package/DroidVMVirtioGpu.cpp unchanged and
+//!                                      DroidVMVirtioGpu3D.cpp staged (staged/gpu.rs GPU3D: each blob made, closed and
+//!                                      gone goes to OneiOSAdreno.cpp), with NativeAdreno's DroidVMVirtgpuABI.h
 //!
 //! Force-loaded by CONFIG_XNU_EXTRA_LD_ARCHIVES and started from oneios_board_late_start (0005-gpu-3d.patch).
 //! kernel/build-hosted.sh adds it to the board's archives of the build's device repository; the VM kernel
@@ -48,7 +49,7 @@
 use crate::class_record::{pylist, ClassRecord};
 use crate::drivers_build::Record;
 use crate::gen::{self, fail, Compile, Ctx};
-use crate::staged::gpu::GPU;
+use crate::staged::gpu::{GPU, GPU3D};
 use anyhow::{Context, Result};
 use oneios_common::pyjson::Value;
 use std::collections::BTreeSet;
@@ -148,6 +149,18 @@ pub fn staged_text(text: String) -> std::result::Result<String, String> {
     for (anchor, replacement) in GPU {
         if text.matches(anchor).count() != 1 {
             return Err(format!("DroidVMGpu.cpp no longer has exactly one {}", anchor.trim()));
+        }
+        text = text.replace(anchor, replacement);
+    }
+    Ok(text)
+}
+
+/// DroidVMVirtioGpu3D.cpp with the changes of staged/gpu.rs GPU3D; Err is the anchor that is not there exactly once.
+pub fn staged_3d_text(text: String) -> std::result::Result<String, String> {
+    let mut text = text;
+    for (anchor, replacement) in GPU3D {
+        if text.matches(anchor).count() != 1 {
+            return Err(format!("DroidVMVirtioGpu3D.cpp no longer has exactly one {}", anchor.trim()));
         }
         text = text.replace(anchor, replacement);
     }
@@ -267,9 +280,16 @@ pub fn main() -> Result<()> {
     // them in __DATA the kernel no longer fits the collection's stock layout (kernel/prelink, the board's Q7).
     let extra = ["-I".to_string(), gen::s(&places.package), "-I".to_string(), gen::s(&places.adreno), "-DDROIDVM_VIRTIO_GPU_DYNAMIC=1".to_string(),
                  format!("-DONEIOS_GPU_ADRENO={}", link as u8)];
+    // DroidVMVirtioGpu3D.cpp from a staged copy with the changes of staged/gpu.rs GPU3D (each blob's life to
+    // OneiOSAdreno.cpp's report); the package's headers are found through -I as before.
+    let staged_dir = out.join("staged");
+    gen::mkdirs(&staged_dir)?;
+    let staged_3d = staged_dir.join("DroidVMVirtioGpu3D.cpp");
+    gen::write_text(&staged_3d, &staged_3d_text(gen::read_text(&sources[2])?).map_err(|e| anyhow::anyhow!("build-oneios-gpu: {e}"))?)?;
     let mut objects = Vec::new();
     for source in &sources {
-        objects.push(compile.object(&record, source, &out.join(gen::stem(source) + ".o"), &extra)?);
+        let compiled = if source == &sources[2] { &staged_3d } else { source };
+        objects.push(compile.object(&record, compiled, &out.join(gen::stem(source) + ".o"), &extra)?);
     }
     objects.extend(linked);
     let archive = out.join("liboneiosgpu.a");

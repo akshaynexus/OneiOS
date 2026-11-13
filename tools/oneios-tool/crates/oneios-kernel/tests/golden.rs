@@ -75,6 +75,8 @@ fn the_edit_lists_write_what_the_python_functions_wrote() {
                expected("hid_transport"));
     assert_eq!(build_oneios_net::staged_text(made_up("net_transport")).unwrap(), expected("net_transport"));
     assert_eq!(build_oneios_gpu::staged_text(made_up("gpu")).unwrap(), expected("gpu"));
+    assert_eq!(build_oneios_gpu::staged_3d_text(made_up("gpu3d")).unwrap(), expected("gpu3d"));   // no Python original
+    assert!(build_oneios_gpu::staged_3d_text(made_up("gpu3d").repeat(2)).is_err());
     assert_eq!(build_oneios_display::staged_text(made_up("display")).unwrap(), expected("display"));
 }
 

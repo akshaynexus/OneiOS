@@ -183,12 +183,24 @@
 # iconservicesagent draws them all again. A guess for the phone's slow Home Screen of 2026-11-12 23:45 (lsd 90% for the
 # first minute, iconservicesagent 115%), not proven: the lines say. oneios-store-report=0: the whole step off.
 0060-ls-boot-state.patch
+# fix-wifi-late-2: 0026's user backtraces as a sampler of a boot's first minutes. oneios-ubt-count=N stops after N
+# reports (default 0: no end, as before), and each report starts with "oneios-ubt: report K at +S s" (seconds after
+# bsd_init's late start). For configd's ~89 s between launchd and en0's name (phone, 2026-11-13): oneios-ubt=configd,wifid,logd
+# oneios-ubt-at=20 oneios-ubt-every=10 oneios-ubt-count=18. Numbered 0061 (other agents hold 0059-0060, 0062-0069).
+0061-ubt-count.patch
 # bluetooth: how a daemon looks for its hardware (bluetoothd ran on the phone, 2026-11-12 23:45, and never opened the
 # transport). Boot argument oneios-iokit=NAME[,NAME...] (default bluetoothd,BlueTool; - for none): one oneios-iokit:
 # line per distinct IOKit matching lookup, matching notification, registry path, property read (name, plane, entry),
 # user client open and kernel control looked up by name (CTLIOCGINFO), again when its answer changes and at the 16th,
 # 64th, 256th asking; at most 800 lines. A debugging aid, nothing else changes.
 0062-iokit-hardware-probe-trace.patch
+# hang (2026-11-13): 0058's give-back in long runs. Each cold free page brings the free, held pages next to it in
+# physical memory (oneios-free-report-run=PAGES, 256; 1: 0058's way), batches of up to 1024 pages when the free queues
+# hold that much above keep (oneios-free-report-batch), the free queue's lock held for at most 128 pages at a time, a
+# batch given back as its sorted runs (osfmk/arm64/hosted/free_report_runs.h = runtime/xnuhost/include/xnuhost/
+# free_report_runs.h). A fourth oneios-mem: line splits the give-back time: lock waits, taking, host calls, putting back,
+# the thread's own CPU time, per MiB. Numbered 0066 to stay clear of the 0059-0065 other agents have open.
+0066-free-page-runs.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # oneios-tool kernel gen net), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and
@@ -196,4 +208,5 @@
 # fix-wifi-late (2026-11-13), in that archive, not a numbered patch (no XNU source changed): the nub reserves en0's
 # unit (network-interface-unit-en = <0>, as the iPhone's Wi-Fi node), so configd's InterfaceNamer names en0 at once
 # instead of waiting for IOKit quiet, which comes only after driverkitd; "first ..." lines time the naming, the enable,
-# the first request, the power on, the first scan and join (net/README.md, "en0's name").
+# the first request, the power on, the first scan and join (net/README.md, "en0's name"). On the phone (2026-11-13) it did
+# not make Wi-Fi earlier: configd named en0 89 s after launchd with IOKit already quiet (0061 samples configd).
