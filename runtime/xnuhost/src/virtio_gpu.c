@@ -97,6 +97,9 @@ typedef struct {
   bool ctx_fast[MAX_CTX];              // that context's commands are the fast lane's (the render server's: "xnu:backboardd")
   blob *blobs;                         // BLOB_SLOTS of them; id 0 = free
   unsigned nblobs;
+  // The blobs the host holds (2026-11-13): bytes of the live ones, made and unref'd since the start, and the last line's
+  // figures (blob_note). Set where the worker changes the table.
+  uint64_t blob_bytes, blobs_made, blobs_unref, blob_note_us, noted_made, noted_unref;
   struct { uint32_t width, height, format, stride, offset; } scan;      // the scanout when it is a blob
   pthread_mutex_t pl;
   pthread_cond_t idle;
@@ -229,6 +232,7 @@ static void blob_del(gpu_state *g, blob *b)
   unsigned i = (unsigned)(b - g->blobs), j = i;
   free(b->entries);
   g->nblobs--;
+  g->blob_bytes -= b->size;
   for (;;) {                                         // backward shift: the probe chains stay whole
     g->blobs[i].id = 0;
     for (;;) {
@@ -430,6 +434,8 @@ static uint32_t command3d(gpu_state *g, const gpu_hdr *h, const uint8_t *body, s
     int r = b && (host || (a[2] & XH_GPU_BLOB_FLAG_GUEST_HANDLE)) ? b->create_blob(b, host ? h->ctx : 0, a[0], a[1], a[2], wide[0], wide[1], entries, a[3]) : 0;
     if (r && host) { nb->entries = entries; blob_del(g, nb); return r == -ENOMEM ? RESP_ERR_OUT_OF_MEMORY : RESP_ERR_UNSPEC; }
     nb->ctx = host ? h->ctx : 0; nb->mem = a[1]; nb->size = wide[1]; nb->entries = entries; nb->nentries = a[3];
+    g->blob_bytes += wide[1];
+    g->blobs_made++;
     return RESP_OK_NODATA;
   }
   case CMD_RESOURCE_MAP_BLOB: {
@@ -466,6 +472,7 @@ static uint32_t command3d(gpu_state *g, const gpu_hdr *h, const uint8_t *body, s
     if (g->scanout_resource == a[0]) { g->scanout_resource = 0; g->scan.width = 0; }
     if (b) b->unref(b, a[0]);
     blob_del(g, bl);
+    g->blobs_unref++;
     return RESP_OK_NODATA;
   }
   case CMD_SET_SCANOUT_BLOB: {
@@ -494,6 +501,23 @@ static uint32_t command3d(gpu_state *g, const gpu_hdr *h, const uint8_t *body, s
   return 0;
 }
 
+// The blobs the host holds, one line per 10 s while they change: `gpu: 10 s: host blobs N (M MiB), made +A unref'd +B`.
+// Against the guest's `oneios-gpu-memory` live count (and the sum of its own and wired MiB): the host holding more than
+// the guest has live is blobs the guest released and the host kept; the same is the guest's own holding.
+static void blob_note(gpu_state *g)
+{
+  uint64_t now = flush_now_us();
+  if (!g->blob_note_us) g->blob_note_us = now;
+  if (now - g->blob_note_us < 10000000u) return;
+  if (g->blobs_made != g->noted_made || g->blobs_unref != g->noted_unref)
+    LOGI("gpu: %llu s: host blobs %u (%llu MiB), made +%llu unref'd +%llu", (unsigned long long)((now - g->blob_note_us) / 1000000u),
+         g->nblobs, (unsigned long long)(g->blob_bytes >> 20), (unsigned long long)(g->blobs_made - g->noted_made),
+         (unsigned long long)(g->blobs_unref - g->noted_unref));
+  g->blob_note_us = now;
+  g->noted_made = g->blobs_made;
+  g->noted_unref = g->blobs_unref;
+}
+
 static uint32_t command(gpu_state *g, const uint8_t *req, size_t size, uint8_t *resp, size_t resp_max, size_t *resp_size)
 {
   const gpu_hdr *h = (const gpu_hdr *)req;
@@ -501,6 +525,7 @@ static uint32_t command(gpu_state *g, const uint8_t *req, size_t size, uint8_t *
   size_t left = size - sizeof *h;
   *resp_size = sizeof *h;
   if (g->blobs) {
+    blob_note(g);
     uint32_t status = command3d(g, h, body, left, resp, resp_max, resp_size);
     if (status) return status;
   }
@@ -690,6 +715,7 @@ static void teardown(gpu_state *g)
   }
   memset(g->blobs, 0, BLOB_SLOTS * sizeof *g->blobs);
   g->nblobs = 0;
+  g->blob_bytes = 0;
   for (unsigned i = 0; i < MAX_CTX; i++) if (g->ctx[i]) { g->b->ctx_destroy(g->b, g->ctx[i]); g->ctx[i] = 0; }
   pthread_mutex_lock(&g->pl);
   pending *list = g->fences;

@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include "xnuhost.h"
 #include "xnuhost/free_report.h"
+#include "xnuhost/free_report_runs.h"
 #include "stub_abi.h"
 #include <sys/mman.h>
 #include <sys/syscall.h>
@@ -1184,6 +1185,11 @@ static void test_config(const char *dir)
   uint64_t total = 0, available = 0;
   CHECK(xh_meminfo(meminfo, &total, &available) == 0 && total == phone && available == 7ull * G);
   CHECK(xh_meminfo(partial, &total, &available) == -1 && xh_meminfo("/nonexistent/meminfo", &total, &available) == -1);
+  uint64_t value = 0;
+  CHECK(xh_meminfo_value(meminfo, "MemFree", &value) == 0 && value == 401234ull << 10);
+  CHECK(xh_meminfo_value(meminfo, "Buffers", &value) == 0 && value == 1234ull << 10);
+  CHECK(xh_meminfo_value(meminfo, "Mem", &value) == -1 && xh_meminfo_value(meminfo, "SwapTotal", &value) == -1);
+  CHECK(xh_meminfo_value("/nonexistent/meminfo", "MemFree", &value) == -1);
   char set_meminfo[340], set_small[340], set_none[340];
   snprintf(set_meminfo, sizeof set_meminfo, "ram-meminfo=%s", meminfo);
   snprintf(set_small, sizeof set_small, "ram-meminfo=%s", small);
@@ -1430,6 +1436,10 @@ static void test_discard(void)
   CHECK(g_discard.calls == 3 && g_discard.bytes == 17 * gp && g_discard.failed == 0 && g_discard.refused == 8);
   // fallocate's own failure is counted and returned (a closed descriptor).
   CHECK(xh_ram_discard_fd(1000, base, base, size, base, gp, page) < 0 && g_discard.failed == 1 && g_discard.calls == 4);
+  // In the host's RAM (mincore): every page but the holes of pages 8..15 (page 9's first host page written again).
+  CHECK(xh_ram_discard_fd(fd, base, base, size, base + 8 * gp, 8 * gp, page) == 0);
+  CHECK(xh_ram_resident(window, size, page) == memfd_held(fd) && memfd_held(fd) == size - 8 * gp);
+  CHECK(xh_ram_resident(window, size, 0) == 0 && xh_ram_resident(NULL, size, page) == 0);
   munmap(window, size);
   munmap(task, size);
   close(fd);
@@ -1483,6 +1493,56 @@ static void test_free_report(void)
     unsigned lines = 0;
     while (fgets(line, sizeof line, patch)) {
       if (!strncmp(line, "diff --git", 10)) { if (in) break; in = strstr(line, "b/osfmk/arm64/hosted/free_report.h\n") != NULL; continue; }
+      if (!in || line[0] != '+' || !strncmp(line, "+++", 3)) continue;
+      lines++;
+      if (!fgets(mine, sizeof mine, ours) || strcmp(line + 1, mine)) { same = false; break; }
+    }
+    CHECK(same && lines > 20 && !fgets(mine, sizeof mine, ours));
+  }
+  if (patch) fclose(patch);
+  if (ours) fclose(ours);
+
+  // 0066: the heap sort and its runs give what the insertion sort gave, for any order and with duplicates.
+  uint32_t seed = 12345;
+  for (unsigned round = 0; round < 200; round++) {
+    uint32_t n = 1 + round * 5 % 1024, a[1024], b[1024], fa[1024], ca[1024], fb[1024], cb[1024];
+    for (uint32_t i = 0; i < n; i++) {
+      seed = seed * 1103515245u + 12345u;
+      a[i] = b[i] = round % 3 == 0 ? (seed >> 8) % (n * 2) : round % 3 == 1 ? 5000 + i : 9000 - i;   // random, ascending, descending
+    }
+    uint32_t ra = n <= 256 ? xh_fr_runs(a, n, fa, ca) : 0, rb = xh_fr_sorted_runs(b, n, fb, cb);
+    bool sorted = true;
+    for (uint32_t i = 1; i < n; i++) sorted &= b[i - 1] <= b[i];
+    CHECK(sorted);
+    if (n <= 256) CHECK(ra == rb && !memcmp(fa, fb, ra * sizeof fa[0]) && !memcmp(ca, cb, ra * sizeof ca[0]));
+    if (round % 3 != 0) CHECK(rb == 1 && cb[0] == n);   // n consecutive pages are one run
+  }
+  uint32_t dup[] = { 4, 4, 5, 3, 3, 9 }, fd[6], cd[6];
+  CHECK(xh_fr_sorted_runs(dup, 6, fd, cd) == 2 && fd[0] == 3 && cd[0] == 3 && fd[1] == 9 && cd[1] == 1);
+  CHECK(xh_fr_sorted_runs(dup, 0, fd, cd) == 0);
+  // The batch: what is above keep, at most `most`, whole slices where it is cut.
+  CHECK(xh_fr_batch_pages(0, 1024, 128) == 0 && xh_fr_batch_pages(50, 0, 128) == 0);
+  CHECK(xh_fr_batch_pages(50, 1024, 128) == 50 && xh_fr_batch_pages(300, 1024, 128) == 300);
+  CHECK(xh_fr_batch_pages(5000, 1024, 128) == 1024 && xh_fr_batch_pages(5000, 1000, 128) == 896);
+  CHECK(xh_fr_batch_pages(5000, 64, 128) == 64);       // 0058's batch: smaller than a slice
+  // Neighbours: ahead first, the run at most run_most pages with the cold page, never past the batch's room.
+  uint32_t behind = 99;
+  CHECK(xh_fr_neighbours(10, 10, 100, 256, &behind) == 10 && behind == 10);
+  CHECK(xh_fr_neighbours(300, 300, 1000, 256, &behind) == 255 && behind == 0);
+  CHECK(xh_fr_neighbours(100, 300, 1000, 256, &behind) == 100 && behind == 155);
+  CHECK(xh_fr_neighbours(100, 300, 20, 256, &behind) == 20 && behind == 0);
+  CHECK(xh_fr_neighbours(5, 5, 100, 1, &behind) == 0 && behind == 0);   // run 1: 0058's way
+  CHECK(xh_fr_neighbours(5, 5, 0, 256, &behind) == 0 && behind == 0);
+  // The kernel's copy (0066-free-page-runs.patch adds osfmk/arm64/hosted/free_report_runs.h) is this header.
+  patch = fopen("../../kernel/patches/oneios-hosted/0066-free-page-runs.patch", "r");
+  ours = fopen("include/xnuhost/free_report_runs.h", "r");
+  CHECK(patch && ours);
+  if (patch && ours) {
+    char line[512], mine[512];
+    bool in = false, same = true;
+    unsigned lines = 0;
+    while (fgets(line, sizeof line, patch)) {
+      if (!strncmp(line, "diff --git", 10)) { if (in) break; in = strstr(line, "b/osfmk/arm64/hosted/free_report_runs.h\n") != NULL; continue; }
       if (!in || line[0] != '+' || !strncmp(line, "+++", 3)) continue;
       lines++;
       if (!fgets(mine, sizeof mine, ours) || strcmp(line + 1, mine)) { same = false; break; }

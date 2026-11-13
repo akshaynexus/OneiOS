@@ -107,6 +107,8 @@ uint64_t xh_parse_size(const char *text, bool *ok);
 uint64_t xh_ram_auto(uint64_t total, unsigned percent, uint64_t floor);
 // MemTotal and MemAvailable of a /proc/meminfo file, in bytes: 0, or -1 when the file has not both.
 int      xh_meminfo(const char *path, uint64_t *total, uint64_t *available);
+// One line of a /proc/meminfo file ("Key:  N kB"), in bytes: 0, or -1 when the file has no such line.
+int      xh_meminfo_value(const char *path, const char *key, uint64_t *bytes);
 
 // The display's mode plumbing (config.c; docs/booter.md 2.8).
 #define XH_PANEL_WIDTH  1440u          // the Galaxy S24 Ultra's panel, where the host's cannot be read
@@ -192,6 +194,11 @@ void *xh_ram(uint64_t pa, uint64_t len);
 typedef struct { uint64_t calls, bytes, failed, refused, ns; } xh_discard_stats;
 extern xh_discard_stats g_discard;
 int64_t xh_ram_discard_fd(int fd, uint64_t fd_base, uint64_t lo, uint64_t len, uint64_t phys, uint64_t size, uint64_t page);
+// The bytes of [base, base + size) of a shared mapping of the RAM memfd that are in the host's RAM (mincore: a page the
+// host swapped out, to zram on the phone, is not; nor one never touched or given back). `page` is the host's page
+// size. A range mincore refuses (not mapped) counts nothing. The `memory:` line's swap figure is the memfd's held
+// pages (st_blocks, which counts swapped ones too) less this.
+uint64_t xh_ram_resident(const void *base, uint64_t size, uint64_t page);
 
 // ---- MMIO dispatch (mmio.c) ---------------------------------------------------------------------
 typedef struct xh_mmio_region {

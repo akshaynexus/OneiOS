@@ -1,0 +1,10 @@
+// A made-up source for the edit list "gpu3d" (no Python original: written by hand, 2026-11-13): every anchor once.
+// (before anchor 0)
+DroidVMClientMemory droidvm_virtgpu_client_memory[64];
+// (before anchor 1)
+    c->resources[c->resourceCount++] = r;
+// (before anchor 2)
+        c->closed[c->closedCount++] = {*r, c->sequence};
+// (before anchor 3)
+    countPages(c, r, -1);
+// (the end)

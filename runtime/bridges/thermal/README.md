@@ -64,7 +64,22 @@ not readable). Apple's meaning of the names [F, `ProcessInfo.ThermalState` docum
 
 `br_cpu_thermal_mask` (`cpu/topology.c`) works from the topology, not from these numbers. xnuhost's `thermal_step`
 (`main.c`) narrows the vCPU threads' affinity and bumps an epoch, and `xh_thread_run` (`task.c`) places each iOS thread
-again at its next run. Only xnuhost's own threads and its tasks' are changed: they end with the session, nothing outside
+again at its next run.
+
+**Fixed 2026-11-13 (hang):** until then the P vCPUs at step 2 ran on cpu5-6 only (`thermal: step 2 (trapping): P vCPUs
+on host CPUs 0x60` on the phone, 2026-11-13 10:4x): `br_cpu_plan_cap` intersected the step's CPUs with the vCPU's own
+kind and lost the E cores the step adds, and cpu-pin then put the six P vCPUs three to a core (`rank % 2`), each with
+the iOS threads it runs, while the E cores carried only the two E vCPUs. A vCPU preempted on its core while it holds a
+kernel lock holds up every vCPU spinning on it; in that session interrupts took up to 953 ms, system calls 639 ms and
+faults 399 ms, and the display got 10 frames in 30 s [inference: the step is one of several loads there, with the
+keyboard's and Spotlight's CPU, backboardd's GPU memory and the host's low memory; not measured apart]. Now
+`br_cpu_plan_cap` keeps the step's CPUs of the other kind (P vCPUs at step 2 on `0x63`, as the table says), and
+`br_cpu_pin_mask` pins a vCPU to one core only while every vCPU of its kind has a core of the mask to itself; with more
+vCPUs than cores (steps 1-3: six P vCPUs on five, four or two cores) the vCPUs get the whole mask and Linux spreads them.
+The cores each step allows are the same as before, so the heat the step holds back is the same: what changes is that no
+core runs three vCPUs while another of the step's cores idles. Step 0 is unchanged (one P vCPU per P core). The log
+line names the P vCPUs' mask (`0x63` at step 2 now). Tests: `make test` here (64 checks; the plan at steps 2 and 3, the
+pin at steps 0-2). Not run on the phone. Only xnuhost's own threads and its tasks' are changed: they end with the session, nothing outside
 the process is written, so a SIGKILL leaves nothing to restore. No cpufreq or devfreq node, nothing under `/sys/power`.
 `ONEIOS_THERMAL_CAP=0` in xnuhost's environment: the level is still sent to iOS, the step stays 0.
 
@@ -81,8 +96,8 @@ reset stops the reports; the reads go on.
 ## Tests
 
 `make -C runtime/bridges/thermal test` (Linux; on a Mac in the container: `runtime/host-tests.sh`, part `bridges`): the
-limits parser, each rule and its hysteresis, the steps' CPUs on the S24 Ultra's topology and on a one-kind host, the
-sysfs reader on a fake tree (an off zone, no `lrp`), the worker's two listeners. 56 checks.
+limits parser, each rule and its hysteresis, the steps' CPUs and pins on the S24 Ultra's topology and on a one-kind host, the
+sysfs reader on a fake tree (an off zone, no `lrp`), the worker's two listeners. 64 checks.
 
 ## On the phone
 

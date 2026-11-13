@@ -1,0 +1,20 @@
+// A made-up source for the edit list "gpu3d" (no Python original: written by hand, 2026-11-13): every anchor once.
+// (before anchor 0)
+DroidVMClientMemory droidvm_virtgpu_client_memory[64];
+// OneiOS: a blob made (its resource id, client slot, bytes, kind bits: 1 host-visible, 2 the caller's pages wired,
+// 4 this driver's pages in the caller's task, the blob flags << 4), closed while the GPU may still use it, and gone.
+void oneios_gpu_blob_made(uint32_t, uint32_t, uint64_t, uint32_t, task_t, uint64_t) __attribute__((weak));
+void oneios_gpu_blob_closed(uint32_t) __attribute__((weak));
+void oneios_gpu_blob_gone(uint32_t) __attribute__((weak));
+// (before anchor 1)
+    c->resources[c->resourceCount++] = r;
+    if (oneios_gpu_blob_made)
+        oneios_gpu_blob_made(r.id, c->slot, r.size, (r.hostVisible ? 1u : 0u) | (r.wired ? 2u : 0u) | (r.prepared ? 4u : 0u) |
+                             ((in.blob_flags & 0xfu) << 4), task, user);
+// (before anchor 2)
+        c->closed[c->closedCount++] = {*r, c->sequence};
+        if (oneios_gpu_blob_closed) oneios_gpu_blob_closed(r->id);
+// (before anchor 3)
+    countPages(c, r, -1);
+    if (oneios_gpu_blob_gone) oneios_gpu_blob_gone(r.id);
+// (the end)
