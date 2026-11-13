@@ -556,6 +556,21 @@ wifid's first request +1350 s, first scan +1775 s. What holds configd for those 
 the next boot's lines below say it. No join came by +275 s; whether a known network was in range is open (the owner
 was asked; 35 networks against the hotel's 64).
 
+**Where configd was, on the PC** (2026-11-13, `kernel.kc` `84d3304c` with 0061, `oneios-ubt=configd
+oneios-ubt-at=850 oneios-ubt-every=45 oneios-ubt-count=6`, a fresh Data store; six reports, then `oneios-ubt: 6
+reports, the last (oneios-ubt-count)`). configd was spawned about 625 s after the driver's start and named en0 at
++1568 s; its two threads, named with `oneios-tool sym` (slide `0xbb54000`):
+- reports 1 and 2 (+850, +895 s): the main thread in `_os_state_add_handler` -> `__os_trace_init_slow` ->
+  `_firehose_client_reconnect` -> `_firehose_send_register` -> `mach_msg`: **waiting for logd** to register its log
+  buffer (logd's first lines came after configd's in that boot);
+- reports 3 to 6 (+940 to +1075 s): the main thread **loading the plugin bundles**: `CFBundleLoadExecutableAndReturnError`
+  -> dyld `dlopen_from` -> `notifyLoad` -> libobjc `map_images_nolock`, mostly in state 0x9 (an uninterruptible wait;
+  [I] page-ins of the bundle's pages), and the second thread, configd's server (`_dispatch_mach_mig_demux`), waiting
+  in `objc_lookUpImpOrForward` for the Objective-C runtime lock the load holds: **configd's server does not answer
+  its clients** (wifid, IPConfiguration's own clients) while a plugin bundle loads.
+[I] The phone's 89 s are the same two waits (logd, the bundles' load under the first minutes' CPU and storage load);
+the next boot's reports say. The PC cannot rank them for the phone.
+
 **wifid's `sets 25` -> 102** is `APPLE80211_IOC_HOST_AP_MODE` (24A446's table; the PC's iOS log names it: `IOCTL
 type 25/'APPLE80211_IOC_HOST_AP_MODE', len[0] return -1`, the framework's `-3903`). 102 is `EOPNOTSUPP`: the driver
 refuses the access point modes on purpose (`kRefusedSets`, bit 25), and wifid goes on with its attach and scans after
@@ -570,7 +585,7 @@ PC's first auto-join was `trigger=power_on`, then `Cancelled active auto-join re
 also has an auto-join deferral (`AJDeferralTimer`, `in autojoin deferral period`, `Auto-join deferral is active, will
 not continue auto-join`) and first-unlock rules (`enabling autojoin before first unlock`): its log tells those apart.
 
-**For the next phone boot**, in the image's `xnuhost.conf` boot arguments: `oneios-ubt=configd,wifid oneios-ubt-at=20
+**For the next phone boot**, in the image's `xnuhost.conf` boot arguments: `oneios-ubt=configd,wifid,logd oneios-ubt-at=20
 oneios-ubt-every=10 oneios-ubt-count=18` (hosted 0061: a report of every configd and wifid thread every 10 s from +20 s
 to +190 s after bsd_init, each headed `oneios-ubt: report K at +S s`), and `oneios-sysfail=configd` (0034: its failing
 path calls). Then:

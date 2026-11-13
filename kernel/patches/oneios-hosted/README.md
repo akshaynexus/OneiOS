@@ -796,9 +796,9 @@ decision, 2026-11-12: no pressure feedback, no cache cap, no change to XNU's fre
 minutes: `oneios-ubt-count=N` stops after N reports (default 0: no end, as before), and each report now starts with
 `oneios-ubt: report K at +S s` (seconds after bsd_init's late start, where 0026's thread starts). Why: on the phone
 (2026-11-13, main c1223f8) configd named en0 89 s after launchd with IOKit already quiet, and what its threads did in
-those 89 s is not in xnuhost's log. For the next boot, in the image's `xnuhost.conf`: `oneios-ubt=configd,wifid
+those 89 s is not in xnuhost's log. For the next boot, in the image's `xnuhost.conf`: `oneios-ubt=configd,wifid,logd
 oneios-ubt-at=20 oneios-ubt-every=10 oneios-ubt-count=18` (+20 s to +190 s); give each line's addresses to `oneios-tool
-sym` (`docs/hardware.md` 3, "en0 late"). Compiled in the Linux PC's kernel (`HOSTED_OUT=fixwifi`) and prelinked (`kernel.kc` `84d3304c`: audit 0 failures, `stubs-check.py` 666 good). Not on the phone.
+sym` (`docs/hardware.md` 3, "en0 late"). Compiled in the Linux PC's kernel (`HOSTED_OUT=fixwifi`) and prelinked (`kernel.kc` `84d3304c`: audit 0 failures, `stubs-check.py` 666 good). On the PC (2026-11-13, `oneios-ubt=configd oneios-ubt-at=850 oneios-ubt-every=45 oneios-ubt-count=6`): reports 1 to 6 at +850 to +1075 s, then `oneios-ubt: 6 reports, the last (oneios-ubt-count)`; what they showed is in `docs/hardware.md` 3. Not on the phone.
 
 ## 0049-wifi-association-event.patch (radio2, 2026-11-12)
 

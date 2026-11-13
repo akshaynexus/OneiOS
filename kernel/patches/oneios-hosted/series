@@ -179,7 +179,7 @@
 0058-free-page-report.patch
 # fix-wifi-late-2: 0026's user backtraces as a sampler of a boot's first minutes. oneios-ubt-count=N stops after N
 # reports (default 0: no end, as before), and each report starts with "oneios-ubt: report K at +S s" (seconds after
-# bsd_init's late start). For configd's ~89 s between launchd and en0's name (phone, 2026-11-13): oneios-ubt=configd,wifid
+# bsd_init's late start). For configd's ~89 s between launchd and en0's name (phone, 2026-11-13): oneios-ubt=configd,wifid,logd
 # oneios-ubt-at=20 oneios-ubt-every=10 oneios-ubt-count=18. Numbered 0061 (other agents hold 0059-0060, 0062-0069).
 0061-ubt-count.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
