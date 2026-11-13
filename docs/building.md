@@ -329,7 +329,7 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   thread, with the thread's return addresses up its frame pointers where the host can read the task's memory (on
   the phone; under qemu-user it cannot, and only pc and lr are shown). Seen on the Linux PC on 2026-11-13 (qemu-aarch64
   11.1.3, a boot 30 minutes in, the pid from `xnuhost.pid`): `qemu: uncaught target signal 3 (Quit) - core dumped` and the
-  boot ended, so there it costs the boot (cause not looked into); `oneios-ubt=` is the safe way. `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
+  boot ended, so there it costs the boot (cause not looked into; another such boot left a 470 MB `qemu_xnuhost_*.core` in the working directory, exit 131); `oneios-ubt=` is the safe way. `qemu-aarch64 -g PORT` plus gdb (`set architecture aarch64`, `target remote :PORT`) debugs the kernel.
 - A user process that dies: the kernel logs its registers and a backtrace (`sheng-exc`, `sheng-ubt` lines) for the
   processes named in the boot argument `sheng-exc-name=SpringBoard,backboardd,...` (default: backboardd, chronod,
   liveactivitiesd; launchd always). `oneios-tool sym ADDR...` names those addresses in the image set's dyld
@@ -374,7 +374,8 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   status 0` and two `oneios-adreno: selftest:` lines (IOKit's match, the plug-in's open and one call;
   [gpu.md](gpu.md) 5.1). No 3D call can run here: qemu has no KGSL.
 - A user process that neither dies nor does its job: boot arguments `oneios-ubt=NAME[,NAME...]`
-  (`oneios-ubt-at=SECONDS`, default 420; `oneios-ubt-every=SECONDS` to repeat) make the kernel print where every
+  (`oneios-ubt-at=SECONDS`, default 420; `oneios-ubt-every=SECONDS` to repeat; `oneios-ubt-count=N` to stop after N
+  reports, each headed `oneios-ubt: report K at +S s`, `0061`) make the kernel print where every
   thread of those processes is (`oneios-ubt:` lines: scheduler state, saved pc and lr, the return addresses up the
   frame pointers; `0026`). Give a long line's addresses to `oneios-tool sym` for the slide, then name the rest
   with `--slide`.
