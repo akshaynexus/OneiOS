@@ -51,6 +51,8 @@ typedef struct {
   char  ram_meminfo[256];   // ram-meminfo=FILE: where ram=auto reads MemTotal (tests); default /proc/meminfo
   uint64_t ram_auto_total, ram_auto_available;
   int   host_mem_log;       // host-mem-log=SECONDS: the host's MemAvailable in the log every so often; 0 = off; -1 = unset (30)
+  int   usb_log;            // usb-log=SECONDS: how often the USB gadget is read for its "usb:" line (usb.c), which is
+                            // logged at the start and on every change; 0 = off; -1 = unset (3)
   xh_disk_config disk[XH_MAX_DISKS];
   unsigned ndisk;
   char  display[16];        // "shm", "drm", "none"
@@ -106,6 +108,36 @@ uint64_t xh_ram_auto(uint64_t total, unsigned percent, uint64_t floor);
 int      xh_meminfo(const char *path, uint64_t *total, uint64_t *available);
 // One line of a /proc/meminfo file ("Key:  N kB"), in bytes: 0, or -1 when the file has no such line.
 int      xh_meminfo_value(const char *path, const char *key, uint64_t *bytes);
+
+// The phone's USB gadget for the log (usb.c, docs/booter.md 2.9a): sys.usb.state, sys.usb.config, sys.usb.controller
+// and the named file /sys/class/udc/<controller>/state. Read only; portable (the property source is a parameter).
+#define XH_USB_PROPS 3
+#define XH_USB_STATE 0
+#define XH_USB_CONFIG 1
+#define XH_USB_CONTROLLER 2
+#define XH_USB_VALUE 92                 // PROP_VALUE_MAX
+typedef struct {
+  // Property `name` (the i-th of XH_USB_PROPS): false when there is none; else *serial, a number that changes with
+  // every change of its value (bionic's __system_property_serial).
+  bool (*serial)(void *ctx, unsigned i, const char *name, uint32_t *serial);
+  // Its value (at most size bytes with the NUL): false when it cannot be read.
+  bool (*value)(void *ctx, unsigned i, const char *name, char *out, size_t size);
+  void *ctx;
+} xh_usb_source;
+typedef struct {
+  char root[256];                       // prefix of the /sys path: "" on the phone, a folder in the tests
+  char value[XH_USB_PROPS][XH_USB_VALUE];
+  uint32_t serial[XH_USB_PROPS];
+  bool known[XH_USB_PROPS];
+  bool logged;
+  char line[400];                       // the last line, "usb: state S, config C, UDC NAME STATE"
+} xh_usb_watch;
+// Reads the gadget once (a property's value only when its serial changed): true when w->line is new (the first poll
+// or a change). The controller's name is used only when it is one path component (xh_usb_controller_ok).
+bool xh_usb_poll(xh_usb_watch *w, const xh_usb_source *src);
+bool xh_usb_controller_ok(const char *name);
+// The phone's property area through bionic; NULL where there is none (the host build).
+const xh_usb_source *xh_usb_bionic(void);
 
 // The display's mode plumbing (config.c; docs/booter.md 2.8).
 #define XH_PANEL_WIDTH  1440u          // the Galaxy S24 Ultra's panel, where the host's cannot be read

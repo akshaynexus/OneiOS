@@ -10,13 +10,14 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
 /// The stage's log files (oneos/interface.md section 3), by the name `--file` takes.
-pub const FILES: [(&str, &str, &str); 6] = [
+pub const FILES: [(&str, &str, &str); 7] = [
     ("xnuhost", "session/xnuhost.log", "this session's log, or the last one's (the next switch moves it to logs/)"),
     ("switch", "switch.log", "the switch"),
     ("return", "return.log", "the return, with the watcher and the key readers"),
     ("outcome", "return.outcome", "how the last return ended"),
     ("display", "control/display.log", "the display helper's output"),
     ("watchdog", "control/watchdog_feeder.log", "the watchdog feeder"),
+    ("usb", "control/usb.log", "the session's USB watcher: the gadget and adbd, its repairs"),
 ];
 
 /// The file on the phone for `--file NAME`: one of FILES, or `logs/xnuhost-<epoch>.log` (an earlier session).

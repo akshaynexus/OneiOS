@@ -1106,7 +1106,8 @@ static void test_config(const char *dir)
   char *ram1[] = { "xnuhost", "--image", image, "--set", set_meminfo };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 5, ram1) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 9728 * M && c.ram_auto_total == phone &&
-        c.ram_auto_available == 7ull * G && c.ram_percent == 90 && c.ram_host_floor == (int64_t)XH_RAM_AUTO_FLOOR && c.host_mem_log == 30);
+        c.ram_auto_available == 7ull * G && c.ram_percent == 90 && c.ram_host_floor == (int64_t)XH_RAM_AUTO_FLOOR && c.host_mem_log == 30 &&
+        c.usb_log == 3);
   char *ram2[] = { "xnuhost", "--image", image, "--set", set_meminfo, "--set", "ram-percent=50", "--set", "host-mem-log=0" };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 9, ram2) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 5632 * M && c.host_mem_log == 0);
@@ -1449,6 +1450,88 @@ static void test_free_report(void)
   if (ours) fclose(ours);
 }
 
+// ---- the USB gadget's log line (usb.c) -----------------------------------------------------------
+// A stand-in property area: values with bionic's kind of serial (changes with the value), and a count of the reads.
+static struct { char value[XH_USB_PROPS][XH_USB_VALUE]; uint32_t serial[XH_USB_PROPS]; bool present[XH_USB_PROPS]; unsigned reads; } fake_props;
+static bool fake_serial(void *ctx, unsigned i, const char *name, uint32_t *serial)
+{
+  (void)ctx; (void)name;
+  if (!fake_props.present[i]) return false;
+  *serial = fake_props.serial[i];
+  return true;
+}
+static bool fake_value(void *ctx, unsigned i, const char *name, char *out, size_t size)
+{
+  (void)ctx; (void)name;
+  fake_props.reads++;
+  snprintf(out, size, "%s", fake_props.value[i]);
+  return true;
+}
+static void fake_set(unsigned i, const char *value)
+{
+  snprintf(fake_props.value[i], sizeof fake_props.value[i], "%s", value);
+  fake_props.present[i] = true;
+  fake_props.serial[i] += 2;
+}
+static void put_file(const char *path, const char *text)
+{
+  FILE *f = fopen(path, "w");
+  if (f) { fputs(text, f); fclose(f); }
+}
+
+static void test_usb(const char *dir)
+{
+  const xh_usb_source src = { fake_serial, fake_value, NULL };
+  xh_usb_watch w;
+  memset(&w, 0, sizeof w);
+  snprintf(w.root, sizeof w.root, "%s/usb", dir);
+  char path[512];
+  snprintf(path, sizeof path, "mkdir -p %s/usb/sys/class/udc/a600000.dwc3", dir);
+  CHECK(system(path) == 0);
+  snprintf(path, sizeof path, "%s/usb/sys/class/udc/a600000.dwc3/state", dir);
+  put_file(path, "configured\n");
+  memset(&fake_props, 0, sizeof fake_props);
+  // No property yet (the host, or a property area that does not have them): said so, and logged once.
+  CHECK(xh_usb_poll(&w, &src) && !strcmp(w.line, "usb: state (none), config (none), UDC (none) (unreadable)"));
+  CHECK(!xh_usb_poll(&w, &src));
+  CHECK(!xh_usb_poll(&w, NULL));                                            // no property area at all: the same
+  fake_set(XH_USB_STATE, "mtp,adb");
+  fake_set(XH_USB_CONFIG, "mtp,adb");
+  fake_set(XH_USB_CONTROLLER, "a600000.dwc3");
+  CHECK(xh_usb_poll(&w, &src) && !strcmp(w.line, "usb: state mtp,adb, config mtp,adb, UDC a600000.dwc3 configured"));
+  // Unchanged serials: no value is read again, and nothing to log.
+  unsigned reads = fake_props.reads;
+  CHECK(!xh_usb_poll(&w, &src) && fake_props.reads == reads);
+  // A value read only through its serial: a value that changed under the same serial is not seen (bionic never does that).
+  snprintf(fake_props.value[XH_USB_STATE], sizeof fake_props.value[0], "none");
+  CHECK(!xh_usb_poll(&w, &src) && strstr(w.line, "state mtp,adb,"));
+  // The cable out: the UDC's state file changes, the properties do not.
+  put_file(path, "not attached\n");
+  CHECK(xh_usb_poll(&w, &src) && !strcmp(w.line, "usb: state mtp,adb, config mtp,adb, UDC a600000.dwc3 not attached"));
+  CHECK(!xh_usb_poll(&w, &src));
+  // adb gone from the gadget: one property, one read.
+  reads = fake_props.reads;
+  fake_set(XH_USB_STATE, "mtp");
+  CHECK(xh_usb_poll(&w, &src) && fake_props.reads == reads + 1 && !strcmp(w.line, "usb: state mtp, config mtp,adb, UDC a600000.dwc3 not attached"));
+  // A property that goes away (a stand-in only: bionic's do not), then a controller that is not a name: its file is
+  // never opened.
+  fake_props.present[XH_USB_CONFIG] = false;
+  CHECK(xh_usb_poll(&w, &src) && strstr(w.line, "config (none),"));
+  fake_set(XH_USB_CONFIG, "adb");
+  fake_set(XH_USB_CONTROLLER, "../../../proc/self");
+  CHECK(xh_usb_poll(&w, &src) && !strcmp(w.line, "usb: state mtp, config adb, UDC (not a name) (unreadable)"));
+  fake_set(XH_USB_CONTROLLER, "");
+  CHECK(xh_usb_poll(&w, &src) && !strcmp(w.line, "usb: state mtp, config adb, UDC (none) (unreadable)"));
+  fake_set(XH_USB_CONTROLLER, "dummy_udc.0");
+  CHECK(xh_usb_poll(&w, &src) && !strcmp(w.line, "usb: state mtp, config adb, UDC dummy_udc.0 (unreadable)"));
+  CHECK(xh_usb_controller_ok("a600000.dwc3") && xh_usb_controller_ok("musb-hdrc.0:x") && !xh_usb_controller_ok("a/b") &&
+        !xh_usb_controller_ok("..") && !xh_usb_controller_ok(".") && !xh_usb_controller_ok("") && !xh_usb_controller_ok("a b"));
+  // The configuration key: 3 s by default, 0 = off, at most an hour.
+  xh_config c;
+  xh_config_defaults(&c);
+  CHECK(c.usb_log == -1 && xh_config_set(&c, "usb-log", "0") == 0 && c.usb_log == 0 && xh_config_set(&c, "usb-log", "3601") != 0);
+}
+
 int main(void)
 {
   char dir[] = "/tmp/xnuhost-test-XXXXXX";
@@ -1469,6 +1552,7 @@ int main(void)
   test_perf();
   test_discard();
   test_free_report();
+  test_usb(dir);
   if (!freopen("/dev/null", "w", stderr)) failures++;   // the refusals below print their reasons
   test_config(dir);
   char command[300];
