@@ -87,6 +87,32 @@ Log lines (xnuhost's log): `thermal: on: 29 zones; case 31.9 C (lrp), SoC 37.4 C
 read every 5000 ms`, then `thermal: heavy (was moderate; by case): ...` at each new level and `thermal: step 1 (heavy): P
 vCPUs on host CPUs 0x7c` at each new step.
 
+**Where the heat comes from (2026-11-14):** every 30 s (`BR_THERMAL_LOAD_MS`), one line:
+
+```
+thermal: 30 s: host CPU 405% of 800 (sys 226%, user 167%, irq 12%), swap in 9380 out 7920 KiB/s, xnuhost 152%; battery 40.3 C, Charging 1600 mA; case 41.0 C, SoC 78.0 C (cpu-1-2-1)
+```
+
+From named files only, read by the bridge's worker (`br_host_load_read`, `br_host_load_line` in `thermal.c`):
+`/proc/stat`'s `cpu` line (busy = all ticks less idle and iowait; sys, user + nice, irq + softirq) and its `cpuN`
+count, `/proc/vmstat`'s `pswpin`/`pswpout` (pages swapped in and out per second, as KiB: on the phone that is zram
+compressing and decompressing, much of it the guest's RAM), `/proc/self/stat`'s utime + stime (xnuhost itself, its
+task processes not included), and `power_supply/battery/temp`, `current_now` (as the phone gives it: Samsung's is mA,
+positive while charging) and `status`, with the case and SoC readings this bridge already has. Percentages are of one
+CPU, as top shows them (all eight busy = 800). A part that cannot be read says `-`. Read only; nothing is written.
+How to read it: high `swap` with high `sys` is the host swapping the guest's RAM (the memory fix is another agent's,
+`ram=` held fixed); `xnuhost` far below `host CPU` is other processes (the display helper, surfaceflinger, KGSL's
+threads, zram's kswapd); `Charging` with a large current while the case rises is the charger's heat on top.
+Tests: `make test` (72 checks: the line from fake `/proc` and battery files, missing files, a short buffer, the
+worker's line at its period). Not run on the phone.
+
+**Charging.** The line shows the charge current and status; the bridge does not and will not change charging (nothing
+is written, nothing under `/sys/power`). Samsung's charger already limits current by the case sensor `lrp` (37-39 C,
+46 C). Limiting it further during a session (Samsung's `batt_slate_mode`, `siop_level` or a charge-current limit
+node) would be the OneOS fork's job, set at the switch and restored at the return, like its CPU caps; worth asking
+for only if the line shows the case still rising with a large `Charging` current while the guest is idle [not
+decided; the nodes named are Samsung's usual ones, not read on this phone].
+
 ## Messages
 
 `OB_THERMAL_QUERY` (guest, no payload) -> `OB_THERMAL_STATE` (`struct ob_thermal_state`: level, reason bits, the step,

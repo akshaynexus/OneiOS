@@ -51,6 +51,14 @@ docs each item names. **Proven** = ran on the phone; **built** = compiled and ho
    oneios-hid-queue-kib=256 owner-hide-vmm=bluetoothd,BlueTool`. In the session: Wi-Fi with a known network in
    range, type a Wi-Fi password for a minute, stay on a widget page, flip Bluetooth, tap keys with click sounds on,
    plug and unplug USB, then return. After it: `oneios-tool phone pull-data data.img` and the searches of each item.
+1a. **The heat** (`docs/hardware.md` 7d "It runs damn hot", branch `fix-thermal-log`): read the new
+   `thermal: 30 s: host CPU ...` line (host sys/user, swap KiB/s, xnuhost, battery and charge current, case, SoC) and
+   `oneios-cpu-sys:` (backboardd's kernel time) with `oneios-display: the compositor swaps format` and `half-float
+   frames:`: a half-float frame narrowed by the CPU in backboardd's swap would show as kernel time; user time is Core
+   Animation's and Metal's (name it from `oneios-ubt=backboardd` with `oneios-tool sym`). Spotlight's indexer A/B
+   (one boot): `oneios-disable-jobs=com.apple.accessibility.axassetsd,com.apple.searchd,com.apple.spotlight.IndexAgent`,
+   undone by `oneios-enable-jobs=com.apple.analyticsd,com.apple.searchd,com.apple.spotlight.IndexAgent`; costs search
+   results while off. Charging: the line shows it; a limit would be the fork's (not asked yet).
 2. **Wi-Fi joins** (`docs/hardware.md` 3): look for `ONEIOS WIFI: scan record 1 ... TIMESTAMP` a few ms before now,
    `channels info: N channels (the host's list)`, then `join:`; in iOS's log `AUTO-JOIN: Scan Results (N>0)`.
    Then configd's 22 s between `*STACK*` and en0 from the `oneios-ubt` samples, and wifid's 17 fault entries.

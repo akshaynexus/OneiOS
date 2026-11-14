@@ -531,6 +531,11 @@ over the time measured since the last report (its seconds start the line; before
 late report in a stall inflated: 1,440 % on eight vCPUs). `kernel_task` likely includes its idle threads [inference: `oneios-perf`'s
 `kernel_task: ... most:` counts them as kernel_task's, 198 of 206 s on the PC; this line was not seen on the PC, which
 has no GPU report]: a high share there is not work until `most:` names a thread that is not `idle`.
+Since 2026-11-14 a second line follows it, `oneios-cpu-sys: 10 s: backboardd[52] 180%, ... (kernel time of the same
+processes)`: each one's system time (TASK_POWER_INFO `total_system`) over the same span, so a process's share splits into
+kernel work (system calls, faults, IOKit calls: the framebuffer swap's CPU copy or half-float conversion is
+backboardd's) and its own code (`docs/hardware.md` 7d, "It runs damn hot"). Compiled alone with the kernel's flags,
+not yet in a booted kernel.
 The phone's run of 2026-11-11 drew 40-58 frames a second for ten minutes with nobody touching the lock screen, from the lock
 screen's first frame until the first SpringBoard (pid 30) aborted; after its restart the same screen drew 0 a second and
 frames came only with touches. Before iconservicesagent had a GPU device (an earlier boot) the screen idled. Which process

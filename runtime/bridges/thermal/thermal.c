@@ -211,6 +211,119 @@ void br_thermal_read(const br_thermal_sensors *s, br_thermal_raw *raw)
   raw->skin = raw->lrp != BR_THERMAL_UNKNOWN ? raw->lrp : raw->ap;
 }
 
+// ---- where the heat comes from ------------------------------------------------------------------
+static void deci_text(char *out, size_t size, int32_t v);
+static bool read_text(const char *root, const char *rel, char *out, size_t size)
+{
+  char path[256];
+  snprintf(path, sizeof path, "%s%s", root, rel);
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return false;
+  ssize_t n = 0, got;
+  while ((size_t)n < size - 1 && (got = read(fd, out + n, size - 1 - (size_t)n)) > 0) n += got;
+  close(fd);
+  if (n <= 0) return false;
+  out[n] = 0;
+  return true;
+}
+
+void br_host_load_read(const char *root, br_host_load *out)
+{
+  memset(out, 0, sizeof *out);
+  if (!root) root = "";
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  out->ms = (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+  static char text[16384];                         // the worker's only (one sample at a time)
+  if (read_text(root, "/proc/stat", text, sizeof text)) {
+    unsigned long long v[8] = { 0 };
+    if (sscanf(text, "cpu %llu %llu %llu %llu %llu %llu %llu %llu", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]) >= 4) {
+      out->user = v[0]; out->nice = v[1]; out->system = v[2]; out->idle = v[3];
+      out->iowait = v[4]; out->irq = v[5]; out->softirq = v[6]; out->steal = v[7];
+      out->have_cpu = true;
+    }
+    for (const char *at = text; (at = strstr(at, "\ncpu")) != NULL; at += 4)
+      if (isdigit((unsigned char)at[4])) out->ncpu++;
+  }
+  if (read_text(root, "/proc/vmstat", text, sizeof text)) {
+    unsigned found = 0;
+    for (char *line = text; line && *line; line = strchr(line, '\n') ? strchr(line, '\n') + 1 : NULL) {
+      unsigned long long v;
+      if (sscanf(line, "pswpin %llu", &v) == 1) { out->pswpin = v; found |= 1; }
+      else if (sscanf(line, "pswpout %llu", &v) == 1) { out->pswpout = v; found |= 2; }
+    }
+    out->have_swap = found == 3;
+  }
+  if (read_text(root, "/proc/self/stat", text, sizeof text)) {
+    // pid (comm) state ... : utime and stime are fields 14 and 15, counted after the comm's closing parenthesis
+    const char *after = strrchr(text, ')');
+    unsigned long long utime, stime;
+    if (after && sscanf(after + 1, " %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu", &utime, &stime) == 2) {
+      out->self_ticks = utime + stime;
+      out->have_self = true;
+    }
+  }
+  char rel[96];
+  snprintf(rel, sizeof rel, "/sys/class/power_supply/battery/current_now");
+  char value[64];
+  if (read_text(root, rel, value, sizeof value)) {
+    char *end;
+    errno = 0;
+    long long v = strtoll(value, &end, 10);
+    if (end != value && !errno) { out->current = v; out->have_current = true; }
+  }
+  if (read_text(root, "/sys/class/power_supply/battery/status", value, sizeof value)) {
+    size_t n = strcspn(value, "\n");
+    value[n] = 0;
+    snprintf(out->status, sizeof out->status, "%.*s", (int)sizeof out->status - 1, value);
+  }
+}
+
+size_t br_host_load_line(const br_host_load *was, const br_host_load *now, const br_thermal_raw *raw, unsigned page,
+                         char *out, size_t size)
+{
+  if (!size) return 0;
+  size_t at = 0;
+#define PUT(...) do { if (at < size) { int k = snprintf(out + at, size - at, __VA_ARGS__); at += k > 0 ? (size_t)k : 0; } } while (0)
+  uint64_t ms = now->ms > was->ms ? now->ms - was->ms : 0;
+  PUT("%llu s: host CPU ", (unsigned long long)((ms + 500) / 1000));
+  // Per cent of one CPU, as top shows it: the share of every CPU's ticks, times the CPUs.
+  uint64_t total_was = was->user + was->nice + was->system + was->idle + was->iowait + was->irq + was->softirq + was->steal;
+  uint64_t total_now = now->user + now->nice + now->system + now->idle + now->iowait + now->irq + now->softirq + now->steal;
+  unsigned ncpu = now->ncpu ? now->ncpu : 1;
+  uint64_t dt = total_now > total_was ? total_now - total_was : 0;
+#define SHARE(d) (dt ? (unsigned long long)(((d) * 100u * ncpu + dt / 2) / dt) : 0ull)
+#define DIFF(f) (now->f >= was->f ? now->f - was->f : 0)
+  if (now->have_cpu && was->have_cpu && dt) {
+    uint64_t busy = dt - DIFF(idle) - DIFF(iowait);
+    PUT("%llu%% of %u (sys %llu%%, user %llu%%, irq %llu%%)", SHARE(busy), ncpu * 100, SHARE(DIFF(system)), SHARE(DIFF(user) + DIFF(nice)),
+        SHARE(DIFF(irq) + DIFF(softirq)));
+  } else {
+    PUT("-");
+  }
+  if (now->have_swap && was->have_swap && ms)
+    PUT(", swap in %llu out %llu KiB/s", (unsigned long long)(DIFF(pswpin) * page / 1024u * 1000u / ms),
+        (unsigned long long)(DIFF(pswpout) * page / 1024u * 1000u / ms));
+  else
+    PUT(", swap -");
+  // xnuhost's own ticks against the ticks one CPU had in the interval
+  if (now->have_self && was->have_self && dt) PUT(", xnuhost %llu%%", (unsigned long long)((DIFF(self_ticks) * 100u * ncpu + dt / 2) / dt));
+  else PUT(", xnuhost -");
+#undef DIFF
+#undef SHARE
+  char battery[16], skin[16], soc[16];
+  deci_text(battery, sizeof battery, raw ? raw->battery : BR_THERMAL_UNKNOWN);
+  deci_text(skin, sizeof skin, raw ? raw->skin : BR_THERMAL_UNKNOWN);
+  deci_text(soc, sizeof soc, raw ? raw->soc : BR_THERMAL_UNKNOWN);
+  PUT("; battery %s, %s", battery, now->status[0] ? now->status : "-");
+  if (now->have_current) PUT(" %lld mA", (long long)now->current);
+  PUT("; case %s, SoC %s (%s)", skin, soc, raw && raw->soc_zone[0] ? raw->soc_zone : "-");
+#undef PUT
+  if (at >= size) at = size - 1;
+  out[at] = 0;
+  return at;
+}
+
 // ---- the session --------------------------------------------------------------------------------
 struct br_thermal {
   br_thermal_sensors sensors;
@@ -226,7 +339,22 @@ struct br_thermal {
   br_thermal_state now, sent;
   uint64_t sent_ms;
   unsigned cap_told;
+  uint32_t load_ms;                         // the load line's period (BR_THERMAL_LOAD_MS)
+  br_host_load load;                        // the last sample
 };
+
+// With the lock held: every load_ms, the "thermal: N s: host CPU ..." line (br_host_load_line).
+static void load_tick(br_thermal *t)
+{
+  br_host_load now;
+  br_host_load_read(t->sensors.root, &now);
+  if (now.ms - t->load.ms < t->load_ms) return;
+  char line[400];
+  long page = sysconf(_SC_PAGESIZE);
+  br_host_load_line(&t->load, &now, &t->now.raw, page > 0 ? (unsigned)page : 4096u, line, sizeof line);
+  br_log(1, "thermal: %s", line);
+  t->load = now;
+}
 
 static uint64_t now_ms(void)
 {
@@ -277,6 +405,7 @@ static void *worker(void *arg)
     pthread_cond_timedwait(&t->wake, &t->lock, &until);
     if (t->quit) break;
     step(t);
+    load_tick(t);
     br_thermal_state state = t->now;
     br_thermal_fn cap_fn = t->cap_told != state.cap ? t->cap_fn : NULL, report_fn = NULL;
     void *cap_ctx = t->cap_ctx, *report_ctx = t->report_ctx;
@@ -326,6 +455,8 @@ br_thermal *br_thermal_open(const br_thermal_options *options)
   const char *cap = options ? NULL : getenv("ONEIOS_THERMAL_CAP");
   t->cap_off = cap && !strcmp(cap, "0");
   t->poll_ms = options && options->poll_ms ? options->poll_ms : BR_THERMAL_POLL_MS;
+  t->load_ms = options && options->load_ms ? options->load_ms : BR_THERMAL_LOAD_MS;
+  br_host_load_read(t->sensors.root, &t->load);
   br_thermal_raw raw;
   br_thermal_read(&t->sensors, &raw);
   br_thermal_decide(&t->limits, &raw, NULL, &t->now);

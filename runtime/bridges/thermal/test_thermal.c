@@ -268,6 +268,69 @@ static void test_worker(void)
   br_thermal_close(t);
 }
 
+// The load line from fake /proc and battery files: two samples 30 s apart on an 8-CPU host.
+static char last_line[512];
+static void keep_line(int level, const char *line) { (void)level; if (!strncmp(line, "thermal: ", 9) && strstr(line, "host CPU")) snprintf(last_line, sizeof last_line, "%s", line); }
+
+static void stat_files(unsigned long long user, unsigned long long system, unsigned long long idle, unsigned long long irq,
+                       unsigned long long swpin, unsigned long long swpout, unsigned long long self)
+{
+  char text[1024];
+  snprintf(text, sizeof text, "cpu  %llu 0 %llu %llu 0 %llu 0 0 0 0\n", user, system, idle, irq);
+  size_t at = strlen(text);
+  for (unsigned i = 0; i < 8; i++) at += (size_t)snprintf(text + at, sizeof text - at, "cpu%u 1 2 3 4 5 6 7 0 0 0\n", i);
+  snprintf(text + at, sizeof text - at, "intr 1 2 3\nctxt 99\n");
+  put("/proc/stat", text);
+  snprintf(text, sizeof text, "nr_free_pages 10\npswpin %llu\npswpout %llu\npgfault 7\n", swpin, swpout);
+  put("/proc/vmstat", text);
+  // comm with a space and a parenthesis: the fields are counted after its last ')'
+  snprintf(text, sizeof text, "4242 (xnu host) S 1 4242 4242 0 -1 4194560 100 0 0 0 %llu %llu 0 0 20 0 30 0 1 2 3\n", self / 2, self - self / 2);
+  put("/proc/self/stat", text);
+}
+
+static void test_load(void)
+{
+  // 30 s at 100 ticks a second on 8 CPUs: 24000 ticks. sys 6780 (226%), user 5010 (167%), irq 360 (12%), the rest idle.
+  stat_files(1000, 2000, 50000, 100, 500, 400, 700);
+  put("/sys/class/power_supply/battery/current_now", "1600\n");
+  put("/sys/class/power_supply/battery/status", "Charging\n");
+  br_host_load a, b;
+  br_host_load_read(base, &a);
+  CHECK(a.have_cpu && a.ncpu == 8 && a.user == 1000 && a.system == 2000 && a.idle == 50000 && a.irq == 100);
+  CHECK(a.have_swap && a.pswpin == 500 && a.pswpout == 400 && a.have_self && a.self_ticks == 700);
+  CHECK(a.have_current && a.current == 1600 && !strcmp(a.status, "Charging"));
+  stat_files(1000 + 5010, 2000 + 6780, 50000 + 11850, 100 + 360, 500 + 70350, 400 + 59400, 700 + 4560);
+  br_host_load_read(base, &b);
+  a.ms = 1000; b.ms = 31000;
+  br_thermal_raw raw = raw_with(410, 780, 403);
+  snprintf(raw.soc_zone, sizeof raw.soc_zone, "cpu-1-2-1");
+  char line[400];
+  br_host_load_line(&a, &b, &raw, 4096, line, sizeof line);
+  // swap: 70350 pages of 4 KiB in 30 s = 9380 KiB/s, 59400 = 7920 KiB/s; xnuhost 4560 of 3000 ticks of one CPU = 152%
+  CHECK(!strcmp(line, "30 s: host CPU 405% of 800 (sys 226%, user 167%, irq 12%), swap in 9380 out 7920 KiB/s, xnuhost 152%; "
+                      "battery 40.3 C, Charging 1600 mA; case 41.0 C, SoC 78.0 C (cpu-1-2-1)"));
+  if (strncmp(line, "30 s: host CPU 405%", 19)) fprintf(stderr, "  line: %s\n", line);
+  // Missing files: each part says "-", nothing breaks; a short buffer stays terminated.
+  br_host_load none;
+  memset(&none, 0, sizeof none);
+  none.ms = 31000;
+  br_host_load_line(&a, &none, NULL, 4096, line, sizeof line);
+  CHECK(!strcmp(line, "30 s: host CPU -, swap -, xnuhost -; battery -, -; case -, SoC - (-)"));
+  CHECK(br_host_load_line(&a, &b, &raw, 4096, line, 12) == 11 && strlen(line) == 11);
+  // The worker writes the line at its period.
+  put("/sys/class/power_supply/battery/lrp", "350\n");
+  br_log_sink = keep_line;
+  br_thermal_options o = { .root = base, .poll_ms = 20, .load_ms = 50 };
+  br_thermal *t = br_thermal_open(&o);
+  CHECK(t != NULL);
+  if (t) {
+    wait_ms(250);
+    br_thermal_close(t);
+  }
+  CHECK(strstr(last_line, "thermal: ") == last_line && strstr(last_line, "host CPU ") && strstr(last_line, "; case 35.0 C"));
+  br_log_sink = NULL;
+}
+
 static void quiet(int level, const char *line) { (void)level; (void)line; }
 
 int main(void)
@@ -280,6 +343,7 @@ int main(void)
   test_masks();
   test_sysfs();
   test_worker();
+  test_load();
   char cmd[300];
   snprintf(cmd, sizeof cmd, "rm -rf %s", base);
   if (system(cmd)) fprintf(stderr, "could not remove %s\n", base);

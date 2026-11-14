@@ -1780,6 +1780,37 @@ Details and the phone test: `runtime/bridges/battery/README.md`, `drivers/batter
 
 Details: `runtime/bridges/thermal/README.md` (sensors, levels, the step, `thermalctl`), `drivers/thermal/README.md`.
 
+### "It runs damn hot, why" (9f6dc38 session, 2026-11-14; fix-thermal-log)
+
+Measured from outside at about +6060 s: `/proc/vmstat` pswpin +12190 and pswpout +10291 pages in 5 s (zram
+compressing the guest's RAM: the memory fix is fix-ram-fit's), top 800 % with 226 % sys and 167 % user, xnuhost
+148-155 %, battery 40.3 C charging (1.6 A at the boot); in the guest backboardd 291-364 %, Spotlight 78-107 %,
+SpringBoard about 70 %. Two new lines say where the heat goes at the next boot, and what decides each part:
+
+- `thermal: 30 s: host CPU ...` (the bridge, every 30 s: the host's busy, sys, user, irq; swap in and out KiB/s;
+  xnuhost's own CPU; the battery's temperature, status and current; case and SoC): `runtime/bridges/thermal/README.md`.
+- `oneios-cpu-sys: 10 s: ...` after each `oneios-cpu:` line (the gpu archive, `OneiOSAdreno.cpp`): the same busiest
+  processes' kernel time. **backboardd's 300 %:** its share in kernel time is its system calls, faults and IOKit calls,
+  among them the framebuffer swap. A BGRA frame is presented from the surface's own pages (no copy in the guest; the
+  copy into the display's buffer is xnuhost's device thread, `display: 10 s: flushes N, copy mean ...`, and the
+  helper's into the Android buffer is the helper's); a half-float `RGhA` frame without `oneios-display-wide=1` and
+  without the GOP presenter's GPU hand-off is converted to 8-bit sRGB by the CPU in the swap (`NativeLegacyDisplay`
+  `convertHalfRows`, a full 1440x3120 frame each time), after waiting for the GPU's work in 100 us sleeps up to
+  200 ms (`LegacyDisplayProbe.cpp` `waitForGpuWork`). Which one runs is the boot's `oneios-display: the compositor swaps
+  format '...'` and `oneios-display: half-float frames: ...` lines. Mostly user time instead is Core Animation's and
+  Metal's own work (metal2vulkan's translation, Turnip's command building): `oneios-ubt=backboardd` samples named
+  with `oneios-tool sym` say which. Nothing is changed in the display path until those lines are read [the CPU
+  conversion as a cause is a guess].
+- **Spotlight:** the guest's `Spotlight` is the app (`/Applications/Spotlight.app`), the indexer jobs are
+  `com.apple.searchd` and `com.apple.spotlight.IndexAgent` (24A446's launchd cache); `com.apple.spotlightknowledged` and
+  `com.apple.hybridsearchd` are already disabled (`userland/config/daemons.toml` base). iOS runs its indexing as
+  maintenance work, and plugged-in time is when its scheduler runs such work [Apple's documented behaviour for
+  background tasks, not read in this build]. The least-risk test, no seed: one boot with
+  `oneios-disable-jobs=com.apple.accessibility.axassetsd,com.apple.searchd,com.apple.spotlight.IndexAgent` (hosted
+  0053; keep axassetsd, the default, in the list). It writes the Data store's `disabled.plist`, so it stays for later
+  boots until `oneios-enable-jobs=com.apple.analyticsd,com.apple.searchd,com.apple.spotlight.IndexAgent` (0044) turns
+  them on again. Cost while off: search finds nothing new (apps, settings, mail, notes are not indexed). Not run.
+
 ### The phone in a session [F, the phone, 2026-11-12]
 
 - Kept running: the kernel's 81 thermal zones (`step_wise`), LMh, `thermal-engine-v2` (empty

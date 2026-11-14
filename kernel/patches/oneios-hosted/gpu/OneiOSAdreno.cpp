@@ -266,9 +266,9 @@ kern_return_t task_info(task_t, task_flavor_t, task_info_t, mach_msg_type_number
 void absolutetime_to_nanoseconds(uint64_t, uint64_t *);
 }
 namespace cpu {
-struct Seen { int pid; uint32_t round; uint64_t mach; };
+struct Seen { int pid; uint32_t round; uint64_t mach, sys; };
 Seen seen[1024];
-struct Busy { int pid; uint64_t mach; char name[24]; };
+struct Busy { int pid; uint64_t mach, sys; char name[24]; };
 struct Walk { uint32_t round; Busy top[8]; uint64_t all; };
 int visit(proc_t p, void *arg)
 {
@@ -279,16 +279,17 @@ int visit(proc_t p, void *arg)
     task_power_info_data_t info = {};
     mach_msg_type_number_t count = TASK_POWER_INFO_COUNT;
     if (task_info(task, TASK_POWER_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS) return 0;
-    const uint64_t now = info.total_user + info.total_system;
+    const uint64_t now = info.total_user + info.total_system, sys = info.total_system;
     Seen &e = seen[unsigned(pid) % 1024];
-    const uint64_t used = e.pid == pid && e.round + 1 == w.round && now >= e.mach ? now - e.mach : 0;
-    e.pid = pid; e.round = w.round; e.mach = now;
+    const bool known = e.pid == pid && e.round + 1 == w.round && now >= e.mach;
+    const uint64_t used = known ? now - e.mach : 0, used_sys = known && sys >= e.sys ? sys - e.sys : 0;
+    e.pid = pid; e.round = w.round; e.mach = now; e.sys = sys;
     w.all += used;
     unsigned at = 8;
     while (at > 0 && w.top[at - 1].mach < used) at--;
     if (at < 8 && used) {
         memmove(&w.top[at + 1], &w.top[at], (7 - at) * sizeof(Busy));
-        w.top[at].pid = pid; w.top[at].mach = used;
+        w.top[at].pid = pid; w.top[at].mach = used; w.top[at].sys = used_sys;
         strlcpy(w.top[at].name, proc_best_name(p), sizeof w.top[at].name);
     }
     return 0;   // PROC_RETURNED
@@ -321,6 +322,17 @@ void report(uint32_t every, uint32_t round)
     uint64_t all = 0;
     absolutetime_to_nanoseconds(w.all, &all);
     IOLog("oneios-cpu: %u s: %s (all %llu%%)\n", every, at ? text : "idle", all * 100 / span);
+    // The same processes' kernel time (TASK_POWER_INFO total_system): their system calls, faults and IOKit calls (a
+    // swap's CPU copy or half-float conversion in the framebuffer's user client is backboardd's system time), against
+    // their own code in user mode. A line of its own, so that the line above keeps its form for the log tools.
+    at = 0;
+    for (unsigned i = 0; i < 8 && w.top[i].mach; i++) {
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(w.top[i].sys, &ns);
+        at += snprintf(text + at, sizeof text - at, "%s%.20s[%d] %llu%%", at ? ", " : "", w.top[i].name, w.top[i].pid, ns * 100 / span);
+        if (at >= sizeof text - 1) break;
+    }
+    if (at) IOLog("oneios-cpu-sys: %u s: %s (kernel time of the same processes)\n", every, text);
 }
 }  // namespace cpu
 
