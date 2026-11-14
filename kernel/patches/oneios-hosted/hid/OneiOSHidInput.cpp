@@ -91,6 +91,9 @@ void droidvm_motion_register(void);
 }
 
 static uint32_t oneios_hid_log = 1;
+// oneios-hid-buttons-builtin=1 (fix-power-key, 2026-11-14; off by default, not proven): the buttons' event service as an
+// iPhone's built-in buttons (native_hid_live_checkpoint).
+static uint32_t oneios_hid_buttons_builtin = 0;
 
 void
 native_hid_input_observed(unsigned event, int result)
@@ -309,6 +312,24 @@ native_hid_live_checkpoint(IOService *device)
 		}
 		IOLog("oneios-hid: touch screen: Digitizer/Touch Screen, Built-In, DisplayIntegrated published on the event service; "
 		    "edge wrapper %u\n", native_touch_edge_install[0]);
+	}
+	// The buttons (oneios-hid-buttons-builtin=1; fix-power-key, docs/hardware.md 5). backboardd lists them as
+	// "eventSource: externalKeyboard; primaryUsagePage: 0x1; primaryUsage: 0x6; transport: Virtual" (the PC boot of
+	// 2026-11-14) and logs each volume press with "source:externalKeyboard ... destinations:<none>": the boot keyboard
+	// collection that holds report 2 makes the service a keyboard that is not built in. An iPhone's buttons are a
+	// built-in Consumer Control service. Built-In and the Consumer Control pair on the event service and its interface,
+	// as for the touch screen; the device's usage pair (1, 6), which the personality matches, stays.
+	if (!touch && oneios_hid_buttons_builtin && !state->published) {
+		state->published = true;
+		driver->setProperty("Built-In", kOSBooleanTrue);
+		driver->setProperty("PrimaryUsagePage", (unsigned long long)0x0c, 32);
+		driver->setProperty("PrimaryUsage", (unsigned long long)1, 32);
+		if (IORegistryEntry *interface = driver->getParentEntry(gIOServicePlane)) {
+			interface->setProperty("Built-In", kOSBooleanTrue);
+			interface->setProperty("PrimaryUsagePage", (unsigned long long)0x0c, 32);
+			interface->setProperty("PrimaryUsage", (unsigned long long)1, 32);
+		}
+		IOLog("oneios-hid: buttons: Consumer Control, Built-In published on the event service (oneios-hid-buttons-builtin=1)\n");
 	}
 	if (!oneios_hid_log) {
 		return;
@@ -624,6 +645,7 @@ oneios_hid_input_start(void)
 	uint32_t enabled = 1;
 	PE_parse_boot_argn("oneios-hid", &enabled, sizeof(enabled));
 	PE_parse_boot_argn("oneios-hid-log", &oneios_hid_log, sizeof(oneios_hid_log));
+	PE_parse_boot_argn("oneios-hid-buttons-builtin", &oneios_hid_buttons_builtin, sizeof(oneios_hid_buttons_builtin));
 	PE_parse_boot_argn("oneios-hid-queue-kib", &oneios_hid_queue_kib, sizeof(oneios_hid_queue_kib));
 	if (!enabled || oneios_hid_stage) {
 		return;

@@ -69,7 +69,9 @@ docs each item names. **Proven** = ran on the phone; **built** = compiled and ho
    `--set haptics=sim`; phone: `Actuator: user client N opened by audiomxd`, audiomxd's `actuator port` lines; the
    power-key boot with `oneios-actuator=0`. **Power key (fix-power-key, 2026-11-14; confirmed broken in the 9f6dc38
    session):** a stand-in for the button haptics service ButtonResolver waits for, `oneios-button-haptics=1` (off by
-   default; built, not on the phone); the A/B/C boots and the lines to read are in `docs/hardware.md` 5, "The power
+   default; built, not on the phone) and, since a PC boot showed backboardd taking the buttons for an external keyboard
+   (`eventSource: externalKeyboard`, `destinations:<none>`), `oneios-hid-buttons-builtin=1` (off by default); the 15:35
+   boot also brought `BacklightMode.inc` (`oneios-bl-mode=0` is the test of that). The A-E boots and the lines to read are in `docs/hardware.md` 5, "The power
    key: a stand-in for the button haptics service".
 7. **Blank widgets** (`docs/gpu.md` 5.1, PR #16): the `oneios-gpu-surfaces/pixels/locks/sync` lines and the host's
    `gpu: KGSL imports` say where the image is lost; the four guesses and how to read them are there. The likely

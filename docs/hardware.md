@@ -1152,6 +1152,45 @@ helps only if the blocked path above is the one the press takes. The next boots 
 | A | as now, plus `oneios-ubt=SpringBoard,backboardd oneios-ubt-at=240 oneios-ubt-every=60` | (the control; the `oneios-ubt` lines after a press show where the threads wait) |
 | B | A plus `oneios-button-haptics=1` | ButtonResolver's readiness was the stop: keep it (then make it the default) |
 | C | A plus `oneios-actuator=0` (no Actuator device, no `/product/haptics`) | the node is the switch, by another path than ButtonResolver |
+| D | A plus `oneios-bl-mode=0` (CoreBrightness keeps VMBLControl; the slider then does nothing again) | the backlight control's mode is the switch (below) |
+| E | A plus `oneios-hid-buttons-builtin=1` | backboardd did not route the buttons because it took them for an external keyboard (below) |
+
+**The buttons look like an external keyboard to backboardd** [F, the PC boot of 2026-11-14 with `haptics=sim`,
+`oneios-button-haptics=1` and the input script; iOS's log read with `oneios-tool ioslog show ... --proc backboardd`]:
+`Services discovered: [<BKIOHIDService ...; eventSource: externalKeyboard; primaryUsagePage: 0x1; primaryUsage: 0x6;
+name: OneiOS buttons; transport: Virtual>` (the touch screen: `eventSource: builtin; ... authenticated; builtIn`), and
+every volume press as `VolumeIncrement page:0xC usage:0xE9 downEvent:1 source:externalKeyboard senderID:100000219
+down`, `0xC/0xE9/100000219 began: ... destinations:<none>`. No power-key line came from the button processor in the
+8 s between backboardd's start-up and the end of that boot, so the power key's own route on the PC is not seen, and
+SpringBoard had only just become the shell, so `destinations:<none>` may be early. [I] An external keyboard's
+consumer keys are not the hardware buttons SpringBoard listens to. `oneios-hid-buttons-builtin=1` (the HID archive,
+`kernel/patches/oneios-hosted/hid/OneiOSHidInput.cpp`, off by default) publishes `Built-In` and the Consumer Control
+pair (0x0C, 1) on the buttons' event service and interface, as the touch screen's are, once the event driver has
+attached (log `oneios-hid: buttons: Consumer Control, Built-In published on the event service`). The device's own pair
+(1, 6), which the personality matches, stays. Also seen in that boot: ButtonHaptics was `ready in 0.73 s` and
+ButtonResolver opened two HID event system connections, but nothing opened the stand-in `AppleSPUHapticsAudioDriver`
+before the boot ended (8 s later), so whether ButtonResolver uses the AOP interface on iPhone18,2 is not settled.
+The decisive line on the phone: backboardd's `BackBoard:Button` line of a power press (`page:0xC usage:0x30 ...
+source:... destinations:...`) in the 9f6dc38 log.
+
+**The 15:35 boot changed two things, not one** [F git]: it was the first with the Actuator (5e426f3, 15:01) and the
+first with `drivers/brightness/BacklightMode.inc` in the Metal plug-in (7d6d6a3, 15:23), which turns CoreBrightness's
+VMBLControl into BLControl in backboardd. A lock's display-off and a wake's display-on go through backboardd's
+brightness control, so [I] the power key may stop there as well: SpringBoard's lock asks backboardd for the backlight
+off, which BLControl now sends to our backlight service (as brightness 0 or a display power change), and the press
+"does not sleep the display" if that request is taken but the panel is not blanked. The brightness bridge never writes
+0 to the panel (`never 0`, section 7a), so a display-off would show as the lowest brightness, not as a dark panel. The
+9f6dc38 session's "a brightness of 0 put the touch IC to sleep" may be that display-off. So read, before any boot,
+whether the 9f6dc38 xnuhost log has a brightness request of 0 (`ONEIOS BACKLIGHT` / `brightness:` lines) within a
+second or two of a power press (`oneios-hid: buttons:` at +5083..+5175). If it does, iOS locked and the stop is ours:
+the panel is not turned off and on (the bridge's side, fix-brightness-touch's area).
+
+What a lock looks like in iOS's log on its way [V strings of SpringBoard.framework and backboardd 24A446; the order is
+[I]]: backboardd `UISensor mode changing to: ... changeSource: LockButton` (seen in 9f6dc38: the UI mode change comes
+with the lock button), then SpringBoard `Lock button down: state=%d`, `Lock button single press should wait for
+double-press timeout: ...`, `Lock button single press recognized.`, `Lock button single press: state=%d`,
+`lockUIFromSource:%{public}@ options:%{public}@`, then backboardd's backlight factor change and CoreBrightness. A
+wake: `Button press up; waking screen.`, `unlockUIFromSource`. The first of these that is missing names the step.
 
 In iOS's log, B should show backboardd's `_BRController ready: device haptic asset slot count:8` (a default-level line), ButtonResolver's (debug level: they may not be stored)
 `AOP service added`, `isReady: YES loaderReady: YES`, and Haptics' `UpdateSSHBAsset` without `err`. What a working
