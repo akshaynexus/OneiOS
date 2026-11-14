@@ -120,3 +120,9 @@ result out by age), answers `APPLE80211_IOC_CHANNELS_INFO` (207) from the host's
 the runtime sends), builds the supported-channel lists from it, and logs the first scan record of a boot
 (`docs/hardware.md` 3, "Wi-Fi does not join"). Compiled in the integration kernel of 2026-11-13 (prelink audit 0
 failures, stubs 666 good); not booted yet.
+
+On the phone (2026-11-14) the record came out as written (`scan record 1 ... TIMESTAMP .. (3951 ms before now)`,
+`channels info: 63 channels (the host's list)`), and auto-join still joined nothing. Since fix-wifi-join-2 the record
+also carries PHY_MODE at 0x8e0 (the modes the band, rates and HT/VHT/HE elements show; it was zero) and an AGE (0x84)
+as of the answer, and `scan record 1` (now in a shorter form the console keeps whole: `scan record 1 (2280 B): ch .. flags .. RSSI .. ... TIMESTAMP .. ns (.. ms ago) PHY 0x.. IEs .. B`) says the PHY mode. Why auto-join drops the results is to be read from
+CoreWiFi's info-level lines, which hosted 0070 (`oneios-log-persist=com.apple.WiFiManager`) keeps.

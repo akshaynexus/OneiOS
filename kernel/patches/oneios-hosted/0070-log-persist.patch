@@ -1,0 +1,83 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -9569,6 +9569,71 @@
+ 	    oneios_camera_addon_status);
+ }
+ #endif
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0070): info-level messages of chosen log subsystems kept in the unified log, for a boot whose question
++ * is answered only at that level. The phone's log keeps the default level, and CoreWiFi says why _CWFFilteredScanResults
++ * drops a scan result only at the info level ("[corewifi] Filtering based on maxAge (...)" and 15 other reasons,
++ * subsystem com.apple.WiFiManager): auto-join saw no result in the phone's boot of 2026-11-13 and the reason was not in
++ * its log. oneios-log-persist=SUBSYSTEM[,SUBSYSTEM...] (default: none, nothing written) writes, before launchd, the
++ * Data volume's /private/var/preferences/Logging/Subsystems/SUBSYSTEM.plist (/Library/Preferences is a link to
++ * /private/var/preferences; logd reads /Library/Preferences/Logging/Subsystems over the system's own) with
++ * DEFAULT-OPTIONS Level Enable and Persist Info, root 0644, making the two folders when missing. A file already there
++ * is left alone (an owner's profile, or this patch's file of an earlier boot). The files stay in the Data store: remove
++ * them to go back (more log volume). One line per subsystem:
++ *   oneios-logpersist: com.apple.WiFiManager: info kept (/private/var/preferences/Logging/Subsystems/com.apple.WiFiManager.plist written)
++ */
++static void
++oneios_log_persist(void)
++{
++	static const char dir1[] = "/private/var/preferences/Logging", dir2[] = "/private/var/preferences/Logging/Subsystems";
++	static const char plist[] = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
++	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
++	    "<plist version=\"1.0\">\n<dict>\n\t<key>DEFAULT-OPTIONS</key>\n\t<dict>\n\t\t<key>Level</key>\n\t\t<dict>\n"
++	    "\t\t\t<key>Enable</key>\n\t\t\t<string>Info</string>\n\t\t\t<key>Persist</key>\n\t\t\t<string>Info</string>\n"
++	    "\t\t</dict>\n\t</dict>\n</dict>\n</plist>\n";
++	char names[256] = "";
++	vfs_context_t ctx = vfs_context_current();
++	if (!PE_parse_boot_argn("oneios-log-persist", names, sizeof(names)) || names[0] == 0 || !strcmp(names, "-")) {
++		return;
++	}
++	const char *dirs[] = { dir1, dir2 };
++	for (unsigned i = 0; i < 2; i++) {
++		vnode_t dvp = NULLVP;
++		int error = vnode_lookup(dirs[i], VNODE_LOOKUP_NOFOLLOW, &dvp, ctx);
++		if (error == 0) {
++			vnode_put(dvp);
++		} else if (error != ENOENT || (error = oneios_kern_mkdir(dirs[i], 0755, ctx)) != 0) {
++			printf("oneios-logpersist: %s could not be made (%d): nothing written\n", dirs[i], error);
++			return;
++		}
++	}
++	for (char *name = names; *name;) {
++		char *end = name;
++		while (*end && *end != ',') {
++			end++;
++		}
++		char saved = *end;
++		*end = 0;
++		char path[256];
++		vnode_t vp = NULLVP;
++		bool safe = name[0] != 0 && strchr(name, '/') == NULL && name[0] != '.';
++		snprintf(path, sizeof(path), "%s/%s.plist", dir2, name);
++		if (!safe) {
++			printf("oneios-logpersist: \"%s\": not a subsystem name: left out\n", name);
++		} else if (vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, ctx) == 0) {
++			vnode_put(vp);
++			printf("oneios-logpersist: %s: %s is there already: left alone\n", name, path);
++		} else {
++			int error = native_gpu_addon_write(path, (const uint8_t *)plist, sizeof(plist) - 1, 0644, ctx);
++			printf("oneios-logpersist: %s: %s (%s %s %d)\n", name, error > 0 ? "not kept" : "info kept", path,
++			    error > 0 ? "not written," : "written,", error > 0 ? error : 0);
++		}
++		*end = saved;
++		name = saved ? end + 1 : end;
++	}
++}
++#endif /* XNU_HOSTED */
+ static void
+ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+ {
+@@ -9652,6 +9717,7 @@
+ 	oneios_feature_flags_off(p, scratch);         /* 0048 */
+ 	oneios_jobs_disable();                        /* 0053 */
+ 	oneios_swap_folder();                         /* 0057 */
++	oneios_log_persist();                         /* 0070 */
+ #endif
+ }
+ 
