@@ -210,6 +210,12 @@
 # never compiled. Uncomment after a kernel build, the prelink and a PC boot. Without it, xnuhost's ram-giveback=0 still
 # holds the RAM: the kernel's first ram_discard gets -EPERM and 0058 stops giving back for the boot.
 #0067-ram-fixed.patch
+# fix-brightness-touch (2026-11-14): iOS's display power for the host. backboardd's IOMobileFramebufferRequestPowerChange
+# (IOMobileFramebufferUserClient selector 12, one scalar: the state) is answered as before (unsupported by this family)
+# and then passed to drivers/brightness's oneios_display_power_request (weak), which sends OB_BRIGHT_POWER: the host
+# sleeps the touch IC and floors the panel only for a real display off, and wakes both at display on. A brightness of 0
+# is no longer an off. oneios-display-power-hook=0: not passed. In iokit/Kernel/IOUserClient.cpp after 0029/0062's hooks.
+0069-display-power-request.patch
 # radio2: no numbered patch for the Wi-Fi: net/ is an archive of this build (kernel/build-hosted.sh,
 # oneios-tool kernel gen net), started by oneios_drivers_start's oneios_net_start (weak in drivers/bridge/OneiOSBridge.c).
 # net/README.md: IO80211Controller/IO80211Interface under the collection's original IOEthernetController and

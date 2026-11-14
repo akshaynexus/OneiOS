@@ -157,45 +157,49 @@ static void test_touch(void)
     // A level change with the display on touches the panel only.
     br_bright_set(b, BR_BRIGHT_FULL, false, 0); usleep(80000);
     CHECK(trace_is("p:255"));
-    // iOS sleeps the display: the IC first (1,0 then 1,1), then the backlight; and only once.
+    // A level of 0 with the display on (iOS's brightness-nits 0, phone 2026-11-13 +4805): the panel at its floor,
+    // the IC left awake.
     br_bright_set(b, 0, false, 0); usleep(80000);
-    CHECK(trace_is("t:1,0 t:1,1 p:1") && get(tsp, "enabled") == 1);
-    br_bright_set(b, 0, false, 0); usleep(80000);
-    CHECK(trace_is(""));
-    // iOS wakes it: the backlight first, then 2,0 and 2,1.
+    CHECK(trace_is("p:1") && get(tsp, "enabled") == 2);
+    br_bright_set(b, 0, false, 100); usleep(200000);                 // nor a fade down to 0
     br_bright_set(b, BR_BRIGHT_FULL, false, 0); usleep(80000);
+    CHECK(trace_is("p:255"));
+    // iOS's display off (its framebuffer's power request): the IC first (1,0 then 1,1), then the backlight; once.
+    br_bright_display(b, false, "test"); usleep(80000);
+    CHECK(trace_is("t:1,0 t:1,1 p:1") && get(tsp, "enabled") == 1);
+    br_bright_display(b, false, "test"); usleep(80000);
+    CHECK(trace_is(""));
+    // On again: the level from before the off, then 2,0 and 2,1; a second on wakes the IC again.
+    br_bright_display(b, true, "test"); usleep(80000);
     CHECK(trace_is("p:255 t:2,0 t:2,1") && get(tsp, "enabled") == 2);
+    br_bright_display(b, true, "test"); usleep(80000);
+    CHECK(trace_is("t:2,0 t:2,1"));
+    // A power-key press wakes the IC whatever it is believed to be (the phone's 2026-11-13 key press found it off).
+    br_bright_display(b, false, "test"); usleep(80000);
+    CHECK(trace_is("t:1,0 t:1,1 p:1"));
+    br_bright_key(b); usleep(80000);
+    CHECK(trace_is("t:2,0 t:2,1") && get(tsp, "enabled") == 2);
+    br_bright_key(b); usleep(80000);
+    CHECK(trace_is("t:2,0 t:2,1"));
+    // A level iOS sets while its display is off is taken; the on that follows does not undo it.
+    br_bright_set(b, BR_BRIGHT_FULL / 2, true, 0); usleep(80000);
+    CHECK(trace_is("p:128"));
+    br_bright_display(b, true, "test"); usleep(80000);
+    CHECK(trace_is("t:2,0 t:2,1"));
     // The pen's and the touchpad's nodes were never written.
     CHECK(get(sec, "tsp_pen/enabled") == 0 && get(sec, "sec_epen/enabled") == 0 && get(sec, "tsp_pad/enabled") == 0);
-    // Closed while the display sleeps: One UI's level, then the IC awake again.
-    br_bright_set(b, 0, false, 0); usleep(80000);
+    // Closed while the display is off: One UI's level, then the IC awake again (the return).
+    br_bright_display(b, false, "test"); usleep(80000);
     CHECK(trace_is("t:1,0 t:1,1 p:1"));
     br_bright_close(b);
-    CHECK(trace_is("p:100 t:2,0 t:2,1") && get(tsp, "enabled") == 2);
+    CHECK(trace_is("p:100 t:2,0 t:2,1") && get(tsp, "enabled") == 2 && get(panel, "brightness") == 100);
   }
-  // A fade to 0: the IC sleeps at the start of the fade; a fade up from 0: awake after the first step.
-  b = br_bright_open(&o);
-  if (b) {
-    trace_is("t:2,0 t:2,1");
-    br_bright_set(b, 0, false, 100); usleep(200000);
-    pthread_mutex_lock(&trace_lock);
-    CHECK(!strncmp(trace, "t:1,0 t:1,1 p:", 14) && strstr(trace, " p:1") && !strstr(trace, "t:2"));
-    trace[0] = 0;
-    pthread_mutex_unlock(&trace_lock);
-    br_bright_set(b, BR_BRIGHT_FULL, false, 100); usleep(200000);
-    pthread_mutex_lock(&trace_lock);
-    CHECK(!strncmp(trace, "p:", 2) && strstr(trace, " t:2,0 t:2,1 p:") && !strstr(trace, "t:1"));
-    trace[0] = 0;
-    pthread_mutex_unlock(&trace_lock);
-    br_bright_close(b);
-    trace_is("p:100 t:2,0 t:2,1");
-  }
-  // ONEIOS_TSP_OFF=0: level 0 leaves the IC awake.
+  // ONEIOS_TSP_OFF=0: the display's off leaves the IC awake.
   o.no_touch_off = true;
   b = br_bright_open(&o);
   if (b) {
     trace_is("t:2,0 t:2,1");
-    br_bright_set(b, 0, false, 0); usleep(80000);
+    br_bright_display(b, false, "test"); usleep(80000);
     CHECK(trace_is("p:1"));
     br_bright_close(b);
     trace_is("p:100 t:2,0 t:2,1");
@@ -212,7 +216,7 @@ static void test_touch(void)
     CHECK(i.saved == 0 && i.start == 64 && get(panel, "brightness") == 64 && trace_is("p:64 t:2,0 t:2,1"));
     CHECK(br_bright_level(b) > 32000 && br_bright_level(b) < 33500);
     br_bright_set(b, 0, false, 0); usleep(80000);
-    trace_is("t:1,0 t:1,1 p:1");
+    CHECK(trace_is("p:1"));
     br_bright_close(b);
     CHECK(trace_is("p:64 t:2,0 t:2,1") && get(panel, "brightness") == 64);
   }
@@ -244,9 +248,10 @@ static void test_touch(void)
     br_bright_info i;
     br_bright_info_get(b, &i);
     CHECK(i.touch_nodes == 1 && trace_is("t:2,0 t:2,1"));
-    br_bright_set(b, 0, false, 0); usleep(80000);
     br_bright_set(b, BR_BRIGHT_FULL, false, 0); usleep(80000);
-    CHECK(trace_is("t:1,0 t:1,1 p:1 p:255 t:2,0 t:2,1") && get(panel, "brightness") == 255);
+    br_bright_display(b, false, "test"); usleep(80000);
+    br_bright_display(b, true, "test"); usleep(80000);
+    CHECK(trace_is("p:255 t:1,0 t:1,1 p:1 p:255 t:2,0 t:2,1") && get(panel, "brightness") == 255);
     br_bright_close(b);
   }
   br_bright_trace = NULL;

@@ -1,0 +1,48 @@
+diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
+--- a/iokit/Kernel/IOUserClient.cpp
++++ b/iokit/Kernel/IOUserClient.cpp
+@@ -5674,6 +5674,36 @@
+ }
+ #endif /* XNU_HOSTED */
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0069): iOS's display power, for the host's touch IC and backlight. backboardd turns its display off
++ * and on through IOMobileFramebufferRequestPowerChange, which is IOConnectCallScalarMethod(selector 12, { state })
++ * (24A446 IOMobileFramebuffer kern_RequestPowerChange; QuartzCore's CA::IOMobileFramebuffer::set_power_state). This
++ * framebuffer family answers it kIOReturnUnsupported (no platform subclass), so nothing else sees the request: it is
++ * passed, after the method and whatever it answered, to the backlight driver (drivers/brightness/OneiOSBacklight.cpp,
++ * oneios_display_power_request), which tells the host (OB_BRIGHT_POWER). Before this the host took a brightness of 0
++ * for the display's off and slept the touch IC while iOS was on (phone, 2026-11-13). Nothing else changes: the
++ * method's answer, the arguments and the family are left as they are. oneios-display-power-hook=0: not passed.
++ */
++extern "C" void oneios_display_power_request(uint64_t state, int pid, int result) __attribute__((weak_import));
++static void
++hosted_display_power(IOUserClient *client, uint32_t selector, const io_user_scalar_t *input, mach_msg_type_number_t count, IOReturn ret)
++{
++	static int wanted = -1;
++	if (selector != 12 || count != 1 || client == NULL || !&oneios_display_power_request) {
++		return;
++	}
++	if (wanted < 0) {
++		uint32_t value = 1;
++		PE_parse_boot_argn("oneios-display-power-hook", &value, sizeof(value));
++		wanted = value != 0;
++	}
++	if (wanted && !strcmp(client->getMetaClass()->getClassName(), "IOMobileFramebufferUserClient")) {
++		oneios_display_power_request((uint64_t)input[0], proc_selfpid(), ret);
++	}
++}
++#endif /* XNU_HOSTED */
++
+ /* Routine io_user_client_method */
+ kern_return_t
+ is_io_connect_method_var_output
+@@ -5873,6 +5903,7 @@
+ 		ret = client->callExternalMethod( selector, &args );
+ #if XNU_HOSTED
+ 		hosted_iouc_trace(client, selector, ret);
++		hosted_display_power(client, selector, scalar_input, scalar_inputCnt, ret);
+ #endif
+ 	}
+ 

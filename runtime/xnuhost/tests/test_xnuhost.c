@@ -1026,6 +1026,9 @@ static unsigned input_take(driver *d, test_ev *out, unsigned max)
 static xh_input_state fake_state;
 static int fake_read_state(xh_input_source *s, xh_input_state *state) { (void)s; *state = fake_state; return 0; }
 
+static unsigned power_presses;
+static void count_power_press(void) { power_presses++; }
+
 static void test_input_filter(void)
 {
   driver d = { .dev = xh_virtio_input_create(0, 45) };
@@ -1090,7 +1093,10 @@ static void test_input_filter(void)
   xh_input_source_init(&k, d.dev, "keys", false);
   k.read_state = fake_read_state;
   const xh_input_ev press[] = { { now, 1, 116, 1 }, { now, 1, 30, 1 }, { now, 3, 0x35, 3 }, { now, 1, 172, 1 }, { now, 0, 0, 0 } };
+  power_presses = 0;
+  xh_input_power_key = count_power_press;                                       // the brightness bridge's touch wake
   xh_input_feed(&k, press, 5, now, counter, hz);
+  CHECK(power_presses == 1);                                                    // the press, not the release below
   n = input_take(&d, got, 32);
   CHECK(n == 3 && got[0].code == 116 && got[0].value == 1 && got[1].code == 172 && got[2].type == 0 && k.sent_keys == 4);
   fake_state.keys = 2;                                                          // power up, volume up down: both changed
@@ -1098,6 +1104,8 @@ static void test_input_filter(void)
   xh_input_feed(&k, kdrop, 3, now, counter, hz);
   n = input_take(&d, got, 32);
   CHECK(n == 3 && got[0].code == 115 && got[0].value == 1 && got[1].code == 116 && got[1].value == 0 && got[2].type == 0 && k.sent_keys == 2);
+  CHECK(power_presses == 1);                                                    // a release (and a resync) is no press
+  xh_input_power_key = NULL;
 }
 
 // The scripted event source (input_script.c): the file's lines as steps.

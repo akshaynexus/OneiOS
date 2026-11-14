@@ -9,7 +9,7 @@ panel. The phone's light sensor goes the other way.
 **Never run on the phone.** Host tests pass; the first run is `brightctl` below.
 
 ```sh
-make test          # 74 checks: the curve, the fade, the sensor's events, a session and the touch IC on a fake sysfs
+make test          # 81 checks: the curve, the fade, the sensor's events, a session and the touch IC on a fake sysfs
 make               # build/android/brightctl
 ```
 
@@ -33,7 +33,8 @@ assumed: the node is found and its range is read at open.
   it is **squared**, as on the Mi A3 (`laurel_level_for`: half the slider is a quarter of the light). A level
   from `brightness-nits` is a fraction of the light and is taken as it is.
 - The result is spread over `floor..ceiling` of the node. Floor 1: level 0 is the dimmest setting, **never 0**. iOS
-  sets 0 before it sleeps the display and draws black; an OLED panel is dark then, and a killed session cannot
+  may send 0 with its display on (the phone, 2026-11-13: brightness-nits 0; `drivers/brightness` no longer passes
+  nits of 0 or less on) and sets the floor at a display off; an OLED panel is dark then, and a killed session cannot
   leave the panel off for the return's screen.
 - Ceiling: `max_brightness`, except that 510 and 51000 are halved. Samsung's node carries the high-brightness
   levels above the manual range on some panels (2 x 255, 2 x 25500); those stay One UI's [I: the rule is from
@@ -60,27 +61,41 @@ session, the keys work. One UI's input HAL tells the IC about every panel power 
 did. A plain `1` does nothing. What works (the parent, on the phone; the fork's `guest_start.sh` and
 `oneos_switch.sh` write the same): `<display state>,<event>` with state 2 on / 1 off and event 0 early / 1 late.
 
-The bridge is the one place that sees iOS's level cross 0, so it writes them, from the panel's worker:
+**Since 2026-11-14 (fix-brightness-touch) the IC follows iOS's display power, not the level.** Before, a level of 0
+put the IC to sleep; on the phone (2026-11-13 +4805) iOS sent `brightness-nits` 0 right after 27496 with its
+display on, the IC slept, and touch stayed dead (the last touch at +4804) until it was woken by hand. Now the
+display's power comes from iOS's framebuffer: backboardd's `IOMobileFramebufferRequestPowerChange` (hosted `0069`,
+`drivers/brightness` `oneios_display_power_request`, the channel's `OB_BRIGHT_POWER`), and a power-key press from
+xnuhost's evdev reader. The panel's worker writes:
 
 | When | Writes, in order |
 |---|---|
 | the bridge opens | (the backlight, only if One UI left 0), `2,0`, `2,1` |
-| iOS's level becomes 0 | `1,0`, `1,1`, then the backlight (at the start of a fade to 0) |
-| iOS's level leaves 0 | the backlight, then `2,0`, `2,1` (in a fade up: after the first step above the lowest level) |
-| the bridge closes (SIGTERM) | the backlight, `2,0`, `2,1` |
+| a level of 0 (any source), the display on | the backlight's floor only: the IC stays awake |
+| iOS's display off (`br_bright_display(false)`) | `1,0`, `1,1`, then the backlight's floor; the level is kept |
+| iOS's display on (every time, also a repeat) | the level from before the off (when nothing set another), then `2,0`, `2,1` |
+| a power-key press (`br_bright_key`) | `2,0`, `2,1`, whatever the IC is believed to be (an off that follows sleeps it again) |
+| the bridge closes (SIGTERM) | One UI's value, `2,0`, `2,1` |
+
+Host-tested (`make test`, 81 checks): nits 0 with the display on (no sleep), a fade to 0 (no sleep), a display off
+and on (sleep, then the level back and the wake), a repeated on (wake again), a power-key press after an off (wake),
+a level set while off, the close after an off (One UI's value and the IC on). `runtime/bridges/tests` checks the
+channel's `OB_BRIGHT_POWER`. Not run on the phone; whether backboardd calls `RequestPowerChange` at the lock in
+this guest is what the next boot's `ONEIOS BACKLIGHT: display off: backboardd[N] asked its framebuffer` says.
 
 - Which nodes: every `/sys/class/sec/tsp*/enabled` whose `input/name` is `sec_touchscreen`. Never the pen's or the
   touchpad's, whatever the folder is called; nothing under `/sys/power`. No such node: one log line, the panel
   works as before. A write that fails is logged (the first three) and nothing else changes.
-- The backlight itself is still never 0 (level 0 is the lowest setting), so "after the backlight is not 0" holds
-  for every wake.
+- The backlight itself is still never 0 (level 0 is the lowest setting, also for a display off), so "after the
+  backlight is not 0" holds for every wake.
+- If iOS never asks its framebuffer for an off (the hook sees no request), the IC is simply never put to sleep: an
+  awake IC with the panel at its floor costs a little power and nothing else.
 - **After a SIGKILL of xnuhost nothing here runs.** The IC keeps its last state, asleep if iOS's display slept.
   It is woken by One UI's side: the return restarts the framework, and its input HAL writes `2,0`, `2,1` when
   the display comes on [I: that is the sequence this copies; not checked after a killed session]. The fork's
   return scripts do not write the node themselves.
-- `ONEIOS_TSP_OFF=0` (or `touch-sleep=0` in the image's `xnuhost.conf`, which sets it): the IC is never put to sleep (only the wakes are written). The first thing to try if touch
-  dies with the display on: iOS's `brightness` 0 is taken as "display asleep", and whether the slider's bottom
-  can also send 0 is not known.
+- `ONEIOS_TSP_OFF=0` (or `touch-sleep=0` in the image's `xnuhost.conf`, which sets it): the IC is never put to sleep
+  (only the wakes are written), not even for iOS's display off.
 - `brightctl` does not touch the IC.
 
 ## The light sensor

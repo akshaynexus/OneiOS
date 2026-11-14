@@ -651,9 +651,11 @@ Linux's page cache and a sparse file: the store is a raw image.
 - **The touch IC's power state** is the brightness bridge's (`runtime/bridges/brightness/README.md`, "The touch IC
   follows the display"): Samsung's IC is off while the panel is blank and One UI's input HAL, which wakes it, is
   not there in a session. The bridge writes `/sys/class/sec/tsp*/enabled` (`sec_touchscreen` only): `2,0`, `2,1`
-  at its start, after the backlight when iOS's level leaves 0, and at the stop; `1,0`, `1,1` before the backlight
-  when the level becomes 0. Without it touch is dead after iOS's first display sleep. `touch-sleep=0` (`--set touch-sleep=0`, or the
-  image's `xnuhost.conf`) keeps the IC awake at level 0 (it sets `ONEIOS_TSP_OFF=0` for the bridge). After a SIGKILL of xnuhost
+  at its start, at every iOS display on (after the backlight), at every press of the power key (input.c calls
+  `xh_input_power_key`, which main.c sets to the bridge's `br_bright_key`), and at the stop; `1,0`, `1,1` before the
+  backlight when iOS turns its display off (its framebuffer's power request, `OB_BRIGHT_POWER`, hosted `0069`). A
+  brightness of 0 no longer sleeps it (since 2026-11-14). `touch-sleep=0` (`--set touch-sleep=0`, or the
+  image's `xnuhost.conf`) keeps the IC awake at a display off (it sets `ONEIOS_TSP_OFF=0` for the bridge). After a SIGKILL of xnuhost
   the IC is woken by One UI's own input HAL when the return brings the framework back.
 - **`--input-script FILE`** (`input-script=FILE`; `src/input_script.c`, whose head has the format): touches and
   key presses from a text file, on the same virtio-input device, for a host with no touchscreen (the PC under

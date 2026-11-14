@@ -514,6 +514,9 @@ int   xh_input_start(xh_virtio *dev, unsigned width, unsigned height);
 void  xh_input_stop(void);
 // The display showed a guest frame (display.c): the end of input.c's touch-to-frame measurement.
 void  xh_input_frame_shown(void);
+// Called on the input thread at each press of the power key (KEY_POWER down) that is passed to the guest: the brightness
+// bridge wakes the touch IC (br_bright_key). NULL: nothing.
+extern void (*xh_input_power_key)(void);
 // One reader's filter, the part of input.c the host tests run. An event as read, its time on CLOCK_MONOTONIC.
 #define XH_INPUT_SLOTS 16
 typedef struct { int64_t time_ns; uint16_t type, code; int32_t value; } xh_input_ev;

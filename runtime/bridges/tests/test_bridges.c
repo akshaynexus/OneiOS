@@ -675,6 +675,18 @@ static void test_bridge_brightness(const char *tmp)
   send_message(&g, OB_CH_BRIGHTNESS, OB_BRIGHT_SET, &shortened, 4);          // too short: ignored
   usleep(100000);
   CHECK(br_bright_current(bright) == 255);
+  // iOS's display off and on (the framebuffer's power request): the floor, then the level from before
+  struct ob_bright_power power = { 0, OB_POWER_FRAMEBUFFER };
+  send_message(&g, OB_CH_BRIGHTNESS, OB_BRIGHT_POWER, &power, sizeof power);
+  usleep(100000);
+  CHECK(br_bright_current(bright) == 1);
+  power.on = 1;
+  send_message(&g, OB_CH_BRIGHTNESS, OB_BRIGHT_POWER, &power, 4);            // too short: ignored
+  usleep(100000);
+  CHECK(br_bright_current(bright) == 1);
+  send_message(&g, OB_CH_BRIGHTNESS, OB_BRIGHT_POWER, &power, sizeof power);
+  usleep(100000);
+  CHECK(br_bright_current(bright) == 255);
   br_bright_close(bright);
   f = fopen(path, "r");
   unsigned back = 0;

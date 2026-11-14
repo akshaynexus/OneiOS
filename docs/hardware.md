@@ -1608,6 +1608,22 @@ Details and the phone test: `runtime/bridges/brightness/README.md`, `drivers/bri
   Period}`, read in 24A446's CoreBrightness): taken as the slider's level when its value is unambiguous (a float's bits,
   data or text; not the integers 0 and 1), and logged with what it held (`drivers/brightness/README.md`,
   "DisplayBrightness"). Host-tested decoder; not run.
+- **The slider, nits 0 and the touch IC (fix-brightness-touch, 2026-11-14).** Phone, 2026-11-13 (main 9f6dc38): iOS
+  sent `brightness-nits` 0 with its display on; the panel went to its floor and the bridge slept the touch IC (dead
+  touch until woken by hand); Control Center's slider sent only `DisplayBrightnessSliderPosition` and
+  `DisplayBrightness`, both dropped. Read in 24A446 [F]: IOKit's serializer turns a CFNumber float into its truncated
+  integer (`Brightness number 0x0 (31 bits)`: 31 is Float32's width there), so `DisplayBrightness` cannot carry the
+  position; `DisplayBrightnessSliderPosition` and `brightness-nits-cap` are SInt32 16.16. Now: the slider position is
+  the slider's level (the sliders work, no iOS-side code), the cap is kept and holds `brightness-nits` under it, nits
+  of 0 or less are no level (the panel keeps its own), and the touch IC follows iOS's display power: backboardd's
+  `IOMobileFramebufferRequestPowerChange` (selector 12, seen by hosted `0069`, sent as `OB_BRIGHT_POWER`) sleeps it at
+  off and wakes it at on, and every power-key press wakes it (xnuhost's evdev reader). The return writes One UI's value
+  and wakes the IC as before. Host tests: `test_bl_request` 2038, the bridge's brightness 81, `runtime/bridges/tests`
+  (the channel's `OB_BRIGHT_POWER`), xnuhost (the power-key hook); the driver compiles (`oneios-tool kernel drivers
+  --check`); the kernel with hosted 0069 and the new driver built (HOSTED_OUT=fixbr, xnu.macho 122efae5) and prelinked (audit 0
+  failures, stubs 666 good, kernel.kc 7632e390); the
+  boot is not done (not on the PC: no phone panel, touch IC or power key there). Details: `drivers/brightness/README.md` ("The slider, the cap
+  and nits 0"), `runtime/bridges/brightness/README.md` ("The touch IC follows the display").
 - **Why the slider did nothing** (phone, 2026-11-12): vmm-present makes MobileGestalt answer `IsVirtualDevice`, and
   24A446's CoreBrightness then runs `VMBLControl` (log: `Set VM Mode 3 BLControl`), which sends brightness to a
   Virtualization.framework host over remote XPC and never to the service. `drivers/brightness/BacklightMode.inc`,

@@ -64,6 +64,7 @@ enum {
   OB_BRIGHT_QUERY = 2,                   // guest -> host: no payload; the host answers OB_BRIGHT_STATE
   OB_BRIGHT_STATE = 3,                   // host -> guest: struct ob_bright_state
   OB_BRIGHT_ALS = 4,                     // host -> guest: struct ob_bright_als, when the light changes and every 2 s
+  OB_BRIGHT_POWER = 5,                   // guest -> host: struct ob_bright_power, iOS's display on or off (its framebuffer's power request)
 };
 enum { OB_BRIGHT_LINEAR = 1u };          // ob_bright_set.flags: the level is a fraction of the light, not of the slider
 enum { OB_BRIGHT_HAS_PANEL = 1u, OB_BRIGHT_HAS_ALS = 2u };      // ob_bright_state.flags
@@ -77,6 +78,12 @@ struct ob_bright_state {
   uint32_t max_nits;                     // the light at level 65535
   uint32_t min_millinits;                // the light at level 0
   uint32_t level;                        // where the panel is now on the slider's scale, 0..65535
+};
+// The touch IC sleeps while the display is off and wakes when it is on; a brightness of 0 alone is a dim panel, not off.
+enum { OB_POWER_FRAMEBUFFER = 1u };     // ob_bright_power.source: IOMobileFramebufferRequestPowerChange (selector 12)
+struct ob_bright_power {
+  uint32_t on;                           // 0 off, 1 on
+  uint32_t source;                       // OB_POWER_*
 };
 struct ob_bright_als {
   uint32_t millilux;

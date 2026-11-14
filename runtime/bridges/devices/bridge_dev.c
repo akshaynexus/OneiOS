@@ -154,6 +154,10 @@ static void from_guest(bridge_state *s, const struct ob_header *h, const uint8_t
       struct ob_bright_set set;
       memcpy(&set, payload, sizeof set);
       br_bright_set(s->config.brightness, set.level, set.flags & OB_BRIGHT_LINEAR, set.fade_ms);
+    } else if (h->type == OB_BRIGHT_POWER && h->length >= sizeof(struct ob_bright_power)) {
+      struct ob_bright_power power;
+      memcpy(&power, payload, sizeof power);
+      br_bright_display(s->config.brightness, power.on != 0, power.source == OB_POWER_FRAMEBUFFER ? "the framebuffer's power request" : "the guest");
     } else if (h->type == OB_BRIGHT_QUERY) {
       bright_state(s);
       br_bright_listen(s->config.brightness, bright_als, s);      // light readings from now on
