@@ -84,6 +84,12 @@ br_bright *br_bright_open(const br_bright_options *options);
 void br_bright_info_get(const br_bright *b, br_bright_info *out);
 // Never blocks: a worker writes the node, in steps of 16 ms when fade_ms is not 0.
 void br_bright_set(br_bright *b, uint32_t level, bool linear, uint32_t fade_ms);
+// iOS's display power (its framebuffer's power request, OB_BRIGHT_POWER). Off: the touch IC sleeps (unless
+// ONEIOS_TSP_OFF=0), then the panel goes to its floor, the level kept. On (every time): the level from before the off
+// when nothing has set another, then the IC woken. A level of 0 alone does neither: it is a dim panel, not an off one.
+void br_bright_display(br_bright *b, bool on, const char *why);
+// A press of the power key (xnuhost's evdev reader): the touch IC woken; iOS's display off that may follow sleeps it.
+void br_bright_key(br_bright *b);
 // The node's value written last (the saved one before the first set).
 uint32_t br_bright_current(br_bright *b);
 // Where the panel is now on the slider's scale (the squared curve undone), 0..BR_BRIGHT_FULL.

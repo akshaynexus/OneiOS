@@ -240,6 +240,8 @@ static br_cpu_plan cpu_plan;
 static br_haptic *haptic;
 static br_camera *camera;          // the camera helper process (runtime/bridges/camera, bin/oneios-camera)
 static br_bright *brightness;     // the panel's backlight and the light sensor (runtime/bridges/brightness)
+// A power-key press from the evdev reader: the touch IC woken (iOS turns its display on or off next).
+static void power_key_pressed(void) { br_bright_key(brightness); }
 static br_battery *battery;       // the phone's battery for iOS (runtime/bridges/battery)
 static br_thermal *thermal;       // the phone's temperatures: iOS's pressure level and xnuhost's CPU step (runtime/bridges/thermal)
 static br_cpu_topology cpu_host;  // the host's CPUs, and the plan as made: the thermal steps narrow it
@@ -476,6 +478,7 @@ static int boot(void)
     if (!haptic && !strcmp(config.haptics, "off")) LOGI("haptics: off (haptics=off): iOS gets no actuator");
     if (!config.touch_sleep) setenv("ONEIOS_TSP_OFF", "0", 1);   // touch-sleep=0: the bridge reads this
     brightness = br_bright_open(NULL);
+    if (brightness) xh_input_power_key = power_key_pressed;        // the touch IC is woken at each press
     battery = br_battery_open(NULL);
     thermal = br_thermal_open(NULL);
     if (thermal) br_thermal_on_cap(thermal, thermal_step, NULL);

@@ -60,6 +60,8 @@
 #include "oneios_bl_request.h"
 
 extern "C" void proc_selfname(char *buf, int size);
+extern "C" void proc_name(int pid, char *buf, int size);
+extern "C" void oneios_display_power_request(uint64_t state, int pid, int result);
 
 #define OBL_VALUE_MAX        255u       /* IODisplayParameters brightness max, as on the Mi A3 */
 #define OBL_FULL             65535u     /* the bridge's level scale */
@@ -79,11 +81,14 @@ private:
 	uint32_t fNits;                 /* the light at the top of the slider */
 	uint32_t fMinNits16;            /* the lowest level's light, 16.16 */
 	uint32_t fRequests;
+	int32_t fCap16;                 /* brightness-nits-cap, 16.16 nits; 0 or less: no cap */
 	bool fHasAls;
 	uint32_t nits16For(uint32_t value) const;
 	void publish(uint32_t value, uint32_t nits16);
 	bool calibration();
 	void logRequest(OSDictionary *d, uint32_t level, uint32_t ms, bool linear);
+	/* Whether the next request is logged: the first 64, then every 64th (a slider drag sends some 550 a second). */
+	bool logged() const { uint32_t n = fRequests + 1; return n <= 64 || n % 64 == 0; }
 	int32_t displayBrightness(OSObject *value, uint32_t *fadeMs, char *raw, size_t rawSize);
 };
 
@@ -274,6 +279,9 @@ void
 OneiOSBacklight::logRequest(OSDictionary *d, uint32_t level, uint32_t ms, bool linear)
 {
 	uint32_t n = ++fRequests;
+	if (n > 64 && n % 64 != 0) {
+		return;
+	}
 	char name[32], keys[160];
 	size_t used = 0;
 	keys[0] = 0;
@@ -293,7 +301,25 @@ OneiOSBacklight::logRequest(OSDictionary *d, uint32_t level, uint32_t ms, bool l
 		IOLog("ONEIOS BACKLIGHT: request %u from %s {%s} -> level %u of 65535%s, fade %u ms\n", n, name, keys, level,
 		    linear ? " (of the light)" : " (of the slider)", ms);
 	} else {
-		IOLog("ONEIOS BACKLIGHT: request %u from %s {%s}: no brightness in it, nothing sent\n", n, name, keys);
+		/* What came, key by key (each object's class and value as the kernel received it), so a request no key of ours
+		 * covers says what it held. */
+		char values[200];
+		size_t at = 0;
+		values[0] = 0;
+		OSCollectionIterator *each = d != NULL ? OSCollectionIterator::withCollection(d) : NULL;
+		if (each != NULL) {
+			OSObject *o;
+			while ((o = each->getNextObject()) != NULL && at + 8 < sizeof(values)) {
+				OSSymbol *key = OSDynamicCast(OSSymbol, o);
+				if (key == NULL) {
+					continue;
+				}
+				at += (size_t)scnprintf(values + at, sizeof(values) - at, "%s%s = ", at ? "; " : "", key->getCStringNoCopy());
+				at += obl_describe(d->getObject(key), values + at, sizeof(values) - at);
+			}
+			each->release();
+		}
+		IOLog("ONEIOS BACKLIGHT: request %u from %s {%s}: no level in it, nothing sent (%s)\n", n, name, keys, values);
 	}
 }
 
@@ -363,21 +389,56 @@ OneiOSBacklight::setProperties(OSObject *properties)
 		publish(value, nits16For(value));
 		return kIOReturnSuccess;
 	}
-	if (nits != NULL) {
-		/* brightness-nits alone: a fraction of the light. Signed 16.16 (iOS 27): zero or less is the display going dark,
-		 * level 0 (the host keeps the panel at its floor and puts the touch IC to sleep). As unsigned, a negative value
-		 * was the top of the range. */
-		int32_t signed16 = (int32_t)nits->unsigned32BitValue();
-		uint64_t n16 = signed16 < 0 ? 0 : (uint64_t)signed16, top = (uint64_t)fNits << 16;
-		if (n16 > top) {
-			n16 = top;
+	OSNumber *slider = d != NULL ? OSDynamicCast(OSNumber, d->getObject("DisplayBrightnessSliderPosition")) : NULL;
+	if (slider != NULL) {
+		/* The slider's position as CoreBrightness sends it beside every DisplayBrightness: signed 16.16 of 0..1 in an
+		 * SInt32 (oneios_bl_request.h). Of the slider, as `brightness` (the host's curve squares it). Control Center's
+		 * slider sends this and DisplayBrightness only (phone, 2026-11-13: about 550 of each in a 1 s drag). */
+		int32_t fraction = obl_fixed16_fraction(slider->unsigned64BitValue());
+		if (fraction >= 0) {
+			set.level = (uint32_t)fraction * OBL_FULL / OBL_FRACTION_FULL;
+			set.flags = 0;
+			logRequest(d, set.level, set.fade_ms, false);
+			(void)oneios_bridge_send(OB_CH_BRIGHTNESS, OB_BRIGHT_SET, &set, sizeof(set));
+			uint32_t value = (uint32_t)(((uint64_t)fraction * OBL_VALUE_MAX + OBL_FRACTION_FULL / 2) / OBL_FRACTION_FULL);
+			publish(value, nits16For(value));
+			return kIOReturnSuccess;
 		}
-		set.level = (uint32_t)(n16 * OBL_FULL / top);
+		IOLog("ONEIOS BACKLIGHT: DisplayBrightnessSliderPosition 0x%llx (%u bits) is not a 16.16 position 0..1, nothing sent\n",
+		    slider->unsigned64BitValue(), slider->numberOfBits());
+	}
+	OSNumber *cap = d != NULL ? OSDynamicCast(OSNumber, d->getObject("brightness-nits-cap")) : NULL;
+	if (cap != NULL) {
+		/* CoreBrightness's cap on the light, signed 16.16 nits (SetBLDriverNitsCap); 0 or less: no cap. It bounds the
+		 * levels that brightness-nits gives from now on; nothing is sent for it alone. */
+		fCap16 = (int32_t)cap->unsigned32BitValue();
+		IOLog("ONEIOS BACKLIGHT: brightness-nits-cap 0x%x (%d.%03d nits, %u bits)%s\n", (uint32_t)fCap16, fCap16 >> 16,
+		    (int)(((uint32_t)fCap16 & 0xffffu) * 1000u >> 16), cap->numberOfBits(),
+		    fCap16 > 0 ? ": brightness-nits is held under it" : ": no cap (0 or less)");
+		if (nits == NULL) {
+			return kIOReturnSuccess;
+		}
+	}
+	if (nits != NULL) {
+		/* brightness-nits alone: a fraction of the light, signed 16.16, held under the cap. Zero or less is not a level
+		 * (phone, 2026-11-13 +4805: nits 0 right after 27496 put the panel at its floor and slept the touch IC while iOS
+		 * stayed on): nothing is sent, the panel keeps its level, and only iOS's framebuffer power request turns the
+		 * display off (oneios_display_power_request). */
+		int32_t signed16 = (int32_t)nits->unsigned32BitValue();
+		int32_t lit = obl_nits_level(signed16, fCap16, fNits);
+		if (lit < 0) {
+			logRequest(d, OBL_FULL + 1, 0, false);
+			IOLog("ONEIOS BACKLIGHT: brightness-nits 0x%x (0 or less) is no level: the panel keeps its own; the display is "
+			    "off only when its framebuffer asks\n", (uint32_t)signed16);
+			return kIOReturnSuccess;
+		}
+		uint64_t n16 = (uint64_t)lit * ((uint64_t)fNits << 16) / OBL_FRACTION_FULL;
+		set.level = (uint32_t)lit * OBL_FULL / OBL_FRACTION_FULL;
 		set.flags = OB_BRIGHT_LINEAR;
 		logRequest(d, set.level, set.fade_ms, true);
 		(void)oneios_bridge_send(OB_CH_BRIGHTNESS, OB_BRIGHT_SET, &set, sizeof(set));
 		/* IODisplayParameters follow: the slider's value is the square root of the fraction (the host's curve). */
-		uint64_t square = n16 * OBL_VALUE_MAX * OBL_VALUE_MAX / top, value = 0;
+		uint64_t top = (uint64_t)fNits << 16, square = n16 * OBL_VALUE_MAX * OBL_VALUE_MAX / top, value = 0;
 		while ((value + 1) * (value + 1) <= square) {
 			value++;
 		}
@@ -400,13 +461,46 @@ OneiOSBacklight::setProperties(OSObject *properties)
 			publish(value, nits16For(value));
 			return kIOReturnSuccess;
 		}
-		logRequest(d, OBL_FULL + 1, 0, false);
-		IOLog("ONEIOS BACKLIGHT: DisplayBrightness %s: %s, nothing sent\n", raw,
-		    fraction == OBL_AMBIGUOUS ? "the integer 0 or 1 (a float that lost its fraction on the way?)" : "not a position 0..1");
+		OSDictionary *dict = OSDynamicCast(OSDictionary, db);
+		OSNumber *position = OSDynamicCast(OSNumber, dict != NULL ? dict->getObject("Brightness") : db);
+		bool lost = position != NULL && obl_number_was_float(position->numberOfBits());
+		if (logged()) {
+			logRequest(d, OBL_FULL + 1, 0, false);
+			IOLog("ONEIOS BACKLIGHT: DisplayBrightness %s: %s, nothing sent\n", raw,
+			    lost ? "a float IOKit truncated to an integer on the way (31 bits: Float32, 63: Float64); the position comes as "
+			    "DisplayBrightnessSliderPosition"
+			    : fraction == OBL_AMBIGUOUS ? "the integer 0 or 1" : "not a position 0..1");
+		} else {
+			fRequests++;
+		}
 		return kIOReturnSuccess;
 	}
 	logRequest(d, OBL_FULL + 1, 0, false);
 	return kIOReturnSuccess;
+}
+
+/*
+ * iOS's display power, as its framebuffer is asked for it: IOMobileFramebufferRequestPowerChange(fb, state) is
+ * IOConnectCallScalarMethod(selector 12, { state }) [F, 24A446 IOMobileFramebuffer kern_RequestPowerChange 0x22ac117d0],
+ * which QuartzCore's CA::IOMobileFramebuffer::set_power_state calls when backboardd turns the display off or on.
+ * Hosted 0069 (iokit/Kernel/IOUserClient.cpp) calls this after the user client's method, whatever it answered (this
+ * family refuses selector 12, kIOReturnUnsupported, without a platform subclass: the request is seen all the same).
+ * The host then sleeps the touch IC and puts the panel at its floor (off), or brings both back (on): a brightness of 0
+ * alone does neither.
+ */
+extern "C" void
+oneios_display_power_request(uint64_t state, int pid, int result)
+{
+	static volatile uint32_t last = 2;
+	char name[32] = "?";
+	proc_name(pid, name, sizeof(name));
+	struct ob_bright_power power = { state != 0 ? 1u : 0u, OB_POWER_FRAMEBUFFER };
+	if (power.on != last) {
+		IOLog("ONEIOS BACKLIGHT: display %s: %s[%d] asked its framebuffer (power change %llu, answered 0x%x)\n",
+		    power.on ? "on" : "off", name, pid, state, (unsigned)result);
+	}
+	last = power.on;
+	(void)oneios_bridge_send(OB_CH_BRIGHTNESS, OB_BRIGHT_POWER, &power, sizeof(power));
 }
 
 /* CoreBrightness sets properties; nothing of ours opens a connection. A process that tries is logged (who, which type)

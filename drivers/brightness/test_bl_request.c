@@ -62,6 +62,22 @@ int main(void)
   CHECK(obl_period_ms(f32(0.25f), 32) == 250 && obl_period_ms(f32(1.5f), 32) == 1500 && obl_period_ms(f64(0.5), 64) == 500);
   CHECK(obl_period_ms(0, 32) == 0 && obl_period_ms(1, 32) == 1000 && obl_period_ms(f32(60.0f), 32) == -1 && obl_period_ms(1000, 32) == -1);
 
+  // IOKit's widths: Float32 arrives as 31 bits, Float64 as 63 (the truncated integer), integers as 8..64.
+  CHECK(obl_number_was_float(31) && obl_number_was_float(63) && !obl_number_was_float(32) && !obl_number_was_float(64) && !obl_number_was_float(8));
+
+  // DisplayBrightnessSliderPosition: 16.16 of 0..1 (CoreBrightness's fcvtzs #16 into an SInt32).
+  CHECK(obl_fixed16_fraction(0) == 0 && obl_fixed16_fraction(0x10000) == 65535 && obl_fixed16_fraction(0x8000) == 32768);
+  CHECK(obl_fixed16_fraction(0x6b85) == 27525);                                          // 0.42
+  CHECK(obl_fixed16_fraction(0x10100) == 65535);                                         // a hair over 1: the top
+  CHECK(obl_fixed16_fraction(0x20000) == OBL_NOT_A_NUMBER && obl_fixed16_fraction(0xffffffffu) == OBL_NOT_A_NUMBER);   // 2.0, -1/65536
+
+  // brightness-nits (16.16) to a level of the light on a 500-nit panel, with and without a cap; nits 0 is no level.
+  CHECK(obl_nits_level(250 << 16, 0, 500) == 32767 && obl_nits_level(500 << 16, 0, 500) == 65535 && obl_nits_level(900 << 16, 0, 500) == 65535);
+  CHECK(obl_nits_level(250 << 16, 100 << 16, 500) == 13107 && obl_nits_level(50 << 16, 100 << 16, 500) == 6553);
+  CHECK(obl_nits_level(250 << 16, -5, 500) == 32767);                                    // a cap of 0 or less: none
+  CHECK(obl_nits_level(0, 0, 500) == -1 && obl_nits_level(-65536, 0, 500) == -1 && obl_nits_level(100 << 16, 0, 0) == -1);
+  CHECK(obl_nits_level(0x3b5c0000, 0, 500) >= 0);                                        // the phone's 27496 of 65535 came from such a value
+
   printf("bl request: %d checks, %d failed\n", checks, failures);
   return failures != 0;
 }

@@ -206,6 +206,53 @@ send `brightness-nits` from the same request) [I]. Written and host-tested on th
 compiles: `oneios-tool kernel drivers --check` (then `drivers/build.py --check`) against the records of the Linux PC's `HOSTED_OUT=pc` build (2026-11-12, all 16
 sources), and it is in that kernel. Not run on the phone.
 
+**Answered (fix-brightness-touch, 2026-11-14) [F]:** the float does not survive. IOKit.framework's binary serializer
+(`DoCFSerializeBinary`, 24A446 0x18f07c8f4) reads every CFNumber with `CFNumberGetValue(kCFNumberLongLongType)`
+(`mov w1, #0xb` at 0x18f07cb34) and takes the OSNumber's width from a table by the CFNumber's type (0x18f113ec8:
+SInt8 8, SInt16 16, SInt32 32, SInt64 64, **Float32 31, Float64 63**). So `Brightness number 0x0 (31 bits)` (phone,
+2026-11-13, 550 a second in a Control Center drag) is a Float32 truncated to 0: no form of it reaches the kernel.
+No iOS-side code is needed: see the next section.
+
+## The slider, the cap and nits 0 (fix-brightness-touch, 2026-11-14)
+
+The phone, 2026-11-13 (main 9f6dc38): at +4805 CoreBrightness sent, in one millisecond, `{brightness-nits-cap}`,
+`{brightness-nits}` -> 27496, `{DisplayBrightness}` (a truncated float), `{brightness-nits}` -> 0 and
+`{DisplayBrightnessSliderPosition}`; the panel went to its floor and the host slept the touch IC. A Control Center
+drag then sent only `{DisplayBrightnessSliderPosition}` and `{DisplayBrightness}` pairs, both dropped. Read in 24A446's
+CoreBrightness [F]:
+
+- `DisplayBrightnessSliderPosition`: `CFNumberCreate(kCFNumberSInt32Type)` of `fcvtzs(position, #16)`, i.e. **signed
+  16.16 of the slider's position 0..1** (`__DisplaySetLogicalBrightnessInternal` 0x22aa0d784 and 0x22aa0de14, from
+  `__DisplayLogicalToSliderBrightnessInternal`), set on the service alone (`IORegistryEntrySetCFProperty` in
+  `__DisplaySetBLDriverProperty_block_invoke` 0x22aa0f7fc). The driver now takes it as the slider's level
+  (`(of the slider)`, the host's curve squares it): **the Control Center and Settings sliders move the panel.**
+- `brightness-nits-cap`: also `kCFNumberSInt32Type`, 16.16 nits (`SetBLDriverNitsCap` 0x22aa0fdd8; one caller
+  computes it with `fcvtzs w1, s0, #0x10` at 0x22a9f31d0). The driver keeps it and holds `brightness-nits` under it when
+  it is above 0 (0 or less: no cap); it is logged with its value (`ONEIOS BACKLIGHT: brightness-nits-cap 0x... (N.NNN
+  nits, 32 bits)`).
+- `brightness-nits`: `kCFNumberSInt32Type` 16.16 (`SetBLDriverNitsValue`), as before. **Nits of 0 or less are no
+  level now**: nothing is sent and the panel keeps its level (`ONEIOS BACKLIGHT: brightness-nits 0x0 (0 or less) is no
+  level ...`). The display's off is iOS's framebuffer power request (below), not a brightness.
+- Why CoreBrightness sent nits 0 at +4805 is not known [U]. Candidates: a cap of 0 (the request-3 value, unlogged
+  then, is logged now), or CoreBrightness's own minimum (`capabilities ... MinNits`). The next boot's cap line and
+  the slider position that follows say which. Auto-brightness and the ALS are not the cause on that boot's evidence
+  [I: AppleUSBALS was refused, so no lux reached CoreBrightness].
+- Unknown keys are logged with each value (`... no level in it, nothing sent (key = number 0x... (32 bits); ...)`);
+  requests are logged for the first 64, then every 64th (a drag sends some 550 a second).
+
+**The display's power.** `IOMobileFramebufferRequestPowerChange(fb, state)` is `IOConnectCallScalarMethod(selector 12,
+{ state })` (24A446 IOMobileFramebuffer `kern_RequestPowerChange` 0x22ac117d0; QuartzCore's
+`CA::IOMobileFramebuffer::set_power_state` calls it when backboardd turns the display off or on) [F]. This framebuffer
+family answers it unsupported, so hosted `0069` passes the request, after the method, to
+`oneios_display_power_request` here, which logs `ONEIOS BACKLIGHT: display off: backboardd[N] asked its framebuffer
+(power change 0, answered 0x...)` on each change and sends `OB_BRIGHT_POWER`: the host sleeps the touch IC and floors
+the panel at off, brings the level back and wakes the IC at on (`runtime/bridges/brightness/README.md`). Whether
+backboardd makes that call at the lock in this guest [U] is what that line says; without it the IC is never slept.
+
+Tests: `test_bl_request.c` (`drivers/tests/host.sh`): 2038 checks, with the 31/63-bit floats, the 16.16 positions
+(0, 0.42, 1, a hair over 1, 2, negative) and the nits levels with and without a cap. **Not compiled into a kernel
+yet** at the time of writing (`docs/hardware.md` 7a has the state); not run on the phone.
+
 ## Only a session can show
 
 1. CoreBrightness finds the service and creates its display (no fault in `_DisplayCreateWithCapabilitiesAndID`).

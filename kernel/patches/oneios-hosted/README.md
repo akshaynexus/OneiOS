@@ -1078,3 +1078,19 @@ offer and DroidVMVirtioGpuDisplay.cpp's resources carry the scanout format: `sta
 (`oneios-display: properties: ...`) and each surface format the compositor swaps (`oneios-display: the compositor
 swaps format 'BGRA' ...: taken`). Without the boot argument the frames take the path they took before. Not compiled
 yet: the kernel build, prelink and a PC boot are the next step (`display/README.md`).
+
+## 0069-display-power-request.patch (fix-brightness-touch, 2026-11-14)
+
+iOS's display power for the host. backboardd turns its display off and on with
+`IOMobileFramebufferRequestPowerChange(fb, state)`, which is `IOConnectCallScalarMethod(selector 12, { state })` (24A446
+IOMobileFramebuffer `kern_RequestPowerChange`; QuartzCore's `CA::IOMobileFramebuffer::set_power_state`). This family
+answers it `kIOReturnUnsupported` without a platform subclass, so the request reached nothing. In
+`iokit/Kernel/IOUserClient.cpp` (`is_io_connect_method`, beside 0029's trace), after the method and whatever it
+answered, a call on `IOMobileFramebufferUserClient` with selector 12 and one scalar goes to
+`oneios_display_power_request` (weak; `drivers/brightness/OneiOSBacklight.cpp`), which logs `ONEIOS BACKLIGHT: display
+off: backboardd[N] asked its framebuffer (power change 0, answered 0x...)` and sends `OB_BRIGHT_POWER`: the host sleeps
+the touch IC and floors the panel at off, brings both back at on (`runtime/bridges/brightness/README.md`). The method's
+answer and arguments are not changed. `oneios-display-power-hook=0`: not passed. Checked: the patched file passes the
+kernel's recorded compile command with `-fsyntax-only` (the records of a tree with 0001-0066); the kernel build, the
+prelink and a boot are the next step. Whether backboardd calls it at the lock in this guest is [U] until a phone boot's
+log shows the line.

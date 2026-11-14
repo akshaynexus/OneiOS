@@ -217,5 +217,17 @@ the boot, while xnuhost went on flushing frames: the panel stayed dark until the
 - The helper logs why its read ended: `oneios-display: xnuhost closed the socket` or `oneios-display: reading
   xnuhost's socket failed: <error>`.
 To get the picture back by hand during a session (as root on the phone, the switch script's own command):
-`busybox setsid /data/local/tmp/oneios/runtime/bin/oneios-display --session /data/local/tmp/oneios/session --takeover --wait 60 >> /data/local/tmp/oneios/control/display.log 2>&1 &`
+`busybox setsid /data/local/tmp/oneios/runtime/bin/oneios-display --session /data/local/tmp/oneios/session --takeover --wait 60 >> /data/local/tmp/oneios/control/display.log 2>&1 & echo $! >> /data/local/tmp/oneios/control/display.pid`
+(the pid appended to `control/display.pid`: the fork's boot-screen hand-off and the return find the helper by it; without it the
+OneOS boot screen stays up under the helper's layer, as on 2026-11-13, and shows when the helper ends.)
+
+**The OneOS boot screen and this layer (2026-11-14, read in the fork 3876dd5) [F, I].** The fork's renderer
+(`OneOSBootStatus`, `control/bootui/renderer.log`) puts its layer at z 2,000,000,000; this helper's is at
+2,147,483,646 and opaque, so it is always above. The helper does not re-create or re-place its layer on a display
+off or on, a power-key press or a refresh-rate change: nothing in it listens for them, and iOS's display off is a
+black (blank) frame on the same layer. So the boot screen can only show through when this layer is gone, i.e. the
+helper ended or was killed [I: the 2026-11-13 helper had been started late, by hand, after the libnativewindow
+fault, and was not in `control/display.pid`, so the hand-off never ended the renderer]. The fork's feeder ends the
+renderer once a helper in `control/display.pid` logs `first frame posted`; since OneOS `fix-bootui-handoff` the
+switch starts each session with an empty `display.log`, so an earlier session's line cannot end it early.
 Not run on the phone yet.

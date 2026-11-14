@@ -134,6 +134,15 @@ gone), and feeds Samsung's software watchdog. It saves One UI's clock caps (each
 is gone, writes the hardware's range; the return writes One UI's values back before zygote (`docs/hardware.md` 7d). Gone: zygote, zygote_secondary, system_server and every app. So no InputDispatcher: read
 `/dev/input/event*` yourself. Do not `EVIOCGRAB` the volume-key device (see 6), or handle the chord yourself.
 
+**The display helper and the boot screen (rule, 2026-11-14).** The switch starts `bin/oneios-display` with a fresh
+`control/display.log` (the last session's moved to `display.log.1`, OneOS `fix-bootui-handoff`) and its pid in
+`control/display.pid`. Every helper of the session, also one started again by hand, has its pid appended to
+`control/display.pid` and its output appended to `control/display.log` (`runtime/display/README.md` has the command).
+The fork's boot screen (z 2,000,000,000) ends when a helper in `control/display.pid` logs `oneios-display: first frame
+posted` (or `layer up` after `session/ready`); the helper's layer (z 2,147,483,646, opaque) is above it until then. The
+helper does not re-create its layer at a display off or on: iOS's display off is a black frame on the same layer, so
+the boot screen shows through only when no helper runs.
+
 ## 5. What xnuhost must do for the switch
 
 - **Stay in its mount namespace**, with every process it starts (iOS task processes included). The return

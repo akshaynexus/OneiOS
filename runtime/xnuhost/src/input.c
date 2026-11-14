@@ -54,6 +54,8 @@ void xh_input_frame_shown(void)
     __atomic_store_n(&down_frame_ns, now - down, __ATOMIC_RELEASE);
 }
 
+void (*xh_input_power_key)(void);
+
 static void send_event(xh_input_source *s, uint16_t type, uint16_t code, int32_t value)
 {
   if (type == EV_ABS_ && code == ABS_MT_SLOT_) s->slot = value >= 0 && value < XH_INPUT_SLOTS ? (unsigned)value : XH_INPUT_SLOTS;
@@ -192,6 +194,7 @@ void xh_input_feed(xh_input_source *s, const xh_input_ev *ev, unsigned n, int64_
       // The side keys, and the two the guest also takes from a host that has them (OneiOSSideKeys.inc): Home, the ringer.
       bool side = v->code == KEY_VOLUMEDOWN_ || v->code == KEY_VOLUMEUP_ || v->code == KEY_POWER_ || v->code == KEY_MUTE_ || v->code == KEY_HOMEPAGE_;
       if (side || (s->touch && v->code == BTN_TOUCH_)) send_event(s, EV_KEY_, v->code, v->value);
+      if (v->code == KEY_POWER_ && v->value == 1 && xh_input_power_key) xh_input_power_key();
     } else if (v->type == EV_ABS_ && s->touch) {
       if (v->code == ABS_MT_SLOT_ || v->code == ABS_MT_TRACKING_ID_ || v->code == ABS_MT_POSITION_X_ || v->code == ABS_MT_POSITION_Y_ ||
           v->code == ABS_MT_PRESSURE_ || v->code == ABS_MT_TOUCH_MAJOR_)

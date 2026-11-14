@@ -163,4 +163,55 @@ obl_period_ms(uint64_t value, unsigned bits)
 	return ms < 0 || ms > 10000 ? -1 : (int32_t)ms;
 }
 
+/*
+ * How IOKit carries a CFNumber to the kernel [F, 24A446 IOKit.framework DoCFSerializeBinary at 0x18f07c8f4]: the value
+ * is read with CFNumberGetValue(kCFNumberLongLongType), so a float or double arrives as the integer it truncates to,
+ * and the width the OSNumber gets comes from a table by the CFNumber's type (0x18f113ec8): SInt8 8, SInt16 16, SInt32
+ * 32, SInt64 64, Float32 31, Float64 63, CGFloat 63. So 31 or 63 bits is a float that lost its fraction: no form of it
+ * that reaches setProperties keeps the value (a slider position 0.42 is 0). CoreBrightness sends the slider's position
+ * a second way, as a fixed-point integer (below), which does.
+ */
+static inline int
+obl_number_was_float(unsigned bits)
+{
+	return bits == 31 || bits == 63;
+}
+
+/*
+ * DisplayBrightnessSliderPosition and brightness-nits-cap [F, 24A446 CoreBrightness]: CFNumberCreate(kCFNumberSInt32Type)
+ * of fcvtzs(x, #16), i.e. signed 16.16 fixed point: the slider's position 0..1 as 0..0x10000
+ * (__DisplaySetLogicalBrightnessInternal 0x22aa0d784, __DisplayLogicalToSliderBrightnessInternal's result), and the cap
+ * in nits (SetBLDriverNitsCap 0x22aa0fdd8; __DisplaySetProperty_block_invoke 0x22a9f31d0). Each is set on the service
+ * alone (IORegistryEntrySetCFProperty in __DisplaySetBLDriverProperty_block_invoke).
+ */
+/* A 16.16 slider position as the fraction 0..OBL_FRACTION_FULL; up to 1% over 1 is the top; negative or larger: not one. */
+static inline int32_t
+obl_fixed16_fraction(uint64_t value)
+{
+	int32_t v = (int32_t)(uint32_t)value;
+	if (v < 0) {
+		return OBL_NOT_A_NUMBER;
+	}
+	return obl_fraction_of(((int64_t)v * OBL_FRACTION_FULL + 0x8000) >> 16);
+}
+
+/* A level of the light (0..OBL_FRACTION_FULL) for 16.16 nits against the panel's top in nits, bounded by a 16.16 cap when
+ * the cap is above 0 (a cap of 0 or less is no cap). -1 for nits of 0 or less: not a level (the display is not off for
+ * it; only its framebuffer's power request turns it off). */
+static inline int32_t
+obl_nits_level(int32_t nits16, int32_t cap16, uint32_t max_nits)
+{
+	if (nits16 <= 0 || max_nits == 0) {
+		return -1;
+	}
+	uint64_t n = (uint64_t)nits16, top = (uint64_t)max_nits << 16;
+	if (cap16 > 0 && n > (uint64_t)cap16) {
+		n = (uint64_t)cap16;
+	}
+	if (n > top) {
+		n = top;
+	}
+	return (int32_t)(n * OBL_FRACTION_FULL / top);
+}
+
 #endif
