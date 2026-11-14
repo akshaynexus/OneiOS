@@ -1174,6 +1174,28 @@ static void test_filter(void)
   CHECK(xh_task_filter(f, 0xfffff000ull, 0x100001000ull, 5, 6) == 0);           // text across a 4 GiB line
 }
 
+// ---- the access of a task fault (stub_abi.h xs_fault_access) --------------------------------------
+// The syndromes are the hardware's, as Linux passes them on in esr_context for a user address: EC 0x24 (data abort
+// from a lower EL) with IL, ISS.CM (bit 8), ISS.WnR (bit 6) and the fault status code.
+static void test_fault_access(void)
+{
+  const uint64_t pc = 0x1a0004000ull, far = 0xc998c0000ull;
+  CHECK(xs_fault_access(0x92000047ull, far, pc) == XH_PROT_WRITE);  // str: WnR, translation fault level 3
+  CHECK(xs_fault_access(0x9200004full, far, pc) == XH_PROT_WRITE);  // str: WnR, permission fault level 3
+  CHECK(xs_fault_access(0x92000007ull, far, pc) == XH_PROT_READ);   // ldr: translation fault level 3
+  // dc cvau / ic ivau / dc civac on a page the host has not mapped: CM and WnR, translation fault (levels 0-3);
+  // on a mapped page it may not read: CM and WnR, permission fault. A read either way (WebKit's sys_icache_invalidate
+  // on the read-execute alias of a JIT page, phone 2026-11-14: it was taken as a write).
+  for (uint64_t fsc = 4; fsc <= 7; fsc++) CHECK(xs_fault_access(0x92000140ull | fsc, far, pc) == XH_PROT_READ);
+  CHECK(xs_fault_access(0x9200014full, far, pc) == XH_PROT_READ);
+  CHECK(xs_fault_access(0x9200010bull, far, pc) == XH_PROT_READ);   // CM without WnR (access flag fault)
+  CHECK(xs_fault_access(0x96000147ull, far, pc) == XH_PROT_READ);   // same EL (EC 0x25), CM and WnR
+  CHECK(xs_fault_access(0x82000007ull, far, pc) == XH_PROT_EXEC);   // instruction abort
+  CHECK(xs_fault_access(0x82000147ull, far, pc) == XH_PROT_EXEC);   // instruction abort: bits 6 and 8 mean nothing
+  CHECK(xs_fault_access(0, pc, pc) == XH_PROT_EXEC);                // no syndrome, at pc
+  CHECK(xs_fault_access(0, far, pc) == 0);                          // no syndrome: unknown
+}
+
 // ---- configuration ------------------------------------------------------------------------------
 static void test_config(const char *dir)
 {
@@ -1924,6 +1946,7 @@ int main(void)
   test_input_filter();
   test_input_script();
   test_filter();
+  test_fault_access();
   test_perf();
   test_discard();
   test_ramfix();

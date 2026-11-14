@@ -87,7 +87,10 @@ docs each item names. **Proven** = ran on the phone; **built** = compiled and ho
 12. **`pull-data` over wireless adb** (PR #25): the chunked copy has run on the stand-in only; check busybox's `dd`
     and `sha256sum` on the phone, `--verify end` against `--verify chunk`, a break and a resume.
 13. **Slow Home Screen** (0060): `oneios-ls-state:` and `oneios-icons-state:` lines; lsd's fixed start work stays.
-14. **WebKit** (`docs/newtodo.md` 10): the WebContent crash report's exception type decides the fix.
+14. **WebKit** (`docs/newtodo.md` 10): **cause found and fixed (fix-webkit-icache, 2026-11-14; PC only).** The crash
+    report's fault was JSC's i-cache flush (`dc cvau`) on the read-execute JIT alias, taken as a write because the
+    stub and the kernel dropped ESR ISS.CM. Fixed in the stub and in hosted 0070. On the phone (new runtime and
+    `kernel.kc`): no `.ips` with `sys_icache_invalidate`, WebContent stays up, Safari loads a page.
 
 ## Decisions waiting for the owner
 
@@ -97,7 +100,7 @@ docs each item names. **Proven** = ran on the phone; **built** = compiled and ho
   seed comparison.
 - `scripts/ios/{ios-sign,macho-check,make-tbds}.py` are still Python (not ported yet).
 - The token for `gh`: rerunning a failed CI job needs **Actions: Read and write**.
-- The WebKit agent of 2026-11-12 ran on Opus 4.8, not 5.5 (PR #5: diagnosis and a test only). Redo it on 5.5?
+- The WebKit agent of 2026-11-12 ran on Opus 4.8, not 5.5 (PR #5: diagnosis and a test only). Redo it on 5.5? (2026-11-14: done with the crash report: fix-webkit-icache on 5.5 found the cause and fixed it, item 14.)
 
 ## Fault detail (written by each fault's agent; newest notes first in each)
 
@@ -244,8 +247,33 @@ docs each item names. **Proven** = ran on the phone; **built** = compiled and ho
     content process (pids 300-331, ~20 in 20 s) logs, in order, `triggered unnest of range ... of DYLD shared
     region`, then `CODE SIGNING: ... vm_map_entry_reinit_code_signing_after_copy: curprot cannot be write+execute.
     removing execute access`, then crashes; after ~20 corpses iOS says `Too many corpses being created`. MobileSafari
-    sits at 70-101 % CPU (spinning on the content process it keeps losing). **Investigated 2026-11-12, not fixed; the
-    host side is proven sound, the cause is phone-specific and needs the crash report.** What was ruled in/out:
+    sits at 70-101 % CPU (spinning on the content process it keeps losing).
+    - **Cause found and fixed 2026-11-14 (fix-webkit-icache; built and tested on the PC, not on the phone).** The crash
+      report (phone, main `9f6dc38`, `com.apple.WebKit.WebContent-2026-11-14-060324.ips`): `EXC_BAD_ACCESS / SIGBUS,
+      KERN_PROTECTION_FAILURE at 0xc998c0000`, esr "(Data Abort) byte write Permission fault", thread 0 in
+      `libsystem_platform sys_icache_invalidate + 40` <- `JSC::LinkBuffer::finalizeCodeWithoutDisassemblyImpl` <-
+      `JSC::LLInt::createJSGateThunk` <- `JSC::LLInt::initialize()` <- `JSC::initialize()` <- `WebKit::InitializeWebKit2()`.
+      So JSC's first JIT thunk dies in its i-cache flush on the read-execute alias of the JIT region. Proven from the
+      code: the `dc cvau` is that alias's first access (the hosted pmap maps a page into the task only when it faults),
+      so it takes a data abort with ISS.WnR = 1 and ISS.CM = 1; Linux passes that ESR on whole; the stub read WnR
+      alone (`XH_PROT_WRITE`); the kernel's fill refused a write to the read-execute page, and its ESR (0002's
+      `hosted_trap_fault_esr`: a permission fault with WnR, CM dropped) made `inspect_data_abort` ask `vm_fault` for
+      write: KERN_PROTECTION_FAILURE, exactly the report's "byte write Permission fault". `test_jit` passed because
+      its RX alias was mapped before the thread ran (no fault), and qemu-user never faults on cache maintenance. The
+      host mapping of the RX alias was readable all along (`hosted_pte_prot` gives `READ | EXEC`). Fixed on both
+      sides: the stub (`xs_fault_access`: CM is a read; host test `test_fault_access`) and hosted **0070** (the same in
+      the kernel, also for the kernel's own faults; XNU gets CM and WnR as the hardware set them with an access flag
+      fault, so its own CM rule makes it a read; checked by `hosted_selftest=1`). Test: `test_jit_icache` in the test
+      kernel (`docs/booter.md` 2.6 and 6). Either half alone fixes it (a new runtime with the old kernel, or the new
+      kernel with the old runtime). **Proof on the phone** (a runtime and `kernel.kc` with the fix): no new
+      `com.apple.WebKit.WebContent-*.ips` with `sys_icache_invalidate` (or any `KERN_PROTECTION_FAILURE` in
+      `JSC::LLInt::initialize`) under `/private/var/mobile/Library/Logs/CrashReporter`; `oneios-tool ioslog show
+      data.img --proc com.apple.WebKit.WebContent` shows one long-lived content process per tab, not ~20 in 20 s, and
+      no `Too many corpses being created`; MobileSafari is not at 70-101 % CPU; Safari loads a page (a screenshot with
+      the page drawn). The `CODE SIGNING: ... removing execute access` line stays (benign, below). If WebContent still
+      dies, read its new `.ips`: the next fault is a different one.
+    - **Investigated 2026-11-12, not fixed then; the host side was shown sound for a resident RX alias, the cause
+      needed the crash report.** What was ruled in/out:
     - The **CODE SIGNING line is benign** and matches a real device: `vm_map_entry_reinit_code_signing_after_copy`
       strips execute from the **copy** of a `used_for_jit` entry (not the executable one) on every iOS map, because
       `VM_MAP_POLICY_ALLOW_JIT_COPY` is always false on iOS (`VM_MAP_IS_ALIEN` is unconditionally true). It fires
