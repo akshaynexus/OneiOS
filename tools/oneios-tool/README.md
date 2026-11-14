@@ -1628,7 +1628,7 @@ workflows run that script).
 
 ```sh
 tools/oneios-tool/tests/packagepy/compare-golden.sh     # 91 cases against pack.py's frozen output (made-up stages)
-runtime/package/test.sh                                 # 19 tests of the whole runtime/package.sh (needs the NDK)
+runtime/package/test.sh                                 # 22 tests of the whole runtime/package.sh (needs the NDK; 19 until 2026-11-14: 3 are runtime/package/elf-check.sh's, docs/releases.md)
 cargo test -p oneios-package                            # 6 tests: every rule and its message
 ```
 
