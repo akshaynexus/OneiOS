@@ -11,6 +11,7 @@
 #                      new file begun with the same first line, which the session goes on writing): a new file
 #   FAKE_CUT=FILE      a `tail -f` or `tail -F` that is running is cut off when FILE appears (the fake removes it):
 #                      adb dropping at the moment a test chooses
+#   FAKE_PUSH_CORRUPT=1  a pushed file arrives with one byte more (a copy that is not the file sent)
 #   FAKE_ADB_LOG=FILE  every call is appended to FILE
 #   FAKE_ROOT_LOG=FILE every script for root's shell (`su -c 'sh -s'`, on stdin) is appended to FILE, as the tool
 #                      sent it
@@ -20,8 +21,9 @@
 #                      /proc; FAKE_PROC=stand-in runs that path on Linux too). The tool's commands are the same.
 #
 # Commands: devices; [-s SERIAL] shell CMD; exec-out CMD; push LOCAL REMOTE; install [-r] [-d] APK.
-# In CMD every /data/... path becomes $FAKE_PHONE/data/... (and /proc/... the stand-in's /proc with
-# FAKE_PROC=stand-in: fake-rewrite.sh); `su -c X` runs X (`su -c 'sh -s'`: stdin); the
+# In CMD every /data/... path becomes $FAKE_PHONE/data/... and every /sys/... path $FAKE_PHONE/sys/... (and
+# /proc/... the stand-in's /proc with FAKE_PROC=stand-in: fake-rewrite.sh); `su -c X` runs X (`su -c 'sh -s'`:
+# stdin; after each such script the phone's drivers act, $FAKE_PHONE/.fake/drivers when a test made one); the
 # stage's bin/oneios_root.sh is tests/phone/fake-root.sh, which hands everything but switch and return to the
 # OneOS fork's own root script under its test root. dumpsys, getprop, pm and chown are stand-ins in $FAKE_PHONE/.fake/bin.
 set -u
@@ -80,7 +82,9 @@ shell|exec-out)
   exec bash -c "$cmd" ;;
 push)
   dst=$(printf '%s' "$3" | rewrite)
-  mkdir -p "$(dirname "$dst")" && cp -r "$2" "$dst" && echo "$2: 1 file pushed" ;;
+  mkdir -p "$(dirname "$dst")" && cp -r "$2" "$dst" || exit 1
+  [ -z "${FAKE_PUSH_CORRUPT:-}" ] || [ ! -f "$dst" ] || printf 'x' >> "$dst"
+  echo "$2: 1 file pushed" ;;
 install)
   shift
   while [ $# -gt 1 ]; do shift; done

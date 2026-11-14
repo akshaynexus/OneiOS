@@ -22,11 +22,14 @@ $(A)/oneios-display: src/launcher.c
 # Dynamic: it is loaded into app_process and calls the NDK's native-window API. ANativeWindow_setBuffersDataSpace
 # and _getBuffersDataSpace are libnativewindow's, not libandroid's: without -lnativewindow the library links (a
 # shared library may leave symbols undefined) but app_process cannot load it (the 2026-11-14 phone session:
-# "cannot locate symbol ANativeWindow_getBuffersDataSpace", the panel stayed on the OneOS splash). -Wl,-z,defs makes
-# any symbol that no named library has a link error here, not on the phone.
+# "cannot locate symbol ANativeWindow_getBuffersDataSpace", the panel stayed on the OneOS splash).
+# $(ANDROID_SO_LDFLAGS) (../host.mk: -Wl,-z,defs) makes any symbol that no named library has a link error here, not
+# on the phone. DISPLAY_LIBS is a variable for ../package/elf-check-test.sh: it links this rule with 1f7dd1f's
+# libraries (`-landroid -lm`) and expects the link to fail.
+DISPLAY_LIBS := -landroid -lnativewindow -lm
 $(A)/liboneios-display.so: src/jni.c src/xhd.c $(XHD_H)
 	@mkdir -p $(A)
-	$(ANDROID_CC) -std=gnu11 $(CFLAGS) $(WARN) -fPIC -shared -Wl,-soname,liboneios-display.so -Wl,-z,defs src/jni.c src/xhd.c -landroid -lnativewindow -lm -o $@
+	$(ANDROID_CC) -std=gnu11 $(CFLAGS) $(WARN) -fPIC -shared -Wl,-soname,liboneios-display.so $(ANDROID_SO_LDFLAGS) src/jni.c src/xhd.c $(DISPLAY_LIBS) -o $@
 $(A)/displayctl: src/displayctl.c src/xhd.c $(XHD_H)
 	@mkdir -p $(A)
 	$(ANDROID_CC) -std=gnu11 $(CFLAGS) $(WARN) -static src/displayctl.c src/xhd.c -lm -o $@

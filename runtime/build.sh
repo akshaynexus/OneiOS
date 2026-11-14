@@ -4,6 +4,9 @@
 #                                 bridges' helpers bin/oneios-audio and bin/oneios-net.sh, and the display helper
 #                                 (runtime/display): bin/oneios-display, bin/liboneios-display.so, lib/oneios-display.dex,
 #                                 and the phone checks: bin/gpuctl, bin/bridgectl, bin/wifictl, bin/brightctl, bin/batteryctl, bin/thermalctl, bin/displayctl, bin/camctl
+#                                 Then runtime/package/elf-check.sh STAGE: every dynamic ELF file of the stage (the display
+#                                 helper's library, oneios-audio, oneios-camera, camctl) must need only API 30 stubs of the
+#                                 NDK and find each undefined symbol in one of them, or the build fails (exit 1)
 #   runtime/build.sh --test       host unit tests of the loader and of xnuhost, then the Android binary
 #                                 booting the test kernel under qemu-aarch64 when that is installed (on a Mac: the
 #                                 whole host suite in an arm64 Linux container, runtime/host-tests.sh)
@@ -74,4 +77,8 @@ mkdir -p "$STAGE/lib"
 cp "$D/oneios-display.dex" "$STAGE/lib/oneios-display.dex"
 chmod 0644 "$STAGE/lib/oneios-display.dex"
 chmod 0755 "$STAGE/bin/xnuhost" "$STAGE/bin/oneios-audio" "$STAGE/bin/oneios-net.sh" "$STAGE/bin/oneios-display" "$STAGE/bin/liboneios-display.so"
+# Can Android load what was built? A shared object links with undefined symbols unless its link has -z defs
+# (host.mk: ANDROID_SO_LDFLAGS), and the phone then refuses it (liboneios-display.so, 2026-11-14): a stage with
+# such a file fails here, on the build machine (docs/building.md section 4).
+NDK="$NDK" "$ROOT/runtime/package/elf-check.sh" "$STAGE"
 echo "build: $STAGE/bin/xnuhost ($(wc -c < "$STAGE/bin/xnuhost" | tr -d ' ') bytes)"

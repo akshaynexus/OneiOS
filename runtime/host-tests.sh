@@ -4,7 +4,8 @@
 #                                  macOS: builds the Android parts here with the Mac's NDK (runtime/host.mk), then runs
 #                                  the suite in an arm64 Ubuntu 24.04 container of Apple's `container` tool (its own
 #                                  small VM, booted with the kernel below) with the checkout mounted at its own path,
-#                                  then runtime/package/test.sh here (it needs the NDK).
+#                                  then runtime/package/elf-check-test.sh and runtime/package/test.sh here (they need
+#                                  the NDK).
 #   runtime/host-tests.sh --kernel macOS: (re)build that kernel only, then stop
 #   runtime/host-tests.sh --suite  the suite alone, where it is (the container runs this, with STRICT=1 and PREBUILT=1:
 #                                  the Android xnuhost and test kernel are the Mac's and are never remade there)
@@ -17,6 +18,9 @@
 #   bridges   runtime/bridges/tests/host.sh: the unit tests, test-binder (a binderfs in a user namespace: it says
 #             "skipped" when the kernel has no binderfs), brightness, battery; the Android build when the NDK is there
 #   camera    runtime/bridges/camera/tests/host.sh
+#   links     runtime/package/elf-check-test.sh, when the NDK is there (on a Mac: on the Mac, after the container): the
+#             link rule of Android shared objects (-z defs, runtime/host.mk) and runtime/package/elf-check.sh, on the
+#             display helper's library as 1f7dd1f linked it (both must fail) and on a stage of runtime/build.sh
 #   package   runtime/package/test.sh, when the NDK is there (on a Mac it runs on the Mac, after the container)
 # The kernel (macOS): the default kernel of `container` has neither binderfs nor udmabuf and loads no modules. The first
 # run builds, once, Linux $KVER (kernel.org, SHA-256 checked) with the default kernel's own configuration
@@ -84,8 +88,10 @@ suite() {
   part display make -s -C runtime/display test
   part bridges runtime/bridges/tests/host.sh
   part camera runtime/bridges/camera/tests/host.sh
-  if ndk_ok; then part package runtime/package/test.sh
-  else results+=("package: skipped (no NDK here$( [ "${STRICT:-0}" = 1 ] && echo ': the Mac runs it'))"); fi
+  if ndk_ok; then
+    part links runtime/package/elf-check-test.sh
+    part package runtime/package/test.sh
+  else results+=("links, package: skipped (no NDK here$( [ "${STRICT:-0}" = 1 ] && echo ': the Mac runs them'))"); fi
 }
 
 if [ "${1:-}" = --suite ] || [ "$(uname -s)" = Linux ]; then
@@ -156,8 +162,9 @@ results=()
 container run --rm --progress none --cap-drop ALL --cap-add SETFCAP --kernel "$KERNEL" --cpus "$JOBS" --memory "$MEMORY" -e JOBS="$JOBS" -e STRICT=1 -e PREBUILT=1 \
   -v "$ROOT:$ROOT" -w "$ROOT" "$IMAGE" runtime/host-tests.sh --suite
 inside=$?
+part links runtime/package/elf-check-test.sh
 part package runtime/package/test.sh
-echo "==== host tests (macOS: runtime/package/test.sh)"
+echo "==== host tests (macOS: runtime/package/elf-check-test.sh, runtime/package/test.sh)"
 for r in "${results[@]}"; do echo "  $r"; done
 case "${results[*]}" in *FAIL*) exit 1 ;; esac
 exit $inside

@@ -459,8 +459,9 @@ Open, in order:
 ## 6. `phone`, `app` and `cycle`: the adb workflow, the fork's app, one test cycle (third Linux round)
 
 Written; **nothing of it ran on the real phone, and the app was not built or installed with it**. Crate
-`crates/oneios-phone` (`adb.rs`: the one phone and the rules; `phone.rs`; `sparse.rs`; `app.rs`). README "phone" and
-"app" have the commands and what the stand-in tests show (`tests/phone/run.sh` 76 checks, `tests/app/run.sh` 65,
+`crates/oneios-phone` (`adb.rs`: the one phone and the rules; `phone.rs`; `sparse.rs`; `app.rs`; `session.rs`: the
+commands that run only in a session, 2026-11-14). README "phone" and
+"app" have the commands and what the stand-in tests show (`tests/phone/run.sh` 200 checks since 2026-11-14, `tests/app/run.sh` 65,
 `tests/cycle/run.sh` 103; `tests/phone/modes.sh` runs them with the host's `/proc` and with the stand-in's own, macOS's
 only mode).
 
@@ -501,6 +502,17 @@ Open, in order:
    then correct the test's macOS expectations and `hole_block`. ext4 and f2fs through the kernel were not run on
    the Linux box either (a mount needs root); the phone's own file system does not matter (the copy is read
    there, written here).
+6. **The session's own commands on the phone** (`session.rs`: `phone display-restart`, `touch status|wake`,
+   `backlight status|set`; README "The session's own commands"; 2026-11-14, stand-in only). To check in a real
+   session, in this order: `touch status` and `backlight status` (read only: the node reads `1`, the level is in
+   1..12750, `control/base/backlight` has One UI's value); `backlight set N` and the level after `phone return`
+   (One UI's again); `touch wake` after iOS's display slept (the node reads `1` and touch works);
+   `display-restart` (the old helper leaves on SIGTERM, the new one's `layer up` and `first frame posted` are
+   printed, the picture is back, `phone return` still restores One UI); whether su's shell from adb is in init's
+   mount namespace (the command says `in init's mount namespace` or `through nsenter`); whether adb lets the
+   command go while the helper it started runs (`busybox setsid`, as `phone switch`); then
+   `display-restart --lib --dex` with a rebuilt helper and, after the return, `phone status` (`ready 1`: the
+   fork's preflight takes the rewritten `runtime.sha256`).
 
 ## Docs
 
