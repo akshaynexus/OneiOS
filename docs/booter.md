@@ -372,6 +372,23 @@ The same reading goes to the guest on the bridge's channel 6 (`drivers/thermal`)
   `tcp_input` (`compute_iaj_meat`'s `cur_iaj_dev * cur_iaj_dev`, a signed multiply of a wrapped `uint32_t`
   difference) came with a software-TLB fill's data abort and panicked iOS: "Unexpected fault in kernel physical
   aperture"; an app's `brk` (Swift traps, `__builtin_trap`) reached iOS as that fault too, not as `EXC_BREAKPOINT`.
+- **A cache maintenance fault is a read** (fix-webkit-icache, 2026-11-14). A `dc cvau`, `dc cvac`, `dc civac`,
+  `dc cvap` or `ic ivau` (the cache maintenance by address EL0 may run; Linux sets SCTLR_EL1.UCI and traps them only
+  for Cortex-A53 r0p0-r0p2 errata, not on the SM8650's cores) runs natively in the task process. On a page the
+  task's Linux process has not mapped (the hosted pmap maps a page into the task only when it faults) it takes a
+  data abort whose ESR has **ISS.WnR = 1 and ISS.CM = 1**; Linux treats it as a read (`is_write_abort` is WnR without
+  CM), finds no VMA and sends SIGSEGV with that ESR whole in `esr_context` (`set_thread_esr` sanitizes kernel
+  addresses only). The stub (`xs_fault_access`, `stub/stub_abi.h`) used to read WnR alone and said `XH_PROT_WRITE`;
+  the kernel's software TLB then refused to fill the read-execute page, and its ESR (a permission fault with WnR, no
+  CM) made `inspect_data_abort` ask `vm_fault` for write on a read-execute entry: KERN_PROTECTION_FAILURE. That was
+  WebKit's crash loop (phone, 2026-11-14 06:03): every WebContent process died in `sys_icache_invalidate` of its first
+  JIT thunk (`JSC::LLInt::createJSGateThunk`), on the read-execute alias of its JIT region, "byte write Permission
+  fault". Now the stub says `XH_PROT_READ` for CM, and hosted 0070 does the same on the kernel's side (also with an
+  older stub, and for the kernel's own faults) and hands XNU the fault with CM and WnR kept as the hardware set them
+  and an access flag fault (XNU's rule: CM with WnR is a write only for a permission fault). The fill maps the page
+  read-execute (`hosted_pte_prot`: AP read-only and UXN clear = `XH_PROT_READ | XH_PROT_EXEC`, the stub's
+  `PROT_READ | PROT_EXEC` of the RAM memfd), so the retried `dc cvau` reads a mapped page and goes on. qemu-user
+  runs these instructions as no-ops that never fault, so a PC boot cannot show the fault (section 6).
 - **Running a thread.** `thread_run(thread, state, trap)` releases the thread with the given registers (the
   handler returns through `rt_sigreturn`) and blocks the vCPU until the thread traps again: the vCPU "is in
   user mode". If the vCPU's interrupt line rises meanwhile, xnuhost signals the thread and it stops with
@@ -785,7 +802,7 @@ XnuPrelink and VerifiedRoot are the kernel's and the image set's. vphone-android
 | --- | --- | --- |
 | `runtime/loader`: `make test` | PC, ASan/UBSan | 150 checks pass: Mach-O and fileset parsing with DarwinBoot's rejected variants, the tree round trip and malformed trees, the board's tree, sidecars, placement in both `boot_args` layouts, hosted and firmware |
 | `runtime/xnuhost`: `test_xnuhost` | PC, ASan/UBSan | 149 checks pass: instruction decoding, MMIO emulation, the GIC by registers and by calls, system registers and PSCI, virtio block/GPU/input driven as a guest driver does, the seccomp filter run in a BPF interpreter, configuration, the Data store |
-| `make check-arm64` | the Android binary under `qemu-aarch64` | the test kernel's 59 checks pass |
+| `make check-arm64` | the Android binary under `qemu-aarch64` | the test kernel's checks pass (98 on 2026-11-14, with `test_jit_icache`) |
 | cross-build | NDK 28.2, `aarch64-linux-android30`, `-Wall -Wextra -Werror` | clean |
 
 The test kernel (`tests/testkernel.c`) is our own freestanding program wrapped as a Mach-O linked at
@@ -807,7 +824,17 @@ written (the two aliases share the physical page, so a store through one is fetc
 store is also in the kernel's own view of the page. This proves the host layer carries WebKit's separated-W^X-heaps
 JIT; the `msr sprr_uperm_el0` per-thread path is never taken, since the kernel leaves the commpage's fast-permissions
 byte zero. (Under qemu-user the host has no SELinux, so whether the phone's kernel permits a W+X mapping of the RAM
-memfd for a task is **not** covered here; see section 7.)
+memfd for a task is **not** covered here; see section 7.) And JSC's i-cache flush (`test_jit_icache`, 2026-11-14):
+code written through the RW alias of a MAP_JIT page, then `dc cvau` + `dsb ish` + `ic ivau` + `dsb ish` + `isb` on
+the **RX** alias and a branch to it, once with the RX alias mapped first (no fault) and once with it never touched,
+so that its first access is the `dc cvau`: a fault there must come as a read (`XH_PROT_READ`, ISS.CM in the ESR),
+after which the test kernel maps the page read-execute, as the kernel does, and the code runs. **What qemu cannot
+show:** qemu-user (11.1.3) runs `dc cvau`, `dc civac` and `ic ivau` as no-ops that never fault, even on an unmapped
+or `PROT_NONE` page (checked with a probe on 2026-11-14), so under `make check-arm64` the never-touched alias's
+first fault is the branch (the test prints a `NOTE`) and the cache maintenance fault path runs only on arm64
+hardware (the phone, or `check-arm64` on an arm64 Linux host, which runs the binary without qemu). The decision
+itself (an ESR with CM is a read, whatever WnR says) is checked on the host by `test_fault_access` in
+`test_xnuhost` with the hardware's syndromes, and on the kernel's side by `hosted_selftest=1` (0070).
 
 **Not covered anywhere**: qemu-user has no seccomp and no `process_vm_writev`, so the `svc #0x80` trap and
 `task_read/write` have run nowhere (the test prints SKIP). The filter's logic is tested in the interpreter

@@ -302,6 +302,73 @@ static void test_unmap_race(uint64_t task, uint64_t a, uint64_t code_va, uint64_
 // one is seen by an instruction fetch through the executable one. 0067 (fault 10): the hosted layer carries no
 // per-thread W^X (one Linux process cannot give two threads different permissions of one page), so WebKit must not
 // take the per-thread path; this checks the aliasing path it does take.
+// JSC's first JIT thunk (JSC::LLInt::createJSGateThunk -> LinkBuffer::finalizeCodeWithoutDisassemblyImpl ->
+// sys_icache_invalidate): code written through the RW alias of a MAP_JIT page, then `dc cvau` + `dsb ish` +
+// `ic ivau` + `dsb ish` + `isb` on the **RX** alias, then a branch to it. resident = 1: the RX alias is mapped first.
+// resident = 0: it is not (as on the phone, where the hosted pmap maps a page into the task only when it faults), so
+// the alias's first access is the dc cvau. On arm64 hardware that faults as a data abort with ISS.CM and WnR set: the
+// stub must say XH_PROT_READ (the kernel then maps the RX page and the dc cvau is retried). Taken as a write, iOS
+// failed it on the RX entry (phone 2026-11-14: every WebContent process, "byte write Permission fault"). qemu-user
+// runs dc cvau / ic ivau as no-ops that never fault, so under qemu the first access is the branch (an exec fault).
+static void test_jit_icache(int resident)
+{
+  const char *what = resident ? "jit icache (RX alias resident)" : "jit icache (RX alias never touched)";
+  uint64_t task = 0, thread = 0;
+  if (H->task_create(C0, &task) < 0) { put("SKIP "); put(what); put(": task_create\n"); return; }
+  uint64_t code_pa = page_alloc(), jit_pa = page_alloc();
+  uint32_t *c = (uint32_t *)(uintptr_t)kva(code_pa);
+  c[0] = 0x52816c05; c[1] = 0x72ba5005; c[2] = 0xb9000025;      // mov w5,#0xb60; movk w5,#0xd280,lsl16; str w5,[x1]
+  c[3] = 0x52800405; c[4] = 0x72ba8405; c[5] = 0xb9000425;      // mov w5,#0x20;  movk w5,#0xd420,lsl16; str w5,[x1,#4]
+  c[6] = 0xd50b7b22; c[7] = 0xd5033b9f; c[8] = 0xd50b7522;      // dc cvau,x2; dsb ish; ic ivau,x2
+  c[9] = 0xd5033b9f; c[10] = 0xd5033fdf; c[11] = 0xd61f0040;    // dsb ish; isb; br x2   (x2: "mov x0,#0x5b; brk #1")
+  H->text_fixup(C0, c, 12 * 4);
+  const uint64_t code_va = 0x110000000ull, exec_va = 0x190000000ull, write_va = 0x1d0000000ull;
+  check(H->task_map(C0, task, write_va, 0x4000, XH_PROT_READ | XH_PROT_WRITE | XH_PROT_EXEC, jit_pa) == 0 &&
+        H->task_map(C0, task, code_va, 0x4000, XH_PROT_READ | XH_PROT_EXEC, code_pa) == 0 &&
+        (!resident || H->task_map(C0, task, exec_va, 0x4000, XH_PROT_READ | XH_PROT_EXEC, jit_pa) == 0), what);
+  if (H->thread_create(C0, task, &thread) != 0) { check(0, "jit icache: thread_create"); H->task_destroy(C0, task); return; }
+  static struct xh_user_state st;
+  struct xh_trap trap;
+  zero(&st, sizeof st);
+  st.pc = code_va;
+  st.x[1] = write_va;
+  st.x[2] = exec_va;
+  int k = -1, faults = 0, cm_faults = 0, cm_as_write = 0, exec_faults = 0, other = 0;
+  for (int round = 0; round < 8; round++) {
+    int64_t r;
+    while ((r = H->thread_run(C0, thread, &st, &trap)) == 0 && trap.kind == XH_TRAP_INTERRUPT) irq_upcall(C0, NULL);
+    k = r == 0 ? (int)trap.kind : -1;
+    if (k != XH_TRAP_FAULT) break;
+    faults++;
+    if ((trap.far & ~0x3fffull) != exec_va) { other++; break; }
+    if (st.pc == code_va + 6 * 4 || st.pc == code_va + 8 * 4) {
+      // the cache maintenance on the RX alias faulted (arm64 hardware): a read, with ISS.CM in Linux's syndrome
+      cm_faults++;
+      if (trap.access != XH_PROT_READ || (trap.esr != 0 && !(trap.esr & (1ull << 8)))) cm_as_write++;
+      put("  "); put(what); put(": cache maintenance at pc "); hex(st.pc); put(" faulted: access ");
+      hex(trap.access); put(" esr "); hex(trap.esr); put("\n");
+    } else if (st.pc == exec_va) exec_faults++;
+    else { other++; break; }
+    // As the kernel does for a read or an execute fault on the RX entry: the page mapped read-execute, then retried.
+    if (H->task_map(C0, task, exec_va, 0x4000, XH_PROT_READ | XH_PROT_EXEC, jit_pa) != 0) { other++; break; }
+  }
+  int ran = k == XH_TRAP_BRK && st.x[0] == 0x5b && st.pc == exec_va + 4;
+  if (!ran || other) {
+    put("  "); put(what); put(": kind "); hex((uint64_t)(uint32_t)k); put(" x0 "); hex(st.x[0]); put(" pc "); hex(st.pc);
+    put(" far "); hex(trap.far); put(" faults "); hex((uint64_t)faults); put("\n");
+  }
+  check(ran && !other, resident ? "jit icache: dc cvau / ic ivau on the resident RX alias, then the code runs (x0 = 0x5b)"
+                                : "jit icache: dc cvau / ic ivau as the RX alias's first access, then the code runs (x0 = 0x5b)");
+  if (resident) check(faults == 0, "jit icache: no fault on the resident RX alias");
+  else {
+    check(!cm_as_write, "jit icache: a cache maintenance fault on the RX alias is a read (ISS.CM), not a write");
+    if (cm_faults == 0) put("NOTE jit icache: the cache maintenance did not fault (qemu-user runs dc cvau / ic ivau as no-ops); "
+                            "the RX alias's first fault was the branch\n");
+    check(cm_faults + exec_faults >= 1, "jit icache: the never-touched RX alias faulted once and was mapped read-execute");
+  }
+  check(H->thread_destroy(C0, thread) == 0 && H->task_destroy(C0, task) == 0, "jit icache: thread_destroy, task_destroy");
+}
+
 static void test_jit(void)
 {
   uint64_t task = 0, thread = 0;
@@ -348,6 +415,8 @@ static void test_jit(void)
   check(H->thread_destroy(C0, thread) == 0, "jit: thread_destroy");
   check(H->task_unmap(C0, task, exec_va, 0x4000) == 0 && H->task_unmap(C0, task, write_va, 0x4000) == 0, "jit: unmap the aliases");
   check(H->task_destroy(C0, task) == 0, "jit: task_destroy");
+  test_jit_icache(1);
+  test_jit_icache(0);
 }
 
 static void test_tasks(void)

@@ -177,10 +177,7 @@ void xs_handler(int signo, struct k_siginfo *info, struct k_ucontext *uc)
   } else if (signo == SIGSEGV || signo == SIGBUS) {
     trap->kind = XH_TRAP_FAULT;
     trap->far = info->addr;
-    unsigned ec = (unsigned)(trap->esr >> 26) & 0x3f;
-    if (ec == 0x20 || ec == 0x21) trap->access = XH_PROT_EXEC;
-    else if (ec == 0x24 || ec == 0x25) trap->access = (trap->esr & 0x40) ? XH_PROT_WRITE : XH_PROT_READ;
-    else if (info->addr == st->pc) trap->access = XH_PROT_EXEC;
+    trap->access = xs_fault_access(trap->esr, info->addr, st->pc);   // a cache maintenance fault (ISS.CM) is a read
   } else if (signo == SIGILL) {
     trap->kind = XH_TRAP_ILLEGAL;
     trap->far = st->pc;

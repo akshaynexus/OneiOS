@@ -86,7 +86,8 @@ struct xh_trap {
   uint64_t far;               // fault address (FAULT), instruction address (ILLEGAL, BRK)
   uint64_t esr;               // ESR_EL1 as Linux reported it, 0 if it did not
   uint32_t svc;               // SYSCALL: the svc immediate (0x80 for XNU's)
-  uint32_t access;            // FAULT: XH_PROT_* bit of the access that faulted, 0 if unknown
+  uint32_t access;            // FAULT: XH_PROT_* bit of the access that faulted, 0 if unknown (a cache
+                              // maintenance instruction, ESR ISS.CM: READ, though the hardware sets WnR)
   uint32_t insn;              // the instruction at the trap, when readable
   uint32_t exit_status;       // EXITED: the Linux wait status of the task process
 };

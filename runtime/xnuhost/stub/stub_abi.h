@@ -86,6 +86,25 @@ struct xs_service_page {
   struct xs_op ops[XS_OPS_MAX];
 };
 
+// The access a SIGSEGV or SIGBUS of a task thread was, as XH_PROT_* (0: unknown), from the syndrome in the signal
+// frame's esr_context (for a user address Linux passes the hardware's ESR whole: arch/arm64/mm/fault.c
+// set_thread_esr sanitizes kernel addresses only) and, without one, from whether the fault is at pc.
+// A data abort with ISS.CM = 1 is a cache maintenance instruction by address (dc cvau, dc cvac, dc civac, dc cvap,
+// ic ivau: what JSC's sys_icache_invalidate runs on the read-execute alias of its JIT region). The hardware reports it
+// with WnR = 1, but it needs read access only (Linux's is_write_abort and XNU's inspect_data_abort take it as a read):
+// a write here made the kernel refuse the fill of the read-execute page and fail the fault (docs/booter.md 2.6).
+#define XS_ESR_EC_SHIFT 26
+#define XS_ESR_WNR      (1ull << 6)
+#define XS_ESR_CM       (1ull << 8)
+static inline uint32_t xs_fault_access(uint64_t esr, uint64_t far, uint64_t pc)
+{
+  unsigned ec = (unsigned)(esr >> XS_ESR_EC_SHIFT) & 0x3f;
+  if (ec == 0x20 || ec == 0x21) return XH_PROT_EXEC;                       // instruction abort (lower EL, same EL)
+  if (ec == 0x24 || ec == 0x25) return (esr & XS_ESR_WNR) && !(esr & XS_ESR_CM) ? XH_PROT_WRITE : XH_PROT_READ;
+  if (far == pc) return XH_PROT_EXEC;
+  return 0;
+}
+
 _Static_assert(sizeof(struct xs_trap_page) <= XS_OPS_OFF, "the trap page is one 4 KiB page");
 _Static_assert(XS_OPS_OFF + XS_THREAD_OPS * sizeof(struct xs_op) <= XS_SLOT_SIZE, "a thread's deferred maps fit its slot");
 _Static_assert(sizeof(struct xs_service_page) <= XS_SLOT_SIZE, "the service page fits a slot");

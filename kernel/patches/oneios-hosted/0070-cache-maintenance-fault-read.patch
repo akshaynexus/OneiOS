@@ -1,0 +1,103 @@
+diff --git a/osfmk/arm64/hosted/hosted_machine.c b/osfmk/arm64/hosted/hosted_machine.c
+--- a/osfmk/arm64/hosted/hosted_machine.c
++++ b/osfmk/arm64/hosted/hosted_machine.c
+@@ -447,7 +447,9 @@
+ 	hosted_stats.kernel_faults++;
+ 	/* The software TLB: the page tables may already allow what the host mapping does not have yet. */
+ 	if (ec == ESR_EC_DABORT_EL1 || ec == ESR_EC_IABORT_EL1) {
+-		uint32_t access = ec == ESR_EC_IABORT_EL1 ? XH_PROT_EXEC : (esr & ISS_DA_WNR) ? XH_PROT_WRITE : XH_PROT_READ;
++		/* 0070: a cache maintenance instruction (ISS.CM) reports WnR but reads the page (hosted_user.c) */
++		uint32_t access = ec == ESR_EC_IABORT_EL1 ? XH_PROT_EXEC :
++		    ((esr & ISS_DA_WNR) && !(esr & ISS_DA_CM)) ? XH_PROT_WRITE : XH_PROT_READ;
+ 		if (hosted_kernel_fill(frame->far, access)) {
+ 			hosted_stats.kernel_fills++;
+ 			hosted_frame_resume(frame);
+diff --git a/osfmk/arm64/hosted/hosted_user.c b/osfmk/arm64/hosted/hosted_user.c
+--- a/osfmk/arm64/hosted/hosted_user.c
++++ b/osfmk/arm64/hosted/hosted_user.c
+@@ -321,12 +321,37 @@
+ #endif
+ }
+ 
++/*
++ * 0070: a cache maintenance instruction by address that faults (the ones EL0 may run: dc cvau, dc cvac, dc civac,
++ * dc cvap, ic ivau) reports a data abort with ISS.WnR = 1 and ISS.CM = 1. It needs read access to the page only
++ * (Linux's is_write_abort and XNU's inspect_data_abort take it as a read): JSC's sys_icache_invalidate of a new
++ * thunk on the read-execute alias of its JIT region, whose first access is that dc cvau when the host has not
++ * mapped the alias yet. Taken as a write, the fill refused it and vm_fault failed it on the read-execute entry:
++ * KERN_PROTECTION_FAILURE, "byte write Permission fault", every WebContent process at JSC::initialize.
++ * Linux passes the hardware's ESR of a user address whole (set_thread_esr sanitizes kernel addresses only).
++ */
++static inline bool
++hosted_esr_is_cache_maintenance(uint64_t esr)
++{
++	return ESR_EC(esr) == ESR_EC_DABORT_EL0 && (esr & ISS_DA_CM) != 0;
++}
++
++/* sleh.c's is_permission_fault (static there): the fault codes inspect_data_abort takes CM with WnR as a write for */
++static inline bool
++is_hosted_permission_fsc(uint32_t fsc)
++{
++	return fsc >= FSC_PERMISSION_FAULT_L1 && fsc <= FSC_PERMISSION_FAULT_L3;
++}
++
+ /* The access a user fault was, as XH_PROT_* bits. */
+ static uint32_t
+ hosted_trap_access(const struct xh_trap *trap, uint64_t pc)
+ {
+ 	uint32_t ec = (uint32_t)ESR_EC(trap->esr);
+ 
++	if (hosted_esr_is_cache_maintenance(trap->esr)) {
++		return XH_PROT_READ;    /* 0070: also from a stub that said XH_PROT_WRITE for it (xnuhost before 0070) */
++	}
+ 	if (trap->access != 0) {
+ 		return trap->access;
+ 	}
+@@ -360,6 +385,15 @@
+ 			return esr;
+ 		}
+ 	}
++	if (hosted_esr_is_cache_maintenance(esr)) {
++		/*
++		 * 0070: CM and WnR as the hardware set them, so the thread state says what the instruction was; the fault
++		 * an access flag fault, not a permission fault: inspect_data_abort takes CM with WnR as a write only when
++		 * it is a permission fault. As with the permission fault below, arm_fast_fault is tried before vm_fault.
++		 */
++		return ((uint64_t)ESR_EC_DABORT_EL0 << ESR_EC_SHIFT) | ESR_IL | (esr & (ISS_DA_CM | ISS_DA_WNR)) |
++		       FSC_ACCESS_FLAG_FAULT_L3;
++	}
+ 	if (access & XH_PROT_EXEC) {
+ 		return ((uint64_t)ESR_EC_IABORT_EL0 << ESR_EC_SHIFT) | ESR_IL | FSC_PERMISSION_FAULT_L3;
+ 	}
+@@ -966,6 +1000,31 @@
+ 	}
+ 	printf("hosted selftest: copyio and user mode\n");
+ 
++	/*
++	 * 0070: the syndrome a user fault reaches XNU with. A cache maintenance fault as the hardware reports it (CM and
++	 * WnR, a translation fault: dc cvau on a page the host has not mapped), with the stub of an older xnuhost that
++	 * said XH_PROT_WRITE for it, must be a read by inspect_data_abort's rule (a write only with WnR and either no CM
++	 * or a permission fault); a store stays a write.
++	 */
++	{
++		const uint64_t dabt = ((uint64_t)ESR_EC_DABORT_EL0 << ESR_EC_SHIFT) | ESR_IL;
++		struct xh_trap cm = { .kind = XH_TRAP_FAULT, .far = 0x100004000ULL, .access = XH_PROT_WRITE,
++			              .esr = dabt | ISS_DA_CM | ISS_DA_WNR | FSC_TRANSLATION_FAULT_L3 };
++		struct xh_trap st = cm;
++		uint64_t       far = 0, esr;
++
++		st.esr = dabt | ISS_DA_WNR | FSC_TRANSLATION_FAULT_L3;
++		esr = hosted_trap_esr(&cm, 0x100000000ULL, &far);
++		bool cm_read = hosted_trap_access(&cm, 0x100000000ULL) == XH_PROT_READ && far == cm.far &&
++		    ESR_EC(esr) == ESR_EC_DABORT_EL0 && (esr & ISS_DA_CM) && (esr & ISS_DA_WNR) &&
++		    !is_hosted_permission_fsc((uint32_t)ISS_DA_FSC(esr));
++		esr = hosted_trap_esr(&st, 0x100000000ULL, &far);
++		bool st_write = hosted_trap_access(&st, 0x100000000ULL) == XH_PROT_WRITE && !(esr & ISS_DA_CM) &&
++		    (esr & ISS_DA_WNR) && is_hosted_permission_fsc((uint32_t)ISS_DA_FSC(esr));
++		hosted_selftest_check(cm_read && st_write,
++		    "a cache maintenance fault (CM, WnR) reaches XNU as a read with CM kept; a store as a write");
++	}
++
+ 	const vm_size_t size = 8 * PAGE_SIZE, span = 3 * PAGE_SIZE + 123;
+ 	pmap_t   pmap = pmap_create_options(NULL, 0, PMAP_CREATE_64BIT);
+ 	vm_map_t map = vm_map_create_options(pmap, 0x100000000ULL, 0x1000000000ULL, VM_MAP_CREATE_DEFAULT);
