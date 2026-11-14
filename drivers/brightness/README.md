@@ -250,8 +250,9 @@ the panel at off, brings the level back and wakes the IC at on (`runtime/bridges
 backboardd makes that call at the lock in this guest [U] is what that line says; without it the IC is never slept.
 
 Tests: `test_bl_request.c` (`drivers/tests/host.sh`): 2038 checks, with the 31/63-bit floats, the 16.16 positions
-(0, 0.42, 1, a hair over 1, 2, negative) and the nits levels with and without a cap. **Not compiled into a kernel
-yet** at the time of writing (`docs/hardware.md` 7a has the state); not run on the phone.
+(0, 0.42, 1, a hair over 1, 2, negative) and the nits levels with and without a cap. Compiled into the kernel of
+2026-11-14 (`HOSTED_OUT=fixbr`, prelink audit 0 failures, stubs 666 good); **not run on the phone**.
+(`docs/hardware.md` 7a has the state.)
 
 ## Only a session can show
 

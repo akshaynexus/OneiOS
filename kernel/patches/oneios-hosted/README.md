@@ -1091,6 +1091,8 @@ answered, a call on `IOMobileFramebufferUserClient` with selector 12 and one sca
 off: backboardd[N] asked its framebuffer (power change 0, answered 0x...)` and sends `OB_BRIGHT_POWER`: the host sleeps
 the touch IC and floors the panel at off, brings both back at on (`runtime/bridges/brightness/README.md`). The method's
 answer and arguments are not changed. `oneios-display-power-hook=0`: not passed. Checked: the patched file passes the
-kernel's recorded compile command with `-fsyntax-only` (the records of a tree with 0001-0066); the kernel build, the
-prelink and a boot are the next step. Whether backboardd calls it at the lock in this guest is [U] until a phone boot's
+kernel's recorded compile command with `-fsyntax-only`; built on the Linux PC (2026-11-14, `HOSTED_OUT=fixbr`, series through
+0069, xnu.macho 122efae5, 974 s); prelinked: audit 0 failures (2711 paired), `stubs-check` 666 good, 0 bad (kernel.kc
+7632e390). Not booted; the
+PC cannot press a phone's power key into a lit display. Whether backboardd calls it at the lock in this guest is [U] until a phone boot's
 log shows the line.

@@ -1620,8 +1620,9 @@ Details and the phone test: `runtime/bridges/brightness/README.md`, `drivers/bri
   off and wakes it at on, and every power-key press wakes it (xnuhost's evdev reader). The return writes One UI's value
   and wakes the IC as before. Host tests: `test_bl_request` 2038, the bridge's brightness 81, `runtime/bridges/tests`
   (the channel's `OB_BRIGHT_POWER`), xnuhost (the power-key hook); the driver compiles (`oneios-tool kernel drivers
-  --check`) and the patched `IOUserClient.cpp` passes the kernel's recorded compile command (`-fsyntax-only`); the
-  kernel build and a boot are not done in this change. Details: `drivers/brightness/README.md` ("The slider, the cap
+  --check`); the kernel with hosted 0069 and the new driver built (HOSTED_OUT=fixbr, xnu.macho 122efae5) and prelinked (audit 0
+  failures, stubs 666 good, kernel.kc 7632e390); the
+  boot is not done (not on the PC: no phone panel, touch IC or power key there). Details: `drivers/brightness/README.md` ("The slider, the cap
   and nits 0"), `runtime/bridges/brightness/README.md` ("The touch IC follows the display").
 - **Why the slider did nothing** (phone, 2026-11-12): vmm-present makes MobileGestalt answer `IsVirtualDevice`, and
   24A446's CoreBrightness then runs `VMBLControl` (log: `Set VM Mode 3 BLControl`), which sends brightness to a
