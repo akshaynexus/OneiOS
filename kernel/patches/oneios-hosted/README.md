@@ -940,7 +940,13 @@ no transport opened). For the processes of the boot argument `oneios-iokit=NAME[
   `IORegistryEntrySearchCFProperty` uses): name, plane, recursive or not, the entry, found or not;
 - user client opens (`io_service_open_extended`): class, type, result;
 - kernel controls looked up by name (`CTLIOCGINFO`, `bsd/kern/kern_control.c`): `kernel control
-  "com.apple.uart.sk.bluetooth" -> id N` or `-> not registered (errno 2)`.
+  "com.apple.uart.sk.bluetooth" -> id N` or `-> not registered (errno 2)`;
+- `kern.hv_vmm_present` reads (`bsd/kern/hvg_sysctl.c`, after Droid-VM-UniXNU's `owner-hide-vmm`; added 2026-11-14):
+  `sysctl kern.hv_vmm_present -> 1 (a virtual machine)` for a traced process, and for any process the boot argument
+  `owner-hide-vmm=NAME,...` applied to (matched on `proc_best_name`, the long name), once per process:
+  `-> 0 (the virtual machine hidden by owner-hide-vmm)`. A daemon that decides "virtual" with no such line asked
+  something else (MobileGestalt's cached `IsVirtualDevice`, the device tree's `/defaults vmm-present`: the latter shows
+  as a `property "vmm-present"` line).
 
 A request is logged when first made, when its answer changes, and at its 16th, 64th, 256th, ... asking (a polling loop
 shows with its count), at most 800 lines a boot. The property wrappers rename the original routines

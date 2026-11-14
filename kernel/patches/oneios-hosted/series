@@ -192,7 +192,9 @@
 # transport). Boot argument oneios-iokit=NAME[,NAME...] (default bluetoothd,BlueTool; - for none): one oneios-iokit:
 # line per distinct IOKit matching lookup, matching notification, registry path, property read (name, plane, entry),
 # user client open and kernel control looked up by name (CTLIOCGINFO), again when its answer changes and at the 16th,
-# 64th, 256th asking; at most 800 lines. A debugging aid, nothing else changes.
+# 64th, 256th asking; at most 800 lines. Since 2026-11-14 also kern.hv_vmm_present as a process read it (bsd/kern/
+# hvg_sysctl.c): for the traced processes, and once for every process owner-hide-vmm hid the virtual machine from.
+# A debugging aid, nothing else changes.
 0062-iokit-hardware-probe-trace.patch
 # hang (2026-11-13): 0058's give-back in long runs. Each cold free page brings the free, held pages next to it in
 # physical memory (oneios-free-report-run=PAGES, 256; 1: 0058's way), batches of up to 1024 pages when the free queues
