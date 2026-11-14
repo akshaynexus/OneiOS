@@ -769,6 +769,14 @@ oneios-tool phone image-check                 # the staged manifest.json against
 oneios-tool phone manifest DIR [--out FILE] [--stage]   # the phone's manifest.json with DIR's files' entries set to theirs
 oneios-tool phone switch [--version-code N]   # busybox setsid sh oneios_root.sh switch <the installed app's versionCode> 1
 oneios-tool phone return [--timeout 180] [--note TEXT]   # session/return.request, then waits for "One UI restored"
+# only during a session (refused without one; "The session's own commands" below):
+oneios-tool phone display-restart [--lib PATH] [--dex PATH] [--timeout 30] [--kill-after 3]
+                                              # end the display helper (control/display.pid) and start it as the switch does;
+                                              #   waits for `first frame posted` in control/display.log
+oneios-tool phone touch status                # /sys/class/sec/tsp/enabled: 1 on, 0 off (read only)
+oneios-tool phone touch wake                  # 2,0 then 2,1 to that node, then reads it back
+oneios-tool phone backlight status            # the panel's level, max_brightness, One UI's own value (read only)
+oneios-tool phone backlight set N             # 1..max_brightness (12750); the return writes One UI's own value back
 oneios-tool phone pull-data OUT [--ioslog]    # data/data.img in chunks, each checked against the phone's sha256, zero runs as holes;
                                               #   run again after a stop and it goes on (OUT.part, OUT.part.progress)
                                               #   [--chunk MIB] [--retries 5] [--backoff 2] [--stall 120] [--verify chunk|end] [--restart]
@@ -782,11 +790,15 @@ The rules of `docs/building.md` section 6 are in the tool (`crates/oneios-phone/
   (KernelSU's root does not survive a restart of the phone). Nothing is changed then.
 - **Named files only.** No command sends `find`, `ls -R`, `du` or any walk of a tree to the phone (a walk of
   sysfs or /proc panicked the phone's kernel on 2026-11-12). `stage image` lists the *local* folder.
-- **Nothing but status, return and log runs beside a session.** A session is open when `session/xnuhost.pid` names a live
-  process that is still an xnuhost (stage.sh's test). `sums` refuses too, which stage.sh's does not: it reads the
-  whole kernel collection.
+- **Nothing but status, return, log and the session's own commands runs beside a session.** A session is open when
+  `session/xnuhost.pid` names a live process that is still an xnuhost (stage.sh's test). `sums` refuses too, which
+  stage.sh's does not: it reads the whole kernel collection.
+- **The session's own commands run only in a session** (`display-restart`, `touch`, `backlight`): without one they
+  are refused and nothing is changed, because the display helper, the touch IC and the panel's level are One UI's
+  then.
 - **No restart, nothing under `/sys/power`**, and nothing of One UI's is written: only the stage, through the
-  fork's root script or stage.sh's own commands.
+  fork's root script or stage.sh's own commands, and in a session the touch IC's node and the panel's level, which
+  the return hands back to One UI.
 - Words that go into a script for root's shell (file names, `runtime.json`'s fields, the note of `return`) are
   refused or cut down unless they are letters, digits and `._+-/,`.
 
@@ -862,7 +874,8 @@ What each does:
     in the main checkout, or `ONEIOS_DSC_INDEX`). It is not line by line: the analysis is of the log so far.
 
 ```sh
-tools/oneios-tool/tests/phone/run.sh          # 106 checks against the stand-in phone (30 of them usb.sh: ONEOS_DIR=a fork checkout with --usb-watch); ALL OK
+tools/oneios-tool/tests/phone/run.sh          # 200 checks against the stand-in phone (94 of them session-cmds.sh: display-restart, touch, backlight;
+                                              #   30 of them usb.sh: ONEOS_DIR=a fork checkout with --usb-watch); ALL OK
 tools/oneios-tool/tests/cycle/run.sh          # phone log, status --watch and cycle: 95 checks; ALL OK
 tools/oneios-tool/tests/phone/modes.sh        # phone, app and cycle in each /proc mode this host has (below); ALL OK
 FAKE_PROC=stand-in tools/oneios-tool/tests/phone/run.sh   # one suite with the stand-in's own /proc (macOS's way)
@@ -917,6 +930,149 @@ suite's process group while a session ran stopped it with none left, in both mod
 5 passed. Before the change, on the same box: the host mode passed (phone 73, cycle 90 checks); the stand-in's
 `/proc` pointed at nothing (the Mac's case) failed 12 and 31 (above). **Linux only**: macOS itself was not run
 here; there, `stand-in` is the only mode, and the GNU tools and perl's setsid are the Mac's.
+
+### The session's own commands (`display-restart`, `touch`, `backlight`)
+
+In the session of 2026-11-14 the Mac went to adb and scripts three times because the CLI had no command: to start
+the display helper again (it had failed mid-session from a library fault, fixed since in `f7bb1c3`), to wake the
+touch IC (`2,0` then `2,1` to `/sys/class/sec/tsp/enabled`, after a brightness of 0 had put it to sleep), and to
+set the panel's level (5350 written to `/sys/class/backlight/panel0-backlight/brightness`). These are those three
+(`crates/oneios-phone/src/session.rs`). **Not run on the phone yet**: written and tested against the stand-in.
+
+What all of them keep:
+- Root first, then **a session, or a refusal** (`no session is open: ... is One UI's while no session runs`):
+  without a session the display helper, the touch IC and the panel's level are One UI's, and nothing is written.
+- **xnuhost and iOS are never touched**: no signal, no file of `session/` written, nothing asked of the guest.
+- **The return works during and after each.** The new helper's pid is in `control/display.pid`, where the return
+  looks for it; the return writes One UI's own backlight value back; a restart that is waiting for its helper
+  when a return comes ends with status 1 and the return goes on (tested).
+- **Named files only**: `control/display.pid`, `control/display.log`, `control/state`, `control/base/backlight`,
+  `session/return.request` (its existence), `/proc/PID/cmdline` of the one pid a pid file names,
+  `/proc/PID/ns/mnt` of the script's own shell and of init, `/proc/PID/oom_score_adj` of the helper it started,
+  `/sys/class/sec/tsp/enabled`, `/sys/class/backlight/panel0-backlight/brightness` and `max_brightness`,
+  `/sys/fs/cgroup/oneios_session/cgroup.procs`. No listing, no `pidof` or `pkill`, nothing under `/sys/power`
+  (a unit test and a stand-in check hold the list).
+
+**`phone display-restart [--lib PATH] [--dex PATH] [--timeout 30] [--kill-after 3]`**
+
+1. *The local files first.* `--lib` must be an arm64 shared object and `--dex` a dex (the first bytes), else the
+   command stops before the phone is asked anything (a host build, or the two options swapped).
+2. *The session's state.* Refused while the switch is still starting the session (`control/state` `starting`: the
+   switch starts the helper itself) and while a return is under way (`control/state` `returning`, `returned` or
+   `failed`, or `session/return.request` is there: the return ends the helper). The script that stops and starts
+   the helper looks again itself (the session check, `control/state`, `session/return.request`) before it does
+   either: a session that ended or began to return after the tool looked is refused there, with nothing stopped
+   or started.
+3. *`--lib`, `--dex`.* The file is pushed to `/data/local/tmp/oneios-display-tmp/` and root's script takes it from
+   there: the staged file (`runtime/bin/liboneios-display.so`, `runtime/lib/oneios-display.dex`) must be there and
+   listed in `runtime.sha256`; the pushed copy's SHA-256 must be the local file's; it is copied beside the staged
+   file as `.part` (root's, the staged file's mode), hashed again, and renamed over it. The SHA-256 is printed for
+   both sides (`--lib: local SHA PATH`, `--lib: phone SHA runtime/bin/...`). A copy on the phone that differs is
+   refused: the staged file and the lists stay as they were, the pushed copy is removed and the running helper is
+   not touched.
+   **The runtime's lists are updated, not left** (the file's lines in `runtime.sha256` and `runtime.ids`, the way
+   `stage image` rewrites `image.sha256` and `image.ids`). The reason: the fork's preflight hashes every file of
+   the runtime against `runtime.sha256` and refuses the switch when one differs (`oneios_switch.sh`,
+   `check_list runtime full`), and `phone sums` prints that list, not a new hash; the cycle's `stage` step decides
+   by it whether to stage the runtime. A list left alone would name a file that is no longer there: the next
+   switch refused (`runtime/bin/liboneios-display.so does not match its SHA-256`), and `sums` and the cycle saying
+   the runtime is the package's when it is not. With the lines rewritten the lists say what is staged: the next
+   switch starts with the new helper files, `phone sums` (after the return; it refuses in a session) shows them,
+   and a cycle whose package has other files stages the runtime again. What stays as it was: `runtime.conf`'s
+   version and the entry in the staged `runtime/runtime.json`, so the staged runtime is no longer the package they
+   name; the command says so, and `phone stage runtime DIR` puts a whole package back. This is the one change of
+   the stage that is made while a session is open: the two files are read by the helper on One UI's side only.
+4. *The old helper.* By `control/display.pid`, and only a pid whose `/proc/PID/cmdline` holds `OneiOSDisplay` or
+   `oneios-display` (the test of the fork's `end_display`): SIGTERM (the helper removes its layers and exits 0),
+   and SIGKILL when it is still there after `--kill-after` seconds (surfaceflinger drops a dead client's layers).
+   A pid that is gone, or that another process has by now, is left alone and said. /proc is not walked: a helper
+   started by hand without the pid file is not found; it leaves when the new one connects (xnuhost serves one
+   helper and closes the older one's socket: `runtime/display/README.md`, "Leaving").
+5. *The new helper: the switch script's own command.* The fork has no way to start the helper again: `oneios_root.sh`
+   has no verb for it and `oneios_switch.sh` no mode (read at OneOS `oneios` `3876dd5`: its modes are the session,
+   `--check`, `--inner`, `--watch`, `--keys`, `--keys-poll`, `--feed`, `--bootui`, `--stop-loop`, `--usb-save`,
+   `--usb-watch`, `--clocks-save`, `--clocks-tops`). So the tool sends the lines the switch runs ("The guest's
+   screen" in `oneios_switch.sh`), built from named files of the stage:
+
+   ```sh
+   # DH=/data/local/tmp/oneios/runtime/bin/oneios-display: a regular file, executable, root's, not writable by others
+   $NS /data/adb/ksu/bin/busybox setsid "$DH" --session /data/local/tmp/oneios/session --takeover --wait 60 \
+       </dev/null >>/data/local/tmp/oneios/control/display.log 2>&1 &
+   echo $! > /data/local/tmp/oneios/control/display.pid
+   echo 0 > /proc/$!/oom_score_adj
+   echo $! > /sys/fs/cgroup/oneios_session/cgroup.procs
+   ```
+
+   The same file with the same checks and arguments, stdin, log file and pid file, the same OOM score and cgroup
+   (so the return's cgroup kill gets it too). The socket is the session's (`--session <stage>/session`, where
+   xnuhost serves `display.sock`). The user is root and the environment is su's, as the switch's is; `CLASSPATH`
+   is set by the launcher itself (`runtime/display/src/launcher.c`), which also finds the library and the dex next
+   to itself. The switch does not change its own nice level before it starts the helper (only its watcher and key
+   readers are reniced), so neither does this. The switch runs in init's mount namespace and enters it with
+   `nsenter -t 1 -m` when its shell is in another; `$NS` is that `busybox nsenter -t 1 -m --` when
+   `/proc/$$/ns/mnt` is not init's, and empty otherwise. A unit test compares the start line with the switch's.
+6. *Ready.* `control/display.log`'s size is noted before the start and only what the log gains is read, twice a
+   second; each whole line is printed once (a line still being written waits for the next look). The command ends
+   with status 0 at `oneios-display: first frame posted` (the helper posts the whole frame right after `layer up`,
+   without waiting for a flush from xnuhost), and says whether the session is still open. A helper that ended
+   before that (two looks in a row: its pid is no helper any more) is status 1 with its last lines, which is how
+   the fault of 2026-11-14 would have read (`cannot locate symbol ...`). After `--timeout` seconds without the
+   line it is status 1 with the log's last lines; the helper is left running (it waits 60 s for xnuhost's socket).
+
+**`phone touch status`, `phone touch wake`.** `status` reads `/sys/class/sec/tsp/enabled` (`1`: on, `0`: off).
+`wake` writes `2,0` and then `2,1` to it (display state 2 "on", event 0 "early" then 1 "late": what One UI's input
+HAL writes when the panel comes on, and what the brightness bridge writes when iOS's level leaves 0,
+`runtime/bridges/brightness/README.md`), reads it back and prints it; status 1 when it does not read `1`. Only
+that one named node: the bridge's own search of `tsp*` folders is not repeated here.
+
+**`phone backlight status`, `phone backlight set N`.** `status` prints
+`/sys/class/backlight/panel0-backlight/brightness`, `max_brightness` beside it, and One UI's own value as the
+switch recorded it (`control/base/backlight`). `set N` takes 1 to `max_brightness` (12750 on this phone; 0 is
+refused: it would turn the panel off), writes it, reads it back, and says that the return writes One UI's own
+value back. Two things about what happens to the value afterwards (read in the code, not seen on the phone):
+- *iOS's next brightness change writes over it*: xnuhost's brightness bridge writes the node whenever iOS's level
+  changes, and knows nothing of a manual write.
+- *The return restores One UI's value through the fork's script, not reliably through the bridge.* The fork's
+  `oneios_return.sh` writes `control/base/backlight` back once xnuhost is gone, whatever the node holds. The
+  bridge's own close (`br_bright_close` in `runtime/bridges/brightness/brightness.c`) calls `panel_write` with One
+  UI's value, and `panel_write` skips a value equal to the last one *the bridge* wrote: when iOS's level is where
+  it started (or iOS's last level happens to be One UI's value), the bridge writes nothing at its close and a
+  manual level would stay, were it not for the fork's write. That is the bridge's code (fix-brightness-touch's),
+  not changed here.
+
+The stand-in for them (`tests/phone/session-cmds.sh`, sourced by `tests/phone/run.sh`; a phone of its own): a
+display helper in the staged runtime (`fake-display.sh`, which needs its library and dex beside it and writes the
+real helper's lines; flag files make it end at once with the 2026-11-14 linker error, never get ready, write its
+readiness line in two pieces, or ignore SIGTERM); the stand-in session starts it as the switch does and the
+stand-in return ends it by `control/display.pid`, writes `control/state`, and records and restores
+`control/base/backlight` (`fake-session.sh`); `/sys/...` in what the tool sends becomes the stand-in's own
+`FOLDER/sys/...` (`fake-rewrite.sh`), which holds `tsp/enabled`, the panel's two nodes and the cgroup's
+`cgroup.procs`; after each root script the stand-in's "drivers" act (`.fake/drivers`: `tsp/enabled` reads `1`
+after `2,1` was written to it, or stays `0` for an IC that does not wake); `readlink` and `nsenter` stand-ins
+answer `/proc/PID/ns/mnt` and note the `nsenter` call; `FAKE_PUSH_CORRUPT=1` makes a pushed file arrive with one
+byte more.
+
+Result, Linux x86_64, 2026-11-14 (`tests/phone/modes.sh`): `host` mode: phone 200 checks (106 before; the 94 new
+ones are `session-cmds.sh`'s), app 65, cycle 103, all ok; `stand-in` mode (the stand-in's own `/proc`, macOS's
+way): the same counts, all ok; no stand-in session and no stand-in helper left after any suite; the phone suite
+three times in each mode. `cargo test -p oneios-phone`: 15 passed (4 of them `session.rs`'s: the start line against
+the switch's and the script's own look at the session, the named
+files, the touch and backlight commands, the library and dex checks). What the 94 cover: every command refused
+without a session (and with a pid file that names a process that is not an xnuhost), root asked for first; a
+restart that works (the old helper ended by SIGTERM, the new one with the switch's arguments, pid file, log and
+cgroup; only what the log gained printed; xnuhost the same process); through `nsenter` from another mount
+namespace; a readiness line written in two pieces; an old helper that takes a SIGKILL; a pid file that names a
+process that is gone, and one that names another process (not signalled); a helper that never gets ready
+(`--timeout`) and one that ends at once; the refusals while the switch is starting and while a return is under
+way, and a return asked between the tool's look and the script that acts (refused by the script); `--lib` and `--dex` (the copy, both sums, the mode, `runtime.sha256` and `runtime.ids`, every runtime file
+then the one its list names), a copy that is not the file sent, a file of the wrong kind, a file the staged
+runtime does not have; `touch status` and `wake`, an IC that stays off, a phone without the node; `backlight
+status` and `set`, the range; a return while a restart waits; the return afterwards (One UI's level back, the
+helper ended, no session, the commands refused again).
+What the stand-in cannot show: the real helper (`app_process`, surfaceflinger), the real `su`'s mount namespace
+and SELinux domain, whether adb lets the command go while the helper it started runs, the real nodes' answers
+(`tsp/enabled` reading `1` after `2,1`), the fork's real return after a restart. `todo_rust.md` section 6, item 6
+has the order to try them in on the phone.
 
 ### The copy that goes on (`pull-data`)
 

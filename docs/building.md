@@ -505,6 +505,16 @@ $T phone log --file usb            # the session's USB watcher: the gadget and a
 $T phone log --grep 'xnuhost I usb: ' # xnuhost's own "usb: state ..., config ..., UDC ..." lines (docs/booter.md 2.9a)
 $T phone status --watch            # the status again every 5 s
 $T phone return                    # session/return.request, then waits for "One UI restored in place"
+# only during a session (refused without one: these are One UI's then); xnuhost and iOS are not touched:
+$T phone display-restart           # the display helper again: ends the one control/display.pid names (SIGTERM, then SIGKILL),
+                                   #   starts it with the switch script's own command, waits for "first frame posted"
+$T phone display-restart --lib runtime/display/build/android/liboneios-display.so --dex runtime/display/build/android/oneios-display.dex
+                                   #   first a new library and/or dex into the staged runtime (sha256 printed for both sides,
+                                   #   refused when the phone's copy differs; runtime.sha256 and runtime.ids follow)
+$T phone touch status              # /sys/class/sec/tsp/enabled: 1 on, 0 off
+$T phone touch wake                # 2,0 then 2,1 to it (the touch IC sleeps after iOS's brightness was 0), then reads it back
+$T phone backlight status          # the panel's level, max_brightness, and One UI's own value (control/base/backlight)
+$T phone backlight set 5350        # 1..12750; the return writes One UI's own value back
 $T phone pull-data OUT --ioslog    # the Data store's copy (no session open), then ioslog boots and checks. In chunks
                                    #   (--chunk 256 MiB), each checked against the phone's sha256 and tried again when its
                                    #   stream breaks (--retries 5); after a stop, the same command again goes on (OUT.part,
@@ -586,6 +596,27 @@ restore the baseline (`phone-baseline.txt` next to that script) before you relea
    cgroup and the devices it holds; without `session`, the first five only, for One UI). What the numbers were on
    2026-11-12: `docs/hardware.md`, "Baseline on the phone". Do not run `bridgectl bt`, `net`, `haptic` or `audio` during a session: xnuhost's own bridges
    hold the Bluetooth HAL, the tap, the vibrator and the audio helper.
+
+   **The display helper, the touch IC and the panel's level during a session** have commands (`oneios-tool phone
+   display-restart`, `phone touch wake`, `phone backlight set N`; `tools/oneios-tool/README.md`, "The session's own
+   commands"). In the session of 2026-11-14 they did not exist yet and the three were done with adb. The forms by
+   hand, as the fallback (what the commands send; only named files, as root, only while a session runs, never under
+   `/sys/power`):
+
+   ```sh
+   # the display helper again: the switch script's own command, and its pid where the return looks for it
+   adb shell "su -c '/data/adb/ksu/bin/busybox setsid /data/local/tmp/oneios/runtime/bin/oneios-display --session /data/local/tmp/oneios/session --takeover --wait 60 </dev/null >>/data/local/tmp/oneios/control/display.log 2>&1 & echo \$! > /data/local/tmp/oneios/control/display.pid'"
+   adb shell "su -c 'tail -n 12 /data/local/tmp/oneios/control/display.log'"   # oneios-display: layer up, first frame posted
+   # the touch IC, asleep after iOS's brightness was 0 (the node reads 0): what One UI's input HAL writes at panel on
+   adb shell "su -c 'echo 2,0 > /sys/class/sec/tsp/enabled; echo 2,1 > /sys/class/sec/tsp/enabled; cat /sys/class/sec/tsp/enabled'"   # 1: on
+   # the panel's level, 1..12750 (max_brightness beside it); the return writes One UI's own value back
+   adb shell "su -c 'echo 5350 > /sys/class/backlight/panel0-backlight/brightness'"
+   ```
+
+   The command also ends the old helper first (the pid in `control/display.pid`, only when its
+   `/proc/PID/cmdline` is a display helper's: SIGTERM, then SIGKILL), sets the new one's OOM score to 0 and puts it
+   in the cgroup `oneios_session`, as the switch does; by hand, an older helper leaves by itself when the new one
+   connects (xnuhost closes its socket).
 5. **Return**: end every session yourself. The Volume Up + Volume Down chord did not return in the sessions of
    2026-11-12 (agent touch is on it):
 
@@ -782,7 +813,8 @@ own unified log out of a copy of the phone's Data store, without a mount) and `p
 board archive generators `kernel gen NAME`, the build record, the records made from the kernelcache, and since 2026-11-13
 the drivers' build, the fixup of the linked kernel, the series check and the KDK headers), `package` (the runtime package's
 Apple-file check, manifest and archive) and `debug` (the tests' helpers). Since the third Linux round also `phone` (the adb
-workflow of section 6: status, stage, sums, switch, return, log, the Data store's copy), `app` (the fork's app of
+workflow of section 6: status, stage, sums, switch, return, log, the Data store's copy, and in a session the display
+helper's restart, the touch IC's wake and the panel's level), `app` (the fork's app of
 section 7: version, doctor, build, install, stage-scripts) and `cycle` (one test cycle: build, tests, stage, switch, watch, hold, return, collect).
 **None of the three has run on the real phone yet**: sections 6 and 7 show the CLI first and, as the fallback, the
 scripts and adb lines that were run. Commands, crates, and each tool's comparison with the Python tool it replaces:
