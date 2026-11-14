@@ -48,6 +48,8 @@ enum { OH_EV_OPEN = 0, OH_EV_CLOSE = 1, OH_EV_SELECTOR = 2, OH_EV_REFUSED = 3, O
 void oneios_haptic_actuator_event(uint32_t kind, uint32_t a, uint32_t b);
 void oneios_vibrator_start(void);
 void oneios_vibrator_key(int key, int down);      // 0 power, 1 volume up, 2 volume down
+// The stand-in for the always-on processor's button haptics service (OneiOSButtonHaptics.cpp; oneios-button-haptics=1).
+void oneios_button_haptics_start(void);
 
 // drivers/bluetooth
 void oneios_bt_start(void);

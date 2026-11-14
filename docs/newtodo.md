@@ -67,7 +67,10 @@ docs each item names. **Proven** = ran on the phone; **built** = compiled and ho
    the phone are clean. GPU memory is the guest's own RAM, so no separate pool is needed (`docs/gpu.md` 2).
 6. **Haptics and the power key** (`docs/hardware.md` 5, PR #17): the counters show where a tap stops. PC boot with
    `--set haptics=sim`; phone: `Actuator: user client N opened by audiomxd`, audiomxd's `actuator port` lines; the
-   power-key boot with `oneios-actuator=0`.
+   power-key boot with `oneios-actuator=0`. **Power key (fix-power-key, 2026-11-14; confirmed broken in the 9f6dc38
+   session):** a stand-in for the button haptics service ButtonResolver waits for, `oneios-button-haptics=1` (off by
+   default; built, not on the phone); the A/B/C boots and the lines to read are in `docs/hardware.md` 5, "The power
+   key: a stand-in for the button haptics service".
 7. **Blank widgets** (`docs/gpu.md` 5.1, PR #16): the `oneios-gpu-surfaces/pixels/locks/sync` lines and the host's
    `gpu: KGSL imports` say where the image is lost; the four guesses and how to read them are there. The likely
    fix (guess 1) is in the Metal plug-in: the Mac builds it, with a new trust list and seed.

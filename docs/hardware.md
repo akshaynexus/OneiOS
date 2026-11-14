@@ -1108,6 +1108,58 @@ decides:
   SpringBoard thread in an `AVHapticClient`/`AudioServicesPlaySystemSound` call). If it still does not lock, the node
   is not the cause of fault 2, and the haptics fault is a separate one.
 
+### The power key: a stand-in for the button haptics service (fix-power-key, 2026-11-14; built, not on the phone)
+
+The owner confirmed in the 9f6dc38 session that the power key neither sleeps nor wakes the display. The presses reach
+iOS (`oneios-hid: buttons: ... 24 key events ... 24 HID reports`, `HID events queued ..., 0 dropped`), so the stop is
+above the HID service, as in the 15:35 boot.
+
+What ButtonResolver needs to get ready [V: ButtonResolver, Haptics.framework and the kernelcache of 24A446]:
+
+- `+[BRInterfaceAOP interface]` makes the AOP interface when MobileGestalt's `HomeButtonType` is 1, or, with fast
+  haptics, when `MGIsDeviceOneOfType` matches its list of device types. [I] iPhone18,2 (a Camera Control phone) is in
+  that list: the list is hashes and was not decoded.
+- `-[BRInterfaceAOP _findService]`: an `IOServiceNameMatching` notification for **`AppleSPUHapticsAudioDriver`** (fast
+  haptics; else `AppleSPUButtonDriver`), then `IOServiceOpen` type 0 (`AOP service added: %u`). `updateReadyState`
+  logs `%s isReady: %s loaderReady: %s`: ready needs the service **and** the loader.
+- Haptics.framework's `HAButtonHapticsLoader` matches `IOPropertyMatch {"Button Haptics Asset Interface" = 1}` (a
+  number), opens type 0, maps memory type 0 (`IOConnectMapMemory`), calls scalar method 1 (`GetNumberOfSupportedAssets`,
+  one scalar out) and posts `HAButtonHapticsLoaderServiceIsAvailableNotification` (also if that call fails; not if
+  the open or the mapping fails: `Unable to open user client err %d`). Assets go in through struct method calls
+  (`UpdateSSHBAsset`).
+- `-[BRInterfaceAOP playState:forSpeed:error:]` is scalar method 2 with three scalars in; the configuration goes in
+  with `IORegistryEntrySetCFProperty` on the service.
+- Apple's `AppleSPUHapticsAudioDriver` is in the kernelcache (the string is in `kernelcache.macho` and in our
+  `kernel.kc`), but it belongs to the always-on processor's kexts, which have no hardware to match here: neither
+  service exists, so ButtonResolver is never ready and backboardd's `BKButtonHapticsController` queue waits for good
+  (section above). Also read: backboardd's `_BKHIDXXApplyButtonDefinitions` does not wait on this home-button type
+  (`not configuring SSHB because we don't have a real home button`); its `_BKHIDXXPlayHaptic` does.
+
+**The stand-in** (`drivers/haptics/OneiOSButtonHaptics.cpp`, a driver-archive source, no XNU patch; **off by default**):
+boot argument `oneios-button-haptics=1` publishes `IOService:/IOResources/oneios-button-haptics/AppleSPUHapticsAudioDriver`
+with `"Button Haptics Asset Interface" = 1`; its user client takes every call (selector 1 answers the slot count,
+`oneios-button-haptics-slots=N`, default 8; selector 2 and the others succeed, outputs zeroed), maps 128 KiB of type
+0, and its `setProperties` keeps every key. Nothing is played on the actuator. Log:
+`ONEIOS BUTTON HAPTICS: off (...)` or `ONEIOS BUTTON HAPTICS: on: AppleSPUHapticsAudioDriver published ...`, then
+`user client N (type 0) opened by backboardd`, `backboardd calls selector N (call N; ...)` (the first 4 calls of each
+selector), `backboardd sets KEY` (each new key).
+Tested: compiled with the drivers (`oneios-tool kernel drivers --check`, 17 sources). **Whether it brings the power key
+back is not known**: the power key worked before `/product/haptics`, and nothing above reads the node, so the stand-in
+helps only if the blocked path above is the one the press takes. The next boots decide (A/B):
+
+| Boot | Boot arguments | If the power key then works |
+|---|---|---|
+| A | as now, plus `oneios-ubt=SpringBoard,backboardd oneios-ubt-at=240 oneios-ubt-every=60` | (the control; the `oneios-ubt` lines after a press show where the threads wait) |
+| B | A plus `oneios-button-haptics=1` | ButtonResolver's readiness was the stop: keep it (then make it the default) |
+| C | A plus `oneios-actuator=0` (no Actuator device, no `/product/haptics`) | the node is the switch, by another path than ButtonResolver |
+
+In iOS's log, B should show backboardd's `_BRController ready: device haptic asset slot count:8` (a default-level line), ButtonResolver's (debug level: they may not be stored)
+`AOP service added`, `isReady: YES loaderReady: YES`, and Haptics' `UpdateSSHBAsset` without `err`. What a working
+press produces [I, from backboardd's and SpringBoard's strings, not traced]: SpringBoard's lock path asks backboardd to
+turn the display off (backlight to 0 and the framebuffer's power state off; on the next press, on); the display and
+backlight drivers see that as a brightness of 0 and then a brightness above 0, or a framebuffer power-state change
+(`kernel/patches/oneios-hosted/display/README.md`, the power word).
+
 ### The bridge (`runtime/bridges/haptics/haptic.c`)
 
 - Finds the device by its EV_FF bits (`sec_vibrator_inputff` first), sets `FF_GAIN` 10000 once.
