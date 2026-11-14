@@ -19,7 +19,8 @@
 #define FORMAT_RGBX_8888 XHD_BUFFER_RGBX_8888
 #define FORMAT_RGBA_FP16 XHD_BUFFER_RGBA_FP16    // the guest's half floats as they are
 
-// ANativeWindow_setBuffersDataSpace and _get are API 28; the library is built for 30, so they are there.
+// ANativeWindow_setBuffersDataSpace and _get are API 28 and libnativewindow's (the Makefile links it: libandroid does
+// not have them); the library is built for 30, so they are there.
 struct context { int fd; struct xhd_frame frame; };
 
 // SIGTERM, SIGINT and SIGHUP end the run loop through a pipe, so the Java half removes the layers.

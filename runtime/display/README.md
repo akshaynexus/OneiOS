@@ -81,7 +81,10 @@ NDK's `ANativeWindow` on that `Surface`, from the mapped memfd straight into the
   it falls back to `BGRA_8888` and encodes the half floats to sRGB, clamped (what is outside sRGB is lost). Pacing is
   the buffer queue's: the next buffer is handed out when surfaceflinger has taken the last, so the loop runs at the
   panel's vsync and every flush that came meanwhile is one post.
-- **Colour.** The buffers are tagged with a dataspace (`ANativeWindow_setBuffersDataSpace`), which says what their
+- **Colour.** The buffers are tagged with a dataspace (`ANativeWindow_setBuffersDataSpace`, libnativewindow's: the
+  library links `-lnativewindow` and `-Wl,-z,defs`; without the first, `1f7dd1f`'s library could not be loaded on the
+  phone, 2026-11-14: `cannot locate symbol "ANativeWindow_getBuffersDataSpace"`, and the panel stayed on the OneOS
+  splash while iOS drew), which says what their
   numbers mean, so that surfaceflinger turns them into the panel's colours: `SRGB` (`0x8810000`) for an 8-bit frame
   (iOS composites this display in sRGB: QuartzCore's `IOMFBDisplay::compositing_color_space` is `kCGColorSpaceSRGB`,
   `kernel/patches/oneios-hosted/display/README.md` "What iOS renders into"), `SCRGB_LINEAR` (`0x18410000`) for half
