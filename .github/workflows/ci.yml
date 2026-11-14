@@ -31,6 +31,7 @@ jobs:
       - name: Host tests
         run: |
           set -euo pipefail
+          runtime/package/elf-check-test.sh
           runtime/package/test.sh
           kernel/tests/host.sh
           # Other areas: any executable tests/host.sh below the repository runs here.
