@@ -874,7 +874,7 @@ What each does:
     in the main checkout, or `ONEIOS_DSC_INDEX`). It is not line by line: the analysis is of the log so far.
 
 ```sh
-tools/oneios-tool/tests/phone/run.sh          # 198 checks against the stand-in phone (92 of them session-cmds.sh: display-restart, touch, backlight;
+tools/oneios-tool/tests/phone/run.sh          # 200 checks against the stand-in phone (94 of them session-cmds.sh: display-restart, touch, backlight;
                                               #   30 of them usb.sh: ONEOS_DIR=a fork checkout with --usb-watch); ALL OK
 tools/oneios-tool/tests/cycle/run.sh          # phone log, status --watch and cycle: 95 checks; ALL OK
 tools/oneios-tool/tests/phone/modes.sh        # phone, app and cycle in each /proc mode this host has (below); ALL OK
@@ -959,7 +959,10 @@ What all of them keep:
    command stops before the phone is asked anything (a host build, or the two options swapped).
 2. *The session's state.* Refused while the switch is still starting the session (`control/state` `starting`: the
    switch starts the helper itself) and while a return is under way (`control/state` `returning`, `returned` or
-   `failed`, or `session/return.request` is there: the return ends the helper).
+   `failed`, or `session/return.request` is there: the return ends the helper). The script that stops and starts
+   the helper looks again itself (the session check, `control/state`, `session/return.request`) before it does
+   either: a session that ended or began to return after the tool looked is refused there, with nothing stopped
+   or started.
 3. *`--lib`, `--dex`.* The file is pushed to `/data/local/tmp/oneios-display-tmp/` and root's script takes it from
    there: the staged file (`runtime/bin/liboneios-display.so`, `runtime/lib/oneios-display.dex`) must be there and
    listed in `runtime.sha256`; the pushed copy's SHA-256 must be the local file's; it is copied beside the staged
@@ -1049,18 +1052,19 @@ after `2,1` was written to it, or stays `0` for an IC that does not wake); `read
 answer `/proc/PID/ns/mnt` and note the `nsenter` call; `FAKE_PUSH_CORRUPT=1` makes a pushed file arrive with one
 byte more.
 
-Result, Linux x86_64, 2026-11-14 (`tests/phone/modes.sh`): `host` mode: phone 198 checks (106 before; the 92 new
+Result, Linux x86_64, 2026-11-14 (`tests/phone/modes.sh`): `host` mode: phone 200 checks (106 before; the 94 new
 ones are `session-cmds.sh`'s), app 65, cycle 103, all ok; `stand-in` mode (the stand-in's own `/proc`, macOS's
-way): the same counts, all ok; no stand-in session and no stand-in helper left after any suite;
-`cargo test -p oneios-phone`: 15 passed (4 of them `session.rs`'s: the start line against the switch's, the named
-files, the touch and backlight commands, the library and dex checks). What the 92 cover: every command refused
+way): the same counts, all ok; no stand-in session and no stand-in helper left after any suite; the phone suite
+three times in each mode. `cargo test -p oneios-phone`: 15 passed (4 of them `session.rs`'s: the start line against
+the switch's and the script's own look at the session, the named
+files, the touch and backlight commands, the library and dex checks). What the 94 cover: every command refused
 without a session (and with a pid file that names a process that is not an xnuhost), root asked for first; a
 restart that works (the old helper ended by SIGTERM, the new one with the switch's arguments, pid file, log and
 cgroup; only what the log gained printed; xnuhost the same process); through `nsenter` from another mount
 namespace; a readiness line written in two pieces; an old helper that takes a SIGKILL; a pid file that names a
 process that is gone, and one that names another process (not signalled); a helper that never gets ready
 (`--timeout`) and one that ends at once; the refusals while the switch is starting and while a return is under
-way; `--lib` and `--dex` (the copy, both sums, the mode, `runtime.sha256` and `runtime.ids`, every runtime file
+way, and a return asked between the tool's look and the script that acts (refused by the script); `--lib` and `--dex` (the copy, both sums, the mode, `runtime.sha256` and `runtime.ids`, every runtime file
 then the one its list names), a copy that is not the file sent, a file of the wrong kind, a file the staged
 runtime does not have; `touch status` and `wake`, an IC that stays off, a phone without the node; `backlight
 status` and `set`, the range; a return while a restart waits; the return afterwards (One UI's level back, the

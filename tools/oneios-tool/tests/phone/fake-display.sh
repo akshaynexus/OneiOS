@@ -11,11 +11,16 @@
 #   $P/.fake/display-hang     it connects and then never makes its layer (no readiness line)
 #   $P/.fake/display-slow     the layer comes after 0.7 s and the first frame's line is written in two pieces 0.7 s apart
 #   $P/.fake/display-deaf     SIGTERM is ignored (it takes a SIGKILL)
-# Each is read once, at the start. Every start is appended to $P/.fake/display-starts (`PID ARGS...`).
+# Each is read once, first thing (a test may take the file away once the helper's `panel modes` line is there). Every start is appended to $P/.fake/display-starts (`PID ARGS...`).
 # While it runs it keeps $P/.fake/proc/PID/cmdline (app_process's argv, as the real helper's /proc entry reads), the
 # stand-in's /proc (FAKE_PROC=stand-in); with the host's /proc its command line holds this file's path.
 P=${FAKE_PHONE:?}
 S=$P/data/local/tmp/oneios
+broken=; hang=; slow=; deaf=
+[ ! -e "$P/.fake/display-broken" ] || broken=1
+[ ! -e "$P/.fake/display-hang" ] || hang=1
+[ ! -e "$P/.fake/display-slow" ] || slow=0.7
+[ ! -e "$P/.fake/display-deaf" ] || deaf=1
 here=$(cd "$(dirname "$0")" && pwd)
 lib=$here/liboneios-display.so
 dex=$here/../lib/oneios-display.dex
@@ -25,19 +30,18 @@ trap 'rm -rf "$P/.fake/proc/$$"' EXIT
 echo "$$ $*" >> "$P/.fake/display-starts"
 say() { echo "oneios-display: $*" >&2; }
 [ -r "$lib" ] && [ -r "$dex" ] || { say "$dex or $lib is missing"; exit 2; }
-if [ -e "$P/.fake/display-broken" ]; then
+if [ -n "$broken" ]; then
   echo "java.lang.UnsatisfiedLinkError: dlopen failed: cannot locate symbol \"ANativeWindow_getBuffersDataSpace\" referenced by \"$lib\"..." >&2
   exit 5
 fi
 stop=0
-if [ -e "$P/.fake/display-deaf" ]; then trap '' TERM; else trap 'stop=1' TERM; fi
+if [ -n "$deaf" ]; then trap '' TERM; else trap 'stop=1' TERM; fi
 trap 'stop=1' INT HUP
 xp=$(cat "$S/session/xnuhost.pid" 2>/dev/null)
 [ -n "$xp" ] && kill -0 "$xp" 2>/dev/null || { say "$S/session/display.sock: No such file or directory"; exit 3; }
 say "(stand-in) library $(sha256sum < "$lib" | cut -c1-12), dex $(sha256sum < "$dex" | cut -c1-12)"
 say "panel modes: active 1080x2340 (up to 120 Hz), native 1440x3120 (up to 120 Hz)"
-if [ ! -e "$P/.fake/display-hang" ]; then
-  slow=; [ ! -e "$P/.fake/display-slow" ] || slow=0.7
+if [ -z "$hang" ]; then
   say "reporting the panel to xnuhost: 1440x3120 at 120 Hz"
   say "guest frame 1440x3120, stride 5888, format 1 (B,G,R,X 8-bit sRGB); layer buffers in format 5, dataspace 8810000"
   [ -z "$slow" ] || sleep "$slow"

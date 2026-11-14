@@ -461,7 +461,7 @@ Open, in order:
 Written; **nothing of it ran on the real phone, and the app was not built or installed with it**. Crate
 `crates/oneios-phone` (`adb.rs`: the one phone and the rules; `phone.rs`; `sparse.rs`; `app.rs`; `session.rs`: the
 commands that run only in a session, 2026-11-14). README "phone" and
-"app" have the commands and what the stand-in tests show (`tests/phone/run.sh` 198 checks since 2026-11-14, `tests/app/run.sh` 65,
+"app" have the commands and what the stand-in tests show (`tests/phone/run.sh` 200 checks since 2026-11-14, `tests/app/run.sh` 65,
 `tests/cycle/run.sh` 103; `tests/phone/modes.sh` runs them with the host's `/proc` and with the stand-in's own, macOS's
 only mode).
 

@@ -10,7 +10,7 @@
 //! own shell and of init, `/sys/class/sec/tsp/enabled`, `/sys/class/backlight/panel0-backlight/brightness` and
 //! `max_brightness`, `/sys/fs/cgroup/oneios_session/cgroup.procs`. Nothing is listed and nothing under /sys/power.
 
-use crate::adb::{last_lines, Adb, BUSYBOX, STAGE};
+use crate::adb::{last_lines, session_check_script, Adb, BUSYBOX, STAGE};
 use anyhow::{anyhow, bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -112,6 +112,12 @@ pub fn install_script(path: &str, sha: &str) -> String {
 pub fn restart_script(kill_after: u64) -> String {
     let ticks = kill_after.max(1) * 5;
     let mut s = format!("S={STAGE}; C=$S/control; DH=$S/runtime/bin/oneios-display; BB={BUSYBOX}\n");
+    // the session once more, in the script that acts: one that ended or began to return since the tool looked is
+    // refused here, with nothing stopped or started (the session check is `Adb::session_open`'s, unchanged)
+    s += &format!("s=$(\n{})\n", session_check_script());
+    s += "[ \"$s\" = open ] || { echo \"@@REFUSED the session ended meanwhile (session/xnuhost.pid names no xnuhost)\"; exit 3; }\n";
+    s += "st=$(cat \"$C/state\" 2>/dev/null); case \"$st\" in starting|returning|returned|failed) echo \"@@REFUSED the session is no longer running (control/state: $st)\"; exit 3 ;; esac\n";
+    s += "[ ! -e \"$S/session/return.request\" ] || { echo \"@@REFUSED a return was asked meanwhile (session/return.request)\"; exit 3; }\n";
     s += "helper() { case \"$(cat /proc/$1/cmdline 2>/dev/null | tr '\\0' ' ')\" in *OneiOSDisplay*|*oneios-display*) return 0 ;; esac; return 1; }\n";
     s += "[ -f \"$DH\" ] && [ ! -L \"$DH\" ] && [ -x \"$DH\" ] || { echo \"@@REFUSED the staged runtime has no display helper (runtime/bin/oneios-display)\"; exit 3; }\n";
     s += "o=$(id -u); case \"$(stat -c '%u %A' \"$DH\" 2>/dev/null)\" in \"$o \"?????w*|\"$o \"????????w*) o= ;; \"$o \"*) ;; *) o= ;; esac\n";
@@ -425,6 +431,10 @@ mod tests {
         ] {
             assert!(script.lines().any(|l| l == line), "no line: {line}");
         }
+        // the script that acts looks at the session itself, before it stops or starts anything
+        let (guard, stop) = (script.find("@@REFUSED the session ended meanwhile").expect("the session guard"), script.find("kill -TERM").expect("the stop"));
+        assert!(guard < stop && script.find("@@REFUSED a return was asked meanwhile").expect("the return guard") < stop);
+        assert!(script.contains(&format!("s=$(\n{})\n[ \"$s\" = open ] ||", session_check_script())));
         // 3 s between SIGTERM and SIGKILL, looked at five times a second
         assert!(script.contains("while [ $n -lt 15 ] && helper \"$dp\"; do sleep 0.2;"));
         assert!(restart_script(0).contains("[ $n -lt 5 ]"));

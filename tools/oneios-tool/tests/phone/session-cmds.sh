@@ -15,7 +15,8 @@
 # gained printed, xnuhost untouched), through nsenter when the shell is not in init's mount namespace, with a
 # readiness line that comes in two pieces, with an old helper that takes a SIGKILL, with a pid file that names
 # another process; a helper that never gets ready (the timeout) and one that ends at once (the 2026-11-14 library
-# fault); the refusals while the switch is still starting and while a return is under way; --lib and --dex (the
+# fault); the refusals while the switch is still starting and while a return is under way, also one asked between
+# the tool's look and the script that acts; --lib and --dex (the
 # copy, the sums on both sides, the mode, runtime.sha256 and runtime.ids), a copy that is not the file sent, a file
 # of the wrong kind, a file the staged runtime does not have; touch status and wake, an IC that stays off, a
 # missing node; backlight status and set, the range; a return during a restart; the return afterwards, which puts
@@ -61,6 +62,12 @@ case "$(cat "$n" 2>/dev/null)" in
 2,1) if [ -e "$FAKE_PHONE/.fake/tsp-dead" ]; then echo 0 > "$n"; else echo 1 > "$n"; fi ;;
 1,1) echo 0 > "$n" ;;
 esac
+# .fake/race: a return is asked right after the second root script from now (between the tool's own look at the
+# session and the script that acts)
+if [ -e "$FAKE_PHONE/.fake/race" ]; then
+  r=$(($(cat "$FAKE_PHONE/.fake/race") + 1)); echo $r > "$FAKE_PHONE/.fake/race"
+  [ $r -lt 2 ] || { rm -f "$FAKE_PHONE/.fake/race"; echo "session-cmds: asked meanwhile" > "$FAKE_PHONE/data/local/tmp/oneios/session/return.request"; }
+fi
 SH
   cat > "$P/.fake/bin/readlink" <<'SH'
 #!/bin/sh
@@ -171,7 +178,9 @@ SH
   echo returning > "$C/state"
   check "display-restart while the session returns (control/state): refused" 1 "the session is returning to One UI \(control/state: returning\).*Nothing was changed" sphone display-restart
   echo running > "$C/state"
-  touch "$P/.fake/no-return"; echo "session-cmds: asked" > "$S/session/return.request"
+  touch "$P/.fake/no-return"; echo 0 > "$P/.fake/race"
+  check "display-restart when a return is asked after the tool looked: refused by the script that acts" 1 "a return was asked meanwhile \(session/return.request\)\. Nothing was stopped or started" sphone display-restart
+  [ -e "$S/session/return.request" ] && [ ! -e "$P/.fake/race" ] && [ "$(helper_pid)" = "$pid" ] && alive "$pid" && ok "display-restart refused by its script: the helper was not touched" || bad "display-restart refused by its script: the helper"
   check "display-restart after a return was asked: refused" 1 "the session is returning to One UI .*session/return.request is there.*Nothing was changed" sphone display-restart
   [ "$(helper_pid)" = "$pid" ] && alive "$pid" && ok "display-restart refused: the helper was not touched" || bad "display-restart refused: the helper"
   rm -f "$P/.fake/no-return"; wait_for 10 no_session "$P" || end_session "$P"
@@ -271,7 +280,8 @@ SH
   session_up || bad "a third session"
   touch "$P/.fake/display-hang"
   sphone display-restart --timeout 30 > "$W/restart.out" 2>&1 & c=$!
-  wait_for 5 grep -q "^new helper: pid" "$W/restart.out"; new=$(helper_pid)
+  # (the helper's own line: it has read its flag file by then)
+  wait_for 10 grep -q "^  oneios-display: panel modes" "$W/restart.out"; new=$(helper_pid)
   rm -f "$P/.fake/display-hang"
   check "return while a display-restart waits: One UI's restore line" 0 "One UI restored in place \(Enforcing\)" sphone return
   wait "$c"; st=$?
