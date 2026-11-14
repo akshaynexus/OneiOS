@@ -11,6 +11,9 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 pass=0
 if command -v sha256sum >/dev/null; then SHA256=(sha256sum); else SHA256=(shasum -a 256); fi
 ok() { pass=$((pass + 1)); echo "ok $pass: $*"; }
+# The NDK's compiler, found as package.sh finds the NDK (for the faulty library of the refusals).
+if [ "$(uname -s)" = Darwin ]; then SDK_DEFAULT=$HOME/Library/Android/sdk; else SDK_DEFAULT=$HOME/Android/Sdk; fi
+NDK_CC=$(echo "${ANDROID_NDK_ROOT:-${ANDROID_SDK_ROOT:-$SDK_DEFAULT}/ndk/28.2.13676358}"/toolchains/llvm/prebuilt/*/bin)/aarch64-linux-android30-clang
 
 # 1. A plain package: verifies, runtime.json first, manifest equals the content.
 "$ROOT/runtime/package.sh" $V > "$T/log" 2>&1 || { cat "$T/log"; fail "package.sh"; }
@@ -40,6 +43,11 @@ PY
 ok "package, checksum, member order, manifest"
 zstd -dc "$P" | tar -tv | awk '$1 !~ /^-/ {bad=1} END {exit bad}' || fail "a member is not a regular file"
 ok "regular files only"
+# Its dynamic ELF files were checked against the NDK's API 30 stubs (elf-check.sh), twice: runtime/build.sh on its
+# stage, then package.sh on the package's content.
+[ "$(grep -c '^elf-check: .* 0 failures$' "$T/log")" = 2 ] || { cat "$T/log"; fail "package.sh did not run elf-check.sh twice"; }
+grep -q '^elf-check: bin/liboneios-display.so: NEEDED .*libnativewindow.so' "$T/log" || { cat "$T/log"; fail "bin/liboneios-display.so was not checked"; }
+ok "NEEDED and symbol check: $(grep -m1 '^elf-check: .* 0 failures$' "$T/log" | sed 's/^elf-check: //')"
 
 # 2. The same inputs give the same bytes.
 first=$(cut -d' ' -f1 "$P.sha256")
@@ -98,6 +106,18 @@ m6() { macho kernel/xnu.macho 2; record kernel/xnu.macho 'restricted_sources=["c
 refuse "kernel that links a non-redistributable source" m6
 link() { ln -s /etc/passwd "$T/extra/link"; }
 refuse "symbolic link" link
+# A library that Android cannot load, in the display helper's place: what liboneios-display.so of 1f7dd1f was.
+# elf-fault.c calls libnativewindow's dataspace functions and is linked `-landroid -lm` only, without -z defs.
+faulty_library() {
+  mkdir -p "$T/extra/bin"
+  "$NDK_CC" -fPIC -shared "$ROOT/runtime/package/elf-fault.c" -landroid -lm -o "$T/extra/bin/liboneios-display.so"
+}
+refuse "a shared object with a symbol that none of its NEEDED libraries has" faulty_library
+for symbol in ANativeWindow_getBuffersDataSpace ANativeWindow_setBuffersDataSpace; do
+  grep -qxF "bin/liboneios-display.so: symbol $symbol is in none of its NEEDED libraries (NEEDED: libandroid.so, libm.so, libdl.so, libc.so); it is in libnativewindow.so" "$T/log" ||
+    { cat "$T/log"; fail "the refusal does not name $symbol and libnativewindow.so"; }
+done
+ok "the refusal names it: $(grep -m1 -o 'symbol ANativeWindow_getBuffersDataSpace.*' "$T/log")"
 
 # 4. Our own kernel with its record is accepted and named in the manifest.
 rm -rf "$T/extra" "$OUT_DIR" "$T/k"; mkdir -p "$T/k" "$T/extra/kernel"
