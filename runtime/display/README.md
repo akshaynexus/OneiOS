@@ -216,6 +216,22 @@ the boot, while xnuhost went on flushing frames: the panel stayed dark until the
   kept (N so far)`, once per 1000.
 - The helper logs why its read ended: `oneios-display: xnuhost closed the socket` or `oneios-display: reading
   xnuhost's socket failed: <error>`.
-To get the picture back by hand during a session (as root on the phone, the switch script's own command):
-`busybox setsid /data/local/tmp/oneios/runtime/bin/oneios-display --session /data/local/tmp/oneios/session --takeover --wait 60 >> /data/local/tmp/oneios/control/display.log 2>&1 &`
-Not run on the phone yet.
+
+**To get the picture back during a session: `oneios-tool phone display-restart`** (`tools/oneios-tool/README.md`,
+"The session's own commands"; refused without a session). It ends the helper that `control/display.pid` names
+(only a pid whose `/proc/PID/cmdline` is a display helper's; SIGTERM, and SIGKILL after 3 s), starts a new one with
+the switch script's own command (the same file and arguments, stdin, `control/display.log`, `control/display.pid`,
+OOM score 0, the cgroup `oneios_session`, init's mount namespace), and waits for the new helper's `layer up` and
+`first frame posted`, which it prints. `--lib PATH` and `--dex PATH` first put a new `liboneios-display.so` or
+`oneios-display.dex` into the staged runtime (`runtime/bin/`, `runtime/lib/`; the SHA-256 printed for the local
+file and the phone's, refused when they differ; `runtime.sha256` and `runtime.ids` follow, so the next switch's
+preflight takes the new files): the way to try a rebuilt helper without ending the session, as after the library
+fault of 2026-11-14 (above, "Colour"). xnuhost and iOS are not touched, and the return ends the new helper by the
+same pid file. Tested against the stand-in phone only (`tools/oneios-tool/tests/phone/session-cmds.sh`); not run on
+the phone yet.
+
+By hand, as the fallback (as root on the phone, the switch script's own command; an older helper leaves when the new
+one connects):
+`busybox setsid /data/local/tmp/oneios/runtime/bin/oneios-display --session /data/local/tmp/oneios/session --takeover --wait 60 </dev/null >> /data/local/tmp/oneios/control/display.log 2>&1 & echo $! > /data/local/tmp/oneios/control/display.pid`
+(the pid file is where the return looks for the helper; a helper it does not name still leaves when xnuhost ends
+and its socket closes).

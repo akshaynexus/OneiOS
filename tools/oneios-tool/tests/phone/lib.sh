@@ -65,8 +65,12 @@ case "$2" in
 "id -u") echo 0 ;;
 "sh -s")
   # the script as the tool sent it (FAKE_ROOT_LOG), then as the stand-in runs it (fake-rewrite.sh)
-  if [ -n "${FAKE_ROOT_LOG:-}" ]; then t=$(mktemp); cat > "$t"; cat "$t" >> "$FAKE_ROOT_LOG"; "$FAKE_REWRITE" < "$t" | bash; st=$?; rm -f "$t"; exit $st; fi
-  "$FAKE_REWRITE" | bash ;;
+  if [ -n "${FAKE_ROOT_LOG:-}" ]; then t=$(mktemp); cat > "$t"; cat "$t" >> "$FAKE_ROOT_LOG"; "$FAKE_REWRITE" < "$t" | bash; st=$?; rm -f "$t"
+  else "$FAKE_REWRITE" | bash; st=$?; fi
+  # then the phone's drivers act on what the script wrote to their nodes (a test's .fake/drivers: the touch IC's
+  # tsp/enabled reads 1 after `2,1` was written to it), before the tool's next command reads them
+  [ ! -x "$FAKE_PHONE/.fake/drivers" ] || "$FAKE_PHONE/.fake/drivers"
+  exit $st ;;
 *) exec bash -c "$2" ;;
 esac
 SU

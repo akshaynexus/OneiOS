@@ -12,6 +12,12 @@
 # While it runs it keeps $P/.fake/proc/PID/cmdline (its argv, NUL-separated, as /proc/PID/cmdline holds it): the
 # stand-in's /proc, read instead of the host's with FAKE_PROC=stand-in (fake-rewrite.sh). The entry is removed
 # when the session ends, also by SIGTERM, SIGINT or SIGHUP (fake-adb.sh drops one left by SIGKILL).
+# Of what the fork's switch and return keep in control/ (where the guest cannot write) it plays: control/state
+# (starting, running, returning, returned); control/base/backlight, One UI's panel level at the switch (each
+# backlight node of the stand-in's sysfs, $P/sys/class/backlight, when a test made one), which the return writes
+# back; and the display helper, when the stand-in's runtime has one (runtime/bin/oneios-display: fake-display.sh),
+# started as oneios_switch.sh starts it (pid in control/display.pid, output in control/display.log) and ended by
+# the return by that pid (SIGTERM, a second, SIGKILL).
 P=$1
 S=$P/data/local/tmp/oneios
 step=$(cat "$P/.fake/step" 2>/dev/null || echo 0.2)
@@ -22,8 +28,19 @@ trap 'exit 143' TERM; trap 'exit 130' INT; trap 'exit 129' HUP
 mkdir -p "$P/.fake/proc/$$"
 printf 'fake-xnuhost\0%s\0%s\0' "$0" "$P" > "$P/.fake/proc/$$/cmdline"
 echo $$ > "$S/session/xnuhost.pid"
+mkdir -p "$S/control/base"
+echo starting > "$S/control/state"
+if [ -d "$P/sys/class/backlight" ]; then
+  for bl in "$P"/sys/class/backlight/*/brightness; do [ -f "$bl" ] && echo "${bl#"$P"} $(cat "$bl")"; done > "$S/control/base/backlight"
+fi
 d=$(cat "$P/.fake/log-delay" 2>/dev/null || echo 0); [ "$d" = 0 ] || sleep "$d"
 [ ! -f "$S/session/xnuhost.log" ] || mv "$S/session/xnuhost.log" "$S/logs/xnuhost-$(date +%s).log"
+echo running > "$S/control/state"
+DH=$S/runtime/bin/oneios-display
+if [ -f "$DH" ] && [ ! -L "$DH" ] && [ -x "$DH" ]; then
+  setsid "$DH" --session "$S/session" --takeover --wait 60 </dev/null >>"$S/control/display.log" 2>&1 &
+  echo $! > "$S/control/display.pid"
+fi
 t0=$(date +%s.%N)
 line() { printf '[%9.3f] %s\n' "$(echo "$(date +%s.%N) $t0" | awk '{print $1-$2}')" "$*" >> "$S/session/xnuhost.log"; }
 asked() { [ -e "$S/session/return.request" ]; }
@@ -59,11 +76,23 @@ while ! asked; do
   [ $n -lt 3000 ] || break
 done
 while [ -e "$P/.fake/no-return" ]; do sleep "$step"; done
+echo returning > "$S/control/state"
 line "xnuhost I stopping: signal 15 (reason XH_HALT_SIGNAL, code 15)"
 line "xnuhost I exit 0"
+for dp in $(cat "$S/control/display.pid" 2>/dev/null); do
+  case "$(ps -o command= -p "$dp" 2>/dev/null)" in *oneios-display*) ;; *) continue ;; esac
+  kill -TERM "$dp" 2>/dev/null
+  i=0; while [ $i -lt 10 ] && kill -0 "$dp" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+  kill -9 "$dp" 2>/dev/null
+done
 {
   echo "=== return $(date '+%F %T') asked: $(cat "$S/session/return.request" 2>/dev/null) ==="
+  [ ! -f "$S/control/base/backlight" ] || while read -r bl lv; do
+    case "$bl" in /sys/class/backlight/*/brightness) ;; *) continue ;; esac
+    echo "$lv" > "$P$bl" && echo "backlight: $bl back to $lv"
+  done < "$S/control/base/backlight"
   echo "One UI restored in place (Enforcing)."
 } >> "$S/return.log"
+echo returned > "$S/control/state"
 echo "inplace $(date +%s) fake-boot-id" > "$S/return.outcome"
 rm -f "$S/session/xnuhost.pid" "$S/session/return.request"
