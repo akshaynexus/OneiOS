@@ -23,7 +23,8 @@ void xh_config_defaults(xh_config *c)
   c->host_mem_log = -1;
   c->usb_log = -1;
   c->ram_giveback = c->ram_prefault = c->ram_lock = -1;
-  c->ram_session_reserve = c->ram_unlock_below = -1;
+  c->ram_session_reserve = c->ram_unlock_below = c->ram_gpu_reserve = -1;
+  c->ram_fit_on = c->ram_pagetable_percent = -1;
   c->return_graceful_ms = -1;
   strcpy(c->display, "shm");
   strcpy(c->gpu, "auto");
@@ -113,6 +114,9 @@ int xh_config_set(xh_config *c, const char *key, const char *value)
   else if (!strcmp(key, "ram-prefault")) { bool on; if (flag(value, &on)) return -1; c->ram_prefault = on; }
   else if (!strcmp(key, "ram-lock")) { bool on; if (flag(value, &on)) return -1; c->ram_lock = on; }
   else if (!strcmp(key, "ram-session-reserve")) { uint64_t v = xh_parse_size(value, &ok); ok = ok && v < (1ull << 40); if (ok) c->ram_session_reserve = (int64_t)v; }
+  else if (!strcmp(key, "ram-fit")) { bool on; if (flag(value, &on)) return -1; c->ram_fit_on = on; }
+  else if (!strcmp(key, "ram-gpu-reserve")) { uint64_t v = xh_parse_size(value, &ok); ok = ok && v < (1ull << 40); if (ok) c->ram_gpu_reserve = (int64_t)v; }
+  else if (!strcmp(key, "ram-pagetable-percent")) { ok = number(value, 0, 50, &c->ram_pagetable_percent); }
   else if (!strcmp(key, "ram-unlock-below")) { uint64_t v = xh_parse_size(value, &ok); ok = ok && v < (1ull << 40); if (ok) c->ram_unlock_below = (int64_t)v; }
   else if (!strcmp(key, "return-graceful-ms")) { ok = number(value, 0, 120000, &c->return_graceful_ms); }
   else if (!strcmp(key, "width")) c->width = (unsigned)atoi(value);
@@ -336,21 +340,29 @@ int xh_config_finish(xh_config *c)
   if (c->ram_unlock_below < 0) c->ram_unlock_below = from_image.ram_unlock_below < 0 ? (int64_t)XH_RAM_UNLOCK_BELOW : from_image.ram_unlock_below;
   if (c->ram_giveback) c->ram_prefault = c->ram_lock = 0;        // a RAM that gives pages back is neither prefaulted nor locked
   if (!c->ram_prefault) c->ram_lock = 0;
+  if (c->ram_fit_on < 0) c->ram_fit_on = from_image.ram_fit_on < 0 ? 1 : from_image.ram_fit_on;
+  if (c->ram_gpu_reserve < 0) c->ram_gpu_reserve = from_image.ram_gpu_reserve < 0 ? (int64_t)XH_RAM_GPU_RESERVE : from_image.ram_gpu_reserve;
+  if (c->ram_pagetable_percent < 0) c->ram_pagetable_percent = from_image.ram_pagetable_percent < 0 ? XH_RAM_PAGETABLE_PERCENT : from_image.ram_pagetable_percent;
+  // What the host can hold for the guest without swapping it (2026-11-14, fix-ram-fit): MemAvailable now, after the fork
+  // stopped One UI's zygote and before the guest takes anything (oneos/interface.md 4), less what the session needs
+  // outside the guest: the iOS tasks' page tables (a share of the guest's RAM), KGSL's own memory, and a headroom.
+  uint64_t total = 0, available = 0;
+  bool known = xh_meminfo(c->ram_meminfo, &total, &available) == 0;
+  c->ram_fit = known ? xh_ram_fit(available, (uint64_t)c->ram_session_reserve, (uint64_t)c->ram_gpu_reserve, (unsigned)c->ram_pagetable_percent) : 0;
+  c->ram_fit_available = known ? available : 0;
   if (!c->ram_bytes) {
-    uint64_t total = 0, available = 0;
-    if (xh_meminfo(c->ram_meminfo, &total, &available)) {
+    if (!known) {
       // Not Linux, or no /proc: the size of the time before ram=auto.
       fprintf(stderr, "xnuhost: ram=auto: no MemTotal in %s: the guest gets 4 GiB\n", c->ram_meminfo);
       c->ram_bytes = 4ull << 30;
     } else {
-      // Held for the whole session: no more than the host has free at the start, less what it needs while iOS runs.
-      uint64_t reserve = c->ram_giveback ? 0 : (uint64_t)c->ram_session_reserve;
-      c->ram_bytes = xh_ram_fixed_auto(total, available, (unsigned)c->ram_percent, (uint64_t)c->ram_host_floor, reserve, &c->ram_auto_bound);
+      c->ram_bytes = xh_ram_fit_auto(total, (unsigned)c->ram_percent, (uint64_t)c->ram_host_floor, c->ram_fit_on ? c->ram_fit : UINT64_MAX,
+                                     &c->ram_auto_bound);
       if (!c->ram_bytes) {
-        fprintf(stderr, "xnuhost: ram=auto: this host has %llu MiB, %llu MiB of it available; %d%% of it, all but %llu MiB, or the available "
-                "less %llu MiB, is less than the guest's 1 GiB: give --ram SIZE\n", (unsigned long long)(total >> 20),
+        fprintf(stderr, "xnuhost: ram=auto: this host has %llu MiB, %llu MiB of it available; %d%% of it, all but %llu MiB, or what fits "
+                "beside the session's needs (%llu MiB), is less than the guest's 1 GiB: give --ram SIZE\n", (unsigned long long)(total >> 20),
                 (unsigned long long)(available >> 20), c->ram_percent, (unsigned long long)((uint64_t)c->ram_host_floor >> 20),
-                (unsigned long long)(reserve >> 20));
+                (unsigned long long)(c->ram_fit >> 20));
         return -1;
       }
       c->ram_auto_total = total;
@@ -373,7 +385,14 @@ uint64_t xh_ram_auto(uint64_t total, unsigned percent, uint64_t floor)
   return ram >= (1ull << 30) ? ram : 0;
 }
 
-uint64_t xh_ram_fixed_auto(uint64_t total, uint64_t available, unsigned percent, uint64_t floor, uint64_t reserve, unsigned *bound)
+uint64_t xh_ram_fit(uint64_t available, uint64_t reserve, uint64_t gpu, unsigned pagetable_percent)
+{
+  // G + G * pt / 100 + gpu + reserve <= available
+  if (available <= reserve + gpu) return 0;
+  return (available - reserve - gpu) * 100 / (100 + pagetable_percent);        // MemAvailable < 2^57: no overflow
+}
+
+uint64_t xh_ram_fit_auto(uint64_t total, unsigned percent, uint64_t floor, uint64_t fit, unsigned *bound)
 {
   uint64_t ram = xh_ram_auto(total, percent, floor);
   unsigned why = 0;
@@ -382,9 +401,9 @@ uint64_t xh_ram_fixed_auto(uint64_t total, uint64_t available, unsigned percent,
     uint64_t share = total / 100 * p + total % 100 * p / 100, left = total > floor ? total - floor : 0;
     why = share <= left ? XH_RAM_BOUND_SHARE : XH_RAM_BOUND_FLOOR;
   }
-  if (ram && reserve) {
-    // Held from the start and never given back: no more than the host has free now, less what it needs while iOS runs.
-    uint64_t fits = (available > reserve ? available - reserve : 0) & ~((256ull << 20) - 1);
+  if (ram && fit != UINT64_MAX) {
+    // No more than the host can hold beside what the session needs outside the guest (xh_ram_fit): nothing to swap.
+    uint64_t fits = fit & ~((256ull << 20) - 1);
     if (fits < ram) { ram = fits; why = XH_RAM_BOUND_AVAILABLE; }
     if (ram < (1ull << 30)) ram = 0;
   }
@@ -392,9 +411,13 @@ uint64_t xh_ram_fixed_auto(uint64_t total, uint64_t available, unsigned percent,
   return ram;
 }
 
-bool xh_ram_lock_fits(uint64_t size, uint64_t available, uint64_t reserve)
+bool xh_swap_note(uint64_t swapped, uint64_t *next)
 {
-  return available > reserve && size <= available - reserve;
+  if (!*next) *next = XH_SWAP_NOTE_FIRST;
+  if (swapped <= *next) return false;
+  // Said once over 64 MiB, then again at each further 256 MiB: the next level is the first one at or above it.
+  *next = XH_SWAP_NOTE_FIRST + (swapped - XH_SWAP_NOTE_FIRST + XH_SWAP_NOTE_STEP - 1) / XH_SWAP_NOTE_STEP * XH_SWAP_NOTE_STEP;
+  return true;
 }
 
 int xh_meminfo(const char *path, uint64_t *total, uint64_t *available)

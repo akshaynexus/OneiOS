@@ -161,11 +161,11 @@ check-arm64: $(A)/xnuhost $(A)/testimage/kernel.kc
 	  timeout 30 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --ram 256M --set ram-giveback=1 \
 	     --display none --no-input --width 64 --height 64 2>&1 | tee $(A)/check.log; \
 	  grep -q 'TESTKERNEL: all passed' $(A)/check.log && \
-	  echo "check-arm64: ram=auto on a host of 3 GiB, 2 GiB available (ram-meminfo): the guest gets 1024 MiB with ram-giveback=0 (MemAvailable less the 1 GiB reserve), held fixed" && \
-	  printf 'MemTotal:        3145728 kB\nMemAvailable:    2097152 kB\n' > $(A)/meminfo-3g && rm -f $(A)/testdata/data.img && \
+	  echo "check-arm64: ram=auto on a host of 4 GiB, 2.5 GiB available (ram-meminfo): the guest gets what fits, 1024 MiB, held fixed (ram-giveback=0)" && \
+	  printf 'MemTotal:        4194304 kB\nMemAvailable:    2621440 kB\n' > $(A)/meminfo-3g && rm -f $(A)/testdata/data.img && \
 	  { timeout 30 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 3 --set ram-meminfo=$(A)/meminfo-3g --set ram-giveback=0 \
 	     --display none --no-input --width 64 --height 64 > $(A)/ramauto.log 2>&1; \
-	    grep -q 'ram=auto: host MemTotal 3072 MiB, MemAvailable 2048 MiB; the guest gets 1024 MiB' $(A)/ramauto.log && grep -q 'memory: the guest.s RAM is held for the session: 1024 MiB, prefaulted' $(A)/ramauto.log && \
+	    grep -q 'ram=auto: host MemTotal 4096 MiB, MemAvailable 2560 MiB; the guest gets 1024 MiB' $(A)/ramauto.log && grep -q 'memory: the guest.s RAM is held for the session: 1024 MiB, prefaulted' $(A)/ramauto.log && \
 	    grep -q 'TESTKERNEL: all passed' $(A)/ramauto.log || { grep -E 'memory|FAIL|TESTKERNEL' $(A)/ramauto.log | tail -8; echo "check-arm64: ram=auto failed"; false; }; } && \
 	  echo "check-arm64: a guest that keeps restarting: xnuhost starts again in place 8 times, then exit 3" && \
 	  { XNUHOST_RUNNER="$(ARM64_RUN)" timeout 60 $(ARM64_RUN) $(A)/xnuhost --mode bench --image $(A)/testimage --data $(A)/testdata --cpus 1 --ram 256M \

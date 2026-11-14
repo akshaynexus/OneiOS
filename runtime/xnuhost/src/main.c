@@ -214,15 +214,13 @@ static void ram_fix_start(void)
   g_info.features |= XH_FEATURE_RAM_FIXED;
   if (!config.ram_prefault) { LOGI("memory: the guest's RAM is held for the session, not prefaulted (ram-prefault=0); free pages are not given back"); return; }
   xh_ramfix_facts(facts, sizeof facts);
-  uint64_t total = 0, available = 0;
   g_ramfix.lock = config.ram_lock;
   g_ramfix.lock_why = config.ram_lock ? NULL : "ram-lock=0";
   g_ramfix.unlock_below = (uint64_t)config.ram_unlock_below;
-  // A lock is safe only with room beside it: the host's MemAvailable now, less ram-session-reserve.
-  if (g_ramfix.lock && !xh_meminfo(config.ram_meminfo, &total, &available) &&
-      !xh_ram_lock_fits(g_mem.size, available, (uint64_t)config.ram_session_reserve)) {
+  // A lock is safe only with room beside it: the RAM must be within what fits (config.c, xh_ram_fit) at the start.
+  if (g_ramfix.lock && config.ram_fit_available && g_mem.size > config.ram_fit) {
     g_ramfix.lock = false;
-    g_ramfix.lock_why = "more than the host's MemAvailable less ram-session-reserve";
+    g_ramfix.lock_why = "more than fits beside the session's needs (ram-fit)";
   }
   LOGI("memory: the guest's RAM is held for the session: %llu MiB, prefaulted on a thread at nice 19 in %llu MiB steps, %s; free pages are "
        "not given back (ram-giveback=0); %s", (unsigned long long)(g_mem.size >> 20), (unsigned long long)(XH_RAMFIX_STEP >> 20),
@@ -731,23 +729,69 @@ static void guest_restart(void)
   LOGE("restart: exec /proc/self/exe: %s", strerror(errno));
 }
 
+// Every 5 s: the guest's RAM that the host swapped out (held, st_blocks, less in the host's RAM, mincore), said in plain
+// words once past 64 MiB and again at each further 256 MiB (xh_swap_note): a swapped page stalls whichever vCPU or task
+// touches it next (the phone, 2026-11-14: 2126 MiB swapped out, Settings frozen). Read only.
+static void swap_watch(void)
+{
+  static struct timespec last;
+  static uint64_t next;
+  static xh_ramfix_counters was;
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  if (last.tv_sec && t.tv_sec - last.tv_sec < 5) return;
+  // The host's swap traffic over the last interval (/proc/vmstat pswpin, pswpout: pages; zram on the phone, where it is
+  // also heat: 2026-11-14, about 9.5 MB/s in and 8 MB/s out while iOS's RAM was swapped).
+  xh_ramfix_counters now;
+  xh_ramfix_sample(&now);
+  uint64_t seconds = last.tv_sec ? (uint64_t)(t.tv_sec - last.tv_sec) : 0, ins = 0, outs = 0;
+  if (seconds && now.swap_ins >= was.swap_ins && now.swap_outs >= was.swap_outs) {
+    ins = (now.swap_ins - was.swap_ins) / seconds;
+    outs = (now.swap_outs - was.swap_outs) / seconds;
+  }
+  was = now;
+  last = t;
+  struct stat st;
+  if (g_mem.fd < 0 || !g_mem.host || fstat(g_mem.fd, &st)) return;
+  uint64_t held = (uint64_t)st.st_blocks * 512, in_ram = xh_ram_resident(g_mem.host, g_mem.size, (uint64_t)sysconf(_SC_PAGESIZE));
+  uint64_t swapped = held > in_ram ? held - in_ram : 0, total = 0, available = 0;
+  if (!xh_swap_note(swapped, &next)) return;
+  (void)xh_meminfo(config.ram_meminfo, &total, &available);
+  uint64_t page = (uint64_t)sysconf(_SC_PAGESIZE);
+  LOGE("memory: the host swaps iOS's RAM: %llu MiB (host MemAvailable %llu MiB); host swap-ins %llu pages/s (%.1f MB/s), swap-outs "
+       "%llu pages/s (%.1f MB/s)", (unsigned long long)(swapped >> 20), (unsigned long long)(available >> 20), (unsigned long long)ins,
+       (double)(ins * page) / 1e6, (unsigned long long)outs, (double)(outs * page) / 1e6);
+}
+
 // The guest's RAM as chosen (config.c, ram=auto), once at the start.
 static void ram_choice_log(void)
 {
-  if (!config.ram_auto_total) { LOGI("memory: the guest gets %llu MiB (ram=%s)", (unsigned long long)(config.ram_bytes >> 20), config.ram_given ? "SIZE" : "auto: no MemTotal, 4 GiB"); return; }
+  // What fits beside the session's needs (config.c xh_ram_fit, 2026-11-14): MemAvailable at the start, less the headroom,
+  // the GPU's allowance and the page tables' share of the guest.
+  char fits[300] = "";
+  if (config.ram_fit_available)
+    snprintf(fits, sizeof fits, "what fits beside the session's needs: %llu MiB (MemAvailable %llu MiB less %llu MiB headroom, %llu MiB for the GPU "
+             "and %d%% of the guest for page tables)", (unsigned long long)(config.ram_fit >> 20), (unsigned long long)(config.ram_fit_available >> 20),
+             (unsigned long long)((uint64_t)config.ram_session_reserve >> 20), (unsigned long long)((uint64_t)config.ram_gpu_reserve >> 20),
+             config.ram_pagetable_percent);
+  if (!config.ram_auto_total) {
+    LOGI("memory: the guest gets %llu MiB (ram=%s)%s%s", (unsigned long long)(config.ram_bytes >> 20), config.ram_given ? "SIZE" : "auto: no MemTotal, 4 GiB",
+         *fits ? "; " : "", fits);
+    // A size given by hand that the host cannot hold: Linux will swap the guest (zram), and every page iOS touches there stalls it.
+    if (config.ram_fit_available && config.ram_bytes > config.ram_fit)
+      LOGE("memory: ram=%llu MiB is more than this host can hold without swapping it (%llu MiB fit): the host will swap iOS's RAM; "
+           "give ram=auto or ram=%lluM", (unsigned long long)(config.ram_bytes >> 20), (unsigned long long)(config.ram_fit >> 20),
+           (unsigned long long)((config.ram_fit >> 20) & ~255ull));
+    return;
+  }
   uint64_t total = config.ram_auto_total, floor = (uint64_t)config.ram_host_floor;
-  uint64_t available = config.ram_auto_available, reserve = config.ram_giveback ? 0 : (uint64_t)config.ram_session_reserve;
-  char third[160] = "";
-  // Since 2026-11-13 the RAM is held for the whole session (ramfix.c): it must fit beside what the host keeps running.
-  if (reserve)
-    snprintf(third, sizeof third, ", and MemAvailable less the session's reserve of %llu MiB (%llu MiB)", (unsigned long long)(reserve >> 20),
-             (unsigned long long)((available > reserve ? available - reserve : 0) >> 20));
-  static const char *const bound[] = { "?", "the share", "the floor", "MemAvailable" };
-  LOGI("memory: ram=auto: host MemTotal %llu MiB, MemAvailable %llu MiB; the guest gets %llu MiB: the least of %d%% (%llu MiB)%s "
-       "MemTotal less the host's floor of %llu MiB (%llu MiB)%s, in 256 MiB steps (%s decides)", (unsigned long long)(total >> 20),
-       (unsigned long long)(available >> 20), (unsigned long long)(config.ram_bytes >> 20), config.ram_percent,
-       (unsigned long long)(total / 100 * (unsigned)config.ram_percent >> 20), reserve ? "," : " and", (unsigned long long)(floor >> 20),
-       (unsigned long long)((total > floor ? total - floor : 0) >> 20), third, bound[config.ram_auto_bound < 4 ? config.ram_auto_bound : 0]);
+  static const char *const bound[] = { "?", "the share", "the floor", "what fits" };
+  LOGI("memory: ram=auto: host MemTotal %llu MiB, MemAvailable %llu MiB; the guest gets %llu MiB: the least of %d%% (%llu MiB), "
+       "MemTotal less the host's floor of %llu MiB (%llu MiB) and %s, in 256 MiB steps (%s decides)", (unsigned long long)(total >> 20),
+       (unsigned long long)(config.ram_auto_available >> 20), (unsigned long long)(config.ram_bytes >> 20), config.ram_percent,
+       (unsigned long long)(total / 100 * (unsigned)config.ram_percent >> 20), (unsigned long long)(floor >> 20),
+       (unsigned long long)((total > floor ? total - floor : 0) >> 20), config.ram_fit_on ? fits : "nothing else (ram-fit=0)",
+       bound[config.ram_auto_bound < 4 ? config.ram_auto_bound : 0]);
 }
 
 // Every host-mem-log seconds: what the host has left and how much of the guest's RAM it holds (the memfd's pages that
@@ -921,6 +965,7 @@ int main(int argc, char **argv)
     }
     xh_perf_tick();                         // "perf:" lines every perf-log seconds
     host_memory_tick(false);                // "memory: host MemAvailable" every host-mem-log seconds
+    swap_watch();                           // "memory: the host swaps iOS's RAM" when it does
     usb_tick(false, "");                    // "usb: state ..." when the USB gadget changed
     // Until the guest's display driver presents, show what its kernel console draws.
     xh_display *d = xh_display_get();

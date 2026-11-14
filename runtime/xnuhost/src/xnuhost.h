@@ -60,6 +60,11 @@ typedef struct {
   int   ram_lock;           // ram-lock=0|1 (1): mlock the prefaulted RAM where Linux allows and it fits
   int64_t ram_session_reserve;   // ram-session-reserve=SIZE (1 GiB): MemAvailable at the start that ram=auto and the lock leave the host
   int64_t ram_unlock_below;      // ram-unlock-below=SIZE (256 MiB): the valve; 0 = never unlock
+  // What fits (2026-11-14): ram=auto and the lock take no more than xh_ram_fit of MemAvailable at the start.
+  int   ram_fit_on;         // ram-fit=0|1 (1); 0: ram=auto as before 2026-11-14 (share and floor only)
+  int64_t ram_gpu_reserve;  // ram-gpu-reserve=SIZE (256 MiB): KGSL's own memory and the GPU's host buffers
+  int   ram_pagetable_percent;   // ram-pagetable-percent=N (8): the iOS tasks' page tables, % of the guest's RAM
+  uint64_t ram_fit, ram_fit_available;   // what fits and the MemAvailable it came from (both 0: not known)
   int   host_mem_log;       // host-mem-log=SECONDS: the host's MemAvailable in the log every so often; 0 = off; -1 = unset (30)
   int   usb_log;            // usb-log=SECONDS: how often the USB gadget is read for its "usb:" line (usb.c), which is
                             // logged at the start and on every change; 0 = off; -1 = unset (3)
@@ -120,8 +125,10 @@ uint64_t xh_parse_size(const char *text, bool *ok);
 // 0 when that leaves the guest less than 1 GiB. Portable (unit-tested).
 #define XH_RAM_AUTO_PERCENT 90
 #define XH_RAM_AUTO_FLOOR   (3ull << 29)    // 1.5 GiB
-#define XH_RAM_SESSION_RESERVE (1ull << 30) // ram-session-reserve: MemAvailable at the start the fixed RAM leaves the host
+#define XH_RAM_SESSION_RESERVE (1ull << 30) // ram-session-reserve: the headroom what fits leaves the host (surfaceflinger, helpers, zram, kernel)
 #define XH_RAM_UNLOCK_BELOW    (256ull << 20)   // ram-unlock-below: the lock's valve
+#define XH_RAM_GPU_RESERVE     (256ull << 20)   // ram-gpu-reserve
+#define XH_RAM_PAGETABLE_PERCENT 8              // ram-pagetable-percent: the phone, 2026-11-14: 575 MiB for 7263 MiB held
 #define XH_RAM_MAX (64ull << 30)            // the RAM window and the kernel's own range share 0x20_0000_0000 .. 0x3c_0000_0000
 uint64_t xh_ram_auto(uint64_t total, unsigned percent, uint64_t floor);
 // MemTotal and MemAvailable of a /proc/meminfo file, in bytes: 0, or -1 when the file has not both.
@@ -254,12 +261,19 @@ extern uint64_t g_discard_fixed_refused;
 int64_t xh_ram_discard_host(bool fixed, int fd, uint64_t fd_base, uint64_t lo, uint64_t len, uint64_t phys, uint64_t size, uint64_t page);
 
 // ---- the guest's RAM held fixed for the session (ramfix.c; docs/booter.md 2.2, "Fixed RAM") ----------------------------
-// ram=auto when the RAM is fixed: xh_ram_auto, and no more than the host's MemAvailable at the start less `reserve` (what
-// the host needs while iOS runs), in 256 MiB steps; 0 under 1 GiB. `bound` says which of the three decided.
+// The guest's RAM that fits beside what the session needs outside it (config.c; docs/booter.md 2.2, "What fits"): the
+// largest G with G + G * pagetable_percent / 100 + gpu + reserve <= available (MemAvailable at xnuhost's start, after
+// the fork stopped One UI). Not rounded; 0 when nothing fits.
+uint64_t xh_ram_fit(uint64_t available, uint64_t reserve, uint64_t gpu, unsigned pagetable_percent);
+// ram=auto: xh_ram_auto and, unless `fit` is UINT64_MAX (ram-fit=0), no more than `fit`, in 256 MiB steps; 0 under 1 GiB.
+// `bound` says which of the three decided.
 enum { XH_RAM_BOUND_SHARE = 1, XH_RAM_BOUND_FLOOR = 2, XH_RAM_BOUND_AVAILABLE = 3 };
-uint64_t xh_ram_fixed_auto(uint64_t total, uint64_t available, unsigned percent, uint64_t floor, uint64_t reserve, unsigned *bound);
-// A RAM of `size` may be locked: the host has it free now and `reserve` besides.
-bool xh_ram_lock_fits(uint64_t size, uint64_t available, uint64_t reserve);
+uint64_t xh_ram_fit_auto(uint64_t total, unsigned percent, uint64_t floor, uint64_t fit, unsigned *bound);
+// The host swaps the guest's RAM: say so once past 64 MiB, then at each further 256 MiB. `*next` (0 at the start) is the
+// level the next line waits for; true when a line is due now.
+#define XH_SWAP_NOTE_FIRST (64ull << 20)
+#define XH_SWAP_NOTE_STEP  (256ull << 20)
+bool xh_swap_note(uint64_t swapped, uint64_t *next);
 #define XH_RAMFIX_STEP (16ull << 20)        // a prefault step: one mlock call or 4096 page reads
 typedef struct {
   // asked (set before the start)
