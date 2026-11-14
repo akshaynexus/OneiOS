@@ -1,5 +1,6 @@
 //! oneios-tool phone: the phone on adb (docs/building.md section 6). Status, switch, return, stage, sums, the
-//! Data store's copy. The rules every command keeps are in `adb.rs`.
+//! Data store's copy, and the session's own commands (`session.rs`: the display helper's restart, the touch IC, the
+//! panel's level). The rules every command keeps are in `adb.rs`.
 //!
 //! **Not run on the phone yet** (no phone on the box it was written on): tested against a stand-in phone,
 //! `tests/phone/fake-adb.sh`, which runs the fork's own root script under its test root.
@@ -10,6 +11,7 @@ pub mod cycle;
 pub mod log;
 pub mod phone;
 pub mod pull;
+pub mod session;
 pub mod sparse;
 
 use adb::Adb;
@@ -47,6 +49,32 @@ pub enum Command {
         /// The line written into return.request (the return logs it)
         #[arg(long, default_value = "oneios-tool: return")]
         note: String,
+    },
+    /// Only during a session: end the display helper (control/display.pid: SIGTERM, then SIGKILL) and start it again
+    /// with the switch script's own command; waits for its first frame in control/display.log. xnuhost is not touched
+    DisplayRestart {
+        /// First put this liboneios-display.so into the staged runtime (runtime/bin/), its SHA-256 checked on the phone
+        #[arg(long, value_name = "PATH")]
+        lib: Option<String>,
+        /// First put this oneios-display.dex into the staged runtime (runtime/lib/), its SHA-256 checked on the phone
+        #[arg(long, value_name = "PATH")]
+        dex: Option<String>,
+        /// Seconds to wait for the new helper's `first frame posted`
+        #[arg(long, value_name = "SECONDS", default_value_t = 30)]
+        timeout: u64,
+        /// Seconds between the old helper's SIGTERM and its SIGKILL
+        #[arg(long, value_name = "SECONDS", default_value_t = 3)]
+        kill_after: u64,
+    },
+    /// Only during a session: the touch IC's power state (/sys/class/sec/tsp/enabled)
+    Touch {
+        #[command(subcommand)]
+        command: TouchCommand,
+    },
+    /// Only during a session: the panel's level (/sys/class/backlight/panel0-backlight/brightness)
+    Backlight {
+        #[command(subcommand)]
+        command: BacklightCommand,
     },
     /// Stage files as the app does (scripts/phone/stage.sh): runtime DIR, runtime-asis DIR, image DIR
     Stage {
@@ -109,6 +137,22 @@ pub enum Command {
         #[arg(long)]
         expect_size: Option<u64>,
     },
+}
+
+#[derive(clap::Subcommand)]
+pub enum TouchCommand {
+    /// Read the node: 1 is on, 0 is off (the IC sleeps after iOS's brightness was 0)
+    Status,
+    /// Write `2,0` then `2,1` (what One UI's input HAL writes when the panel comes on), then read the node back
+    Wake,
+}
+
+#[derive(clap::Subcommand)]
+pub enum BacklightCommand {
+    /// The level, max_brightness, and One UI's own value that the return writes back (read only)
+    Status,
+    /// Write LEVEL (1 to max_brightness: 12750 on the S24 Ultra); the return writes One UI's own value back
+    Set { level: u32 },
 }
 
 #[derive(clap::Args)]
@@ -196,6 +240,13 @@ pub fn main(cli: Cli) -> i32 {
         Command::Log(args) => phone_log(serial, args),
         Command::Switch { version_code } => Adb::connect(serial).and_then(|adb| phone::switch(&adb, version_code).map(|_| ())),
         Command::Return { timeout, note } => Adb::connect(serial).and_then(|adb| phone::do_return(&adb, &note, timeout)),
+        Command::DisplayRestart { lib, dex, timeout, kill_after } => {
+            Adb::connect(serial).and_then(|adb| session::display_restart(&adb, &session::Restart { lib, dex, timeout, kill_after }))
+        }
+        Command::Touch { command: TouchCommand::Status } => Adb::connect(serial).and_then(|adb| session::touch_status(&adb)),
+        Command::Touch { command: TouchCommand::Wake } => Adb::connect(serial).and_then(|adb| session::touch_wake(&adb)),
+        Command::Backlight { command: BacklightCommand::Status } => Adb::connect(serial).and_then(|adb| session::backlight_status(&adb)),
+        Command::Backlight { command: BacklightCommand::Set { level } } => Adb::connect(serial).and_then(|adb| session::backlight_set(&adb, level)),
         Command::Stage { kind, dir } => Adb::connect(serial).and_then(|adb| phone::stage(&adb, &kind, &dir)),
         Command::Sums => Adb::connect(serial).and_then(|adb| phone::sums_text(&adb).map(|text| print!("{text}"))),
         Command::ImageCheck => Adb::connect(serial).and_then(|adb| {

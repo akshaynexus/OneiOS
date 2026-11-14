@@ -104,6 +104,17 @@ A tool the package lacks is shown as "Not in this runtime", not as a failure.
 | `logs/` | earlier sessions' `xnuhost-<epoch>.log` (the last 5; the next switch moves `session/xnuhost.log` there, so the epoch is that switch's time and the file's own time is its session's last line) | switch |
 | `switch.log`, `return.log`, `return.outcome`, `control/display.log`, `control/watchdog_feeder.log`, `control/usb.log` | the fork's own logs: the switch, the return with the watcher and the key readers, how the last return ended, the display helper's output, the watchdog feeder, the session's USB watcher (section 6a) | switch, return |
 
+**What OneiOS's CLI writes there during a session** (`oneios-tool phone display-restart`, from the PC over adb;
+`tools/oneios-tool/README.md`, "The session's own commands"; stand-in tested, not run on the phone): it ends the
+display helper that `control/display.pid` names and starts another with the switch's own command line, in init's
+mount namespace, so `control/display.pid` then names the new one and `control/display.log` goes on with its
+lines; the return needs nothing new (it ends the helper by that pid file, and the helper is in the cgroup
+`oneios_session`). With `--lib` or `--dex` it replaces `runtime/bin/liboneios-display.so` or
+`runtime/lib/oneios-display.dex` and writes their lines in `runtime.sha256` and `runtime.ids` again, so the next
+preflight's `check_list runtime full` passes with the new files. The fork has no mode for the restart
+(`oneios_switch.sh`, `oneios_root.sh` at `3876dd5`); if it gets one (`oneios_switch.sh --display-restart`), the
+tool should call it instead of keeping its copy of the start line.
+
 ## 4. How the switch starts xnuhost
 
 After its preflight and the stop of One UI's zygote, `oneios_switch.sh` runs, as root (KernelSU's domain,
