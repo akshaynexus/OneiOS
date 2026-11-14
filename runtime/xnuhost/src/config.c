@@ -475,6 +475,21 @@ static bool has_switch(const char *args, const char *name)
   return false;
 }
 
+bool xh_boot_args_hides_vmm_from(const char *args, const char *name)
+{
+  static const char key[] = "owner-hide-vmm=";
+  size_t n = strlen(name);
+  for (const char *p = args; (p = strstr(p, key)); p++) {
+    if (p != args && p[-1] != ' ') continue;
+    for (const char *e = p + sizeof key - 1; *e && *e != ' ';) {
+      size_t len = strcspn(e, ", ");
+      if (len == n && !strncmp(e, name, n)) return true;
+      e += len + (e[len] == ',');
+    }
+  }
+  return false;
+}
+
 // The display's switches the guest needs, unless the command line has them: its UI scale, the panel's rate, and
 // with a half-float frame (display-format=rgba16f) oneios-display-wide=1, which tells the guest's display to hand
 // half-float surfaces to the scanout as they are (XH_VIRTIO_GPU_FORMAT_RGBA16F) instead of narrowing them to 8 bits.

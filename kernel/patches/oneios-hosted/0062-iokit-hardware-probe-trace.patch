@@ -26,7 +26,7 @@ diff --git a/bsd/kern/kern_control.c b/bsd/kern/kern_control.c
 diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
 --- a/iokit/Kernel/IOUserClient.cpp
 +++ b/iokit/Kernel/IOUserClient.cpp
-@@ -2728,6 +2728,219 @@
+@@ -2728,6 +2728,237 @@
  	return internal_io_service_match_property_table(service, matching, matchingCnt, matches);
  }
  
@@ -241,6 +241,24 @@ diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
 +	}
 +	hosted_iokit_say(name, request, error, answer);
 +}
++
++/* kern.hv_vmm_present as a process read it (bsd/kern/hvg_sysctl.c, with Droid-VM-UniXNU's owner-hide-vmm): a line for a
++ * traced process, and for any process the hide applied to, once per process (again if its answer changes). */
++extern "C" void hosted_iokit_vmm_read(int answer, int hidden);
++extern "C" void
++hosted_iokit_vmm_read(int answer, int hidden)
++{
++	char name[33];
++	if (!hosted_iokit_traced(name, sizeof(name))) {
++		if (!hidden) {
++			return;
++		}
++		name[0] = 0;
++		proc_name(proc_selfpid(), name, (int)sizeof(name));
++	}
++	hosted_iokit_say(name, "sysctl kern.hv_vmm_present", answer + 2 * hidden,
++	    hidden ? "0 (the virtual machine hidden by owner-hide-vmm)" : answer ? "1 (a virtual machine)" : "0");
++}
 +#endif /* XNU_HOSTED */
 +
  static kern_return_t
@@ -436,3 +454,23 @@ diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
  
  /* Routine io_service_close */
  kern_return_t
+diff --git a/bsd/kern/hvg_sysctl.c b/bsd/kern/hvg_sysctl.c
+--- a/bsd/kern/hvg_sysctl.c
++++ b/bsd/kern/hvg_sysctl.c
+@@ -170,6 +170,16 @@
+ #endif
+ 
+ 	vmm_present = !!vmm_present;
++#if XNU_HOSTED && defined(__arm64__)
++	/* OneiOS hosted (0062): which process read it and what it got; a line once per process the hide applied to, and for
++	 * the processes oneios-iokit= traces (iokit/Kernel/IOUserClient.cpp). */
++	if (req->p != kernproc) {
++		extern void hosted_iokit_vmm_read(int answer, int hidden);
++		int in_tree = 0;
++		(void) IODTGetDefault("vmm-present", &in_tree, sizeof(in_tree));
++		hosted_iokit_vmm_read(vmm_present, in_tree != 0 && vmm_present == 0);
++	}
++#endif
+ 	return SYSCTL_OUT(req, &vmm_present, sizeof(vmm_present));
+ }
+ 
