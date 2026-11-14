@@ -1036,6 +1036,8 @@ wired by the VM tag of the caller's mapping; sizes under 1 MiB; ages; closed blo
 by the time measured since its last walk and prints those seconds (it divided by the nominal 10 s: a late report in a
 stall inflated every share). Built into the kernel of 0066's boot B and booted on the PC (no 3D there: the hooks are
 never called, the table is never made; the `oneios-cpu` lines are). Not run on the phone.
+Since 2026-11-14 (fix-thermal-log) an `oneios-cpu-sys:` line follows each `oneios-cpu:` line with the same processes'
+kernel time (`docs/gpu.md` 5.1); compiled alone with the kernel build's own flags, not yet in a built kernel.
 
 ## 0049-wifi-association-event.patch (radio2, 2026-11-12)
 

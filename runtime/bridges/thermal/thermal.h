@@ -11,6 +11,7 @@
 #define ONEIOS_BRIDGE_THERMAL_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #define BR_THERMAL_UNKNOWN INT32_MIN      // a reading that is missing (all readings are tenths of a degree C)
@@ -82,11 +83,38 @@ typedef struct {
 int br_thermal_find(const char *root, br_thermal_sensors *s);
 void br_thermal_read(const br_thermal_sensors *s, br_thermal_raw *raw);
 
+// ---- where the heat comes from (2026-11-14) -------------------------------------------------------
+// One sample of the host's load, from named files only (never a folder list): root/proc/stat's "cpu" line and its cpuN
+// count, root/proc/vmstat's pswpin and pswpout, root/proc/self/stat's utime and stime (this process: xnuhost), and
+// root/sys/class/power_supply/battery/{temp,current_now,status}. A field that cannot be read is 0 with its have_* false.
+typedef struct {
+  bool have_cpu, have_swap, have_self, have_current;
+  unsigned ncpu;                          // cpuN lines of /proc/stat
+  uint64_t user, nice, system, idle, iowait, irq, softirq, steal;   // the "cpu" line, ticks summed over every CPU
+  uint64_t pswpin, pswpout;               // pages since boot
+  uint64_t self_ticks;                    // utime + stime of root/proc/self/stat
+  int64_t current;                        // current_now as the phone gives it (Samsung: mA; + charging, - discharging)
+  char status[16];                        // "Charging", "Discharging", "Full", "Not charging", or ""
+  uint64_t ms;                            // when (CLOCK_MONOTONIC; the caller may set it in tests)
+} br_host_load;
+
+#define BR_THERMAL_LOAD_MS 30000u         // the "thermal: load" line's period
+
+void br_host_load_read(const char *root, br_host_load *out);
+// The one line between two samples, after "thermal: ":
+//   "30 s: host CPU 800% of 800 (sys 226%, user 167%, irq 12%), swap in 9520 out 8040 KiB/s, xnuhost 152%;
+//    battery 40.3 C, Charging 1600 mA; case 41.0 C, SoC 78.0 C (cpu-1-2-1)"
+// Percentages are of one CPU, as top shows them (all busy = ncpu x 100). Missing parts say "-". `page` is the host's
+// page size in bytes (for swap KiB/s). Returns the length written (out is always terminated).
+size_t br_host_load_line(const br_host_load *was, const br_host_load *now, const br_thermal_raw *raw, unsigned page,
+                         char *out, size_t size);
+
 // ---- the session --------------------------------------------------------------------------------
 typedef struct {
   const char *root;                       // NULL: the phone's paths
   uint32_t poll_ms;                       // 0: BR_THERMAL_POLL_MS
   const br_thermal_limits *limits;        // NULL: the defaults and ONEIOS_THERMAL_SKIN, _SOC, _BATTERY
+  uint32_t load_ms;                       // 0: BR_THERMAL_LOAD_MS, the "thermal: N s: host CPU" line's period
 } br_thermal_options;
 
 typedef void (*br_thermal_fn)(void *ctx, const br_thermal_state *state);
