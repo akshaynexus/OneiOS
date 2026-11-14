@@ -7,7 +7,9 @@
 # asked for first and its absence said; status; `stage runtime|runtime-asis|image` and `sums` against
 # scripts/phone/stage.sh on a second, equal stand-in phone (the same output, the same stage afterwards); the
 # refusals while a session is open; switch (the versionCode is the installed app's) and a refused preflight;
-# return (the restore line, no session, a return that hangs); pull-data (the copy is the phone's file, sparse;
+# return (the restore line, no session, a return that hangs); the session's own commands (session-cmds.sh:
+# display-restart with --lib and --dex, touch status and wake, backlight status and set, each refused without a
+# session, and the return after them); pull-data (the copy is the phone's file, sparse;
 # a size that does not match); sparse-write. The session check's command is the phone's, byte for byte, and a pid
 # that is not an xnuhost's is no session. Every case ends the stand-in session it left (end_case), and at the
 # end, a failure or Ctrl-C none is left running (lib.sh's traps).
@@ -175,6 +177,9 @@ phone switch --version-code 115 > /dev/null 2>&1; wait_for 5 has_session "$P"
 check "return: a return that hangs ends at --timeout, with the log's tail" 1 "no restore line after [0-9]+ s" phone return --timeout 3
 rm "$P/.fake/no-return"; wait_for 10 no_session "$P" || end_session "$P"
 end_case
+
+# ---- the session's own commands: display-restart, touch, backlight (tests/phone/session-cmds.sh, a phone of its own)
+. "$HERE/session-cmds.sh"; session_cmd_checks
 
 # ---- pull-data and sparse-write
 check "pull-data" 0 "$W/data.img: 50331648 bytes, [0-9]+ of them written" phone pull-data "$W/data.img"

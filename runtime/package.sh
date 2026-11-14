@@ -13,6 +13,9 @@
 # Nothing of Apple's goes in: `oneios-tool package` (tools/oneios-tool/crates/oneios-package; it was package/pack.py
 # until 2026-11-13) refuses firmware names and containers, and any Mach-O that is
 # not our own source-built XNU (docs/releases.md).
+# Nothing that Android cannot load goes in either: runtime/package/elf-check.sh reads every dynamic ELF file of the
+# stage (the display helper's library, the dynamic helpers) and the package is refused (exit 3) when one needs a
+# library that is no API 30 stub of the NDK, or has an undefined symbol that none of its NEEDED libraries defines.
 # Build hosts: Linux x86_64 and macOS (runtime/host.mk). Needs Rust (cargo) for oneios-tool, which is built when it
 # is missing or older than its sources (scripts/lib/oneios-tool.sh; ONEIOS_TOOL=PATH names another binary).
 # Env: ANDROID_NDK_ROOT (default $HOME/Android/Sdk/ndk/28.2.13676358, on macOS $HOME/Library/Android/sdk/ndk/...;
@@ -122,7 +125,15 @@ fi
 [ -f "$ROOT/LICENSE" ] && cp "$ROOT/LICENSE" "$STAGE/LICENSE"
 if [ -n "${PACKAGE_EXTRA_DIR:-}" ]; then cp -R "$PACKAGE_EXTRA_DIR/." "$STAGE/"; fi
 
-# 5. Checks and manifest.
+# 5. Checks and manifest. First: can Android load every dynamic ELF file of the stage (elf-check.sh's header)?
+# runtime/build.sh has checked its own stage; this is the package's content as it goes out.
+elf=0
+NDK=${NDK:-$ANDROID_NDK_ROOT} "$ROOT/runtime/package/elf-check.sh" "$STAGE" || elf=$?
+if [ "$elf" = 1 ]; then
+  echo "package: refused: Android cannot load a file of the package (the lines above; runtime/package/elf-check.sh, docs/releases.md)" >&2
+  exit 3
+fi
+[ "$elf" = 0 ] || { echo "package: runtime/package/elf-check.sh could not run (exit $elf)" >&2; exit 1; }
 COMMIT=$(git -C "$ROOT" rev-parse HEAD)
 DIRTY=0
 [ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no -- runtime kernel)" ] || DIRTY=1

@@ -1,7 +1,8 @@
 # A tag vN.N.N (or vN.N.N-suffix, a pre-release) on main: build the runtime package with the pinned NDK and
 # attach it and its .sha256 to the GitHub release of that tag (docs/releases.md).
 # The release holds OneiOS's own code only; nothing of Apple's is downloaded or uploaded here. runtime/package.sh
-# refuses Apple files with `oneios-tool package` (Rust; .github/scripts/setup-build.sh builds it).
+# refuses Apple files with `oneios-tool package` (Rust; .github/scripts/setup-build.sh builds it), and a library or
+# dynamic helper that Android could not load with runtime/package/elf-check.sh (the NDK's API 30 stubs).
 name: release
 on:
   push:
@@ -40,6 +41,7 @@ jobs:
       - name: Host tests
         run: |
           set -euo pipefail
+          runtime/package/elf-check-test.sh
           runtime/package/test.sh
           kernel/tests/host.sh
       - name: Kernel from the kernel release, when the tag names one
@@ -62,6 +64,14 @@ jobs:
           for b in bin/xnuhost bin/gpuctl; do
             if strings "$d/$b" | grep -q 'this build has no drm2kgsl'; then echo "$b was built without drm2kgsl"; exit 1; fi
           done
+      - name: Android can load the package's libraries and dynamic helpers
+        # runtime/package.sh refused a stage with such a file already; this reads the archive that is uploaded.
+        # liboneios-display.so of 1f7dd1f linked with a symbol none of its NEEDED libraries has, and the phone could
+        # not load it (2026-11-14; docs/releases.md).
+        run: |
+          set -euo pipefail
+          d=$(mktemp -d); zstd -dc out/release/oneios-runtime-$VERSION-arm64.tar.zst | tar -x -C "$d"
+          runtime/package/elf-check.sh "$d"
       - name: Release
         run: |
           set -euo pipefail
