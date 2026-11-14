@@ -59,7 +59,9 @@ The board (`docs/agents.md`) is for coordination between agents; it is **not** a
   input devices (event0, event2, event4), run realtime threads, leave its namespace or cgroup, lower its OOM score,
   write under `/sys/power`, or reboot. See `oneos/interface.md` and the fork's `docs/oneios.md`.
 - Phone tools run as root with One UI running and must restore whatever they change.
-- **Phone and app work goes through `oneios-tool`** (`phone` status/switch/return/stage/sums/log/pull-data, `app`,
+- **Phone and app work goes through `oneios-tool`** (`phone` status/switch/return/stage/sums/log/pull-data, and in a
+  session only `phone display-restart` (the display helper again, `--lib`/`--dex` for new files), `phone touch
+  status|wake`, `phone backlight status|set N`; `app`,
   `cycle`). Use adb, the shell scripts or other tools directly only when the CLI fails or lacks the command, then
   say so and fix or extend the CLI.
 - **No new Python.** Use `oneios-tool` (Rust) for every job it covers: `sym`, `sym kernel`, `log`, `ioslog`, `image`,

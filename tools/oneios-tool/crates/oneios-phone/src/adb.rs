@@ -3,7 +3,10 @@
 //! - root is checked first and its absence said plainly (KernelSU's root does not survive a restart);
 //! - on the phone only named files are read: no command here walks a tree (no `find`, `ls -R`, `du`; a walk of
 //!   sysfs or /proc panicked the phone's kernel on 2026-11-12);
-//! - a command that changes the stage refuses while a session is open;
+//! - a command that changes the stage refuses while a session is open (but `display-restart --lib/--dex`, which
+//!   replaces the display helper's two files, read by the helper on One UI's side only: `session.rs`);
+//! - the session's own commands (`display-restart`, `touch`, `backlight`: `session.rs`) refuse without a session:
+//!   what they touch is One UI's then;
 //! - nothing here restarts the phone or writes under /sys/power.
 //!
 //! `ADB` names the adb program (the tests' stand-in phone, `tests/phone/fake-adb.sh`).
