@@ -1595,8 +1595,8 @@ static void test_ramfix(void)
   CHECK(xh_ram_resident(base, size, 4096) <= size);
   munmap(base, size); close(fd);
 
-  // A lock that fails part way (ENOMEM: RLIMIT_MEMLOCK, or the host has not the memory): what was locked is unlocked again,
-  // all of the RAM is still prefaulted (read), the boot goes on; the errno is kept for the log.
+  // A lock that fails part way (ENOMEM: RLIMIT_MEMLOCK, or the host has not the memory): what was locked is unlocked again
+  // and the prefault stops (an unlocked, unused page is the first the host swaps); the boot goes on, the errno is kept.
   fd = test_ram(size, &base);
   CHECK(fd >= 0);
   if (fd < 0) return;
@@ -1605,13 +1605,13 @@ static void test_ramfix(void)
   r = (xh_ramfix){ .lock = true, .step = 4 * M };
   xh_ramfix_prefault(&r, base, size);
   CHECK(r.done && r.lock_error == ENOMEM && r.locked == 0 && !r.locking && fake_mlocks == 3 && fake_munlocks == 1 && fake_munlocked == 8 * M);
-  CHECK(r.prefaulted == size && memfd_held(fd) == size);
+  CHECK(r.prefaulted == 8 * M && memfd_held(fd) == 8 * M);
   // EPERM at once (no CAP_IPC_LOCK, a zero RLIMIT_MEMLOCK): nothing to unlock.
   CHECK(xh_ram_discard_fd(fd, 0, 0, size, 0, size, 4096) == 0 && memfd_held(fd) == 0);
   fake_mlocks = fake_munlocks = 0; fake_mlock_ok = 0; fake_mlock_errno = EPERM;
   r = (xh_ramfix){ .lock = true, .step = 4 * M };
   xh_ramfix_prefault(&r, base, size);
-  CHECK(r.lock_error == EPERM && r.locked == 0 && fake_mlocks == 1 && fake_munlocks == 0 && memfd_held(fd) == size);
+  CHECK(r.lock_error == EPERM && r.locked == 0 && fake_mlocks == 1 && fake_munlocks == 0 && r.prefaulted == 0 && memfd_held(fd) == 0);
   // A lock that holds: all locked, and the valve opens once, only under its floor.
   fake_munlocked = 0;
   fake_mlock_ok = 1000;
@@ -1658,7 +1658,7 @@ static void test_ramfix(void)
       fd = test_ram(big, &base);
       r = (xh_ramfix){ .lock = true, .step = big };
       xh_ramfix_prefault(&r, base, big);
-      CHECK((r.lock_error == ENOMEM || r.lock_error == EPERM) && r.locked == 0 && r.prefaulted == big && memfd_held(fd) == big);
+      CHECK((r.lock_error == ENOMEM || r.lock_error == EPERM) && r.locked == 0 && r.prefaulted == 0 && memfd_held(fd) == 0);
       munmap(base, big); close(fd);
     }
   } else printf("ramfix: RLIMIT_MEMLOCK %llu KiB here: the real lock is not tried\n", (unsigned long long)(l.rlim_cur >> 10));
@@ -1704,7 +1704,7 @@ static void test_ramfix(void)
     if (child == 0) {
       uint8_t *b;
       int f = test_ram(big, &b);
-      xh_ramfix rr = { .lock = true, .step = 16 * M };
+      xh_ramfix rr = { .lock = false, .step = 16 * M };
       if (f >= 0) xh_ramfix_prefault(&rr, b, big);
       char one = f >= 0 && memfd_held(f) == big ? 'y' : 'n';
       if (write(ready[1], &one, 1) != 1) _exit(1);

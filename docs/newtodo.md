@@ -68,7 +68,7 @@ docs each item names. **Proven** = ran on the phone; **built** = compiled and ho
    `ram=auto` now takes no more than what fits beside the session's needs (MemAvailable at the start less 1 GiB
    headroom, 256 MiB for KGSL and 8 % of the guest for page tables: about 6.4-7.2 GiB on this phone, by its start
    MemAvailable); an error line when `ram=` by hand is more than fits; `memory: the host swaps iOS's RAM: N MiB ...` with
-   the host's swap rates when it happens; kernel 0067 in the series. PC results and the next phone boot's settings:
+   the host's swap rates when it happens; kernel 0067 in the series; no prefault without the lock (the PC boot B swapped 841 MiB of a prefaulted, unlocked guest). Next phone boot: `ram=6G` on main before fix-ram-fit; with it, `ram=auto` and one try of `ram-giveback=0` (whether `locked (mlock: ...)` shows). PC results and the lines to read:
    `docs/booter.md` 2.2 "What fits". GPU memory is the guest's own RAM, so no separate pool is needed (`docs/gpu.md` 2).
 6. **Haptics and the power key** (`docs/hardware.md` 5, PR #17): the counters show where a tap stops. PC boot with
    `--set haptics=sim`; phone: `Actuator: user client N opened by audiomxd`, audiomxd's `actuator port` lines; the

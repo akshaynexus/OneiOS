@@ -1019,7 +1019,9 @@ host: no (the host holds the RAM fixed); the free queues take the pages iOS free
 - **State.** Written against `vm_resident.c` after 0066 and `hostcall.h` after 0003. Compiled on the Linux PC
   (2026-11-14, `HOSTED_OUT=fixram`, the series of main `f7bb1c3` plus 0067: `xnu.macho` `f9a4b99e`, 1541 s; no warning
   from it), prelinked (`kernel.kc` `e128c27b`: audit 0 failures, 2711 paired; `oneios-tool prelink stubs-check` 666 good,
-  0 bad). The PC boot: `docs/booter.md` 2.2 "What fits" (A/B with `ram-giveback=1` and `0`).
+  0 bad). Booted on the PC twice (`docs/booter.md` 2.2, "Fixed RAM", the A/B table): with `ram-giveback=1` the start
+  line says `free pages given back to the host: yes (the host does not hold the RAM fixed)`, with `ram-giveback=0` `no
+  (the host holds the RAM fixed)` and xnuhost counted no `ram_discard` call; no panic in 960 s each. Not run on the phone.
 - **Without it** xnuhost's `ram-giveback=0` still works: the first `ram_discard` of 0058/0066 gets -EPERM and the kernel
   stops for the boot (`oneios-mem: ram_discard(...) failed: -1; free pages are no longer given back`); one batch's pages
   go back to the head of the free queue.

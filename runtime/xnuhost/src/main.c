@@ -219,8 +219,11 @@ static void ram_fix_start(void)
   g_ramfix.unlock_below = (uint64_t)config.ram_unlock_below;
   // A lock is safe only with room beside it: the RAM must be within what fits (config.c, xh_ram_fit) at the start.
   if (g_ramfix.lock && config.ram_fit_available && g_mem.size > config.ram_fit) {
-    g_ramfix.lock = false;
-    g_ramfix.lock_why = "more than fits beside the session's needs (ram-fit)";
+    // Not prefaulted either: an unlocked page iOS has not used is the first the host swaps (PC boot of 2026-11-14).
+    LOGI("memory: the guest's RAM is held for the session: %llu MiB, not locked and not prefaulted (more than fits beside the "
+         "session's needs: %llu MiB); free pages are not given back (ram-giveback=0); %s", (unsigned long long)(g_mem.size >> 20),
+         (unsigned long long)(config.ram_fit >> 20), facts);
+    return;
   }
   LOGI("memory: the guest's RAM is held for the session: %llu MiB, prefaulted on a thread at nice 19 in %llu MiB steps, %s; free pages are "
        "not given back (ram-giveback=0); %s", (unsigned long long)(g_mem.size >> 20), (unsigned long long)(XH_RAMFIX_STEP >> 20),
