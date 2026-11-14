@@ -8,6 +8,7 @@
 mach   bridge/OneiOSBridge.c
 bsd    haptics/oneios_haptic.c
 iokit  haptics/OneiOSVibrator.cpp
+iokit  haptics/OneiOSButtonHaptics.cpp
 bsd    bluetooth/oneios_bt.c
 bsd    bluetooth/oneios_bt_h4.c
 bsd    bluetooth/oneios_bt_ios.c

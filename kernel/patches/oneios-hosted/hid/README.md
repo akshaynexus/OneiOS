@@ -187,7 +187,10 @@ uses it.
 
 Built by `kernel/build-hosted.sh` (needs `external/NativeHidInput` at 24f1f3f or later: `scripts/setup/get-references.sh
 NativeHidInput`, after removing an older checkout). Boot arguments: `oneios-hid=0` starts nothing; `oneios-hid-log=0`
-silences the state lines; `oneios-hid-driverkit=1` adds no personalities; `droidvm-input=0` leaves xnuhost's input
+silences the state lines; `oneios-hid-driverkit=1` adds no personalities; `oneios-hid-buttons-builtin=1` (off by default,
+fix-power-key 2026-11-14, not proven) publishes `Built-In` and the Consumer Control pair (0x0C, 1) on the buttons' event
+service and interface, because backboardd lists the buttons as `eventSource: externalKeyboard` (`docs/hardware.md` 5,
+"The power key: a stand-in ..."; log `oneios-hid: buttons: Consumer Control, Built-In published ...`); `droidvm-input=0` leaves xnuhost's input
 device alone.
 
 Console lines (`guest` lines of xnuhost's log), in the order of a good start:
