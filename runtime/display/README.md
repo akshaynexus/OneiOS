@@ -19,6 +19,7 @@ make test          # host tests: the socket protocol, the fit, the damage rectan
 
 Needs NDK 28.2, a JDK (`javac`) and `d8` from the Android SDK's build-tools (`ANDROID_SDK_ROOT`, `ANDROID_HOME`,
 or the SDK the NDK is in). No `android.jar`: the Java source reaches the framework by reflection only.
+`liboneios-display.so` links `-landroid -lnativewindow -lm` (the dataspace calls are libnativewindow's) with `../host.mk`'s `ANDROID_SO_LDFLAGS` (`-Wl,-z,defs`: a symbol that none of them has fails the link), and `runtime/build.sh` checks its NEEDED libraries and undefined symbols against the NDK's API 30 stubs (`runtime/package/elf-check.sh`; `docs/building.md` section 4).
 
 | File | What it is |
 |---|---|

@@ -44,6 +44,28 @@ enforces this on every package, and `runtime/package/test.sh` tests it:
 A refusal ends with exit code 3 and no package. CI also refuses firmware-like names, Mach-O files and files over
 5 MiB in git (`.github/scripts/check-tracked-files.sh`).
 
+## What a release must be able to load
+
+A package with a library or a dynamic helper that Android's linker would refuse is refused too (exit code 3, no
+package). `runtime/package.sh` runs `runtime/package/elf-check.sh` on the stage, after `runtime/build.sh` (which runs
+it on its own stage, and fails when the check does) and before the manifest: every NEEDED library of every dynamic arm64 ELF file
+(`bin/liboneios-display.so`, `bin/oneios-audio`, `bin/oneios-camera`, `bin/camctl`) must be one of the NDK's API 30
+stubs or a library in the package, and every undefined symbol must be defined by one of the file's NEEDED libraries
+([building.md](building.md) section 4 has the rule, the check and its tests). The refusal names the file, the symbol
+and the library that has it:
+
+```
+bin/liboneios-display.so: symbol ANativeWindow_getBuffersDataSpace is in none of its NEEDED libraries (NEEDED: libandroid.so, libm.so, libdl.so, libc.so); it is in libnativewindow.so
+package: refused: Android cannot load a file of the package (the lines above; runtime/package/elf-check.sh, docs/releases.md)
+```
+
+That is the library of `1f7dd1f` (PR #15): it linked, and the phone could not load it (2026-11-14: the display helper
+ended with `UnsatisfiedLinkError`, the panel stayed on the OneOS splash). No tagged release has that commit
+(`git tag --contains 1f7dd1f` is empty; the last tag is v0.1.8); the phone ran a build of `main`.
+`runtime/package/test.sh` makes such a library (`runtime/package/elf-fault.c`, linked `-landroid -lm` without
+`-z defs`), puts it in the display helper's place and expects the refusal. The check reads the files only: what it
+cannot see is in [building.md](building.md) section 4.
+
 ## runtime.json
 
 ```json
@@ -110,10 +132,12 @@ runtime/package.sh 0.1.7-dev                           # -> out/release/oneios-r
   target, then **oneios-tool** (`.github/scripts/setup-build.sh`: a current stable Rust, `cargo build --release
   --manifest-path tools/oneios-tool/Cargo.toml`, a few minutes): `runtime/package.sh` refuses Apple files with its
   `package` command (and would build the tool itself when it were missing), and `kernel/tests/host.sh` runs its
-  `kernel series-check` and `kernel build-record --self-test`; the host tests (`runtime/package/test.sh`, `kernel/tests/host.sh`, and any executable `*/tests/host.sh` of
-  another area); `runtime/package.sh 0.0.0-ci`, kept as an artifact for 14 days.
+  `kernel series-check` and `kernel build-record --self-test`; the host tests (`runtime/package/elf-check-test.sh`: the link rule of shared objects and
+  the NEEDED and symbol check, above; `runtime/package/test.sh`, `kernel/tests/host.sh`, and any executable `*/tests/host.sh` of
+  another area); `runtime/package.sh 0.0.0-ci` (which runs the check on its stage), kept as an artifact for 14 days.
 - `release.yml` (a tag `v*`): checks that the tag is a version and its commit is on `main`, builds oneios-tool by the
-  same script, runs the tests, packages
+  same script, runs the tests (`runtime/package/elf-check-test.sh`, `runtime/package/test.sh`, `kernel/tests/host.sh`), packages,
+  unpacks the archive and runs `runtime/package/elf-check.sh` on it (and the drm2kgsl check below),
   and uploads the asset and its `.sha256` to the release of the tag (created if missing; a pre-release when the
   version has a suffix).
 - Neither downloads anything of Apple's. Actions are pinned by commit.
@@ -146,7 +170,7 @@ Checked after the workflow ran: the asset's SHA-256 against its `.sha256`, `runt
 
 ```sh
 git pull --rebase origin main
-runtime/package/test.sh && kernel/tests/host.sh        # the tests CI runs
+runtime/package/elf-check-test.sh && runtime/package/test.sh && kernel/tests/host.sh   # the tests CI runs
 runtime/host-tests.sh                                  # the runtime's other host tests (Apple's container on a Mac)
 runtime/package.sh 0.1.0                               # optional: look at out/release/*.runtime.json
 git tag -a v0.1.0 -m "OneiOS runtime 0.1.0" && git push origin v0.1.0

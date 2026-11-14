@@ -157,8 +157,10 @@ tool: sizes with `wc -c`, CPUs with `getconf _NPROCESSORS_ONLN`, checksums with 
 
 ```sh
 runtime/build.sh STAGE            # -> STAGE/bin/xnuhost (static), the bridges' helpers, the display helper,
-                                  #    and the phone checks (gpuctl, bridgectl, wifictl, brightctl, batteryctl, thermalctl, displayctl, camctl)
+                                  #    and the phone checks (gpuctl, bridgectl, wifictl, brightctl, batteryctl, thermalctl, displayctl, camctl);
+                                  #    then the NEEDED and symbol check of the stage (runtime/package/elf-check.sh, below)
 runtime/package.sh 0.1.0-dev      # -> out/release/oneios-runtime-0.1.0-dev-arm64.tar.zst + .sha256 + runtime.json
+runtime/package/elf-check.sh DIR  # can Android load every library and dynamic helper under DIR? (a stage, or one file)
 runtime/host-tests.sh             # every host test of the runtime, one summary line per part (below)
 runtime/build.sh --test           # Linux: the loader, xnuhost and display tests (xnuhost's with the Android binary on
                                   #   qemu-aarch64); macOS: the same as runtime/host-tests.sh
@@ -171,9 +173,71 @@ the phone: without it xnuhost and gpuctl build with the 2D GPU only and say so a
 (`make -C runtime/xnuhost test`: the unit tests, drm2kgsl and its leak test with LeakSanitizer, the image set, and
 the Android xnuhost booting the test kernel), `display` (`make -C runtime/display test`), `bridges`
 (`runtime/bridges/tests/host.sh`: the unit tests, `test-binder`, brightness, battery), `camera`
-(`runtime/bridges/camera/tests/host.sh`) and `package` (`runtime/package/test.sh`, when the NDK is there).
+(`runtime/bridges/camera/tests/host.sh`), `links` (`runtime/package/elf-check-test.sh`: the link rule and the check
+of the next section) and `package` (`runtime/package/test.sh`); the last two when the NDK is there.
 A part that ends with exit 0 but skipped something shows the first "skipped" line. The exit code is 1 when a part
 failed. Other host tests: `scripts/image/tests/run.sh`.
+
+### Shared objects: the link rule and the NEEDED check
+
+A shared object links with symbols left undefined; Android's linker refuses it when it is loaded. That reached the
+phone on 2026-11-14: `liboneios-display.so` of `1f7dd1f` called `ANativeWindow_getBuffersDataSpace` and
+`ANativeWindow_setBuffersDataSpace`, which the NDK has in `libnativewindow.so`, and linked `-landroid -lm` only. The
+build passed, `app_process` said `dlopen failed: cannot locate symbol "ANativeWindow_getBuffersDataSpace" referenced
+by liboneios-display.so`, and the panel stayed on the OneOS splash (`f7bb1c3` linked `-lnativewindow`). Two things
+now stop such a file on the build machine:
+
+1. **The link rule.** `runtime/host.mk` has `ANDROID_SO_LDFLAGS := -Wl,-z,defs`, and every `-shared` link line of a
+   runtime Makefile carries `$(ANDROID_SO_LDFLAGS)`: a symbol that no library named on the line has is a link error
+   (`ld.lld: error: undefined symbol: ...`). The runtime builds one shared object, `liboneios-display.so`
+   (`runtime/display/Makefile`); a new one takes the same variable, and `runtime/package/elf-check-test.sh` fails
+   when a `-shared` line has none. Executables need no flag: lld fails on an undefined symbol in an executable by
+   default, a static one (xnuhost, the phone checks) and a dynamic one (`oneios-audio`, `oneios-camera`, `camctl`)
+   alike. The test links one of each with a missing symbol and expects the failure.
+2. **The check**, `runtime/package/elf-check.sh [--api N] PATH...` (POSIX shell; the NDK's `llvm-readelf` and
+   `llvm-nm`; `PATH` is a stage or one file). For every arm64 ELF file with a dynamic section:
+   - each NEEDED library must be a stub of the NDK for API 30
+     (`toolchains/llvm/prebuilt/<host>/sysroot/usr/lib/aarch64-linux-android/30/*.so`: the libraries every Android
+     of that level has; 30 is the level the runtime Makefiles compile for) or a library that is in the stage itself
+     (by its SONAME, or by its file name when that ends in `.so`);
+   - each undefined dynamic symbol must be defined by one of the file's own NEEDED libraries, a versioned reference
+     (`fopen@LIBC`) with that version. Weak references are not checked (Android loads a file with one unresolved).
+
+   A failure is one line on stderr and exit 1 (2: a wrong command line, or no NDK), for example:
+
+   ```
+   bin/liboneios-display.so: symbol ANativeWindow_getBuffersDataSpace is in none of its NEEDED libraries (NEEDED: libandroid.so, libm.so, libdl.so, libc.so); it is in libnativewindow.so
+   libuser.so: NEEDED library libonefixture.so is not an API 30 stub of the NDK and not a library the runtime ships
+   ```
+
+   The end of the first line names every stub (and shipped library) that has the symbol, or says that none has.
+   A good file is one line on stdout (`elf-check: bin/oneios-audio: NEEDED libaaudio.so, libdl.so, libc.so; 67
+   undefined symbols, each defined by one of them`), and the last line counts the files. It runs at the end of
+   `runtime/build.sh STAGE` (the build fails), in `runtime/package.sh` on the package's content (the package is
+   refused, exit 3: [releases.md](releases.md)) and in the release workflow on the archive. It reads only what the
+   file says of itself: it does not load anything, and a library that the phone's Android lacks although the NDK
+   lists it for API 30 is not found by it.
+
+`runtime/package/elf-check-test.sh` (the `links` part of `runtime/host-tests.sh`, and a step of CI) tests both, in a
+temporary folder: the display helper's library by its own Makefile rule with `1f7dd1f`'s libraries
+(`make DISPLAY_LIBS='-landroid -lm'`: the link fails on both symbols), the same without the rule's flags, which is
+`1f7dd1f`'s link (it links, and the check fails with the line above), and as the Makefile links it now (both
+pass); the same three with `runtime/package/elf-fault.c`, a test input that makes the same two calls and does not
+depend on the display helper's source; the executables; a NEEDED library that is no stub (refused alone, accepted
+when the stage ships it) and a symbol that nothing has; and a stage of `runtime/build.sh`, as built and with the
+faulty library in the display helper's place. `runtime/package/test.sh` adds the package's side: the two runs of
+the check in the log of a good package, and the refusal of a package with the faulty library.
+
+Checked on 2026-11-14 on the Linux PC of the next table (NDK 28.2.13676358), in a tree without
+`external/virglrenderer` (xnuhost and gpuctl 2D-only, which changes nothing for this check: both are static). Not
+run on a Mac, and nothing of it has been on the phone (the phone's part is `f7bb1c3`'s library, loaded there by hand).
+
+| Part | Result |
+|---|---|
+| `runtime/build.sh out/stage-links` (a new stage) | 15 files: 14 in `bin/` (13 arm64 ELF and `oneios-net.sh`) and `lib/oneios-display.dex`. The check: 4 dynamic ELF files, 9 static, 0 failures. `bin/liboneios-display.so` needs libandroid, libnativewindow, libm, libdl, libc (46 undefined symbols); `bin/oneios-audio` libaaudio, libdl, libc (67); `bin/oneios-camera` and `bin/camctl` libcamera2ndk, libmediandk, libbinder_ndk, libnativewindow, libdl, libm, libc (126 and 152) |
+| `runtime/package/elf-check-test.sh` (`links`) | 13 tests passed. With `1f7dd1f`'s libraries the rule's link fails (`ld.lld: error: undefined symbol: ANativeWindow_getBuffersDataSpace`, and `_setBuffersDataSpace`); `1f7dd1f`'s own link passes and the check prints the line above for both symbols, exit 1; the library as the Makefile links it passes both |
+| `runtime/package/test.sh` (`package`) | 22 tests passed (19 before: the check's two runs in a good package's log, the refusal of the faulty library with exit 3 and no package, and the symbol and `libnativewindow.so` named in it) |
+| `runtime/host-tests.sh`, the other parts | loader 160 checks; xnuhost 13840, display mode 0 failed, image set 37, `check-arm64` `TESTKERNEL: all passed` and the restart test (not run: drm2kgsl and its leak test, which a tree without `external/virglrenderer` does not build, and the udmabuf import: no access to `/dev/udmabuf`, as on 2026-11-12); display 111 and mode choice 10; bridges 289, wifi 162, `test-binder` 38 and 35, brightness 74, battery 65, thermal 64, audio helper 11105 (some timing checks not checked: the box had a load of 14-18 from other builds), Android build ok; camera 131, Android build ok. 0 failed in each. The first run here failed in `check-arm64` (the test kernel's timer and task checks, under qemu-aarch64 at that load, while the suite compiled its tests beside it); `check-arm64` alone and the whole suite again passed |
 
 Checked on 2026-11-12, Linux x86_64 CachyOS (kernel 7.3.1-1-cachyos with binderfs built in, 4 CPUs, 15 GiB; GCC
 16.2.1, clang 23.1.4, GNU make 4.4.1, Python 3.14, NDK 28.2.13676358, build-tools 35.0.0, Temurin JDK 17,
@@ -225,7 +289,7 @@ start on macOS and names `runtime/host-tests.sh`. On a Mac that script:
    `NDK=/nonexistent` and a touched source). A missing pre-built binary is a FAIL that names it. The fix is checked on
    Linux (`NDK=/nonexistent PREBUILT=1 runtime/host-tests.sh --suite` after touching `src/gpu3d.c` and the bridges'
    and camera's sources: every part passes, nothing asks for the NDK); not yet run on a Mac;
-3. runs `runtime/package/test.sh` on the Mac.
+3. runs `runtime/package/elf-check-test.sh` (the `links` part) and `runtime/package/test.sh` on the Mac (both need the NDK).
 
 **The container's kernel.** The default kernel of `container` (6.18.56) has no binderfs, no udmabuf and no modules
 (`# CONFIG_ANDROID_BINDER_IPC is not set`, `# CONFIG_UDMABUF is not set`, `# CONFIG_MODULES is not set`), so
