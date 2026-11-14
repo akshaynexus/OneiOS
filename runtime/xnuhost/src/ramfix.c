@@ -37,19 +37,25 @@ static uint64_t ms_now(void)
 // read of a hole through a shared mapping fills it with a zeroed page: shmem has no shared zero page). Neither changes a
 // byte the guest wrote. Not fallocate: the pages it allocates stay "not up to date" until first touched, so mincore (the
 // `memory:` line's "in the host's RAM") does not count them, and the guest's first touch still takes a fault.
-static void step(xh_ramfix *r, uint8_t *base, uint64_t at, uint64_t length)
+// False when the prefault should stop here: the lock was asked for and failed. A page prefaulted and not locked is one
+// iOS has not used yet, so it is the coldest page there is and the first the host swaps out (the PC, 2026-11-14: 841 MiB
+// of a prefaulted, unlocked 4 GiB guest swapped out in 15 min, against 6 MiB faulted in as used); the rest is faulted
+// in as iOS uses it.
+static bool step(xh_ramfix *r, uint8_t *base, uint64_t at, uint64_t length)
 {
   if (r->locking) {
-    if (xh_ramfix_mlock(base + at, (size_t)length) == 0) { __atomic_store_n(&r->locked, at + length, __ATOMIC_RELAXED); return; }
+    if (xh_ramfix_mlock(base + at, (size_t)length) == 0) { __atomic_store_n(&r->locked, at + length, __ATOMIC_RELAXED); return true; }
     // All or nothing: a RAM locked in part leaves the host short of what it could not lock and swaps the rest anyway.
     r->lock_error = errno ? errno : EINVAL;
     r->locking = false;
     uint64_t had = __atomic_load_n(&r->locked, __ATOMIC_RELAXED);
     if (had) (void)xh_ramfix_munlock(base, (size_t)had);
     __atomic_store_n(&r->locked, 0, __ATOMIC_RELAXED);
+    return false;
   }
   long page = sysconf(_SC_PAGESIZE);
   for (uint64_t i = 0; i < length; i += (uint64_t)page) (void)*(volatile uint8_t *)(base + at + i);
+  return true;
 }
 
 void xh_ramfix_prefault(xh_ramfix *r, uint8_t *base, uint64_t size)
@@ -60,7 +66,7 @@ void xh_ramfix_prefault(xh_ramfix *r, uint8_t *base, uint64_t size)
   r->lock_error = 0;
   for (uint64_t at = 0; at < size && !__atomic_load_n(&r->stop, __ATOMIC_RELAXED); at += chunk) {
     uint64_t length = size - at < chunk ? size - at : chunk;
-    step(r, base, at, length);
+    if (!step(r, base, at, length)) break;
     __atomic_store_n(&r->prefaulted, at + length, __ATOMIC_RELAXED);
   }
   r->ms = ms_now() - t0;
@@ -189,12 +195,12 @@ static const char *meminfo_path = "/proc/meminfo";
 
 static void say_done(xh_ramfix *r)
 {
-  char why[200];
+  char why[320];
   if (r->locked) snprintf(why, sizeof why, "locked (mlock: the host cannot swap it)");
   else if (!r->lock) snprintf(why, sizeof why, "not locked (%s)", r->lock_why ? r->lock_why : "ram-lock=0");
-  else snprintf(why, sizeof why, "not locked (mlock: %s; the host may swap it)", strerror(r->lock_error));
+  else snprintf(why, sizeof why, "not locked (mlock: %s), so not prefaulted further: the rest is faulted in as iOS uses it (an unlocked, unused page is the first the host swaps)", strerror(r->lock_error));
   LOGI("memory: the guest's RAM is held: %llu MiB prefaulted in %llu ms, %s%s", (unsigned long long)(r->prefaulted >> 20),
-       (unsigned long long)r->ms, why, r->locked ? "" : ", read once a page");
+       (unsigned long long)r->ms, why, r->locked || r->lock ? "" : ", read once a page (ram-lock=0)");
 }
 
 static void *ramfix_main(void *arg)

@@ -1217,20 +1217,28 @@ static void test_config(const char *dir)
   CHECK(xh_ram_auto(64 * G, 90, XH_RAM_AUTO_FLOOR) == 58880 * M && xh_ram_auto(128 * G, 90, XH_RAM_AUTO_FLOOR) == XH_RAM_MAX);
   CHECK(xh_ram_auto(2560 * M, 90, XH_RAM_AUTO_FLOOR) == G && xh_ram_auto(2 * G, 90, XH_RAM_AUTO_FLOOR) == 0 && xh_ram_auto(G, 100, 0) == G);
   CHECK(xh_ram_auto(XH_RAM_AUTO_FLOOR, 90, XH_RAM_AUTO_FLOOR) == 0 && xh_ram_auto(0, 90, 0) == 0);
-  // Held fixed for the session: also MemAvailable at the start less the session's reserve (1 GiB).
+  // What fits (2026-11-14): G + 8% of G + 256 MiB (GPU) + 1 GiB (headroom) <= MemAvailable at the start.
+  const uint64_t R = XH_RAM_SESSION_RESERVE, GR = XH_RAM_GPU_RESERVE;
+  const unsigned PT = XH_RAM_PAGETABLE_PERCENT;
+  CHECK(xh_ram_fit(7 * G, R, GR, PT) / M == 5451);                             // (7168 - 1280) / 1.08
+  CHECK(xh_ram_fit(R + GR + 108 * M, R, GR, PT) == 100 * M && xh_ram_fit(R + GR, R, GR, PT) == 0 && xh_ram_fit(0, R, GR, PT) == 0);
+  CHECK(xh_ram_fit(6 * G, 0, 0, 0) == 6 * G);
   unsigned bound = 9;
-  const uint64_t R = XH_RAM_SESSION_RESERVE;
-  CHECK(xh_ram_fixed_auto(phone, 7 * G, 90, XH_RAM_AUTO_FLOOR, R, &bound) == 6144 * M && bound == XH_RAM_BOUND_AVAILABLE);
-  CHECK(xh_ram_fixed_auto(phone, 10900 * M, 90, XH_RAM_AUTO_FLOOR, R, &bound) == 9728 * M && bound == XH_RAM_BOUND_FLOOR);   // fits: the floor
-  CHECK(xh_ram_fixed_auto(phone, 10900 * M, 50, XH_RAM_AUTO_FLOOR, R, &bound) == 5632 * M && bound == XH_RAM_BOUND_SHARE);
-  CHECK(xh_ram_fixed_auto(phone, 7 * G + 200 * M, 90, XH_RAM_AUTO_FLOOR, R, &bound) == 6144 * M);       // 256 MiB steps, down
-  CHECK(xh_ram_fixed_auto(phone, 2 * G + 255 * M, 90, XH_RAM_AUTO_FLOOR, R, &bound) == G);             // 1 GiB is the least
-  CHECK(xh_ram_fixed_auto(phone, 2 * G - M, 90, XH_RAM_AUTO_FLOOR, R, &bound) == 0 && bound == 0);
-  CHECK(xh_ram_fixed_auto(phone, 0, 90, XH_RAM_AUTO_FLOOR, R, &bound) == 0 && xh_ram_fixed_auto(phone, R, 90, XH_RAM_AUTO_FLOOR, R, NULL) == 0);
-  CHECK(xh_ram_fixed_auto(phone, 0, 90, XH_RAM_AUTO_FLOOR, 0, &bound) == 9728 * M && bound == XH_RAM_BOUND_FLOOR);   // reserve 0: as before
-  CHECK(xh_ram_fixed_auto(2 * G, 2 * G, 90, XH_RAM_AUTO_FLOOR, 0, &bound) == 0 && bound == 0);
-  CHECK(xh_ram_lock_fits(4 * G, 6 * G, R) && xh_ram_lock_fits(5 * G, 6 * G, R) && !xh_ram_lock_fits(5 * G + 1, 6 * G, R) &&
-        !xh_ram_lock_fits(M, R, R) && !xh_ram_lock_fits(M, 0, 0) && xh_ram_lock_fits(M, M, 0));
+  CHECK(xh_ram_fit_auto(phone, 90, XH_RAM_AUTO_FLOOR, xh_ram_fit(7 * G, R, GR, PT), &bound) == 5376 * M && bound == XH_RAM_BOUND_AVAILABLE);
+  CHECK(xh_ram_fit_auto(phone, 90, XH_RAM_AUTO_FLOOR, UINT64_MAX, &bound) == 9728 * M && bound == XH_RAM_BOUND_FLOOR);   // ram-fit=0
+  CHECK(xh_ram_fit_auto(phone, 90, XH_RAM_AUTO_FLOOR, 10000 * M, &bound) == 9728 * M && bound == XH_RAM_BOUND_FLOOR);    // fits: the floor
+  CHECK(xh_ram_fit_auto(phone, 50, XH_RAM_AUTO_FLOOR, 10000 * M, &bound) == 5632 * M && bound == XH_RAM_BOUND_SHARE);
+  CHECK(xh_ram_fit_auto(phone, 90, XH_RAM_AUTO_FLOOR, 1279 * M, &bound) == G && xh_ram_fit_auto(phone, 90, XH_RAM_AUTO_FLOOR, 1023 * M, &bound) == 0 &&
+        bound == 0);
+  // The phone of 2026-11-14 (MemTotal 11,084 MiB): the old ram=auto gave 9472 MiB and Linux swapped 2126 MiB of it. What
+  // fits for a start MemAvailable of 8.5 GiB [assumed: that session's start line is not in the notes] is 6656 MiB.
+  CHECK(xh_ram_auto(11084 * M, 90, XH_RAM_AUTO_FLOOR) == 9472 * M);
+  CHECK(xh_ram_fit_auto(11084 * M, 90, XH_RAM_AUTO_FLOOR, xh_ram_fit(8704 * M, R, GR, PT), &bound) == 6656 * M);
+  // The host swaps the guest's RAM: a line once past 64 MiB, then at each further 256 MiB (320, 576, ...).
+  uint64_t next = 0;
+  CHECK(!xh_swap_note(10 * M, &next) && !xh_swap_note(64 * M, &next) && xh_swap_note(65 * M, &next) && next == 320 * M);
+  CHECK(!xh_swap_note(300 * M, &next) && !xh_swap_note(320 * M, &next) && xh_swap_note(321 * M, &next) && next == 576 * M);
+  CHECK(xh_swap_note(2126 * M, &next) && next == 2368 * M && !xh_swap_note(2200 * M, &next) && !xh_swap_note(0, &next));
   char meminfo[300], small[300], partial[300];
   snprintf(meminfo, sizeof meminfo, "%s/meminfo", dir);
   snprintf(small, sizeof small, "%s/meminfo-small", dir);
@@ -1252,39 +1260,40 @@ static void test_config(const char *dir)
   snprintf(set_none, sizeof set_none, "ram-meminfo=%s/none", dir);
   char *ram1[] = { "xnuhost", "--image", image, "--set", set_meminfo };
   xh_config_defaults(&c);
-  // The default is still 0058's way (ram-giveback=1): nothing prefaulted or locked, no MemAvailable bound.
-  CHECK(xh_config_args(&c, 5, ram1) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 9728 * M && c.ram_auto_total == phone &&
+  // The default (ram-giveback=1, 0058's way: nothing prefaulted or locked) with what fits (2026-11-14): MemAvailable 7 GiB here.
+  CHECK(xh_config_args(&c, 5, ram1) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 5376 * M && c.ram_auto_total == phone &&
         c.ram_auto_available == 7ull * G && c.ram_percent == 90 && c.ram_host_floor == (int64_t)XH_RAM_AUTO_FLOOR && c.host_mem_log == 30 &&
         c.usb_log == 3 &&
-        c.ram_auto_bound == XH_RAM_BOUND_FLOOR && c.ram_giveback == 1 && c.ram_prefault == 0 && c.ram_lock == 0 &&
-        c.ram_session_reserve == (int64_t)XH_RAM_SESSION_RESERVE && c.ram_unlock_below == (int64_t)XH_RAM_UNLOCK_BELOW);
-  // The RAM held fixed (ram-giveback=0): also no more than MemAvailable (7 GiB here) less 1 GiB; prefaulted and locked.
+        c.ram_auto_bound == XH_RAM_BOUND_AVAILABLE && c.ram_fit_on == 1 && c.ram_fit / M == 5451 && c.ram_fit_available == 7 * G && c.ram_giveback == 1 && c.ram_prefault == 0 && c.ram_lock == 0 &&
+        c.ram_session_reserve == (int64_t)XH_RAM_SESSION_RESERVE && c.ram_unlock_below == (int64_t)XH_RAM_UNLOCK_BELOW && c.ram_gpu_reserve == (int64_t)XH_RAM_GPU_RESERVE && c.ram_pagetable_percent == 8);
+  // The RAM held fixed (ram-giveback=0): the same size; prefaulted and locked.
   char *ram1a[] = { "xnuhost", "--image", image, "--set", set_meminfo, "--set", "ram-giveback=0" };
   xh_config_defaults(&c);
-  CHECK(xh_config_args(&c, 7, ram1a) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 6144 * M && c.ram_auto_bound == XH_RAM_BOUND_AVAILABLE &&
+  CHECK(xh_config_args(&c, 7, ram1a) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 5376 * M && c.ram_auto_bound == XH_RAM_BOUND_AVAILABLE &&
         c.ram_giveback == 0 && c.ram_prefault == 1 && c.ram_lock == 1);
-  char *ram1b[] = { "xnuhost", "--image", image, "--set", set_meminfo, "--set", "ram-giveback=0", "--set", "ram-session-reserve=0" };   // the bound off
+  char *ram1b[] = { "xnuhost", "--image", image, "--set", set_meminfo, "--set", "ram-giveback=0", "--set", "ram-fit=0" };   // what fits off: the old formula
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 9, ram1b) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 9728 * M && c.ram_auto_bound == XH_RAM_BOUND_FLOOR &&
         c.ram_prefault == 1 && c.ram_lock == 1);
-  char *ram1c[] = { "xnuhost", "--image", image, "--set", set_meminfo, "--set", "ram-giveback=1" };   // 0058's way: no bound, no prefault, no lock
+  char *ram1c[] = { "xnuhost", "--image", image, "--set", set_meminfo, "--set", "ram-giveback=1", "--set", "ram-fit=0" };   // 0058's way as before 2026-11-14
   xh_config_defaults(&c);
-  CHECK(xh_config_args(&c, 7, ram1c) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 9728 * M && c.ram_giveback == 1 &&
+  CHECK(xh_config_args(&c, 9, ram1c) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 9728 * M && c.ram_giveback == 1 &&
         c.ram_prefault == 0 && c.ram_lock == 0);
   char *ram1d[] = { "xnuhost", "--image", image, "--set", set_meminfo, "--set", "ram-prefault=0", "--set", "ram-lock=1",
                     "--set", "ram-session-reserve=512M", "--set", "ram-unlock-below=0", "--set", "ram-giveback=0" };   // no prefault: no lock either
   xh_config_defaults(&c);
-  CHECK(xh_config_args(&c, 15, ram1d) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 6656 * M && c.ram_prefault == 0 && c.ram_lock == 0 &&
+  CHECK(xh_config_args(&c, 15, ram1d) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 5888 * M && c.ram_prefault == 0 && c.ram_lock == 0 &&
         c.ram_unlock_below == 0 && c.ram_giveback == 0);
   char *ram2[] = { "xnuhost", "--image", image, "--set", set_meminfo, "--set", "ram-percent=50", "--set", "host-mem-log=0" };
   xh_config_defaults(&c);
-  CHECK(xh_config_args(&c, 9, ram2) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 5632 * M && c.host_mem_log == 0 &&
-        c.ram_auto_bound == XH_RAM_BOUND_SHARE);
-  char *ram3[] = { "xnuhost", "--image", image, "--set", set_meminfo, "--set", "ram-host-floor=4G", "--set", "ram-session-reserve=0" };
+  CHECK(xh_config_args(&c, 9, ram2) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 5376 * M && c.host_mem_log == 0 &&
+        c.ram_auto_bound == XH_RAM_BOUND_AVAILABLE);
+  char *ram3[] = { "xnuhost", "--image", image, "--set", set_meminfo, "--set", "ram-host-floor=4G", "--set", "ram-fit=0" };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 9, ram3) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 7168 * M);
   CHECK(xh_config_set(&c, "ram-giveback", "2") != 0 && xh_config_set(&c, "ram-lock", "x") != 0 && xh_config_set(&c, "ram-prefault", "") != 0 &&
-        xh_config_set(&c, "ram-session-reserve", "lots") != 0 && xh_config_set(&c, "ram-unlock-below", "2T") != 0);
+        xh_config_set(&c, "ram-session-reserve", "lots") != 0 && xh_config_set(&c, "ram-unlock-below", "2T") != 0 &&
+        xh_config_set(&c, "ram-fit", "x") != 0 && xh_config_set(&c, "ram-pagetable-percent", "51") != 0 && xh_config_set(&c, "ram-gpu-reserve", "?") != 0);
   char *ram4[] = { "xnuhost", "--image", image, "--set", set_small };          // a host too small for auto: say so, start nothing
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 5, ram4) == 0 && xh_config_finish(&c) == -1);
@@ -1302,7 +1311,7 @@ static void test_config(const char *dir)
   CHECK(xh_config_args(&c, 5, ram7) == 0 && xh_config_finish(&c) == -1);
   // The image set's xnuhost.conf: its ram= and ram-percent= apply when the command line has none; --ram auto wins over it.
   f = fopen(path, "w");
-  fprintf(f, "boot-args=-v debug=0x8\nram=3G\nram-percent=80\n%s\n", set_meminfo);
+  fprintf(f, "boot-args=-v debug=0x8\nram=3G\nram-percent=80\nram-fit=0\n%s\n", set_meminfo);
   fclose(f);
   char *ram8[] = { "xnuhost", "--image", image };
   xh_config_defaults(&c);
@@ -1310,15 +1319,15 @@ static void test_config(const char *dir)
   char *ram9[] = { "xnuhost", "--image", image, "--ram", "auto" };
   xh_config_defaults(&c);
   CHECK(xh_config_args(&c, 5, ram9) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 8960 * M && c.ram_auto_total == phone);   // 80% of 11.2 GiB
-  // The image set's own ram-giveback=0 holds the RAM fixed: MemAvailable (7 GiB) less 1 GiB decides
+  // The image set's own ram-giveback=0 holds the RAM fixed, at what fits (5376 MiB of MemAvailable 7 GiB)
   f = fopen(path, "w");
   fprintf(f, "boot-args=-v debug=0x8\nram-percent=80\nram-giveback=0\n%s\n", set_meminfo);
   fclose(f);
   xh_config_defaults(&c);
-  CHECK(xh_config_args(&c, 5, ram9) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 6144 * M && c.ram_giveback == 0 && c.ram_lock == 1);
+  CHECK(xh_config_args(&c, 5, ram9) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 5376 * M && c.ram_giveback == 0 && c.ram_lock == 1);
   char *ram10[] = { "xnuhost", "--image", image, "--set", "ram-giveback=1" };     // the command line wins
   xh_config_defaults(&c);
-  CHECK(xh_config_args(&c, 5, ram10) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 8960 * M && c.ram_giveback == 1 && c.ram_lock == 0);
+  CHECK(xh_config_args(&c, 5, ram10) == 0 && xh_config_finish(&c) == 0 && c.ram_bytes == 5376 * M && c.ram_giveback == 1 && c.ram_lock == 0);
   f = fopen(path, "w");
   fputs("# settings of this image\nboot-args=-v debug=0x8\n", f);
   fclose(f);
@@ -1586,8 +1595,8 @@ static void test_ramfix(void)
   CHECK(xh_ram_resident(base, size, 4096) <= size);
   munmap(base, size); close(fd);
 
-  // A lock that fails part way (ENOMEM: RLIMIT_MEMLOCK, or the host has not the memory): what was locked is unlocked again,
-  // all of the RAM is still prefaulted (read), the boot goes on; the errno is kept for the log.
+  // A lock that fails part way (ENOMEM: RLIMIT_MEMLOCK, or the host has not the memory): what was locked is unlocked again
+  // and the prefault stops (an unlocked, unused page is the first the host swaps); the boot goes on, the errno is kept.
   fd = test_ram(size, &base);
   CHECK(fd >= 0);
   if (fd < 0) return;
@@ -1596,13 +1605,13 @@ static void test_ramfix(void)
   r = (xh_ramfix){ .lock = true, .step = 4 * M };
   xh_ramfix_prefault(&r, base, size);
   CHECK(r.done && r.lock_error == ENOMEM && r.locked == 0 && !r.locking && fake_mlocks == 3 && fake_munlocks == 1 && fake_munlocked == 8 * M);
-  CHECK(r.prefaulted == size && memfd_held(fd) == size);
+  CHECK(r.prefaulted == 8 * M && memfd_held(fd) == 8 * M);
   // EPERM at once (no CAP_IPC_LOCK, a zero RLIMIT_MEMLOCK): nothing to unlock.
   CHECK(xh_ram_discard_fd(fd, 0, 0, size, 0, size, 4096) == 0 && memfd_held(fd) == 0);
   fake_mlocks = fake_munlocks = 0; fake_mlock_ok = 0; fake_mlock_errno = EPERM;
   r = (xh_ramfix){ .lock = true, .step = 4 * M };
   xh_ramfix_prefault(&r, base, size);
-  CHECK(r.lock_error == EPERM && r.locked == 0 && fake_mlocks == 1 && fake_munlocks == 0 && memfd_held(fd) == size);
+  CHECK(r.lock_error == EPERM && r.locked == 0 && fake_mlocks == 1 && fake_munlocks == 0 && r.prefaulted == 0 && memfd_held(fd) == 0);
   // A lock that holds: all locked, and the valve opens once, only under its floor.
   fake_munlocked = 0;
   fake_mlock_ok = 1000;
@@ -1649,7 +1658,7 @@ static void test_ramfix(void)
       fd = test_ram(big, &base);
       r = (xh_ramfix){ .lock = true, .step = big };
       xh_ramfix_prefault(&r, base, big);
-      CHECK((r.lock_error == ENOMEM || r.lock_error == EPERM) && r.locked == 0 && r.prefaulted == big && memfd_held(fd) == big);
+      CHECK((r.lock_error == ENOMEM || r.lock_error == EPERM) && r.locked == 0 && r.prefaulted == 0 && memfd_held(fd) == 0);
       munmap(base, big); close(fd);
     }
   } else printf("ramfix: RLIMIT_MEMLOCK %llu KiB here: the real lock is not tried\n", (unsigned long long)(l.rlim_cur >> 10));
@@ -1695,7 +1704,7 @@ static void test_ramfix(void)
     if (child == 0) {
       uint8_t *b;
       int f = test_ram(big, &b);
-      xh_ramfix rr = { .lock = true, .step = 16 * M };
+      xh_ramfix rr = { .lock = false, .step = 16 * M };
       if (f >= 0) xh_ramfix_prefault(&rr, b, big);
       char one = f >= 0 && memfd_held(f) == big ? 'y' : 'n';
       if (write(ready[1], &one, 1) != 1) _exit(1);

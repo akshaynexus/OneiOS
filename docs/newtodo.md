@@ -62,9 +62,14 @@ docs each item names. **Proven** = ran on the phone; **built** = compiled and ho
    power-off** behind `oneios_power_request()` (`drivers/bridge/OneiOSBridge.c`): a hosted patch (0059 is free)
    that starts iOS's clean power-off as a power-button shutdown does, a halt, never a reboot. Then a PC boot with
    `--set return-graceful-ms=10000`, then the phone; only then make 10000 the default.
-5. **Memory held fixed** (`docs/booter.md` 2.2 "Fixed RAM", PR #18): uncomment 0067 in the series, build, PC boot
-   before/after with `ram-giveback=0`, then the phone with `ram-giveback=0`; make it the default once the PC and
-   the phone are clean. GPU memory is the guest's own RAM, so no separate pool is needed (`docs/gpu.md` 2).
+5. **iOS's RAM must fit, then be held fixed** (`docs/booter.md` 2.2 "What fits" and "Fixed RAM", PRs #18 and
+   fix-ram-fit). The phone (2026-11-14, `ram=auto` 9,472 MiB of MemTotal 11,084): Linux swapped 2,126 MiB of iOS's RAM to
+   zram, Settings froze, and the swap traffic (about 9.5 MB/s in, 8 MB/s out) was also the main heat. fix-ram-fit:
+   `ram=auto` now takes no more than what fits beside the session's needs (MemAvailable at the start less 1 GiB
+   headroom, 256 MiB for KGSL and 8 % of the guest for page tables: about 6.4-7.2 GiB on this phone, by its start
+   MemAvailable); an error line when `ram=` by hand is more than fits; `memory: the host swaps iOS's RAM: N MiB ...` with
+   the host's swap rates when it happens; kernel 0067 in the series; no prefault without the lock (the PC boot B swapped 841 MiB of a prefaulted, unlocked guest). Next phone boot: `ram=6G` on main before fix-ram-fit; with it, `ram=auto` and one try of `ram-giveback=0` (whether `locked (mlock: ...)` shows). PC results and the lines to read:
+   `docs/booter.md` 2.2 "What fits". GPU memory is the guest's own RAM, so no separate pool is needed (`docs/gpu.md` 2).
 6. **Haptics and the power key** (`docs/hardware.md` 5, PR #17): the counters show where a tap stops. PC boot with
    `--set haptics=sim`; phone: `Actuator: user client N opened by audiomxd`, audiomxd's `actuator port` lines; the
    power-key boot with `oneios-actuator=0`.
