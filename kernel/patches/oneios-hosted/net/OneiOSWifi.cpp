@@ -143,7 +143,11 @@ struct link_event {
 // zero until 2026-11-13, so every result was as old as the phone's uptime and auto-join saw none ("All scan results are
 // filtered out", the phone). The flags and counts at 0x8d8 to 0x8e6 stay zero. A caller with a buffer of that size gets
 // the whole record, so the tail is never what its buffer held before.
-enum { kScanRecord27 = 2280, kScanRecordTimestamp = 0x8d0, kChannelsInfoSize = 10016 };
+enum { kScanRecord27 = 2280, kScanRecordTimestamp = 0x8d0, kScanRecordPhyMode = 0x8e0, kChannelsInfoSize = 10016 };
+// PHY_MODE (IO80211's __addScanResultToList reads 32 bits at 0x8e0 of the 2280-byte record, after AP_MODE from the
+// capability's ESS and IBSS bits): APPLE80211_MODE_11A 0x2, 11B 0x4, 11G 0x8, 11N 0x10, 11AC 0x80, 11AX 0x100, the
+// ones the network's elements show. It was zero (no mode) until 2026-11-14.
+enum { kPhy11a = 0x2, kPhy11b = 0x4, kPhy11g = 0x8, kPhy11n = 0x10, kPhy11ac = 0x80, kPhy11ax = 0x100 };
 static_assert(sizeof(apple80211req) == 0x28, "request layout");
 static_assert(sizeof(scan_result) == 1164 && __builtin_offsetof(scan_result, ssid_length) == 0x60 &&
               __builtin_offsetof(scan_result, age_ms) == 0x84 && __builtin_offsetof(scan_result, elements) == 0x8c, "scan result layout");
@@ -489,6 +493,27 @@ static unsigned rates_of(const Net &n, uint32_t *out, unsigned max) {
     }
     return count;
 }
+// The network's PHY modes from its band, rates and elements: HT Capabilities (45) is 11n, VHT Capabilities (191)
+// 11ac, the HE Capabilities extension (255, extension 35) 11ax; 2.4 GHz is 11b, and 11g too with an OFDM rate.
+static uint32_t phy_mode_of(const Net &n) {
+    uint32_t mode = 0;
+    if (n.bss.freq_mhz >= 4900) mode |= kPhy11a;
+    else {
+        uint32_t rates[15]; const unsigned count = rates_of(n, rates, 15);
+        mode |= kPhy11b;
+        for (unsigned i = 0; i < count; i++)   // an OFDM rate (500 kb/s units: 6, 9, 12, 18 Mb/s and up; 11b has 1, 2, 5.5, 11)
+            if (rates[i] == 12 || rates[i] == 18 || rates[i] == 24 || rates[i] >= 36) { mode |= kPhy11g; break; }
+    }
+    for (unsigned i = 0; i + 2 <= n.bss.ie_length;) {
+        const uint8_t id = n.ies[i], len = n.ies[i + 1];
+        if (i + 2u + len > n.bss.ie_length) break;
+        if (id == 45) mode |= kPhy11n;
+        else if (id == 191) mode |= kPhy11ac;
+        else if (id == 255 && len >= 1 && n.ies[i + 2] == 35) mode |= kPhy11ax;
+        i += 2u + len;
+    }
+    return mode;
+}
 static void fill_result(scan_result &r, const Net &n) {
     memset(&r, 0, sizeof r); r.version = 1; fill_channel(r.ch, n.bss.freq_mhz); r.noise_known = 1; r.noise = -95; r.rssi = n.bss.signal_dbm;
     r.snr = static_cast<int16_t>(n.bss.signal_dbm + 95); r.beacon_interval = n.bss.beacon_interval; r.capability = n.bss.capability;
@@ -598,7 +623,11 @@ static int answer(bool set, apple80211req &rq) {
     if (type == kScanResult) {
         if (gScanCursor < gScanCount) {
             const Net &n = gScan[gScanCursor++];
-            fill_result(out.res, n); memcpy(out.raw + kScanRecordTimestamp, &n.seen_ns, sizeof n.seen_ns); have = true;
+            fill_result(out.res, n); memcpy(out.raw + kScanRecordTimestamp, &n.seen_ns, sizeof n.seen_ns);
+            const uint64_t now = continuous_ns();   // AGE as of this answer, the same as CoreWiFi's now minus TIMESTAMP
+            out.res.age_ms = now > n.seen_ns ? static_cast<uint32_t>((now - n.seen_ns) / 1000000) : 0;
+            const uint32_t phy = phy_mode_of(n); memcpy(out.raw + kScanRecordPhyMode, &phy, sizeof phy);
+            have = true;
         } else gScanCursor = 0;
     }
     IOLockUnlock(gLock);
@@ -674,18 +703,21 @@ static int answer(bool set, apple80211req &rq) {
         if (!dumped) {
             dumped = true;
             uint64_t stamp; memcpy(&stamp, out.raw + kScanRecordTimestamp, sizeof stamp);
+            uint32_t phy; memcpy(&phy, out.raw + kScanRecordPhyMode, sizeof phy);
             const uint64_t now = continuous_ns(); const scan_result &r = out.res;
-            log("scan record 1 (%u bytes asked): channel %u flags 0x%x, RSSI %d, noise %d, SNR %d, capability 0x%x, beacon %u TU, "
-                "BSSID %02x:%02x:%02x:..., name of %u bytes, %u rates, age %u ms, TIMESTAMP %llu ns (%llu ms before now), %u element bytes",
+            log("scan record 1 (%u B): ch %u flags 0x%x RSSI %d noise %d SNR %d cap 0x%x beacon %u BSSID %02x:%02x:%02x:.. name %u B "
+                "%u rates age %u ms TIMESTAMP %llu ns (%llu ms ago) PHY 0x%x IEs %u B",   // short: the console cuts a line at about 250
                 rq.req_len, r.ch.channel, r.ch.flags, r.rssi, r.noise, r.snr, r.capability, r.beacon_interval, r.bssid[0], r.bssid[1], r.bssid[2],
                 r.ssid_length, r.rate_count, r.age_ms, static_cast<unsigned long long>(stamp),
-                static_cast<unsigned long long>(now > stamp ? (now - stamp) / 1000000 : 0), r.elements_length);
+                static_cast<unsigned long long>(now > stamp ? (now - stamp) / 1000000 : 0), phy, r.elements_length);
         }
         return copy_out(rq, out.raw, rq.req_len >= kScanRecord27 ? kScanRecord27 : sizeof out.res); }
     case kCurrentNetwork: {
         if (state < kStaAssoc) return ENOENT;
         fill_result(out.res, current); out.res.rssi = static_cast<int16_t>(rssi);
         const uint64_t now = continuous_ns(); memcpy(out.raw + kScanRecordTimestamp, &now, sizeof now);   // joined: seen now
+        out.res.age_ms = 0;
+        const uint32_t phy = phy_mode_of(current); memcpy(out.raw + kScanRecordPhyMode, &phy, sizeof phy);
         return copy_out(rq, out.raw, rq.req_len >= kScanRecord27 ? kScanRecord27 : sizeof out.res); }
     default: return EOPNOTSUPP;
     }

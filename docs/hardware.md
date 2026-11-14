@@ -677,6 +677,104 @@ builds `SUPPORTED_CHANNELS` from the same list (active unless passive, DFS flag 
 4. configd's 22 s between `*STACK*` and en0's name (InterfaceNamer): the next boot's `oneios-ubt` reports of configd
    (0061) name where its InterfaceNamer thread is in those seconds.
 
+
+**On the phone with the driver's half (main 9f6dc38, 2026-11-14): Wi-Fi still "just keeps scanning".** The driver's
+side works: `scan record 1 (2280 bytes asked): channel 6 flags 0xa, RSSI -65, noise -95, SNR 30, capability 0x1431,
+beacon 100 TU, ..., age 2328 ms, TIMESTAMP 16830238088697 ns (3951 ms before now), 302 element bytes`, `channels info:
+63 channels (the host's list)`, 20 `scan done` of 7 to 25 networks (host error 0); `first naming` +96.5 s, `first
+enable` +134.0 s, `first scan request` +248.1 s after the driver's start. Still no `sets 20` (join).
+
+**Read for it (fix-wifi-join-2, 24A446's dyld cache):**
+- The record's numbers agree: age 2328 ms is the host's (nl80211's) at the moment the guest got it, TIMESTAMP is that
+  moment minus the age, and the record was asked for 1.6 s later (3951 ms). The clock: `TIMESTAMP` is
+  `mach_continuous_time` in ns (kernel), `-[CWFScanResult age]` is `clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)` minus
+  it, and CLOCK_MONOTONIC_RAW is `mach_continuous_time` scaled by `mach_timebase_info`, which is the kernel's
+  `rtclock_timebase_const`, set from the same frequency as `absolutetime_to_nanoseconds` (`osfmk/arm/rtclock.c`); the
+  guest's timebase is not scaled on the phone (xnuhost gives the counter's own frequency, `droidvm-timebase-hz` unset).
+  [I] So the age CoreWiFi computes is the right one; not seen in a log.
+- Auto-join's filter (`__performScanWithChannelList:...`) is the scan's own `CWFScanParameters`: BSS type, PHY mode,
+  include-hidden, `addScanDurationToMaxAge`, the channels (the known networks' recent ones), the SSID list, dwell time,
+  scan flags and type, acceptable cache age; then `maximumAge` = the `maxCacheAge` argument, plus the scan's duration
+  in ms (CLOCK_UPTIME_RAW) when `addScanDurationToMaxAge`. The value of `maxScanCacheAge` comes from wifid's
+  auto-join parameters and was not found statically. A result seen during the scan is younger than the scan.
+- `_CWFFilteredScanResults` reads of each result: `age`, `timestamp`, `RSSI`, `channel` (number and band: CoreWiFi's
+  `channelWithNumber:band:width:` with width 0, the band from the channel flags; 0xa is 20 MHz and 2.4 GHz, right),
+  `scanFlags`-dependent background and FILS checks, `BSSType` (`isESS`/`isIBSS`: IO80211 makes `AP_MODE` 2 from the
+  capability's ESS bit, so 0x1431 is ESS), `SSID`, `shortSSID`, `networkName`, `isPasspoint`. Not the security, the
+  PHY mode or the known network's state: those come later, in auto-join's own candidate checks.
+- **Fixed here: `PHY_MODE` at 0x8e0** of the record (IO80211 reads 32 bits there after `AP_MODE`) was zero (no mode).
+  The driver now gives the modes the network's band, rates and elements show (`APPLE80211_MODE_11A` 0x2, 11B 0x4,
+  11G 0x8, 11N 0x10 with HT Capabilities, 11AC 0x80 with VHT Capabilities, 11AX 0x100 with the HE extension element),
+  in `SCAN_RESULT` and `CURRENT_NETWORK`, and `AGE` (0x84) is now the age as of the answer (now minus TIMESTAMP), not
+  the host's at arrival. `scan record 1` says `PHY 0x..` (the line is shorter since: `scan record 1 (2280 B): ch .. flags .. RSSI .. noise .. SNR .. cap .. beacon .. BSSID .. name .. B .. rates age .. ms TIMESTAMP .. ns (.. ms ago) PHY 0x.. IEs .. B`; the console cut the longer one at about 250 characters). [I] Whether PHY mode 0 was what auto-join refused: not
+  known (it is not one of the filter's checks; auto-join's scan sets a PHY mode of its own). On the PC: `scan record 1 (2280 bytes asked): channel 6 flags 0xa, RSSI -48, ..., age 34 ms, TIMESTAMP .. (34 ms before now), PHY mode 0xc` for the made-up 2.4 GHz network (11b and 11g; the line of that build was cut by the console after it).
+- **Fixed here: the reason becomes visible.** CoreWiFi's reason lines are at the info level, which the store does not
+  keep. Hosted 0070 (`oneios-log-persist=com.apple.WiFiManager`, off by default) writes the Data volume's logging
+  override before launchd so that info-level messages of that subsystem are kept (`kernel/patches/oneios-hosted/README.md`,
+  0070). On the PC it works: with `oneios-log-persist=com.apple.WiFiManager` iOS's log kept wifid's info-level `[corewifi]` lines (14 in the first minutes of a `wifi=sim` boot, none expected without it: the system has no preference of its own for that subsystem).
+
+**For the next phone boot:** `oneios-log-persist=com.apple.WiFiManager` in the image's `xnuhost.conf` (with 0061's
+`oneios-ubt=configd,wifid,logd oneios-ubt-at=20 oneios-ubt-every=10 oneios-ubt-count=18`). In `xnuhost.log`:
+`oneios-logpersist: com.apple.WiFiManager: info kept (...)`, `ONEIOS WIFI: scan record 1 ... PHY 0x..`. The Mac's
+manual tap of a network tests the join path apart from auto-join (`ONEIOS WIFI: wifid[..] sets 20` and `join: layout
+656 ...`).
+
+**Searches after the return** (`oneios-tool ioslog show data.img --boot last --sort`, plus):
+- `--proc wifid --grep 'Filtering based on|Filtering BG|Filtering FILS|Filtering hidden|Filtering duplicate|All scan results are filtered out'`:
+  the reason for each dropped result (needs 0070's file; otherwise add `--type info` and see whether the store kept any).
+- `--proc wifid --grep 'AUTO-JOIN: (Discovering|Scanning|Scan Channels|Scan Hidden|Scan .*Results|-- |Found matching|Skipping)'`:
+  what auto-join scanned for (the channels and hidden SSIDs it asked), what came back, and why a candidate was skipped.
+- `--proc wifid --grep 'age=[0-9]+ms'`: CoreWiFi's own description of a result (`age=%lums (%llu)`, the age and the
+  timestamp it computed); an age of hours would be a clock mismatch after all.
+- `--proc wifid --grep 'known networks|KnownNetwork|disabled|lastJoined|autoJoin'`: the 2 known networks and whether
+  either is disabled for auto-join.
+- `--proc wifid --grep 'ASSOCIATE|Apple80211Associate|join'` and xnuhost.log's `sets 20`: the join path, for the manual
+  tap.
+- `--proc wifid --type fault`: the 17 fault entries' messages.
+- The known networks: `oneios-tool image apfs-copy --volume 2 --newest data.img /preferences/com.apple.wifi.known-networks.plist DIR`
+  (the Data volume is `/private/var`), then compare their SSIDs and channels with the networks in range (the last
+  `wifi:` scan lines, or `wifictl scan` in One UI).
+
+**iOS's own log of the same session: auto-join is off by the user's setting** (`AUTO-JOIN: Auto-join aborted (...
+error=(1 'Auto-join is disabled by user (and not in priority link setup)'), reason=DisabledByUser)` 19 times,
+`WiFiManagerGetUserAutoJoinState: user auto join state 0` 18 times and `... state 1` 19 times, `WiFiManagerIsAlwaysOnWiFiEnabled:
+user auto-join disabled.` 14 times; `CWFFilteredScanResults` no longer among the top lines). Read in 24A446's wifid
+(`/usr/sbin/wifid`, `llvm-objdump` and its strings): `WiFiManagerSetUserAutoJoinState(manager, state, trigger)` has 10
+callers. All but two set it to 1, each with its own log line: trigger 1 and 6 and 8 (enabling paths), 2 `Forcing
+auto-join to be enabled for network %@`, 3 `reseting user auto join due to restart` and `... after first unlock due to
+device restart`, 4 `enabling user auto join due to motion state`, 5 `enabling user auto join due to time (date: %@)`.
+**Only trigger 0, a client's request over XPC, sets it to 0**, logged as `Set user auto join enabled requested by "%@"
+enabled %d` (the client's name in the quotes; Control Center's Wi-Fi button is such a client: its strings `Control
+Center`, `Control Center/3rd Party Client`, `Control Center Widget`, `ControlCenterToggled: state:%d`). The state is
+kept in wifid's plist with the place and date of the disabling (`UserAutoJoinState`, `UserAutoJoinDisabledLoc`,
+`UserAutoJoinDisableTimestamp`), so it survives the session in the kept Data store; wifid turns it back on by itself by
+time, by motion or by a new location (location needs location services: [I] ours may never give one). Nothing of
+ours sets it: no driver request or event reaches that setter. [I] The 0 came from a tap of Control Center's Wi-Fi
+button (which on iOS means "disconnect, no auto-join until tomorrow") in this or an earlier session; the client's line
+says it.
+
+**`maxScanChannelCount=-1`** (3 before #22): -1 is "no limit": with the channel list from `CHANNELS_INFO` (63) auto-join
+may scan all of them. [I] Right; it was limited to 3 while wifid had no channel information.
+
+**For the Mac, after the return** (`oneios-tool ioslog show data.img --boot last --sort --proc wifid`, plus):
+- `--grep 'Set user auto join enabled requested by|user auto join state [01] trigger|ControlCenterToggled|control center state changed'`:
+  who turned user auto-join off and when, and each change with its trigger number (0 a client, 1-8 the enabling paths
+  above).
+- `--grep 'date to enable user auto join|disabled location for user auto join|enabling user auto join due to'`: when
+  wifid will turn it on again by itself.
+- To turn it on now: in iOS, tap Control Center's Wi-Fi button once more, or turn Wi-Fi off and on in Settings, or tap
+  a network in Settings (a manual join does not need auto-join).
+- **Is a known network in range** (without sending the names anywhere): copy the store's
+  `/preferences/com.apple.wifi.known-networks.plist` (`oneios-tool image apfs-copy --volume 2 --newest data.img
+  /preferences/com.apple.wifi.known-networks.plist DIR`) and read it on the Mac (`plutil -p`). For each of the 2 entries
+  (`wifi.network.ssid.NAME`): its `SSID`, its security (`SupportedSecurityTypes` or the profile's security keys), its
+  `BSSList` channels, `AddedAt`, `JoinedBySystemAt`, `JoinedByUserAt`, and any `Disabled`, `AutoJoinDisabled` or
+  `__OSSpecific__` auto-join keys. Compare the SSIDs with the networks One UI sees at the same place (`wifictl scan` on
+  the phone in One UI prints each network's name and security) or with iOS's Settings list. What the answers mean: no
+  known SSID in the scan: nothing to join, iOS behaves as designed. A known SSID in range but `AutoJoinDisabled` or
+  `Disabled` set: iOS will not join it by itself (a per-network setting). A known SSID in range, enabled, and user
+  auto-join back at 1, but still no `sets 20`: a fault on our side; then the `Filtering based on` lines (0070) and the
+  `AUTO-JOIN: Skipping` lines say why.
 ### Missing, unknown
 
 - Seen in a session (2026-11-12): wifid takes en0, scans, lists the networks, joins an open network through the

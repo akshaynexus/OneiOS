@@ -1006,6 +1006,21 @@ MiB as 52,602 runs in 822 batches: every run one 4 KiB page (this kernel's page)
 - **Not run on the phone.** What to read there: the fourth `oneios-mem:` line's per MiB on a CPU and by the clock, and
   `runs` against `batches` (0058's were 64 runs a batch).
 
+## 0070-log-persist.patch (fix-wifi-join-2, 2026-11-14)
+
+`oneios-log-persist=SUBSYSTEM[,SUBSYSTEM...]` (default: none, nothing written) keeps the info-level messages of those
+log subsystems in the unified log: before launchd it writes `/private/var/preferences/Logging/Subsystems/SUBSYSTEM.plist`
+on the Data volume (`/Library/Preferences` is a link to `../private/var/preferences` in 24A446's OS image), with
+`DEFAULT-OPTIONS` `Level` `Enable` and `Persist` both `Info`, root 0644, and makes `Logging` and `Logging/Subsystems`
+when missing. A file already there is left alone. The file stays in the Data store; delete it to go back. Why: CoreWiFi
+says why `_CWFFilteredScanResults` drops a scan result (`[corewifi] Filtering based on maxAge (...)` and 15 other
+reasons, subsystem `com.apple.WiFiManager`) only at the info level, and auto-join saw no result in the phone's boots of
+2026-11-13 (`docs/hardware.md` 3, "Wi-Fi does not join"). For the next boot: `oneios-log-persist=com.apple.WiFiManager`
+in the image's `xnuhost.conf`. Line: `oneios-logpersist: com.apple.WiFiManager: info kept (... written, 0)`, or `... is
+there already: left alone`. [I] That logd honours the Data volume's file: `/Library/Preferences/Logging/Subsystems` is
+the path iOS frameworks write their own overrides to (SafariShared, VoiceControl in 24A446's cache); not seen working
+yet on the phone. **On the PC** (2026-11-14, `wifi=sim`, `kernel.kc` `552d08f1` from this branch, a fresh Data store): `oneios-logpersist: com.apple.WiFiManager: info kept (...)` before launchd, and iOS's log then held 14 info-level `com.apple.WiFiManager` entries of wifid (`[corewifi] ADDED LOCAL/DAEMON XPC CONNECTION ...`, `Mega WiFi profile is NOT installed`, ...); the system has no logging preference of its own for that subsystem (HomeKit and containermanager, whose info lines were kept too, have theirs), so logd honours the Data volume's file. Final build `kernel.kc` `bf31eb0d` (audit 0 failures, `prelink stubs-check` 666 good).
+
 ## 0067-ram-fixed.patch (fix-fixed-memory, 2026-11-13; written, NOT in the series, never compiled)
 
 **0058's give-back becomes the host's choice.** With xnuhost's `ram-giveback=0` the RAM is held fixed for the session

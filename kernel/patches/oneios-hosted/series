@@ -201,6 +201,11 @@
 # free_report_runs.h). A fourth oneios-mem: line splits the give-back time: lock waits, taking, host calls, putting back,
 # the thread's own CPU time, per MiB. Numbered 0066 to stay clear of the 0059-0065 other agents have open.
 0066-free-page-runs.patch
+# fix-wifi-join-2: info-level messages of chosen log subsystems kept (oneios-log-persist=SUBSYSTEM[,...], default none):
+# /private/var/preferences/Logging/Subsystems/SUBSYSTEM.plist written before launchd (Enable and Persist Info) when
+# missing. For CoreWiFi's "Filtering based on ..." reasons (com.apple.WiFiManager), which the phone's log lacked.
+# Numbered 0070 (0067-0069 were held by other agents).
+0070-log-persist.patch
 # fix-fixed-memory (2026-11-13): the host holds the guest's RAM fixed for the session (xnuhost ram-giveback=0, the
 # default: prefaulted at the start, locked where Linux allows) and says so with XH_FEATURE_RAM_FIXED in xh_info's
 # features (osfmk/arm64/hosted/hostcall.h). Then 0058/0066 give nothing back; the free queues keep 0058's order (pages
