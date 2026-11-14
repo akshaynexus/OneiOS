@@ -853,17 +853,25 @@ builds `SUPPORTED_CHANNELS` from the same list (active unless passive, DFS flag 
   skips chip initialization, then its power state is never set (DEADBEEF looks like an unset value). Apple's VMs have
   a virtual Bluetooth controller of their own (transport-encoding 10); with H4 the VM path probably waits for
   something only that controller gives. Not proven.
-- **Next step: hide the VM from bluetoothd and BlueTool**, as was done for the audio server: the kernel already has
-  `owner-hide-vmm=NAME,...` (Droid-VM-UniXNU `zzyd-owner-hide-vmm.patch`, in our build; `kern.hv_vmm_present` reads 0
-  for those processes). Try it with the boot argument `owner-hide-vmm=bluetoothd,BlueTool` (add
-  `audiomxd,com.apple.WebKit.GPU` if those are wanted too: it is one list) in the image's `xnuhost.conf` boot-args, or
-  on the PC `--boot-args "... owner-hide-vmm=bluetoothd,BlueTool" --set bluetooth=sim`. Expected, not yet seen:
-  bluetoothd then runs its chip initialization (BlueTool's scripts, `Booting chipset`, the chipset from
-  `AppleOLYHAL`'s `HWIdentifiers`, which this guest does not have: `No AppleOLYHAL service. Retrying...` for 10 s, maybe
-  `Unknown platform/chipset/manufacturer combination, restarting`). UniXNU runs this bluetoothd only with a patched
-  binary and its own capability library (`native-ios27.md`), so the non-VM path may need a published `AppleOLYHAL`
-  with `HWIdentifiers` or more. A PC boot of 2026-11-13 with that argument mounted its root but was stopped in the shared
-  cache hashing (box load 20) before bluetoothd ran: no result yet.
+- **Tried and dropped (2026-11-14): hiding the VM from bluetoothd** with `owner-hide-vmm=bluetoothd,BlueTool` (the
+  kernel's per-process `kern.hv_vmm_present` switch of Droid-VM-UniXNU's `zzyd-owner-hide-vmm.patch`). bluetoothd then
+  leaves the virtual-controller path and **crashes at its start, in a loop** [F]: on the phone (main 9f6dc38) 18 pids in
+  one boot, then launchd's 1200 s throttle; on the PC (`bluetooth=sim`) the same, a new pid every few seconds, each one
+  right after its first device-tree reads. Without the hide (c1223f8, and every PC boot before) it runs as one pid.
+  The non-VM path expects Apple's own Bluetooth chip and its bring-up (UniXNU runs this bluetoothd only with a patched
+  binary and its own library, `native-ios27.md`); the project does not change Apple's binaries, so **the VM path stays**
+  and its power init is what to fix. Never put bluetoothd in `owner-hide-vmm`: no default does, and xnuhost now says
+  so in its log when the boot arguments do (`boot arguments: owner-hide-vmm names bluetoothd: ...`).
+- **Next step: the VM path's own transport.** In a VM bluetoothd expects Apple's virtual controller, transport-encoding
+  10 ("virtual"). Its boot argument `bt-transport-override=10` selects it without a new build. On the PC
+  (`--set bluetooth=sim --boot-args "... bt-transport-override=10"`) and on the phone (in `xnuhost.conf`'s boot-args):
+  read the `oneios-iokit: bluetoothd[...]` lines that follow power init (what service or user client the virtual
+  transport looks for), then publish that service in `drivers/bluetooth` over the same H4 core and host bridge.
+  On the PC nothing asks bluetoothd to power on within a run (no `Beginning asynchronous power init` there), so this
+  is a phone test; a PC boot for it was queued on 2026-11-14 and cancelled (the queue was over an hour).
+- **0062 now also says how a process saw the VM:** `oneios-iokit: bluetoothd[N] sysctl kern.hv_vmm_present -> 1 (a
+  virtual machine)` or `-> 0 (the virtual machine hidden by owner-hide-vmm)` (kernel.kc bc81badb, built, not yet in a
+  boot).
 - **What the next phone boot must check:** in xnuhost.log the `oneios-iokit: bluetoothd[...]` and `oneios-iokit:
   BlueTool[...]` lines (what it looks up, whether a `kernel control "com.apple.uart.sk.bluetooth"` lookup ever comes);
   in iOS's log `oneios-tool ioslog show data.img --proc bluetoothd --grep "power|Power|chip|Chip|Virtual|BlueTool|OLYHAL|HWIdentifiers|StackManager|core stack|transport|MAC"`

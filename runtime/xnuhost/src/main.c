@@ -879,6 +879,10 @@ int main(int argc, char **argv)
   if (xh_display_init(&config, &fb_width, &fb_height, &fb_hz)) return EXIT_SETUP;
   // The display driver's scale and refresh rate go on the kernel's command line (a value given there stays).
   if (xh_display_boot_args(config.boot_args, sizeof config.boot_args, config.scale, fb_hz, config.display_format)) { LOGE("no room in the boot arguments for the display's switches"); return EXIT_SETUP; }
+  // 24A446's bluetoothd with the virtual machine hidden takes its chip path and dies (SIGSEGV at 0x350) in a loop that
+  // launchd then throttles for 1200 s (phone and PC, 2026-11-14; docs/hardware.md 4): said, not changed.
+  if (xh_boot_args_hides_vmm_from(config.boot_args, "bluetoothd"))
+    LOGE("boot arguments: owner-hide-vmm names bluetoothd: it crashes in a loop that way (docs/hardware.md 4); take it out");
   xh_perf_init(&config);
   if (boot()) { xh_tasks_shutdown(); return EXIT_SETUP; }
 

@@ -178,6 +178,9 @@ xh_panel_mode xh_display_mode(const xh_config *c, const xh_panel_mode *panel);
 // offline-legacy-unit-scale=SCALE (/chosen display-scale) and sheng-vsync=HZ (the vsync tick and, above 60 Hz,
 // the refresh properties). -1: no room.
 int  xh_display_boot_args(char *args, size_t size, unsigned scale, unsigned hz, unsigned format);
+// True when the boot arguments' owner-hide-vmm=NAME[,NAME...] (the kernel's per-process vmm-present switch) names
+// `name`. xnuhost warns for bluetoothd: 24A446's bluetoothd crashes in a loop with the virtual machine hidden.
+bool xh_boot_args_hides_vmm_from(const char *args, const char *name);
 // Appends the text fixups a UI scale needs on this build's dyld shared cache to a NUL-separated list
 // (/chosen text-fixups). Returns the list's new length; unknown builds and a scale of 2 add nothing.
 unsigned xh_scale_fixups(const char *build, unsigned scale, char *list, unsigned length, unsigned size);
