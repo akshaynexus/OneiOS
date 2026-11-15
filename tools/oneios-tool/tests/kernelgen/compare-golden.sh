@@ -15,7 +15,7 @@
 #                         crumbs header, hid's and net's report.json, the GPU's adreno/status.json
 #   golden/staged.sha256  the staged copies of other projects' sources (and of Apple's IOBlockStorageDevice.cpp):
 #                         SHA-256, size and name only
-#   golden/stdout.txt     what the nine generators print (the archive steps' logs in build order), with the tree's
+#   golden/stdout.txt     what the ten generators print (the archive steps' logs in build order), with the tree's
 #                         and the checkout's paths taken out and without the lines of drivers/build.py
 # Not frozen: objects and archives (they carry the tree's path and the compiler's version), the compilers' logs,
 # objects.json and build-report.json (the SHA-256 of every source: they change with each source change).
@@ -36,7 +36,7 @@ native-legacy-display/IOMobileFramebufferLegacy-originals.S
 oneios-hid/OneiOSHidLayoutCheck.cpp oneios-hid/IOHIDDevice-bindings.S oneios-hid/IOHIDDevice-originals.S oneios-hid/report.json
 oneios-net/OneiOSNetCheck.cpp oneios-net/ionetworking-include/oneios-mbuf-crumbs.h oneios-net/IONetworking-bindings.S
 oneios-net/IONetworking-originals.S oneios-net/report.json"
-STAGED="oneios-aes/NativeAES.cpp oneios-keystore/NativeKeyStoreEvents.cpp oneios-audio/DroidVMAudio.cpp oneios-hid/NativeHidInput.cpp
+STAGED="oneios-aes/NativeAES.cpp oneios-keystore/NativeKeyStoreEvents.cpp oneios-audio/DroidVMAudio.cpp oneios-codec/DroidVMVTHost.cpp oneios-hid/NativeHidInput.cpp
 oneios-hid/DroidVMVirtioInput.c oneios-net/DroidVMVirtioNet.c native-legacy-display/LegacyDisplayProbe.cpp
 oneios-hosted-storage/IOBlockStorageDevice.cpp oneios-gpu/adreno/root/kits/droidvm/DroidVMGpu.cpp
 oneios-gpu/adreno/root/scripts/build-droidvm-gpu.py"
@@ -55,7 +55,9 @@ said() {
 }
 
 if [ "${UPDATE:-0}" = 1 ]; then
-  rm -rf "$GOLDEN"; mkdir -p "$GOLDEN/build"
+  # Only what this script records: golden/synthetic (cargo test's made-up sources and results) is kept. Until
+  # 2026-11-15 the whole folder was removed first, synthetic with it.
+  rm -rf "$GOLDEN/build" "$GOLDEN/staged.sha256" "$GOLDEN/stdout.txt"; mkdir -p "$GOLDEN/build"
   for f in $TEXT; do mkdir -p "$GOLDEN/build/$(dirname "$f")"; cp "$BUILD/$f" "$GOLDEN/build/$f"; done
   staged > "$GOLDEN/staged.sha256"
   said > "$GOLDEN/stdout.txt"

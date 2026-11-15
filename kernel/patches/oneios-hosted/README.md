@@ -619,6 +619,21 @@ only when `drivers/haptics` has the host's actuator (`oneios-actuator=0`: never;
 stereo). `drivers/haptics` publishes `/product/haptics closed-loop` only when the device exists. Built
 (`HOSTED_OUT=media`); not run. `docs/hardware.md` section 5 has the design, the log lines and the way back.
 
+## codec/: the video encoder (hevc-encoder, hevc-guest, 2026-11-15)
+
+No numbered patch: an archive (`oneios-tool kernel gen codec`, hooked into `kernel/build-hosted.sh` after `audio/`)
+whose start, `oneios_codec_start` (`codec/OneiOSCodec.c`), is the last call of `oneios_drivers_start` (weak in
+`drivers/bridge/OneiOSBridge.c`). It holds UniXNU-droidvm's virtio-media transport (`DroidVMVirtioMedia.c`,
+unchanged, `-DDROIDVM_DEVICE_DYNAMIC=1`), its `AppleVideoToolboxParavirtualizationDriver` and user client
+(`DroidVMVTParavirt.cpp`, unchanged; its static initializer out of `__mod_init_func`, as the audio archive's:
+`droidvm_vt_paravirt_attach` runs it in its own module load), and the sessions behind it (`DroidVMVTHost.cpp`, staged
+with one edit: the hvcC's profile, tier and level bytes taken from the SPS without its emulation prevention bytes).
+With xnuhost's `encoder=auto` (`/arm-io/virtio-media-0`, `droidvm-vt-paravirt=1`) the kernel publishes iOS's own
+paravirtualized VideoToolbox codecs, so CMPhoto finds a hardware HEVC encoder and writes HEIC; without it (the
+default) the classes are registered and no service is published, and iOS is as before. Why this route, the boot
+arguments, the log lines (`ONEIOS CODEC: ...`), the limits and what was built and booted: `codec/README.md`;
+`docs/hardware.md` section 7g. Built and booted on the Linux PC (`HOSTED_OUT=hevc`); not run on the phone.
+
 ## 0052-rt-computation-held.patch (media, 2026-11-12)
 
 `thread_policy_set(THREAD_TIME_CONSTRAINT_POLICY)` (osfmk/kern/thread_policy.c) refuses a computation above

@@ -4,10 +4,11 @@
 // (backend_ndk.c) -- with a guest made of plain memory in this process, encodes an NV12 test pattern through the
 // phone's hardware encoder as root with One UI up, and checks the bitstream. No xnuhost, no Apple code.
 //
-//   encctl hevc|h264 [WIDTH HEIGHT]        default hevc 256x256
+//   encctl hevc|h264 [WIDTH HEIGHT [FILE]]        default hevc 256x256; FILE: the coded stream, as it came (Annex B)
 //
-// A pass prints the backend, the encoded size, the first parameter sets (VPS/SPS/PPS for HEVC, SPS/PPS for H.264) and
-// the keyframe, and "ok". `error:` lines say which step failed.
+// A pass prints each access unit's size and the types of its NAL units (HEVC: 32 VPS, 33 SPS, 34 PPS, 19 or 20 the
+// IDR slice; H.264: 7 SPS, 8 PPS, 5 the IDR slice), and "ok". `error:` lines say which step failed. FILE is for a
+// decoder off the phone (`ffmpeg -i FILE -frames:v 1 out.png`): the picture is a grey gradient with diagonal bands.
 #define _GNU_SOURCE
 #include "encoder.h"
 #include "media_proto.h"
@@ -97,10 +98,15 @@ static uint32_t ioc(guest *g, uint32_t sess, uint32_t nr, void *p, uint32_t len)
   uint32_t c[4] = { MEDIA_CMD_IOCTL, 0, sess, nr }; uint8_t r[8];
   return command(g, c, sizeof c, p, len, r, sizeof r, p, len);
 }
+// MMAP as the guest's transport does it (DroidVMVirtioMedia.c droidvm_media_mmap): the answer is the buffer's place
+// in the pool and its size, refused when it is not inside the pool; the address is the pool's base plus it.
+static uint64_t pool_base, pool_bytes;
 static uint64_t mmap_buf(guest *g, uint32_t sess, uint64_t h) {
   uint32_t c[5] = { MEDIA_CMD_MMAP, 0, sess, 1, (uint32_t)h }; uint8_t r[24];
   if (command(g, c, sizeof c, NULL, 0, r, sizeof r, NULL, 0)) return 0;
-  uint64_t gpa; memcpy(&gpa, r + 8, 8); return gpa;
+  uint64_t at, size; memcpy(&at, r + 8, 8); memcpy(&size, r + 16, 8);
+  if (at > pool_bytes || size > pool_bytes - at) { fprintf(stderr, "error: MMAP: %#llx+%#llx is not in the pool\n", (unsigned long long)at, (unsigned long long)size); return 0; }
+  return pool_base + at;
 }
 #define EVENT_BUFS 8
 static uint8_t event_store[EVENT_BUFS][MEDIA_EVENT_BYTES];
@@ -117,11 +123,15 @@ int main(int argc, char **argv) {
   const char *codec_name = argc > 1 ? argv[1] : "hevc";
   uint32_t W = argc > 3 ? (uint32_t)atoi(argv[2]) : 256, H = argc > 3 ? (uint32_t)atoi(argv[3]) : 256;
   uint32_t codec = strcmp(codec_name, "h264") ? MEDIA_PIXFMT_HEVC : MEDIA_PIXFMT_H264;
+  FILE *stream = argc > 4 ? fopen(argv[4], "wb") : NULL;
+  if (argc > 4 && !stream) { fprintf(stderr, "error: cannot write %s\n", argv[4]); return 1; }
 
   static guest g;
   uint64_t pool_size = 32ull << 20;
   uint8_t *pool = malloc(pool_size);
   if (!pool) { fprintf(stderr, "error: no pool\n"); return 1; }
+  pool_base = (uint64_t)(uintptr_t)pool;
+  pool_bytes = pool_size;
   xh_virtio *dev = br_encoder_create(0x0a000000, 40, br_encoder_backend_ndk(), pool, (uint64_t)(uintptr_t)pool, pool_size);
   if (!dev) { fprintf(stderr, "error: the encoder device could not be made\n"); return 1; }
   guest_up(&g, dev);
@@ -180,13 +190,30 @@ int main(int argc, char **argv) {
         ioc(&g, sess, MEDIA_VIDIOC_QUERYBUF, &cb, sizeof cb);
         uint8_t *nal = (uint8_t *)(uintptr_t)mmap_buf(&g, sess, cb.plane.m);
         if (nal && b.plane.bytesused >= 6) {
-          unsigned type = codec == MEDIA_PIXFMT_HEVC ? (nal[4] >> 1) & 0x3f : nal[4] & 0x1f;
-          printf("encctl: AU %u bytes, first NAL type %u%s\n", b.plane.bytesused, type, (b.flags & MEDIA_BUF_FLAG_KEYFRAME) ? " (keyframe)" : "");
+          // Every NAL unit's type, by its start code (00 00 01, with or without a zero before it).
+          char types[160] = "";
+          for (uint32_t i = 0; i + 3 < b.plane.bytesused; i++) {
+            if (nal[i] || nal[i + 1] || nal[i + 2] != 1) continue;
+            unsigned type = codec == MEDIA_PIXFMT_HEVC ? (nal[i + 3] >> 1) & 0x3f : nal[i + 3] & 0x1f;
+            size_t used = strlen(types);
+            if (used + 8 < sizeof types) snprintf(types + used, sizeof types - used, "%s%u", used ? ", " : "", type);
+            i += 3;
+          }
+          printf("encctl: AU %u bytes of a %u-byte buffer, NAL types %s%s\n", b.plane.bytesused, b.plane.length, types,
+                 (b.flags & MEDIA_BUF_FLAG_KEYFRAME) ? " (keyframe)" : "");
+          if (stream && fwrite(nal, 1, b.plane.bytesused, stream) != b.plane.bytesused) { fprintf(stderr, "error: cannot write %s\n", argv[4]); return 1; }
         }
         if (b.flags & MEDIA_BUF_FLAG_LAST) eos = true;
       }
     } else if (kind == MEDIA_EVT_EVENT) eos = true;
   }
+
+  if (stream && fclose(stream)) { fprintf(stderr, "error: cannot write %s\n", argv[4]); return 1; }
+  // CLOSE as the guest's transport sends it: the command alone, no buffer for an answer.
+  uint32_t close_cmd[4] = { MEDIA_CMD_CLOSE, 0, sess, 0 };
+  void *close_buf = close_cmd; uint32_t close_len = sizeof close_cmd; bool close_writable = false;
+  post(&g, MEDIA_QUEUE_COMMAND, &close_buf, &close_len, &close_writable, 1);
+  reap(&g, MEDIA_QUEUE_COMMAND, NULL);
 
   br_encoder_stats st; br_encoder_get_stats(dev, &st);
   if (aus && key && total && !st.errors) { printf("encctl: %s %ux%u: %u access unit(s), %u bytes, keyframe present; ok\n", codec_name, W, H, aus, total); return 0; }

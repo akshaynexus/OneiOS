@@ -117,7 +117,8 @@ scripts/bg.sh kernel-hosted env HOSTED_OUT=me kernel/build-hosted.sh
 - The build also makes the hosted board's archives from `kernel/patches/oneios-hosted/`, each by `oneios-tool kernel gen NAME`
   (section 10; the script builds the tool first when it is missing or stale, so the kernel build needs Rust): the disks (`storage`), the
   virtio GPU (`gpu`), software AES (`aes`), the speaker and microphone (`audio`: UniXNU-droidvm's virtio-snd and
-  IOAudio2Devices from `external/UniXNU-droidvm`) and the display (`display`: needs `external/NativeMobileDisplay` and
+  IOAudio2Devices from `external/UniXNU-droidvm`), the video encoder (`codec`: UniXNU-droidvm's virtio-media transport
+  and VideoToolbox paravirtualization driver, from the same checkout) and the display (`display`: needs `external/NativeMobileDisplay` and
   `external/UniXNU-droidvm` from `scripts/setup/get-references.sh`; its input for another kernelcache is remade with
   `oneios-tool kernel port-legacy-display`).
 - The VM kernel (UniXNU's own board, not used by xnuhost): `scripts/bg.sh kernel kernel/build-linux.sh`; on a Mac,
@@ -429,6 +430,15 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   a figure moves; xnuhost logs what came over the bridge (`haptics: effect N played on the stand-in actuator`,
   `haptics: counters: ...`). VirtualAudio's own lines: `oneios-tool ioslog show out/run/data/data.img --proc
   audiomxd` (`actuator port`, `Actuator`). [hardware.md](hardware.md) section 5, "Haptics do nothing".
+- The video encoder on the PC: add `--set encoder=auto`. With the bridges off (`--mode bench`) xnuhost runs the
+  stand-in encoder itself (the PC has no MediaCodec and cannot run the Android helper): `encoder: on: stand-in
+  backend, media pool 48 MiB at 0x... (2 session slots)` and `encoder: the stand-in encoder (encoder=auto with the
+  bridges off: no phone): ...`. The guest then says `ONEIOS CODEC: 1 virtio-media device(s), 1 up; VideoToolbox
+  paravirtualization registered (stage 2)`, 3 s later `ONEIOS CODEC: device 0: oneios-encoder caps 0x4004000 out:
+  NV12 cap: HEVC H264`, and `ONEIOS CODEC: counters: ...` every 30 s while a process uses the service
+  (`kernel/patches/oneios-hosted/codec/README.md`). Without `encoder=auto` (or with a kernel that has no codec
+  archive) nothing changes: `ONEIOS CODEC: 0 virtio-media device(s), 0 up; VideoToolbox paravirtualization not
+  published (stage 1)`. [hardware.md](hardware.md) section 7g.
 - Touch and keys on the PC: add `--input-script runtime/xnuhost/tools/input-demo.script` (keep `--no-input`: the
   evdev reader would open the PC's own devices). The script gives xnuhost's input device a panel's axes and, once
   the guest's driver runs it, repeats a tap, a swipe up from the bottom edge and the three side keys
@@ -856,7 +866,7 @@ run the Rust tool only:
 |---|---|---|
 | `scripts/image/build.sh`, `verify.sh`, `kernel-inputs.sh`, `scripts/fetch/fetch.sh` | none: Rust only since 2026-11-13 (`ONEIOS_TOOL=PATH` for another binary; `IMAGETOOL_IMPL` is gone; `scripts/image/imagetool.py` stays in the tree, unused, until the owner decides) | `oneios-tool image` runs every subcommand, `check-ipsw`, `fetch`, `record-plain`, `aea-info`, `pack` and the archive's `verify` too. Before that day: `oneios-tool image` runs profile, apfs-info, apfs-owners, hashes, tree-copy, seed-pack, manifest and the set folder's verify; pack and the archive's verify stay with the Python tool. Same files, byte for byte (README "image") |
 | `scripts/image/kernel-inputs.sh` | none needed; `IM4P_TOOL=PATH` forces it | without the `lzfse` program the kernelcache is decoded by `oneios-tool image im4p`; the result is checked against the pinned SHA-256 either way (section 1) |
-| `kernel/build-hosted.sh`, `kernel/build-linux.sh`, `kernel/build-macos.sh` | none: Rust only since 2026-11-13 (`ONEIOS_TOOL=PATH` for another binary) | the board archives (`storage`, `board`, `aes`, `keystore`, `net`, `hid`, `audio`, `gpu`, `display`) are built by `oneios-tool kernel gen NAME`, which UniXNU's driver runs from `board.toml`, and the VM kernel's build record by `oneios-tool kernel build-record`; the Python generators were deleted after every file they write was compared byte for byte, and their outputs are frozen in `tests/kernelgen/golden/` (README "kernel"); since 2026-11-13 `kernel gen gpu` compiles a staged `DroidVMVirtioGpu3D.cpp` with the GPU report's blob and surface-trail hooks (`staged/gpu.rs` `GPU3D`) |
+| `kernel/build-hosted.sh`, `kernel/build-linux.sh`, `kernel/build-macos.sh` | none: Rust only since 2026-11-13 (`ONEIOS_TOOL=PATH` for another binary) | the board archives (`storage`, `board`, `aes`, `keystore`, `net`, `hid`, `audio`, `codec`, `gpu`, `display`) are built by `oneios-tool kernel gen NAME`, which UniXNU's driver runs from `board.toml`, and the VM kernel's build record by `oneios-tool kernel build-record`; the Python generators were deleted after every file they write was compared byte for byte, and their outputs are frozen in `tests/kernelgen/golden/` (README "kernel"); since 2026-11-13 `kernel gen gpu` compiles a staged `DroidVMVirtioGpu3D.cpp` with the GPU report's blob and surface-trail hooks (`staged/gpu.rs` `GPU3D`) |
 | `kernel/prelink/build.sh` | none: Rust only since 2026-11-12 (`ONEIOS_TOOL=PATH` for another binary) | `oneios-tool prelink` runs all twelve steps; the Python steps were deleted after every step's output was compared byte for byte, and their outputs are frozen as hashes (`tests/prelink/compare-golden.sh`). 14 s instead of two minutes |
 | `runtime/package.sh` (and CI) | none: Rust only since 2026-11-13 (`ONEIOS_TOOL=PATH` for another binary) | `oneios-tool package check\|manifest\|archive`: the Apple-file check, `runtime.json`, the archive without GNU tar; `runtime/package/pack.py` was deleted after 91 frozen cases and the 19 package tests gave the same |
 | `kernel/tests/host.sh`, `drivers/tests/host.sh`, by hand | none | `oneios-tool kernel series-check`, `kernel drivers --check`, `kernel hosted-fixup`, `kernel kdk-headers`, `kernel iig-fix`, `prelink classes\|stubs-check\|unmapped\|port-fixture\|lead-between\|lead-imports`: the scripts of those names were deleted on 2026-11-13 (README, the group 2 section) |

@@ -956,6 +956,18 @@ the PC) is a stand-in actuator (`runtime/bridges/haptics/haptic.c`) that takes, 
 makes a bridge device that serves only the stand-ins (with `bluetooth=sim` one device serves both). Each played
 effect is logged for the first 8, then at 16, 32, ...; `haptics: counters: ...` at those points and at the end
 ([hardware.md](hardware.md) section 5).
+The video encoder (`encoder=` in `xnuhost.conf`, `--set encoder=...`; hevc-encoder and hevc-guest, 2026-11-15):
+`off`, the default until a phone session proves it, gives the guest no device; `auto` carves the 48 MiB media pool
+between the GPU pool and the boot framebuffer (both inside the 64 MiB the hosted kernel lets a task map), makes the
+`droidvm,virtio-media` device `/arm-io/virtio-media-0` with its `media-host-pool`, and adds `droidvm-vt-paravirt=1`
+to the guest's boot arguments, so the kernel's codec archive publishes iOS's paravirtualized VideoToolbox driver.
+With the bridges on (a session) the encoder is the phone's MediaCodec through `bin/oneios-encoder` (`encoder: on:
+mediacodec-helper backend, media pool 48 MiB at 0x... (2 session slots)`; `encoder: off: no bin/oneios-encoder in
+the runtime (the MediaCodec helper)` when the runtime has none). With the bridges off (a PC boot) it is the stand-in
+encoder inside xnuhost (`encoder: on: stand-in backend, ...`, then `encoder: the stand-in encoder (encoder=auto with
+the bridges off: no phone): no MediaCodec; every frame is coded as it is (I_PCM), no compression`); `sim` is the
+stand-in always, also in a session. `encoder: session N: HEVC WxH on <backend>` at each encoder session
+([hardware.md](hardware.md) section 7g, `runtime/bridges/encoder/README.md`).
 The network (`wifi=` in `xnuhost.conf`, `--set wifi=...`): `auto`, the default, makes the phone's wlan0 the guest's
 en0 (`br_wlan_prepare`, [hardware.md](hardware.md) section 3): the `net` window's virtio-net device carries wlan0's
 address in its configuration, its frames go to and from wlan0 by AF_PACKET, and the guest driver's station messages

@@ -151,7 +151,14 @@ static int helper_poll(br_enc_session *s, uint8_t *buf, uint32_t cap, int *key, 
   int bytes = 0;
   if (s->tail != s->head) {
     struct coded *c = &s->ring[s->tail % HELPER_CODED_RING];
-    if (c->size > cap) { pthread_mutex_unlock(&H.lock); return -ENOSPC; }
+    // A unit larger than the guest's coded buffer is dropped and said once: left at the ring's head it came back as
+    // an error at every poll of the device's worker, for as long as the session lived, and no later frame got out.
+    if (c->size > cap) {
+      free(c->bytes); c->bytes = NULL;
+      s->tail++;
+      pthread_mutex_unlock(&H.lock);
+      return -ENOSPC;
+    }
     memcpy(buf, c->bytes, c->size);
     *key = c->key; *eos = c->eos; *pts_us = c->pts;
     bytes = (int)c->size;

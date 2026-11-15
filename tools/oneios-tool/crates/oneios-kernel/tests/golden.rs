@@ -11,8 +11,8 @@
 //! No file of another project and none of Apple's is read. What needs compiled objects (the vtable checks, hid's,
 //! net's and the display's bindings) is compared in a build tree: tests/kernelgen/compare-golden.sh.
 
-use oneios_kernel::{build_oneios_aes, build_oneios_audio, build_oneios_display, build_oneios_gpu, build_oneios_hid, build_oneios_keystore,
-                    build_oneios_net, build_record, drivers_build};
+use oneios_kernel::{build_oneios_aes, build_oneios_audio, build_oneios_codec, build_oneios_display, build_oneios_gpu, build_oneios_hid,
+                    build_oneios_keystore, build_oneios_net, build_record, drivers_build};
 use std::path::{Path, PathBuf};
 
 fn repo() -> PathBuf {
@@ -79,6 +79,27 @@ fn the_edit_lists_write_what_the_python_functions_wrote() {
     assert!(build_oneios_gpu::staged_3d_text(made_up("gpu3d").repeat(2)).is_err());
     assert_eq!(build_oneios_display::staged_text(made_up("display")).unwrap(), expected("display"));
     assert_eq!(build_oneios_display::staged_scanout(made_up("display_scanout")).unwrap(), expected("display_scanout"));
+}
+
+#[test]
+fn the_codec_edit_writes_its_frozen_text_and_fits_the_pinned_source() {
+    // hevc-guest, 2026-11-15 (no Python original): the edit list of `kernel gen codec` (staged/codec.rs) on a made-up
+    // source against its frozen output, and on the real DroidVMVTHost.cpp where external/ has it.
+    assert_eq!(build_oneios_codec::staged_text(golden("synthetic/codec.in")).unwrap(), golden("synthetic/codec.out"));
+    assert!(build_oneios_codec::staged_text(golden("synthetic/codec.out")).is_err());   // applied twice: the anchor is gone
+    // What the archive must define: the start the bridge calls, the transport, the registration and its initializer.
+    assert_eq!(build_oneios_codec::REQUIRED, ["_oneios_codec_start", "_droidvm_media_start", "_droidvm_vt_paravirt_attach",
+                                              "__GLOBAL__sub_I_DroidVMVTParavirt.cpp"]);
+    let source = repo().join("external/UniXNU-droidvm/package/DroidVMVTHost.cpp");
+    if !source.exists() {
+        eprintln!("external/UniXNU-droidvm is not here: the codec's edit was checked on the synthetic source only");
+        return;
+    }
+    let staged = build_oneios_codec::staged_text(std::fs::read_to_string(&source).unwrap()).unwrap();
+    // The hvcC's twelve profile, tier and level bytes: no plain copy of the stream's bytes is left.
+    assert!(!staged.contains("memcpy(out + at, s->sps + 3, 12)"));
+    assert!(staged.contains("if (zeros >= 2 && byte == 3) { zeros = 0; continue; }"));
+    assert!(staged.contains("if (taken < 12) return 0;"));
 }
 
 #[test]

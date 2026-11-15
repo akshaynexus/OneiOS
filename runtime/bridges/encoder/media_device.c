@@ -8,6 +8,11 @@
 //   eventq   (1, manual): the guest posts writable event buffers; a worker thread fills one per event (DQBUF of a
 //            returned OUTPUT buffer or a coded CAPTURE buffer, an EOS EVENT).
 //
+// The worker asks the backend for coded frames (a backend has no callback). It does so every millisecond only for
+// MEDIA_BUSY_MS after the guest's last command or the backend's last frame, every MEDIA_IDLE_MS while a session is
+// open and quiet, and not at all with no session and no event waiting: then it sleeps until a command or a kick
+// wakes it (a device nobody uses costs no wake-ups; before 2026-11-15 it woke 50 times a second for ever).
+//
 // Each virtio-media session gets a fixed slice of the shared media pool for its MMAP'd buffers (MEDIA_SLOTS slots), so
 // the allocator is a per-slot bump with no fragmentation. A session that will not fit is refused at REQBUFS and
 // VideoToolbox keeps its software encoder.
@@ -29,6 +34,8 @@ enum {
   MEDIA_MAX_BUFS = 32,
   MEDIA_CODED_HEADROOM = 65536,
   MEDIA_EVENT_FIFO = 64,
+  MEDIA_BUSY_MS = 2000,                    // the backend is asked every millisecond this long after the last activity
+  MEDIA_IDLE_MS = 50,                      // then this often, while a session is open
 };
 
 struct buf {
@@ -69,8 +76,42 @@ typedef struct {
   unsigned fifo_head, fifo_tail;           // producer: handle()/worker; consumer: flush
   pthread_t worker;
   bool stop;
+  uint64_t busy_until_ms;                  // the device lock held: the worker asks the backend every millisecond until then
+  pthread_mutex_t wake_lock;               // the worker's sleep: `wake` under it
+  pthread_cond_t wake_cond;
+  bool wake;
   br_encoder_stats stats;
 } media_state;
+
+static uint64_t now_ms(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+// Something for the worker: a command or a kick of the guest's (the device lock held or not).
+static void wake_worker(media_state *m) {
+  pthread_mutex_lock(&m->wake_lock);
+  m->wake = true;
+  pthread_cond_signal(&m->wake_cond);
+  pthread_mutex_unlock(&m->wake_lock);
+}
+
+// The worker's sleep with nothing in flight: until it is woken, or `ms` at most (0: no limit).
+static void worker_sleep(media_state *m, unsigned ms) {
+  pthread_mutex_lock(&m->wake_lock);
+  if (!m->wake) {
+    if (ms) {
+      struct timespec until;
+      clock_gettime(CLOCK_MONOTONIC, &until);
+      until.tv_nsec += (long)ms * 1000000L;
+      if (until.tv_nsec >= 1000000000L) { until.tv_sec += until.tv_nsec / 1000000000L; until.tv_nsec %= 1000000000L; }
+      pthread_cond_timedwait(&m->wake_cond, &m->wake_lock, &until);
+    } else pthread_cond_wait(&m->wake_cond, &m->wake_lock);
+  }
+  m->wake = false;
+  pthread_mutex_unlock(&m->wake_lock);
+}
 
 // ---- helpers --------------------------------------------------------------------------------------------------
 
@@ -237,9 +278,22 @@ static int do_ioctl(media_state *m, struct media_session *s, uint32_t nr, uint8_
   }
   case MEDIA_VIDIOC_ENUM_FRAMESIZES:
     return EINVAL;                                                 // encoder: let VideoToolbox decide the size
+  case MEDIA_VIDIOC_ENUM_FMT: {
+    // struct v4l2_fmtdesc: index, type, flags, description[32], pixelformat (at 44). The guest's transport lists
+    // each queue's formats once at start (DroidVMVirtioMedia.c check(), up to 16 an answer of 0 gives it): OUTPUT
+    // takes NV12, CAPTURE gives HEVC and H.264; past the list EINVAL ends its loop, as V4L2 says.
+    if (len < 48) return EINVAL;
+    uint32_t index, type, format = 0;
+    memcpy(&index, payload, 4);
+    memcpy(&type, payload + 4, 4);
+    if (type == MEDIA_BUF_TYPE_VIDEO_OUTPUT_MPLANE) format = index == 0 ? MEDIA_PIXFMT_NV12 : 0;
+    else if (type == MEDIA_BUF_TYPE_VIDEO_CAPTURE_MPLANE) format = index == 0 ? MEDIA_PIXFMT_HEVC : index == 1 ? MEDIA_PIXFMT_H264 : 0;
+    if (!format) return EINVAL;
+    memcpy(payload + 44, &format, 4);
+    return 0;
+  }
   case MEDIA_VIDIOC_G_FMT:
   case MEDIA_VIDIOC_G_CTRL:
-  case MEDIA_VIDIOC_ENUM_FMT:
     return 0;                                                      // not needed by the encoder path
   default:
     return ENOTTY;
@@ -260,13 +314,30 @@ static int64_t media_handle(xh_virtio *dev, unsigned queue, uint16_t head, xh_vi
     if (iov[i].writable) { if (nw < 4) writes[nw++] = &iov[i]; }
     else { if (nr < 4) reads[nr++] = &iov[i]; }
   }
-  if (nr < 1 || nw < 1 || reads[0]->length < 8) return 0;
+  if (nr < 1 || reads[0]->length < 8) return 0;
   const uint8_t *cmd = reads[0]->data;
+  uint32_t op = rd32(cmd);
+  m->busy_until_ms = now_ms() + MEDIA_BUSY_MS;                     // a command: the worker looks at once, and often for a while
+  wake_worker(m);
+  // CLOSE comes with no buffer for an answer (DroidVMVirtioMedia.c droidvm_media_close sends the command alone), so
+  // it is done before the answer's buffer is asked for. Until 2026-11-15 a command without one was dropped: no
+  // session was ever closed, and the device's MEDIA_SLOTS sessions were used up by the guest's start-up check and
+  // the first encode.
+  if (op == MEDIA_CMD_CLOSE) {
+    struct media_session *s = reads[0]->length >= 12 ? session_of(m, rd32(cmd + 8)) : NULL;
+    if (s) {
+      if (s->enc) m->backend->close(s->enc);
+      s->used = false;
+    }
+    if (nw < 1 || writes[0]->length < 8) return 0;
+    memset(writes[0]->data, 0, 8);
+    return 8;
+  }
+  if (nw < 1) return 0;
   uint8_t *resp = writes[0]->data;
   uint32_t resp_cap = writes[0]->length;
   if (resp_cap < 8) return 0;
   memset(resp, 0, resp_cap);
-  uint32_t op = rd32(cmd);
   uint32_t written = 8;
 
   switch (op) {
@@ -284,16 +355,6 @@ static int64_t media_handle(xh_virtio *dev, unsigned queue, uint16_t head, xh_vi
     memcpy(resp, &zero, 4);
     memcpy(resp + 8, &slot->id, 4);
     written = 16;
-    break;
-  }
-  case MEDIA_CMD_CLOSE: {
-    if (reads[0]->length < 12) break;
-    struct media_session *s = session_of(m, rd32(cmd + 8));
-    if (s) {
-      if (s->enc) m->backend->close(s->enc);
-      s->used = false;
-    }
-    written = 8;
     break;
   }
   case MEDIA_CMD_IOCTL: {
@@ -326,9 +387,11 @@ static int64_t media_handle(xh_virtio *dev, unsigned queue, uint16_t head, xh_vi
       for (unsigned i = 0; i < s->capture_count && !size; i++) if (s->capture[i].offset == offset) { at = offset; size = s->capture[i].size; }
       if (size) status = 0;
     }
+    // The answer is the buffer's place in the pool, not its address: the guest adds its media-host-pool base
+    // (DroidVMVirtioMedia.c droidvm_media_mmap: `at > pool_size` is refused, then gpa = pool_base + at). Until
+    // 2026-11-15 the pool's guest address was added here too, which the guest's bound refused for every buffer.
     memcpy(resp, &status, 4);
-    uint64_t gpa = m->pool_gpa + at;
-    memcpy(resp + 8, &gpa, 8);
+    memcpy(resp + 8, &at, 8);
     memcpy(resp + 16, &size, 8);
     written = 24;
     break;
@@ -388,6 +451,7 @@ static void pump(media_state *m) {
       uint32_t flags = (key ? MEDIA_BUF_FLAG_KEYFRAME : 0) | (eos ? MEDIA_BUF_FLAG_LAST : 0);
       s->capture[index].queued = false;
       push_dqbuf(m, s, MEDIA_BUF_TYPE_VIDEO_CAPTURE_MPLANE, index, (uint32_t)bytes, flags, pts / 1000000);
+      m->busy_until_ms = now_ms() + MEDIA_BUSY_MS;                 // the backend is giving: the next may follow at once
       if (bytes > 0) m->stats.frames_out++;
       if (eos) {
         uint32_t ev[16] = { MEDIA_EVENT_EOS };
@@ -407,11 +471,13 @@ static void *worker_main(void *arg) {
     if (m->stop) { xh_virtio_unlock(m->dev); break; }
     pump(m);
     flush_events(m);
-    bool active = false;
-    for (unsigned i = 0; i < MEDIA_SLOTS; i++) active |= m->sessions[i].used && m->sessions[i].enc;
+    // Something may still come without a command: a session's backend may hold a frame, an event may wait for a buffer.
+    bool open = m->fifo_head != m->fifo_tail;
+    for (unsigned i = 0; i < MEDIA_SLOTS; i++) open |= m->sessions[i].used;
+    bool busy = open && now_ms() < m->busy_until_ms;
     xh_virtio_unlock(m->dev);
-    struct timespec ts = { 0, (active ? 1 : 20) * 1000000L };
-    nanosleep(&ts, NULL);
+    if (busy) { struct timespec ts = { 0, 1000000L }; nanosleep(&ts, NULL); }
+    else worker_sleep(m, open ? MEDIA_IDLE_MS : 0);
   }
   return NULL;
 }
@@ -431,7 +497,8 @@ static uint32_t media_config_read(xh_virtio *dev, uint32_t offset, unsigned size
   return 0;
 }
 
-static void media_kick(xh_virtio *dev, unsigned queue) { (void)dev; (void)queue; }   // eventq: the worker polls
+// eventq: the guest gave event buffers back; the worker fills them (an event may have waited for one).
+static void media_kick(xh_virtio *dev, unsigned queue) { (void)queue; wake_worker(xh_virtio_opaque(dev)); }
 
 static void media_reset(xh_virtio *dev) {
   media_state *m = xh_virtio_opaque(dev);
@@ -458,6 +525,12 @@ xh_virtio *br_encoder_create(uint64_t base, unsigned spi, const br_encoder_backe
   m->pool_gpa = pool_gpa;
   m->pool_size = pool_size;
   m->slot_size = pool_size / MEDIA_SLOTS;
+  pthread_condattr_t attr;
+  pthread_condattr_init(&attr);
+  pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+  pthread_mutex_init(&m->wake_lock, NULL);
+  pthread_cond_init(&m->wake_cond, &attr);
+  pthread_condattr_destroy(&attr);
   m->dev = xh_virtio_create(base, spi, &media_ops, m, "virtio-media");
   if (!m->dev) { free(m); return NULL; }
   if (pthread_create(&m->worker, NULL, worker_main, m)) { br_log(0, "encoder: no worker thread"); }

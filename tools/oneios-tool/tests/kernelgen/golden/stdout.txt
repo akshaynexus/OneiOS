@@ -8,5 +8,6 @@ build-oneios-net: TREE/build/oneios-net/liboneiosnet.a (5 objects, 159 original 
 build-oneios-hid: OriginalHidDeviceABI.h is the kernelcache's IOHIDDevice: 207 slots with its discriminators, 54 functions of the family placed, 0xd0 bytes
 build-oneios-hid: TREE/build/oneios-hid/liboneioshid.a (6 objects, 56 original IOHIDDevice functions bound at their 24A446 iPhone18,2 addresses; 14NativeHidInput owns 10 slots, 15OneiOSALSDevice owns 10 slots)
 build-oneios-audio: TREE/build/oneios-audio/liboneiosaudio.a (3 objects: the virtio-snd transport, the Speaker, Mic and Actuator IOAudio2Devices, the start; output latency 6480 frames)
+build-oneios-codec: TREE/build/oneios-codec/liboneioscodec.a (4 objects: the virtio-media transport, the VideoToolbox paravirtualization driver and its sessions, the start)
 build-oneios-gpu: TREE/build/oneios-gpu/liboneiosgpu.a (14 objects); NativeAdreno pieces: linked (IOAcceleratorES bound at its 24A446 iPhone18,2 addresses)
 build-oneios-display: TREE/build/native-legacy-display/libNativeLegacyDisplay.late.a (7 objects; IOMobileFramebufferLegacy: 24 owned slots, 154 of the kernel, 215 original bindings at their 24A446 iPhone18,2 addresses)

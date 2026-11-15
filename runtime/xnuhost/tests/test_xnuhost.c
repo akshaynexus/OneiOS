@@ -1853,6 +1853,14 @@ static void test_config(const char *dir)
   CHECK(!strcmp(c.haptics, "auto"));
   CHECK(xh_config_args(&c, 7, argv4c) == 0 && xh_config_finish(&c) == 0 && c.bridges == 0 && !strcmp(c.haptics, "sim"));
   CHECK(xh_config_set(&c, "haptics", "off") == 0 && !strcmp(c.haptics, "off") && xh_config_set(&c, "haptics", "evdev") != 0);
+  // encoder: off by default; auto (the phone's MediaCodec in a session, the stand-in with the bridges off); sim (the
+  // stand-in always); anything else refused.
+  char *argv4d[] = { "xnuhost", "--image", image, "--mode", "bench", "--set", "encoder=auto" };   // a PC boot
+  xh_config_defaults(&c);
+  CHECK(!strcmp(c.encoder, "off"));
+  CHECK(xh_config_args(&c, 7, argv4d) == 0 && xh_config_finish(&c) == 0 && c.bridges == 0 && !strcmp(c.encoder, "auto"));
+  CHECK(xh_config_set(&c, "encoder", "sim") == 0 && !strcmp(c.encoder, "sim") && xh_config_set(&c, "encoder", "off") == 0 &&
+        !strcmp(c.encoder, "off") && xh_config_set(&c, "encoder", "mediacodec") != 0);
   // hw-backend (bridges/hw_backend.h): samsung by default for every bridge; xnuhost.conf, --set and --hw-backend*;
   // the command line wins per setting over the image set's file; a bad value or an unknown bridge refused.
   xh_config_defaults(&c);

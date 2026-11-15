@@ -1,0 +1,16 @@
+// A made-up source for the edit list "codec": every anchor once, between lines of its own.
+// (before anchor 0)
+    // OneiOS (kernel gen codec): the twelve bytes without the stream's emulation prevention bytes (00 00 03 -> 00 00),
+    // counted from the SPS's first payload byte; upstream copied them as they are in the stream.
+    {
+        uint32_t zeros = 0, payload = 0, taken = 0;
+        for (uint32_t i = 2; i < s->spsSize && taken < 12; ++i) {
+            const uint8_t byte = s->sps[i];
+            if (zeros >= 2 && byte == 3) { zeros = 0; continue; }
+            zeros = byte ? 0 : zeros + 1;
+            if (payload++ >= 1) out[at + taken++] = byte;   // profile space/tier/idc, compatibility flags, constraint flags, level
+        }
+        if (taken < 12) return 0;
+        at += 12;
+    }
+// (the end)

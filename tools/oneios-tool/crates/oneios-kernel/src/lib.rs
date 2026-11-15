@@ -2,7 +2,7 @@
 //!
 //!   kernel gen NAME          one board archive of the kernel build: what UniXNU's driver runs between the two kernel
 //!                            passes (board.toml [kernel] archives), in the build tree, with UNIXNU_DEVICE set.
-//!                            NAME: board, storage, aes, keystore, net, hid, audio, gpu, display
+//!                            NAME: board, storage, aes, keystore, net, hid, audio, codec, gpu, display
 //!   kernel build-record      the record of a finished VM kernel build (build-linux.sh, build-macos.sh)
 //!   kernel drivers           drivers/ of the repository into liboneiosdrivers.a (--check: compile only)
 //!   kernel compile-command   the compile command the archives are built with, for a record
@@ -21,6 +21,7 @@
 pub mod build_oneios_aes;
 pub mod build_oneios_audio;
 pub mod build_oneios_board;
+pub mod build_oneios_codec;
 pub mod build_oneios_display;
 pub mod build_oneios_gpu;
 pub mod build_oneios_hid;
@@ -61,6 +62,8 @@ pub enum Archive {
     Hid,
     /// The speaker, the microphone and the actuator (liboneiosaudio.a)
     Audio,
+    /// The video encoder and decoder: VideoToolbox's paravirtualization driver (liboneioscodec.a)
+    Codec,
     /// virtio-gpu 3D and Metal's kernel side (liboneiosgpu.a)
     Gpu,
     /// The display (libNativeLegacyDisplay.late.a)
@@ -140,6 +143,7 @@ pub fn main(command: Command) -> i32 {
             Archive::Net => build_oneios_net::main(),
             Archive::Hid => build_oneios_hid::main(),
             Archive::Audio => build_oneios_audio::main(),
+            Archive::Codec => build_oneios_codec::main(),
             Archive::Gpu => build_oneios_gpu::main(),
             Archive::Display => build_oneios_display::main(),
         }.map(|()| 0),

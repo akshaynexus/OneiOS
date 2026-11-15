@@ -2,13 +2,16 @@
 // Host test of the video encoder bridge: no phone, no Android, no Apple files. It drives xnuhost's "droidvm,virtio-
 // media" device (media_device.c) over xnuhost's real transport (runtime/xnuhost/src/virtio.c) with a guest made of
 // plain memory, replaying exactly the V4L2 encoder sequence UniXNU-droidvm's DroidVMVTHost.cpp issues, and checks the
-// message layout, the pool MMAP, and that the NV12 test pattern reaches the stand-in encoder and comes back as a
-// well-formed HEVC Annex-B access unit (VPS/SPS/PPS + IDR).
+// message layout, the pool MMAP, and that the NV12 test pattern reaches the stand-in encoder and comes back as an
+// HEVC Annex-B access unit (VPS, SPS, PPS, IDR) that holds the pattern's own samples (tests/standin_reader.h). Twice:
+// through the oneios-encoder helper process (the phone's arrangement, with the stand-in in MediaCodec's place), and
+// with the stand-in inside the device's process (xnuhost's encoder=sim and its PC boots).
 //
 //   test_encoder PATH-TO-HOST-oneios-encoder
 #define _GNU_SOURCE
 #include "encoder.h"
 #include "media_proto.h"
+#include "standin_reader.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,12 +29,6 @@ void (*br_log_sink)(int level, const char *line);
 void br_log(int level, const char *fmt, ...) { (void)level; (void)fmt; }
 
 static void nap(unsigned ms) { struct timespec ts = { 0, (long)ms * 1000000L }; nanosleep(&ts, NULL); }
-
-static uint32_t fnv1a(const uint8_t *p, uint32_t n) {
-  uint32_t h = 2166136261u;
-  for (uint32_t i = 0; i < n; i++) { h ^= p[i]; h *= 16777619u; }
-  return h;
-}
 
 // ---- the virtio device against a guest of plain memory -------------------------------------------
 #define QN 32u
@@ -108,13 +105,30 @@ static uint32_t ioctl_cmd(guest *g, uint32_t session, uint32_t nr, void *payload
   return command(g, cmd, sizeof cmd, payload, len, resp, sizeof resp, payload, len);
 }
 
+// MMAP exactly as the guest's transport does it (DroidVMVirtioMedia.c droidvm_media_mmap): the answer is the buffer's
+// place in the media pool and its size; one that is not inside the pool is refused; the address is the pool's base
+// (the device tree's media-host-pool) plus it.
+static uint64_t guest_pool_base, guest_pool_size;
 static uint64_t mmap_buf(guest *g, uint32_t session, uint64_t handle) {
   uint32_t cmd[5] = { MEDIA_CMD_MMAP, 0, session, 1, (uint32_t)handle };
   uint8_t resp[24];
   uint32_t status = command(g, cmd, sizeof cmd, NULL, 0, resp, sizeof resp, NULL, 0);
   CHECK(status == 0);
-  uint64_t gpa; memcpy(&gpa, resp + 8, 8);
-  return gpa;
+  uint64_t at, size;
+  memcpy(&at, resp + 8, 8);
+  memcpy(&size, resp + 16, 8);
+  CHECK(size != 0 && at <= guest_pool_size && size <= guest_pool_size - at);
+  if (at > guest_pool_size || size > guest_pool_size - at) return 0;
+  return guest_pool_base + at;
+}
+
+// CLOSE exactly as the guest's transport sends it (droidvm_media_close): the command alone, with no buffer for an
+// answer; the device takes it and gives the descriptor back.
+static void close_session(guest *g, uint32_t session) {
+  uint32_t cmd[4] = { MEDIA_CMD_CLOSE, 0, session, 0 };
+  void *buf = cmd; uint32_t len = sizeof cmd; bool writable = false;
+  post(g, MEDIA_QUEUE_COMMAND, &buf, &len, &writable, 1);
+  CHECK(reap(g, MEDIA_QUEUE_COMMAND, NULL) == 0);
 }
 
 // Posts EVENT_BUFS writable event buffers; the worker fills them.
@@ -143,17 +157,19 @@ static uint8_t *wait_event(guest *g, uint32_t *kind, uint32_t *session) {
   return NULL;
 }
 
-int main(int argc, char **argv) {
-  const char *helper = argc > 1 ? argv[1] : "build/host/oneios-encoder";
+// One session of one frame on a device over `backend`, as DroidVMVTHost.cpp runs it.
+static void run(const br_encoder_backend *backend, uint64_t base) {
   static guest g;
   uint64_t pool_size = 32ull << 20;
   uint8_t *pool = malloc(pool_size);
   CHECK(pool != NULL);
   uint64_t pool_gpa = (uint64_t)(uintptr_t)pool;      // identity, as xh_ram here
+  guest_pool_base = pool_gpa;
+  guest_pool_size = pool_size;
 
-  xh_virtio *dev = br_encoder_create(0x0a000000, 40, br_encoder_backend_helper(helper), pool, pool_gpa, pool_size);
+  xh_virtio *dev = br_encoder_create(base, 40, backend, pool, pool_gpa, pool_size);
   CHECK(dev != NULL);
-  if (!dev) { printf("test_encoder: %d/%d\n", checks - failures, checks); return failures ? 1 : 0; }
+  if (!dev) return;
 
   CHECK(xh_virtio_mmio_read(dev, 0x08, 4) == MEDIA_VIRTIO_DEVICE_ID);
   CHECK(xh_virtio_mmio_read(dev, 0x100, 4) == (MEDIA_CAP_VIDEO_M2M_MPLANE | MEDIA_CAP_STREAMING));
@@ -168,6 +184,20 @@ int main(int argc, char **argv) {
   CHECK(command(&g, open_cmd, sizeof open_cmd, NULL, 0, open_resp, sizeof open_resp, NULL, 0) == 0);
   uint32_t session; memcpy(&session, open_resp + 8, 4);
   CHECK(session != 0);
+
+  // ENUM_FMT, as the guest's transport lists each queue once at start (DroidVMVirtioMedia.c check()): OUTPUT takes
+  // NV12, CAPTURE gives HEVC and H.264, and the list ends with an error.
+  struct { uint32_t index, type, flags; char description[32]; uint32_t pixelformat, mbus_code, reserved[3]; } fd;
+  static const struct { uint32_t type, index, format; } formats[] = {
+    { MEDIA_BUF_TYPE_VIDEO_OUTPUT_MPLANE, 0, MEDIA_PIXFMT_NV12 }, { MEDIA_BUF_TYPE_VIDEO_OUTPUT_MPLANE, 1, 0 },
+    { MEDIA_BUF_TYPE_VIDEO_CAPTURE_MPLANE, 0, MEDIA_PIXFMT_HEVC }, { MEDIA_BUF_TYPE_VIDEO_CAPTURE_MPLANE, 1, MEDIA_PIXFMT_H264 },
+    { MEDIA_BUF_TYPE_VIDEO_CAPTURE_MPLANE, 2, 0 } };
+  for (unsigned i = 0; i < sizeof formats / sizeof formats[0]; i++) {
+    memset(&fd, 0, sizeof fd);
+    fd.index = formats[i].index; fd.type = formats[i].type;
+    uint32_t status = ioctl_cmd(&g, session, MEDIA_VIDIOC_ENUM_FMT, &fd, sizeof fd);
+    CHECK(formats[i].format ? status == 0 && fd.pixelformat == formats[i].format : status != 0);
+  }
 
   // S_FMT CAPTURE (HEVC) then OUTPUT (NV12), as startEncoder does.
   struct media_v4l2_format cap_fmt; memset(&cap_fmt, 0, sizeof cap_fmt);
@@ -213,7 +243,9 @@ int main(int argc, char **argv) {
   // A NV12 test pattern into the OUTPUT buffer, then QBUF it.
   uint32_t frame_len = W * H * 3 / 2;
   for (uint32_t i = 0; i < frame_len; i++) out_buf[i] = (uint8_t)(i * 7 + 13);
-  uint32_t crc = fnv1a(out_buf, frame_len);
+  uint8_t *pattern = malloc(frame_len);               // the device may hand the OUTPUT buffer out again
+  CHECK(pattern != NULL);
+  if (pattern) memcpy(pattern, out_buf, frame_len);
   struct media_v4l2_buffer qbo; memset(&qbo, 0, sizeof qbo);
   qbo.type = MEDIA_BUF_TYPE_VIDEO_OUTPUT_MPLANE; qbo.index = 0; qbo.sec = 1; qbo.plane.bytesused = frame_len;
   CHECK(ioctl_cmd(&g, session, MEDIA_VIDIOC_QBUF, &qbo, sizeof qbo) == 0);
@@ -243,31 +275,21 @@ int main(int argc, char **argv) {
   }
   CHECK(saw_output && saw_capture && coded && coded_len > 0);
 
-  // The coded access unit: VPS (32), SPS (33), PPS (34), IDR (19), Annex-B; the stub's IDR marker carries our dims/crc.
-  if (coded && coded_len > 40) {
-    unsigned types_seen = 0;
-    bool vps = false, sps = false, pps = false, idr = false;
-    const uint8_t *p = coded, *end = coded + coded_len;
-    while (p + 5 < end) {
-      if (p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1) {
-        unsigned type = (p[4] >> 1) & 0x3f;
-        types_seen++;
-        if (type == 32) vps = true;
-        else if (type == 33) sps = true;
-        else if (type == 34) pps = true;
-        else if (type == 19) {
-          idr = true;
-          const uint8_t *body = p + 6;      // 4 start + 2 nal header
-          CHECK(memcmp(body, "ONEI", 4) == 0);
-          uint32_t w, h, c, len;
-          memcpy(&w, body + 4, 4); memcpy(&h, body + 8, 4); memcpy(&c, body + 12, 4); memcpy(&len, body + 16, 4);
-          CHECK(w == W && h == H && c == crc && len == frame_len);
-        }
-        p += 4;
-      } else p++;
-    }
-    CHECK(vps && sps && pps && idr && types_seen >= 4);
+  // The coded access unit: VPS (32), SPS (33), PPS (34), IDR (19), Annex-B, no larger than the coded buffer the guest
+  // asks for; the slice's samples are the pattern's (at the PCM depth the stand-in wrote).
+  CHECK(coded_len <= W * H / 2 + 65536);
+  if (coded && coded_len > 40 && pattern) {
+    standin_nal nals[8];
+    unsigned count = standin_split(coded, coded_len, true, nals, 8), luma = 0, chroma = 0;
+    CHECK(count == 4 && nals[0].type == 32 && nals[1].type == 33 && nals[2].type == 34 && nals[3].type == 19);
+    uint32_t n = 0;
+    uint8_t *rbsp = count == 4 ? standin_rbsp(&nals[3], true, &n) : NULL, *picture = malloc(frame_len);
+    CHECK(rbsp && picture && standin_hevc_picture(rbsp, n, W, H, picture, &luma, &chroma));
+    CHECK(rbsp && picture && luma && standin_same_picture(picture, pattern, W, H, luma, chroma));
+    free(rbsp);
+    free(picture);
   }
+  free(pattern);
 
   // ENCODER_CMD STOP -> drain -> EOS.
   uint32_t enc_cmd[10] = { MEDIA_ENC_CMD_STOP };
@@ -285,11 +307,23 @@ int main(int argc, char **argv) {
   br_encoder_get_stats(dev, &st);
   CHECK(st.sessions == 1 && st.frames_in == 1 && st.frames_out == 1 && st.errors == 0);
 
-  // CLOSE.
-  uint32_t close_cmd[3] = { MEDIA_CMD_CLOSE, 0, session };
-  uint8_t close_resp[8];
-  command(&g, close_cmd, sizeof close_cmd, NULL, 0, close_resp, sizeof close_resp, NULL, 0);
+  // CLOSE, then more sessions than the device has slots, one after another: each close gives its slot back (the
+  // guest's transport opens and closes one at start, VideoToolbox one for every picture).
+  close_session(&g, session);
+  for (unsigned i = 0; i < 5; i++) {
+    CHECK(command(&g, open_cmd, sizeof open_cmd, NULL, 0, open_resp, sizeof open_resp, NULL, 0) == 0);
+    uint32_t again; memcpy(&again, open_resp + 8, 4);
+    CHECK(again != 0 && again != session);
+    close_session(&g, again);
+  }
+}
 
-  printf("test_encoder: %d/%d checks passed\n", checks - failures, checks);
+int main(int argc, char **argv) {
+  const char *helper = argc > 1 ? argv[1] : "build/host/oneios-encoder";
+  run(br_encoder_backend_helper(helper), 0x0a000000);
+  int after_helper = checks;
+  run(br_encoder_backend_stub(), 0x0a001000);
+  printf("test_encoder: %d/%d checks passed (%d through the helper process, %d with the stand-in in the device's process)\n",
+         checks - failures, checks, after_helper, checks - after_helper);
   return failures ? 1 : 0;
 }

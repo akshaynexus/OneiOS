@@ -1,10 +1,13 @@
 # The video encoder bridge (README.md; docs/hardware.md, "Video encoder").
-#   make test       host test (ASan, UBSan): the virtio-media device driven over xnuhost's real transport by a guest
-#                   of plain memory, through the real oneios-encoder helper process built for the host with the
-#                   stand-in encoder (no MediaCodec on the box)
+#   make test       host tests (ASan, UBSan): the stand-in encoder alone (test_standin: its streams' layout and
+#                   samples; tests/decode.sh then decodes them with ffmpeg when there is one and compares the
+#                   pictures), and the virtio-media device driven over xnuhost's real transport by a guest of plain
+#                   memory (test_encoder), through the real oneios-encoder helper process built for the host with the
+#                   stand-in encoder (no MediaCodec on the box) and with the stand-in in the device's own process
 #   make            build/android/oneios-encoder (the helper; bin/oneios-encoder of the runtime package),
-#                   build/android/encctl (the phone test), build/android/liboneencoder.a (xnuhost's end: the device
-#                   and the helper backend, static, libc only -- no MediaCodec, which is in the helper)
+#                   build/android/encctl (the phone test), build/android/liboneencoder.a (xnuhost's end: the device,
+#                   the helper backend and the stand-in encoder, static, libc only -- no MediaCodec, which is in the
+#                   helper)
 include $(dir $(lastword $(MAKEFILE_LIST)))../../host.mk
 ANDROID_CC ?= $(TOOLS)/aarch64-linux-android30-clang
 ANDROID_AR ?= $(TOOLS)/llvm-ar
@@ -13,8 +16,9 @@ WARN := -Wall -Wextra -Werror
 INC := -I. -I../include -I$(XNUHOST)/src -I$(XNUHOST)/include
 CFLAGS ?= -O2 -g
 SAN := -O1 -g -fsanitize=address,undefined
-# xnuhost's end (linked into xnuhost, static): the virtio-media device and the helper-process backend. No MediaCodec.
-LINK := media_device.c backend_helper.c
+# xnuhost's end (linked into xnuhost, static): the virtio-media device, the helper-process backend, and the stand-in
+# encoder for a host with no phone (xnuhost's encoder=sim, and encoder=auto with the bridges off). No MediaCodec.
+LINK := media_device.c backend_helper.c backend_stub.c
 LIBS := -lmediandk -ldl -lm
 HDR := $(wildcard *.h ../include/bridges/*.h $(XNUHOST)/src/xnuhost.h)
 A := build/android
@@ -40,9 +44,15 @@ $(A)/encctl: encctl.c media_device.c backend_ndk.c $(XNUHOST)/src/virtio.c $(HDR
 $(H)/oneios-encoder: helper.c backend_stub.c $(HDR)
 	@mkdir -p $(H)
 	$(CC) -std=gnu11 $(SAN) $(WARN) $(INC) -DONEIOS_ENCODER_STUB_ONLY helper.c backend_stub.c -lpthread -o $@
-$(H)/test_encoder: tests/test_encoder.c media_device.c backend_helper.c $(XNUHOST)/src/virtio.c $(HDR)
+$(H)/test_encoder: tests/test_encoder.c tests/standin_reader.h media_device.c backend_helper.c backend_stub.c $(XNUHOST)/src/virtio.c $(HDR)
 	@mkdir -p $(H)
-	$(CC) -std=gnu11 $(SAN) $(WARN) $(INC) tests/test_encoder.c media_device.c backend_helper.c $(XNUHOST)/src/virtio.c -lpthread -o $@
-test: $(H)/test_encoder $(H)/oneios-encoder
+	$(CC) -std=gnu11 $(SAN) $(WARN) $(INC) tests/test_encoder.c media_device.c backend_helper.c backend_stub.c $(XNUHOST)/src/virtio.c -lpthread -o $@
+$(H)/test_standin: tests/test_standin.c tests/standin_reader.h backend_stub.c $(HDR)
+	@mkdir -p $(H)
+	$(CC) -std=gnu11 $(SAN) $(WARN) $(INC) tests/test_standin.c backend_stub.c -o $@
+test: $(H)/test_standin $(H)/test_encoder $(H)/oneios-encoder
+	rm -rf $(H)/streams && mkdir -p $(H)/streams
+	$(H)/test_standin $(H)/streams
+	sh tests/decode.sh $(H)/streams
 	ONEIOS_ENCODER_STUB=1 $(H)/test_encoder $(H)/oneios-encoder
 .PHONY: all test

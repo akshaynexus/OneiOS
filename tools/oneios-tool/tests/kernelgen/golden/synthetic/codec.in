@@ -1,0 +1,4 @@
+// A made-up source for the edit list "codec": every anchor once, between lines of its own.
+// (before anchor 0)
+    memcpy(out + at, s->sps + 3, 12); at += 12;   // profile space/tier/idc, compatibility flags, constraint flags, level
+// (the end)

@@ -80,6 +80,10 @@ PY
 #             Digitizer service.
 #   audio     The speaker and the microphone (no numbered patch: oneios_drivers_start calls oneios_audio_start):
 #             UniXNU-droidvm's virtio-snd transport and its two IOAudio2Devices from xnuhost's /arm-io/virtio-snd.
+#   codec     The video encoder and decoder (no numbered patch: oneios_drivers_start calls oneios_codec_start, which
+#             has a weak default for a kernel without this archive): UniXNU-droidvm's virtio-media transport from
+#             xnuhost's /arm-io/virtio-media-0 (encoder=auto) and its AppleVideoToolboxParavirtualizationDriver, iOS's
+#             own paravirtualized VideoToolbox codecs (README.md in the patch folder; docs/hardware.md 7g).
 #   gpu       The GPU (0005-gpu-3d.patch): Droid-VM's virtio-gpu 3D driver, force-loaded like the board's others.
 #   display   The display (0020-display.patch): UniXNU's NativeMobileDisplay under the collection's
 #             IOMobileFramebufferLegacy, with Droid-VM's probe and virtio-gpu scanout client.
@@ -93,7 +97,7 @@ PY
 # tools/oneios-tool/tests/kernelgen/golden.
 stage_tool
 ENTRIES=()
-for name in storage board aes keystore net hid audio gpu display; do
+for name in storage board aes keystore net hid audio codec gpu display; do
   ENTRIES+=("oneios-tool kernel gen $name")
 done
 python3 -I - "$DEVICE/board.toml" "$DEVICE/configs/oneios_hosted_defconfig" "${ENTRIES[@]}" <<'PY'
@@ -108,7 +112,7 @@ if n != 1:
 open(board, 'w').write(new)
 # The archives the kernel force-loads beside the committed ones, in this order (the link order).
 text = open(config).read()
-for name in ('gpu', 'aes', 'keystore', 'net', 'hid', 'audio'):
+for name in ('gpu', 'aes', 'keystore', 'net', 'hid', 'audio', 'codec'):
     text, n = re.subn(r'^(CONFIG_XNU_EXTRA_LD_ARCHIVES="[^"\n]*)"',
                       lambda m: m.group(1) + f' -Wl,-force_load,{{tree}}/build/oneios-{name}/liboneios{name}.a"', text, count=1, flags=re.M)
     if n != 1:

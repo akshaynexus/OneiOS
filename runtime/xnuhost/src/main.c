@@ -299,6 +299,13 @@ static void ram_fix_start(void)
 // the guest maps. 48 MiB fits 1080p-class widget/screenshot snapshots across the device's session slots; with the 8
 // MiB GPU pool it stays under the hosted kernel's 64 MiB mappable-pool bound (main.c, the RAM layout).
 #define MEDIA_POOL_BYTES (48ull << 20)
+// The guest codec archive (kernel/patches/oneios-hosted/codec) publishes iOS's paravirtualized VideoToolbox driver with
+// this boot argument (DroidVMVTParavirt.cpp); droidvm-media (default on) brings up the transport (DroidVMVirtioMedia.c).
+static void encoder_boot_argument(xh_config *c) {
+  if (strstr(c->boot_args, "droidvm-vt-paravirt=")) return;
+  size_t used = strlen(c->boot_args);
+  if (used + 24 < sizeof c->boot_args) snprintf(c->boot_args + used, sizeof c->boot_args - used, "%sdroidvm-vt-paravirt=1", used ? " " : "");
+}
 static void gpu_log(int level, const char *line) { xh_log(level == 0 ? XH_LOG_ERROR : level == 1 ? XH_LOG_INFO : XH_LOG_DEBUG, "%s", line); }
 
 // ---- the host bridges (runtime/bridges): CPU placement, cpufreq, haptics, Bluetooth, network, sound ---
@@ -654,6 +661,7 @@ static int boot(void)
     xh_cpu_place = place;
     LOGI("cpu: cpu-pin=2: vCPU i and the iOS thread it runs on host CPU i");
   }
+  bool encoder_sim = !strcmp(config.encoder, "sim");
   if (config.bridges) {
 
     // Bluetooth: the phone's controller through its HAL (hidl), or none (virtual). auto: hidl when the HAL is
@@ -727,26 +735,41 @@ static int boot(void)
     }
 
     // The video encoder (encoder=auto): the "droidvm,virtio-media" device over Android's MediaCodec, for iOS's
-    // paravirtualized VideoToolbox encoder (HEIC still images, then video). Off by default until the guest codec
-    // archive lands; both samsung and treble use MediaCodec, so one backend serves both. Its V4L2 buffers live in the
-    // media pool carved above.
-    if (ndev < XL_MAX_DEVICES && media_bytes && *config.runtime &&
-        snprintf(helper, sizeof helper, "%s/bin/oneios-encoder", config.runtime) < (int)sizeof helper && access(helper, X_OK) == 0) {
-      br_hw_select(BR_HW_ENCODER, BR_HW_UNSET);
-      if (br_encoder_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev,
-                            br_encoder_backend_helper(helper), xh_ram(media_pool_pa, media_bytes), media_pool_pa, media_bytes)) {
-        machine.media_pool_base = media_pool_pa;
-        machine.media_pool_size = media_bytes;
-        kinds[ndev++] = XL_DEV_MEDIA;
-        // The guest codec archive publishes iOS's paravirtualized VideoToolbox driver with this boot argument
-        // (DroidVMVTParavirt.cpp); droidvm-media (default on) brings up the transport (DroidVMVirtioMedia.c).
-        if (!strstr(config.boot_args, "droidvm-vt-paravirt=")) {
-          size_t used = strlen(config.boot_args);
-          if (used + 24 < sizeof config.boot_args)
-            snprintf(config.boot_args + used, sizeof config.boot_args - used, "%sdroidvm-vt-paravirt=1", used ? " " : "");
+    // paravirtualized VideoToolbox encoder (HEIC still images, then video). Off by default until a phone session
+    // proves it; both samsung and treble use MediaCodec, so one backend serves both. Its V4L2 buffers live in the
+    // media pool carved above. (encoder=sim: the stand-in, below.)
+    if (media_bytes && !encoder_sim) {
+      if (ndev < XL_MAX_DEVICES && *config.runtime &&
+          snprintf(helper, sizeof helper, "%s/bin/oneios-encoder", config.runtime) < (int)sizeof helper && access(helper, X_OK) == 0) {
+        br_hw_select(BR_HW_ENCODER, BR_HW_UNSET);
+        if (br_encoder_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev,
+                              br_encoder_backend_helper(helper), xh_ram(media_pool_pa, media_bytes), media_pool_pa, media_bytes)) {
+          machine.media_pool_base = media_pool_pa;
+          machine.media_pool_size = media_bytes;
+          kinds[ndev++] = XL_DEV_MEDIA;
+          encoder_boot_argument(&config);
         }
-      }
+      } else LOGI("encoder: off: %s", ndev < XL_MAX_DEVICES ? "no bin/oneios-encoder in the runtime (the MediaCodec helper)" : "no device slot left");
     }
+  }
+
+  // The video encoder with no phone: encoder=sim, or encoder=auto with the bridges off (a PC boot: no MediaCodec
+  // there, and the Android helper cannot run). The stand-in encoder (runtime/bridges/encoder/backend_stub.c) runs
+  // inside xnuhost behind the same device and answers each frame with a real HEVC or H.264 stream that carries the
+  // frame's own pixels uncompressed (I_PCM): iOS's paravirtualized encoder, CMPhoto's HEIC writer and whoever reads the
+  // file back all run as on the phone. Never in a session on the phone (the bridges on) unless encoder=sim asks for it.
+  if (media_bytes && (encoder_sim || !config.bridges)) {
+    if (!config.bridges) br_log_sink = bridge_log;
+    if (ndev < XL_MAX_DEVICES &&
+        br_encoder_create(XL_BOARD_VIRTIO + ndev * XL_BOARD_VIRTIO_SIZE, XL_BOARD_VIRTIO_SPI + ndev, br_encoder_backend_stub(),
+                          xh_ram(media_pool_pa, media_bytes), media_pool_pa, media_bytes)) {
+      machine.media_pool_base = media_pool_pa;
+      machine.media_pool_size = media_bytes;
+      kinds[ndev++] = XL_DEV_MEDIA;
+      encoder_boot_argument(&config);
+      LOGI("encoder: the stand-in encoder (%s): no MediaCodec; every frame is coded as it is (I_PCM), no compression",
+           encoder_sim ? "encoder=sim" : "encoder=auto with the bridges off: no phone");
+    } else LOGI("encoder: off: no device for the stand-in encoder");
   }
 
   // wifi=sim: a made-up radio (runtime/bridges/wifi/sim.c) for a boot with no phone, with the bridges on or off:

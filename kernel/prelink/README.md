@@ -126,6 +126,22 @@ named `AppleKeyStore`, bound to nothing in the kernelcache). For it `com.apple.d
 out of the roots (`FORCE_OUT`): with the original class in the collection the name is taken and the stand-in does
 not start.
 
+The video codec archive (`kernel/patches/oneios-hosted/codec`, `oneios-tool kernel gen codec`; hevc-guest,
+2026-11-15) is in the kernel too. Its two classes carry Apple's names, `AppleVideoToolboxParavirtualizationDriver`
+and `AppleVideoToolboxParavirtualizationUserClient` (the sandbox names the user client a process may open), and are
+classes of their own on `IOService` and `IOUserClient`, bound to nothing in the kernelcache: the iPhone18,2
+kernelcache has no kext with those classes (the two names are in `kernelcache.macho` three times, all among the
+sandbox kext's profile literals at file offsets 12.5 to 13.7 million, beside `AppleAVE2UserClient`'s rule; none is a
+class name of a kext: Apple's profiles for iOS already name the user client), so no root is left out for it and no
+class record is needed. It subclasses no original class
+and calls no original function by address: IOSurface is reached through `IOService` matching and the user client's
+virtual `externalMethod`. So it needs **no pairing record**: `pairs-24A446.json`, `stubs-24A446.json` and the
+reviewed records are unchanged. Built on the Linux PC from `origin/main` `fb4ec88` plus the archive
+(`HOSTED_OUT=hevc XNU_FILESET_REFERENCE=1`, 716 s from an empty tree; `xnu.macho` `972b9132...`, 24,961,392 bytes):
+`kernel.kc` `e4ffcabd1d95f25e...` (96,141,312 bytes; main's without the archive is 96,059,392), `audit: 2711 paired,
+93 functions on the stub, 9 data unpaired; 0 failures` (the figures of main's collection), `prelink stubs-check`:
+666 good, 0 bad. Booted on the PC (`kernel/patches/oneios-hosted/codec/README.md`); not on the phone.
+
 ## AMFI and launch constraints
 
 - `early_security_init`: AMFI's kmod start does nothing here (NULL `_realmain`); its policy registration is the
