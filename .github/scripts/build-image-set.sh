@@ -7,11 +7,13 @@ cd "$ROOT"
 
 PROFILE=profiles/ios-27.0.1-iPhone18,2.toml
 BUILD=24A446
-RUN_SUFFIX="ci-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
-INPUTS=$ROOT/inputs/$RUN_SUFFIX
+RUN_SUFFIX=${ONEIOS_IMAGE_SUFFIX:-ci-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}}
+INPUT_SUFFIX=${ONEIOS_INPUT_CACHE_SUFFIX:-$RUN_SUFFIX}
+KERNEL_SUFFIX=${ONEIOS_KERNEL_CACHE_SUFFIX:-$RUN_SUFFIX}
+INPUTS=$ROOT/inputs/$INPUT_SUFFIX
 IMAGE_OUT=$ROOT/out/image-$RUN_SUFFIX
-PRELINK_OUT=$ROOT/out/kernel/prelink-$RUN_SUFFIX
-HOSTED_OUT=$RUN_SUFFIX
+PRELINK_OUT=$ROOT/out/kernel/prelink-$KERNEL_SUFFIX
+HOSTED_OUT=$KERNEL_SUFFIX
 ARTIFACT_DIR=$IMAGE_OUT/artifact
 AGE_RECIPIENT=${ONEIOS_AGE_RECIPIENT:?set the age public recipient for this build}
 JOBS=${JOBS:-4}
@@ -32,9 +34,10 @@ trap - EXIT
 . "$ROOT/scripts/lib/oneios-tool.sh"
 oneios_tool "$ROOT"
 
-# Fetch only source repositories pinned by this kernel and its prelink, plus the two hosted-kernel drivers.
+# Fetch the exact pinned GPU kits, hosted-kernel drivers, and prelink source. NativeAdreno's
+# headers include AdrenoPM4 and ArmSmmu4K; omitting these makes the hosted GPU compile fail.
 kernel/fetch.sh
-scripts/setup/get-references.sh NativeMobileDisplay NativeHidInput XnuPrelink
+scripts/setup/get-references.sh NativeAdreno AdrenoPM4 ArmSmmu4K NativeMobileDisplay NativeHidInput XnuPrelink
 
 # Fetch, decrypt and verify Apple's required IPSW members, including its kernel inputs.
 scripts/fetch/get-ipsw-cli.sh

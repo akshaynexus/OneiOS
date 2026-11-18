@@ -134,7 +134,7 @@ jobs:
           git ls-files -z '*.sh' | xargs -0 -n1 bash -n
           git ls-files -z '*.py' | xargs -0 python3 -m py_compile
           shellcheck -S error $(git ls-files 'kernel/*.sh' 'runtime/*.sh' '.github/*.sh') \
-            .github/scripts/build-image-set.sh .github/scripts/cleanup-image-set.sh
+            .github/scripts/build-image-set.sh .github/scripts/prepare-image-cache.sh .github/scripts/cleanup-image-set.sh
       - name: NDK 28.2.13676358, the Rust target and oneios-tool
         run: .github/scripts/setup-build.sh
       - name: Sources the runtime links (Droid-VM's virglrenderer for drm2kgsl, the 3D GPU)
@@ -329,6 +329,9 @@ jobs:
     if: needs.plan.outputs.image == 'true'
     runs-on: [self-hosted, linux, x64, oneios-image]
     timeout-minutes: 360
+    concurrency:
+      group: oneios-image-set
+      cancel-in-progress: false
     env:
       JOBS: 2
     steps:
@@ -342,11 +345,12 @@ jobs:
           set -euo pipefail
           [[ "$(uname -s)" = Linux && "$(uname -m)" = x86_64 ]] || { echo "::error::image build requires Linux x86_64"; exit 1; }
           free_kib=$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}')
-          required_kib=$((100 * 1024 * 1024))
-          (( free_kib >= required_kib )) || { echo "::error::image build needs 100 GiB free at startup; this runner has $((free_kib / 1048576)) GiB. Use a dedicated Linux runner with at least 100 GiB free."; exit 1; }
+          required_gib=20
+          required_kib=$((required_gib * 1024 * 1024))
+          (( free_kib >= required_kib )) || { echo "::error::image runner setup needs $required_gib GiB free; this runner has $((free_kib / 1048576)) GiB."; exit 1; }
           if grep -qi microsoft /proc/sys/kernel/osrelease && [[ -d /mnt/c ]]; then
             windows_free_kib=$(df -Pk /mnt/c | awk 'NR==2 {print $4}')
-            (( windows_free_kib >= required_kib )) || { echo "::error::WSL's Windows C: drive needs 100 GiB free at startup; it has $((windows_free_kib / 1048576)) GiB."; exit 1; }
+            (( windows_free_kib >= required_kib )) || { echo "::error::WSL's Windows C: drive needs $required_gib GiB free at startup; it has $((windows_free_kib / 1048576)) GiB."; exit 1; }
             printf 'WSL backing C: drive: %s GiB free\n' "$((windows_free_kib / 1048576))"
           fi
           mem_kib=$(awk '/MemTotal:/ {print $2}' /proc/meminfo)
@@ -416,7 +420,7 @@ jobs:
           test -n "$fuse_bin" || { echo "::error::apfs-fuse did not build"; exit 1; }
           sudo install -m 0755 "$fuse_bin" /usr/local/bin/apfs-fuse
           command -v apfs-fuse
-      - name: Install Rust and build OneiOS image tools
+      - name: Install Rust
         working-directory: OneiOS-image-build
         run: |
           set -euo pipefail
@@ -427,7 +431,29 @@ jobs:
           export PATH="$HOME/.cargo/bin:$PATH"
           rustup toolchain install stable --profile minimal --no-self-update
           rustup default stable
-          cargo build --release --manifest-path tools/oneios-tool/Cargo.toml
+      - name: Reattach private inputs and incremental build cache
+        working-directory: OneiOS-image-build
+        run: bash .github/scripts/prepare-image-cache.sh
+      - name: Check free space for a cold build or a cache resume
+        working-directory: OneiOS-image-build
+        run: |
+          set -euo pipefail
+          required_gib=100
+          if [[ "$ONEIOS_IMAGE_CACHE_RESUME" == true ]]; then
+            required_gib=40
+            echo "Matching verified inputs and incremental kernel output found; using the 40 GiB resume threshold."
+          fi
+          required_kib=$((required_gib * 1024 * 1024))
+          free_kib=$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}')
+          (( free_kib >= required_kib )) || { echo "::error::this build needs $required_gib GiB free; the runner has $((free_kib / 1048576)) GiB."; exit 1; }
+          if grep -qi microsoft /proc/sys/kernel/osrelease && [[ -d /mnt/c ]]; then
+            windows_free_kib=$(df -Pk /mnt/c | awk 'NR==2 {print $4}')
+            (( windows_free_kib >= required_kib )) || { echo "::error::WSL's Windows C: drive needs $required_gib GiB free; it has $((windows_free_kib / 1048576)) GiB."; exit 1; }
+          fi
+          printf 'Image build space check: %s GiB free, %s GiB required\n' "$((free_kib / 1048576))" "$required_gib"
+      - name: Build OneiOS image tools into the reusable Cargo cache
+        working-directory: OneiOS-image-build
+        run: cargo build --release --manifest-path tools/oneios-tool/Cargo.toml --target-dir "$CARGO_TARGET_DIR"
       - name: Build, verify, and age-encrypt the full iOS image set
         working-directory: OneiOS-image-build
         env:
@@ -441,7 +467,7 @@ jobs:
           retention-days: 1
           compression-level: 0
       - name: Remove Apple-derived inputs and generated images from the self-hosted runner
-        if: always()
+        if: success()
         working-directory: OneiOS-image-build
         run: bash .github/scripts/cleanup-image-set.sh
 

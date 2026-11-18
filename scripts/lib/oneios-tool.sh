@@ -5,17 +5,18 @@
 #   missing or older than a file of its sources (cargo from PATH or ~/.cargo/bin; Rust 1.88 or newer).
 # shellcheck shell=bash
 oneios_tool() {
-  local dir=$1/tools/oneios-tool bin cargo
+  local dir=$1/tools/oneios-tool target_dir bin cargo
   if [ -n "${ONEIOS_TOOL:-}" ]; then
     [ -x "$ONEIOS_TOOL" ] || { echo "ONEIOS_TOOL=$ONEIOS_TOOL is not a program" >&2; return 1; }
     export ONEIOS_TOOL; return 0
   fi
-  bin=$dir/target/release/oneios-tool
+  target_dir=${CARGO_TARGET_DIR:-$dir/target}
+  bin=$target_dir/release/oneios-tool
   if [ ! -x "$bin" ] || [ -n "$(find "$dir/Cargo.toml" "$dir/Cargo.lock" "$dir/crates" -type f -newer "$bin" -print 2>/dev/null | head -1)" ]; then
     cargo=$(command -v cargo || echo "$HOME/.cargo/bin/cargo")
     [ -x "$cargo" ] || { echo "oneios-tool is not built and there is no cargo: install Rust 1.88 or newer (https://rustup.rs; docs/building.md section 0)" >&2; return 1; }
     echo "oneios-tool: building (cargo build --release --manifest-path tools/oneios-tool/Cargo.toml)" >&2
-    "$cargo" build --release --manifest-path "$dir/Cargo.toml" >&2 || { echo "oneios-tool: the build failed" >&2; return 1; }
+    "$cargo" build --release --manifest-path "$dir/Cargo.toml" --target-dir "$target_dir" >&2 || { echo "oneios-tool: the build failed" >&2; return 1; }
     touch "$bin"
   fi
   ONEIOS_TOOL=$bin; export ONEIOS_TOOL

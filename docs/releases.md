@@ -226,14 +226,17 @@ plan ──┬── runtime    ubuntu-24.04      the runtime package and its ch
   APK's versionName and versionCode from `aapt2 dump badging` (the versionCode must be `app/build.gradle.kts`'s);
   `check-apk.sh` (above). Artifact `oneos-apk`: `OneOS-oneios-<versionName>-debug.apk` and its `.sha256`.
 - **image**: manual `image set` or `full build` only, and only from `main`. It runs on a self-hosted Linux x86_64
-  runner (label `oneios-image`; at least 10 GiB RAM visible to Linux, 100 GiB free disk, clang 23+, FUSE and
-  passwordless `sudo`; WSL2 Ubuntu 24.04 on Windows is supported).
+  runner (label `oneios-image`; at least 10 GiB RAM visible to Linux, clang 23+, FUSE and passwordless `sudo`;
+  WSL2 Ubuntu 24.04 on Windows is supported). A cold build needs 100 GiB free; a retry with the matching verified
+  restore inputs and incremental hosted-kernel tree needs 40 GiB free.
   It fetches the pinned Apple restore members, builds the hosted kernel and audited kernel collection from that
   kernelcache, runs the normal image hook, packs and verifies the image archive, encrypts it to the dispatch's age
-  public recipient, then uploads only the encrypted file, checksums, and build receipt for one day. A cleanup step
-  removes this run's plaintext inputs, image set, and kernel collection even when an earlier step fails. No private
-  age key is stored in Actions. The image build requires 30 GiB for restore files and decrypted images; 100 GiB free
-  disk leaves room for the kernel build and archive. The standard GitHub Linux runner's 14 GB disk cannot run this
+  public recipient, then uploads only the encrypted file, checksums, and build receipt for one day. The runner keeps
+  matching plaintext inputs and incremental build outputs in a private `.oneios-image-cache` beside the checkout
+  for up to seven days after a failed or cancelled attempt; the next run reuses them. After a successful upload,
+  cleanup removes the Apple-derived inputs and image staging while preserving source/toolchain caches. Image jobs
+  serialize on the runner. No private age key is stored in Actions. The image build requires 30 GiB for restore files
+  and decrypted images; a cold build also needs room for the kernel build and archive. The standard GitHub Linux runner's 14 GB disk cannot run this
   job. An approximately 11 GiB artifact can exceed the account's included Actions storage and incur storage or
   transfer charges; see [building.md](building.md#ci-full-image-set) for key setup and decryption.
 - **release**: needs runtime and apk (each a success, or skipped because the dispatch asked for the other only); if the
