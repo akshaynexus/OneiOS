@@ -7,14 +7,15 @@
 #          ├── apk        (ubuntu-24.04) app/ at the head of the fork's branch, JDK 21, tribalfs' packages,
 #          │                             ./gradlew test assembleFullDebug, the APK's assets checked
 #          ├── apk-macos  (macos-15)     ./gradlew test of the same checkout on a Mac (core:root's script tests)
+#          ├── image      (self-hosted Linux) full iOS image set and hosted kernel, encrypted to a supplied age key
 #          └──────────────── release     needs runtime and apk; a tag v* or a dispatch only
 #
-# Triggers: a pull request or a push to main builds both and releases nothing. A tag vN.N.N[-suffix] on main builds
-# both and releases both. A dispatch (Actions, "build and release", Run workflow) on main takes a version and
-# "both", "runtime only" or "apk only".
-# The runtime job never checks out app/: the fork's tree cannot reach the package. Nothing of Apple's, Samsung's,
-# Google's or OPPO's is downloaded or uploaded here: runtime/package.sh refuses Apple files (`oneios-tool package`),
-# and .github/scripts/check-apk.sh refuses an APK that carries a package set, an image or firmware.
+# Triggers: a pull request or a push to main builds runtime and APK and releases nothing. A tag vN.N.N[-suffix] on
+# main builds both and releases both. A dispatch can build/release those, build only the image set, or do all three.
+# The runtime job never checks out app/: the fork's tree cannot reach the package. The image job is manual only and
+# builds from Apple's restore files, then uploads only an age-encrypted archive for one day; it is never a release
+# asset. runtime/package.sh refuses Apple files (`oneios-tool package`), and .github/scripts/check-apk.sh refuses an
+# APK that carries a package set, an image or firmware.
 name: build and release
 on:
   pull_request:
@@ -24,15 +25,19 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version N.N.N or N.N.N-suffix (the release is the tag v + version, made at this commit when missing)'
-        required: true
+        description: 'Required for release builds: N.N.N or N.N.N-suffix (image set only does not make a release)'
+        required: false
         type: string
       build:
-        description: 'What to build and release'
+        description: 'What to build (image output is encrypted and never added to a release)'
         required: true
         type: choice
-        options: [both, runtime only, apk only]
+        options: [both, runtime only, apk only, image set, full build]
         default: both
+      age_recipient:
+        description: 'Required for image set/full build: your age public recipient (age1…); keep its private key locally'
+        required: false
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -48,6 +53,7 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       runtime: ${{ steps.plan.outputs.runtime }}
       apk: ${{ steps.plan.outputs.apk }}
+      image: ${{ steps.plan.outputs.image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -60,22 +66,36 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           IN_VERSION: ${{ inputs.version }}
           IN_BUILD: ${{ inputs.build }}
+          AGE_RECIPIENT: ${{ inputs.age_recipient }}
         run: |
           set -euo pipefail
-          release=false version=0.0.0-ci runtime=true apk=true
+          release=false version=0.0.0-ci runtime=true apk=true image=false
           if [ "$EVENT" = push ] && [[ $REF == refs/tags/* ]]; then
             release=true version=${REF_NAME#v}
           elif [ "$EVENT" = workflow_dispatch ]; then
-            release=true version=${IN_VERSION#v}
-            case "$IN_BUILD" in both) ;; "runtime only") apk=false ;; "apk only") runtime=false ;;
-              *) echo "::error::build '$IN_BUILD' is not both, runtime only or apk only"; exit 1 ;; esac
+            case "$IN_BUILD" in
+              both) release=true ;;
+              "runtime only") release=true apk=false ;;
+              "apk only") release=true runtime=false ;;
+              "image set") runtime=false apk=false image=true ;;
+              "full build") release=true image=true ;;
+              *) echo "::error::unknown build choice '$IN_BUILD'"; exit 1 ;;
+            esac
+            if [ "$release" = true ]; then
+              version=${IN_VERSION#v}
+            fi
           fi
           if [ "$release" = true ]; then
+            [ -n "$IN_VERSION" ] || [ "$EVENT" = push ] || { echo "::error::a release build needs a version"; exit 1; }
             [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.]*)?$ ]] || { echo "::error::version '$version' is not N.N.N[-suffix]"; exit 1; }
             git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::$GITHUB_SHA is not on main"; exit 1; }
           fi
-          echo "release=$release version=$version runtime=$runtime apk=$apk"
-          { echo "release=$release"; echo "version=$version"; echo "runtime=$runtime"; echo "apk=$apk"; } >> "$GITHUB_OUTPUT"
+          if [ "$image" = true ]; then
+            [ "$REF" = refs/heads/main ] || { echo "::error::image builds can run only from main"; exit 1; }
+            [ -n "$AGE_RECIPIENT" ] || { echo "::error::image builds need an age public recipient"; exit 1; }
+          fi
+          echo "release=$release version=$version runtime=$runtime apk=$apk image=$image"
+          { echo "release=$release"; echo "version=$version"; echo "runtime=$runtime"; echo "apk=$apk"; echo "image=$image"; } >> "$GITHUB_OUTPUT"
 
   runtime:
     needs: plan
@@ -114,7 +134,8 @@ jobs:
           set -euo pipefail
           git ls-files -z '*.sh' | xargs -0 -n1 bash -n
           git ls-files -z '*.py' | xargs -0 python3 -m py_compile
-          shellcheck -S error $(git ls-files 'kernel/*.sh' 'runtime/*.sh' '.github/*.sh')
+          shellcheck -S error $(git ls-files 'kernel/*.sh' 'runtime/*.sh' '.github/*.sh') \
+            .github/scripts/build-image-set.sh .github/scripts/cleanup-image-set.sh
       - name: NDK 28.2.13676358, the Rust target and oneios-tool
         run: .github/scripts/setup-build.sh
       - name: Sources the runtime links (Droid-VM's virglrenderer for drm2kgsl, the 3D GPU)
@@ -392,12 +413,105 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  image:
+    needs: plan
+    if: needs.plan.outputs.image == 'true'
+    runs-on: [self-hosted, linux, x64, oneios-image]
+    timeout-minutes: 360
+    env:
+      JOBS: 4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: OneiOS-image-build
+          fetch-depth: 1
+      - name: The isolated Linux runner has enough room and the pinned kernel compiler
+        working-directory: OneiOS-image-build
+        run: |
+          set -euo pipefail
+          [[ "$(uname -s)" = Linux && "$(uname -m)" = x86_64 ]] || { echo "::error::image build requires Linux x86_64"; exit 1; }
+          free_kib=$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}')
+          required_kib=$((100 * 1024 * 1024))
+          (( free_kib >= required_kib )) || { echo "::error::image build needs 100 GiB free at startup; this runner has $((free_kib / 1048576)) GiB. Use a dedicated Linux runner with at least 100 GiB free."; exit 1; }
+          mem_kib=$(awk '/MemTotal:/ {print $2}' /proc/meminfo)
+          (( mem_kib >= 16 * 1024 * 1024 )) || { echo "::error::image build needs at least 16 GiB RAM"; exit 1; }
+          sudo -n true || { echo "::error::the runner user needs passwordless sudo to install build tools"; exit 1; }
+          command -v clang >/dev/null || { echo "::error::clang 23 or newer is required"; exit 1; }
+          major=$(clang --version | sed -n '1s/.*version \([0-9][0-9]*\).*/\1/p')
+          [[ "$major" =~ ^[0-9]+$ ]] && (( major >= 23 )) || { echo "::error::found $(clang --version | head -1); OneiOS kernel builds need clang 23 or newer"; exit 1; }
+          printf 'Image runner preflight: %s GiB free, %s MiB RAM, clang %s\n' "$((free_kib / 1048576))" "$((mem_kib / 1024))" "$major"
+      - name: Install the build and APFS-read tools
+        working-directory: OneiOS-image-build
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            age autoconf automake bison bubblewrap build-essential bzip2 ca-certificates cmake curl flex fuse3 \
+            git libattr1-dev libblocksruntime-dev libbsd-dev libbz2-dev libdispatch-dev libfuse3-dev libssl-dev \
+            libxml2-dev libzstd-dev m4 make ninja-build pkg-config python3 python3-mako python3-yaml uuid-dev \
+            zlib1g-dev zstd
+          test -r /dev/fuse && test -w /dev/fuse || { echo "::error::the runner user must be able to use /dev/fuse"; exit 1; }
+          command -v age >/dev/null || { echo "::error::age did not install"; exit 1; }
+          command -v clang >/dev/null
+          command -v ld.lld >/dev/null
+          command -v llvm-ar >/dev/null
+          command -v llvm-nm >/dev/null
+          command -v llvm-objcopy >/dev/null
+      - name: Build the pinned read-only APFS FUSE driver
+        working-directory: OneiOS-image-build
+        env:
+          APFS_FUSE_COMMIT: 66b86bd525e8cb90f9012543be89b1f092b75cf3
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/oneios-apfs-fuse"
+          build="$RUNNER_TEMP/oneios-apfs-fuse-build"
+          rm -rf "$src" "$build"
+          git clone --no-checkout https://github.com/sgan81/apfs-fuse.git "$src"
+          git -C "$src" fetch --depth 1 origin "$APFS_FUSE_COMMIT"
+          git -C "$src" checkout --detach FETCH_HEAD
+          git -C "$src" submodule update --init --recursive
+          cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$build" --parallel "$JOBS"
+          fuse_bin=$(find "$build" -type f -name apfs-fuse -executable -print -quit)
+          test -n "$fuse_bin" || { echo "::error::apfs-fuse did not build"; exit 1; }
+          sudo install -m 0755 "$fuse_bin" /usr/local/bin/apfs-fuse
+          command -v apfs-fuse
+      - name: Install Rust and build OneiOS image tools
+        working-directory: OneiOS-image-build
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --no-self-update
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          cargo build --release --manifest-path tools/oneios-tool/Cargo.toml
+      - name: Build, verify, and age-encrypt the full iOS image set
+        working-directory: OneiOS-image-build
+        env:
+          ONEIOS_AGE_RECIPIENT: ${{ inputs.age_recipient }}
+        run: bash .github/scripts/build-image-set.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: oneios-image-set-24A446-${{ github.run_id }}-${{ github.run_attempt }}-encrypted
+          path: OneiOS-image-build/out/image-ci-${{ github.run_id }}-${{ github.run_attempt }}/artifact/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+      - name: Remove Apple-derived inputs and generated images from the self-hosted runner
+        if: always()
+        working-directory: OneiOS-image-build
+        run: bash .github/scripts/cleanup-image-set.sh
+
   release:
-    needs: [plan, runtime, apk]
+    needs: [plan, runtime, apk, image]
     if: >-
       always() && !cancelled() && needs.plan.outputs.release == 'true' &&
       (needs.runtime.result == 'success' || needs.runtime.result == 'skipped' && needs.plan.outputs.runtime == 'false') &&
-      (needs.apk.result == 'success' || needs.apk.result == 'skipped' && needs.plan.outputs.apk == 'false')
+      (needs.apk.result == 'success' || needs.apk.result == 'skipped' && needs.plan.outputs.apk == 'false') &&
+      (needs.image.result == 'success' || needs.image.result == 'skipped' && needs.plan.outputs.image == 'false')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

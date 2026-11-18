@@ -1,0 +1,4 @@
+# The dedicated runner used only by the manual, main-branch image build.
+self-hosted-runner:
+  labels:
+    - oneios-image

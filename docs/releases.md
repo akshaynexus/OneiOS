@@ -41,9 +41,10 @@ window) around a ustar archive of regular files, `runtime.json` first, no top fo
 
 ## What is never in a release
 
-Nothing of Apple's: no IPSW, no kernelcache, no cryptex or disk image, no trust cache, no kext, and no kernel
-collection (the source-built XNU prelinked with Apple's kexts). Those are the **image set**, which each owner
-builds on their own machine from Apple's restore files (`scripts/image/`), and which the app imports from a file.
+Nothing of Apple's is put on a GitHub release: no IPSW, no kernelcache, no cryptex or disk image, no trust cache, no
+kext, and no kernel collection (the source-built XNU prelinked with Apple's kexts). Those are the **image set**, which
+the owner builds from Apple's restore files (`scripts/image/`) and imports into the app from a file. The optional CI
+image job uploads only an age-encrypted, one-day Actions artifact; see [building.md](building.md#ci-full-image-set).
 
 `oneios-tool package` (`tools/oneios-tool/crates/oneios-package/src/pack.rs`; it was `runtime/package/pack.py` until
 2026-11-13, and refuses exactly what that script refused: 91 frozen cases, `tools/oneios-tool/tests/packagepy`)
@@ -184,19 +185,22 @@ One workflow, `.github/workflows/release.yml` ("build and release"; `ci.yml` and
 before 2026-11-15 were merged into it). Its jobs:
 
 ```
-plan ──┬── runtime    ubuntu-24.04   the runtime package and its checks
-       ├── apk        ubuntu-24.04   the OneOS app (submodule app/) and its checks
-       ├── apk-macos  macos-15       ./gradlew test of the same app on a Mac
-       └───────────── release        needs runtime and apk; a tag or a dispatch only
+plan ──┬── runtime    ubuntu-24.04      the runtime package and its checks
+       ├── apk        ubuntu-24.04      the OneOS app (submodule app/) and its checks
+       ├── apk-macos  macos-15          ./gradlew test of the same app on a Mac
+       ├── image      self-hosted Linux the full image set; manual only; encrypted artifact
+       └───────────── release           needs runtime and apk; a tag or a release dispatch only
 ```
 
-`runtime`, `apk` and `apk-macos` start together after `plan` and run on their own runners.
+`runtime`, `apk` and `apk-macos` run on their own runners after `plan`; the image job starts only for its manual choices.
 
 | Trigger | Builds | Releases |
 |---|---|---|
 | a pull request, a push to `main` | runtime, apk, apk-macos | nothing (the runtime package and the APK are artifacts for 14 days) |
 | a tag `vN.N.N` or `vN.N.N-suffix` on `main` | all three | the runtime and the APK on the release of the tag |
-| a dispatch on `main` (Actions, "build and release", Run workflow; inputs `version` and `both` / `runtime only` / `apk only`) | what was asked (apk-macos with the APK) | the release `v<version>`, its tag made at the dispatched commit when missing |
+| a dispatch on `main` with `both` / `runtime only` / `apk only` | what was asked (apk-macos with the APK) | the release `v<version>`, its tag made at the dispatched commit when missing |
+| a dispatch on `main` with `image set` | fetch and verify the full image set and hosted kernel; age-encrypted artifact, one day | nothing |
+| a dispatch on `main` with `full build` | runtime, APK, and the full image set | runtime and APK only; the image set remains an encrypted Actions artifact |
 
 - **plan**: whether the run releases, the version (`0.0.0-ci` when not), what it builds. A release's version must be
   `N.N.N[-suffix]` and its commit on `main`.
@@ -230,15 +234,26 @@ plan ──┬── runtime    ubuntu-24.04   the runtime package and its check
   test is named and the reports still come out. On a failure the job summary lists the failed tests; the reports
   and results are the artifact `oneos-tests-macos`. Not a gate of the release. The macOS results are in
   "macOS: the fork's unit tests" below.
-- **release**: needs runtime and apk (each a success, or skipped because the dispatch asked for the other only).
+- **image**: manual `image set` or `full build` only, and only from `main`. It runs on a self-hosted Linux x86_64
+  runner (label `oneios-image` by default; 16 GiB RAM, 100 GiB free disk, clang 23+, FUSE and passwordless `sudo`).
+  It fetches the pinned Apple restore members, builds the hosted kernel and audited kernel collection from that
+  kernelcache, runs the normal image hook, packs and verifies the image archive, encrypts it to the dispatch's age
+  public recipient, then uploads only the encrypted file, checksums, and build receipt for one day. A cleanup step
+  removes this run's plaintext inputs, image set, and kernel collection even when an earlier step fails. No private
+  age key is stored in Actions. The image build requires 30 GiB for restore files and decrypted images; 100 GiB free
+  disk leaves room for the kernel build and archive. The standard GitHub Linux runner's 14 GB disk cannot run this
+  job. An approximately 11 GiB artifact can exceed the account's included Actions storage and incur storage or
+  transfer charges; see [building.md](building.md#ci-full-image-set) for key setup and decryption.
+- **release**: needs runtime and apk (each a success, or skipped because the dispatch asked for the other only); if the
+  dispatch also requested the image, that job must succeed before a release can proceed.
   Checks the commit is on `main` and that the tag, when it exists, is at the built commit (a tag is never moved);
   downloads the artifacts, checks their `.sha256` (the runtime's and the phone tool's; and that the APK is the file
   the apk job checked), writes the
   notes, creates the release (a pre-release when the version has a suffix; `--latest=false` without a runtime), or
   adds this run's notes to an existing one. Assets are added, never replaced: an asset already on the release with
   the same SHA-256 (GitHub's `digest`) is left, one with other bytes stops the job.
-- Nothing of Apple's is downloaded. Actions are pinned by commit. A rerun needs Actions write, which the agents'
-  token may not have; a push starts a new run.
+- The regular CI and release jobs do not download Apple files; only the manual image job does. Actions are pinned by
+  commit. A rerun needs Actions write, which the agents' token may not have; a push starts a new run.
 
 **tribalfs' packages.** The SESL9 and oneui-design libraries come from GitHub Packages
 (`maven.pkg.github.com/tribalfs`), whose Maven registry wants a login even for public packages.

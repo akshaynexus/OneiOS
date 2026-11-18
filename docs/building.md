@@ -72,6 +72,32 @@ image build attaches the three images with `hdiutil` (read-only, owners ignored)
 the fetch took 62 minutes (10.6 GiB at about 3 MB/s, then both decryptions), the image build 2 minutes with the
 archive (11.15 GB). The three images and the trust files are byte for byte the Linux PC's (the phone's manifest).
 
+## CI: full image set
+
+The manual **image set** choice in Actions runs the same pinned fetch, hosted-kernel, prelink, image-hook, pack, and
+verify steps on `main`. It does not add the image to a GitHub release. Since this repository is public, CI encrypts the
+archive to an age public recipient before uploading it as a one-day Actions artifact; only the encrypted archive,
+checksums, and build receipt are uploaded. The runner removes the unencrypted inputs and build outputs after upload.
+
+The image job needs a Linux x86_64 self-hosted runner labeled `oneios-image`, with clang 23+ and its LLVM tools
+(`ld.lld`, `llvm-ar`, `llvm-nm`, `llvm-objcopy`), 16 GiB RAM, at least 100 GiB free disk, working FUSE access, and
+passwordless `sudo`. The default GitHub-hosted Linux runner has only 14 GB
+of storage, while this profile alone needs 30 GiB for IPSW members and decrypted images. The job installs its build
+packages and builds the pinned APFS FUSE reader. Since this is a self-hosted runner for a public repository, keep it
+dedicated to trusted `main` builds; the image option runs only by manual dispatch from `main`.
+
+Before dispatching, install age locally and create an identity:
+
+```sh
+age-keygen -o oneios-age-key.txt
+```
+
+Copy the printed `age1...` **public recipient** into the workflow's `age_recipient` input. Keep `oneios-age-key.txt`
+private; it never goes to GitHub. Select **image set**. After the
+workflow succeeds, download the artifact immediately (it expires after one day), unzip it, and follow its README to
+verify and decrypt the archive. GitHub's standard artifact allowance may be exceeded by an approximately 11 GiB
+artifact; storage and transfer beyond the account's included allowance can be billed.
+
 ## 2. The kernel
 
 Linux or macOS, the same command (the script picks the toolchain by `uname -s`):
