@@ -341,8 +341,10 @@ static void test_session_on_charger(const char *root)
   pthread_mutex_unlock(&heard.lock);
 
   int n = heard_count();
-  write_node(root, "usb", "online", "1\n");
+  // The kernel may update these nodes separately. Charging itself implies plugged, so set it first and avoid
+  // exposing a transient plugged-but-discharging sample to the polling thread.
   write_node(root, "battery", "status", "Charging\n");
+  write_node(root, "usb", "online", "1\n");
   CHECK(wait_heard(n + 1));
   pthread_mutex_lock(&heard.lock);
   CHECK(heard.last.plugged && heard.last.charging);
