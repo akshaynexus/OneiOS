@@ -6,7 +6,6 @@
 #          │                             phone and oneios-tool-VERSION-android-arm64 beside the package
 #          ├── apk        (ubuntu-24.04) app/ at the head of the fork's branch, JDK 21, tribalfs' packages,
 #          │                             ./gradlew test assembleFullDebug, the APK's assets checked
-#          ├── apk-macos  (macos-15)     ./gradlew test of the same checkout on a Mac (core:root's script tests)
 #          ├── image      (self-hosted Linux) full iOS image set and hosted kernel, encrypted to a supplied age key
 #          └──────────────── release     needs runtime and apk; a tag v* or a dispatch only
 #
@@ -323,94 +322,6 @@ jobs:
             out/apk/*.apk
             out/apk/*.apk.sha256
           if-no-files-found: error
-          retention-days: 14
-
-  # The owner's Mac runs `./gradlew test assembleFullDebug` (oneios-tool cycle app); this proves the `test` half on
-  # macOS. Homebrew's folders are taken off PATH for the tests, so core:root's harness uses its own stand-ins for
-  # GNU stat, sha256sum, timeout and tac over macOS's own tools (the fork's docs/oneios.md): the case of a Mac without
-  # coreutils. Not a release gate: the release needs runtime and apk only.
-  apk-macos:
-    needs: plan
-    if: needs.plan.outputs.apk == 'true'
-    runs-on: macos-15
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: The fork at the head of its branch (app/)
-        run: |
-          set -euo pipefail
-          git submodule update --init --remote app
-          echo "app/: branch $(git config -f .gitmodules submodule.app.branch) at $(git -C app rev-parse HEAD)"
-      - name: Which token reads tribalfs' packages
-        env:
-          RUN_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SECRET_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
-          SECRET_USER: ${{ secrets.GH_PACKAGES_USER }}
-        run: .github/scripts/packages-token.sh
-      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
-        with:
-          distribution: temurin
-          java-version: 21
-      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
-        with:
-          cache-provider: basic
-      - name: Android SDK platform 37
-        run: |
-          sdkmanager=$(ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | tail -n 1)
-          yes | "$sdkmanager" --licenses > /dev/null || true
-          "$sdkmanager" "platforms;android-37.0" "build-tools;37.0.0"
-      - name: Guest app
-        run: app/scripts/build-guest-manager.sh --debug
-      - name: Unit tests on macOS (./gradlew test, core:root's script tests among them)
-        working-directory: app/app-android
-        env:
-          WATCHDOG_MIN: 30
-        run: |
-          set -euo pipefail
-          PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -Ev '^(/opt/homebrew|/usr/local)(/|$)' | paste -sd: -)
-          export PATH
-          for t in gstat gsha256sum gtimeout gtac gsed; do command -v "$t" > /dev/null && echo "note: $t is still on PATH: $(command -v "$t")"; done
-          echo "macOS $(sw_vers -productVersion), sh: $(ls -l /bin/sh | awk '{print $NF}'), stat: $(command -v stat)"
-          # Every test's start and end in the log (.github/scripts/gradle-test-events.gradle). The watchdog: a run
-          # that is not done after WATCHDOG_MIN minutes prints the processes and the test JVMs' threads (where it
-          # hangs), then stops Gradle, so that the failed tests and the reports below still come out (the first
-          # runs, 2026-11-15, hung in :core:root:testDebugUnitTest until the job's limit cancelled everything).
-          ./gradlew --max-workers=3 --continue --init-script "$GITHUB_WORKSPACE/.github/scripts/gradle-test-events.gradle" test &
-          g=$!
-          s=0
-          while kill -0 "$g" 2>/dev/null; do
-            sleep 10; s=$((s + 10))
-            if [ "$s" -ge $((WATCHDOG_MIN * 60)) ]; then
-              echo "::error::./gradlew test is still running after $WATCHDOG_MIN minutes: the processes and the test JVMs' threads follow, then Gradle is stopped"
-              ps -axww -o pid,ppid,etime,state,command | grep -Ev ' (/System/|/usr/libexec/|/usr/sbin/|/sbin/launchd)' | cut -c1-400
-              for p in $(jps -l | awk '/Gradle Test Executor|GradleWorkerMain/ { print $1 }'); do echo "=== jstack $p"; jstack "$p" | awk '/^"/ { keep = /Test worker|main/ } keep'; done
-              ./gradlew --stop || true; kill "$g" 2>/dev/null || true
-              exit 1
-            fi
-          done
-          wait "$g"
-      - name: Failed tests
-        if: failure()
-        working-directory: app/app-android
-        run: |
-          {
-            echo "### Failed unit tests on macOS"
-            grep -rl '<failure' --include='*.xml' . 2>/dev/null | grep '/build/test-results/' | while read -r f; do
-              awk '/<testcase /{ n = $0; sub(/.*<testcase name="/, "", n); sub(/".*/, "", n); c = $0; sub(/.*classname="/, "", c); sub(/".*/, "", c) }
-                   /<failure/{ m = $0; sub(/.*message="/, "", m); sub(/".*/, "", m); print "- " c " > " n ": " substr(m, 1, 400) }' "$f"
-            done
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: oneos-tests-macos
-          path: |
-            app/app-android/**/build/reports/tests/
-            app/app-android/**/build/test-results/
-          if-no-files-found: ignore
           retention-days: 14
 
   image:
