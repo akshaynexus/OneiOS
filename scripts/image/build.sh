@@ -212,5 +212,5 @@ echo "image set: $SET"
 if [ "$pack" = 1 ]; then
   tool pack "$SET" "$OUT/$P_ARCHIVE"
   tool verify "$OUT/$P_ARCHIVE"
-  echo "archive: $OUT/$P_ARCHIVE (+ .sha256). Import it in the OneOS fork's app; never upload it."
+  echo "archive: $OUT/$P_ARCHIVE (+ .sha256). Import it in the OneOS fork's app; keep the plaintext local (CI transfers only age-encrypted output)."
 fi
