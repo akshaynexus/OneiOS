@@ -62,8 +62,9 @@ The driver stops before the prelink (`--skip-prelink`): no kernelcache is read.
 
 ### Linux (`build-linux.sh`)
 
-Host packages: `clang lld llvm git make cmake ninja python3 flex bison m4 autoconf automake pkg-config bubblewrap`,
-libdispatch with BlocksRuntime (Arch: `swift` or `libdispatch`; Debian: `libdispatch-dev libblocksruntime-dev`),
+Host packages: `clang lld llvm git make cmake ninja python3 flex bison m4 autoconf automake pkg-config bubblewrap libncurses-dev`,
+libdispatch with BlocksRuntime (Arch: `swift` or `libdispatch`; Debian: `libdispatch-dev libblocksruntime-dev`;
+Ubuntu 26.04: `swiftlang libblocksruntime-dev`),
 `libbsd`, `libuuid`. No root, no SDK, no KDK.
 
 - `linux/setup-toolchain.sh` builds [xnu-linux-toolchain](https://github.com/Allenwdk/xnu-linux-toolchain) (pin

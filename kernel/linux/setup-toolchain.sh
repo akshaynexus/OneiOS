@@ -3,8 +3,8 @@
 # cctools-port (Apple's ld64, ar, nm, strip, libtool), mig, lzfse, unifdef, tcsh and the shims (iig, xcrun, plutil).
 # The compiler is the host's clang. About 5 minutes; run it in tmux:
 #   scripts/bg.sh toolchain kernel/linux/setup-toolchain.sh
-# Host packages: git cmake make clang flex bison autoconf automake pkg-config python3, and libdispatch with
-# BlocksRuntime (Arch: libdispatch or swift; Debian/Ubuntu: libdispatch-dev libblocksruntime-dev).
+# Host packages: git cmake make clang flex bison autoconf automake pkg-config python3 libncurses-dev, and libdispatch with
+# BlocksRuntime (Arch: libdispatch or swift; Debian: libdispatch-dev libblocksruntime-dev; Ubuntu 26.04: swiftlang libblocksruntime-dev).
 # The upstream bootstrap clones branch heads; this script puts the commits of kernel/pins.sh there first.
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -24,11 +24,24 @@ while read -r name url commit branch; do
 done <<ROWS
 $(pin_rows "$PINS_TOOLCHAIN")
 ROWS
-# libdispatch and BlocksRuntime outside the default paths (Swift's copy on Arch): tell cctools' configure and the loader.
+# libdispatch and BlocksRuntime outside the default paths (Swift's copy on Arch and Ubuntu 26.04): tell cctools'
+# configure and the loader. Ubuntu's Swift package keeps libdispatch in a Swift-specific directory that ldconfig may
+# not index, so find the shared library beside the headers when it is missing from ldconfig.
+dispatch_library=
 if ! [ -e /usr/include/dispatch/dispatch.h ]; then
-  for d in /usr/lib/swift /usr/lib/swift/usr/lib/swift; do
+  for d in /usr/lib/swift /usr/lib/swift/usr/lib/swift /usr/libexec/swift/lib/swift; do
     if [ -e "$d/dispatch/dispatch.h" ]; then
-      lib=$(dirname "$(ldconfig -p | awk '/libdispatch.so / && !seen {print $NF; seen = 1}')")
+      dispatch_library=$(ldconfig -p | awk '/libdispatch\.so / {print $NF; exit}')
+      if [ -z "$dispatch_library" ] || [ ! -e "$dispatch_library" ]; then
+        for candidate in "$d/linux/libdispatch.so" "$d/libdispatch.so"; do
+          if [ -e "$candidate" ]; then dispatch_library=$candidate; break; fi
+        done
+      fi
+      [ -n "$dispatch_library" ] && [ -e "$dispatch_library" ] || {
+        echo "setup-toolchain: found libdispatch headers at $d but no libdispatch.so" >&2
+        exit 1
+      }
+      lib=$(dirname "$dispatch_library")
       export CPPFLAGS="${CPPFLAGS:-} -I$d -I$d/Block" LDFLAGS="${LDFLAGS:-} -L$lib -Wl,-rpath,$lib"
       echo "setup-toolchain: libdispatch headers $d, library $lib"
       break
@@ -40,7 +53,11 @@ fi
 make -C "$PREFIX/src/unifdef" -j"${JOBS:-$(nproc)}" CFLAGS="-O2 -std=gnu11" unifdef >/dev/null
 # bootstrap.sh tests `ldconfig -p | grep -q libdispatch` under pipefail: with a long library list grep leaves early,
 # ldconfig dies of SIGPIPE and the test fails though the library is there. Give it a short answer.
-ldconfig -p | grep libdispatch > "$PREFIX/src/ldconfig.out" || { echo "setup-toolchain: libdispatch not installed" >&2; exit 1; }
+if [ -n "$dispatch_library" ]; then
+  printf 'libdispatch.so => %s\n' "$dispatch_library" > "$PREFIX/src/ldconfig.out"
+else
+  ldconfig -p | grep libdispatch > "$PREFIX/src/ldconfig.out" || { echo "setup-toolchain: libdispatch not installed" >&2; exit 1; }
+fi
 mkdir -p "$PREFIX/src/shim"
 printf '#!/bin/sh\ncat "%s"\n' "$PREFIX/src/ldconfig.out" > "$PREFIX/src/shim/ldconfig"
 chmod +x "$PREFIX/src/shim/ldconfig"
