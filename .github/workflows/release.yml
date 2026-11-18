@@ -497,7 +497,9 @@ jobs:
           git -C "$src" fetch --depth 1 origin "$APFS_FUSE_COMMIT"
           git -C "$src" checkout --detach FETCH_HEAD
           git -C "$src" submodule update --init --recursive
-          cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=Release
+          # The pinned upstream header relies on a transitive uint8_t include; GCC 15 no longer provides it.
+          sed -i '1i#include <cstdint>' "$src/ApfsLib/PList.h"
+          cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           cmake --build "$build" --parallel "$JOBS"
           fuse_bin=$(find "$build" -type f -name apfs-fuse -executable -print -quit)
           test -n "$fuse_bin" || { echo "::error::apfs-fuse did not build"; exit 1; }
