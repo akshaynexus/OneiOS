@@ -80,11 +80,33 @@ archive to an age public recipient before uploading it as a one-day Actions arti
 checksums, and build receipt are uploaded. The runner removes the unencrypted inputs and build outputs after upload.
 
 The image job needs a Linux x86_64 self-hosted runner labeled `oneios-image`, with clang 23+ and its LLVM tools
-(`ld.lld`, `llvm-ar`, `llvm-nm`, `llvm-objcopy`), 16 GiB RAM, at least 100 GiB free disk, working FUSE access, and
-passwordless `sudo`. The default GitHub-hosted Linux runner has only 14 GB
+(`ld.lld`, `llvm-ar`, `llvm-nm`, `llvm-objcopy`), at least 10 GiB RAM visible to Linux, at least 100 GiB free disk,
+working FUSE access, and passwordless `sudo`. A WSL2 Ubuntu 24.04 instance on Windows can host it; for a 16 GB PC,
+give WSL about 12 GB RAM, 4 processors, and 8 GB swap, and keep the machine awake while the job runs. The default
+GitHub-hosted Linux runner has only 14 GB
 of storage, while this profile alone needs 30 GiB for IPSW members and decrypted images. The job installs its build
 packages and builds the pinned APFS FUSE reader. Since this is a self-hosted runner for a public repository, keep it
 dedicated to trusted `main` builds; the image option runs only by manual dispatch from `main`.
+
+To use a Windows 11 PC as that runner, open PowerShell as Administrator and install Ubuntu 24.04 under WSL2:
+
+```powershell
+wsl --install --distribution Ubuntu-24.04
+```
+
+Restart when Windows asks, then launch Ubuntu and create its Linux user. Set `%UserProfile%\.wslconfig` to:
+
+```ini
+[wsl2]
+memory=12GB
+processors=4
+swap=8GB
+```
+
+Apply that setting from PowerShell with `wsl --shutdown`, then reopen Ubuntu. Install and register the GitHub runner
+inside Ubuntu from **OneiOS → Settings → Actions → Runners → New self-hosted runner**. Choose Linux x64, assign
+`oneios-image`, and keep the runner active while Actions runs. The runner's build job needs passwordless `sudo` to
+install its packages. The checked-in workflow restricts the image job to a manual dispatch from `main`.
 
 Before dispatching, install age locally and create an identity:
 
@@ -1096,3 +1118,4 @@ with one thread and 0.59 s with four (the same tree); the stage's SHA-256 check 
 1.53 s (the sums are `sha256sum`'s); `prelink build` 11.65 s where `build.sh` takes 13.71 s (the same `kernel.kc`,
 `ffbe95f7...`, and the same 24 files). The disk and one large file's SHA-256 bound the rest (README "Measured on
 the Linux PC").
+

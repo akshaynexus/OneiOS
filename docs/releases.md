@@ -235,7 +235,8 @@ plan ──┬── runtime    ubuntu-24.04      the runtime package and its ch
   and results are the artifact `oneos-tests-macos`. Not a gate of the release. The macOS results are in
   "macOS: the fork's unit tests" below.
 - **image**: manual `image set` or `full build` only, and only from `main`. It runs on a self-hosted Linux x86_64
-  runner (label `oneios-image` by default; 16 GiB RAM, 100 GiB free disk, clang 23+, FUSE and passwordless `sudo`).
+  runner (label `oneios-image`; at least 10 GiB RAM visible to Linux, 100 GiB free disk, clang 23+, FUSE and
+  passwordless `sudo`; WSL2 Ubuntu 24.04 on Windows is supported).
   It fetches the pinned Apple restore members, builds the hosted kernel and audited kernel collection from that
   kernelcache, runs the normal image hook, packs and verifies the image archive, encrypts it to the dispatch's age
   public recipient, then uploads only the encrypted file, checksums, and build receipt for one day. A cleanup step
@@ -352,3 +353,4 @@ The workflow does the rest: the runtime from this commit, the APK from the head 
 "apk only") and the commits in the notes, then tell the oneos agent the tag (`docs/agents.md`). To redo a broken
 release: delete the release and the tag, fix, tag again; never replace an asset under the same version once the
 fork may have downloaded it (the workflow refuses to: an asset with other bytes under the same name stops it).
+
