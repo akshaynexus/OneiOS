@@ -38,7 +38,7 @@ status 1
 == series-check: another product, build and arch in the OS profile, another pin, another profile in board.toml
 stderr: series-check: OS profile: not arm64e on xnu-12377.121.6
 stderr: series-check: OS profile: the identity is not iPhone18,2
-stderr: series-check: OS profile [ipsw] build = '24A000', the image profile says '24A446'
+stderr: series-check: OS profile [ipsw] build = '24A000', the image profile says '24B156'
 stderr: series-check: pins.sh XNU_COMMIT differs from the OS profile
 stderr: series-check: board.toml os_profile is not the OS profile
 status 1

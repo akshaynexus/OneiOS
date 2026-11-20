@@ -4,7 +4,7 @@ Everyone works on **`main`** in `/home/akshay/Documents/GitHub/OneiOS`. Commit o
 `git add <your paths>` (never `git add -A`), `git commit`, then `git pull --rebase origin main` and `git push origin main`.
 If a rebase conflicts in a file you do not own, keep the owner's version and write a note below.
 
-Goal (owner, 2026-11-10): iOS 27 (iPhone18,2, 27.0.1 userland) booting as a OneOS-style guest on the Galaxy S24 Ultra
+Goal (owner, 2026-11-10): iOS 27 (iPhone18,2, 27.2.1 userland) booting as a OneOS-style guest on the Galaxy S24 Ultra
 (SM-S928, One UI, KernelSU 3.3.0). No probe phase and no phase-by-phase delivery: build the whole path at once.
 Port what works from UniXNU (DarwinBoot, the XNU patches, prelink, verified root, Metal plugin) and from iOSPlus10's
 shim loader into the GSI-style booter (xnuhost). References: `/home/akshay/Documents/GitHub/iOSPlus10` (the full local
@@ -67,7 +67,7 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
 ## Interfaces (write what others need here; keep it current)
 
 - image set -> booter/userland/kernel/oneos: `docs/image-format.md` (format 1). Build: `scripts/fetch/fetch.sh PROFILE`, then
-  `scripts/image/build.sh PROFILE`; profile `profiles/ios-27.0.1-iPhone18,2.toml` (24A446).
+  `scripts/image/build.sh PROFILE`; profile `profiles/ios-27.2.1-iPhone18,2.toml` (24B156).
   - Files, under `--image` (`/data/image` in a session): `manifest.json`; `os.img`, `systemos.img`, `app.img` = Apple's OS,
     SystemOS and AppOS images byte for byte, **raw APFS containers** (`NXSB` at offset 0, no partition table), read-only, to be
     served as block devices to the guest's own APFS kext; `<image>.hashes` = SHA-256 per 1 MiB chunk (32-byte header, layout in
@@ -78,12 +78,13 @@ Ask the owner of a file before changing it; tell the lead when you land somethin
   - Data: `data.seed` is a pax **tar** of the new Data volume's root (= `/private/var`), numeric owners, xattrs as
     `LIBARCHIVE.xattr.*`. Nothing on Linux writes iOS 27's APFS, so **the guest makes the Data volume on its first start**
     (booter + userland): APFS container in the store under `--data`, one case-sensitive volume, UUID `manifest.data.volume_uuid`
-    (`1B7DB2B7-5ECA-4FDA-98AF-55DF8632E355`, the kernel mounts Data by it), `newfs_apfs -e -x`, unpack the seed as root, record
+    (`FB8BA685-FCF2-4528-8EA2-BDCFD1105A71`, the kernel mounts Data by it), `newfs_apfs -e -x`, unpack the seed as root, record
     the seed's SHA-256; a store with another seed hash starts over. (`build.sh --seed apfs` on a Mac gives a ready APFS seed.)
   - kernel -> image: `build.sh` takes the kernel collection from `out/kernel/<build>/kernel.kc` (or `--kernel FILE`).
-  - image -> kernel/booter inputs: `scripts/fetch/fetch.sh --only kernelcache,devicetree,buildmanifest PROFILE` (23 MB), then
-    `scripts/image/kernel-inputs.sh PROFILE` -> `out/kernel-inputs/24A446/kernelcache.macho` (78135296 bytes, sha256
-    `349c4692a6a85df0d396681f28d2d48dc04b95c6d60df0f94d84501e3d0c57e3`) and `devicetree.bin`. Both are on this machine now.
+  - image -> kernel/booter inputs: `scripts/fetch/fetch.sh --only kernelcache,devicetree,buildmanifest PROFILE` (24 MB), then
+    `scripts/image/kernel-inputs.sh PROFILE` -> `out/kernel-inputs/24B156/kernelcache.macho` (78512128 bytes, sha256
+    `f6f31ac427bed2cdcf1353a6d84e3c2897354a86b2cc708f0e330a99be9a5939`) and `devicetree.bin`. To be re-fetched for
+    the new build: what is on this machine now is still 24A446's (`out/kernel-inputs/24A446/`, 78135296 bytes).
 - kernel -> booter: `kernel/README.md`, "What the booter gets" (the table is the contract; "Not done" is what is missing).
   - Build: `scripts/bg.sh kernel kernel/build-linux.sh` (Linux, 91 s) -> `out/kernel/current/xnu.macho` + `.build.json`.
     Native kernel only: arm64e (PAC), `MH_EXECUTE`, PIE with chained fixups, `__TEXT` at `0xfffffff007004000`,

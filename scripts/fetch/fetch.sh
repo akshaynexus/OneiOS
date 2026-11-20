@@ -3,7 +3,7 @@
 #
 #   scripts/fetch/fetch.sh --list PROFILE          only read the IPSW's ZIP directory and BuildManifest and
 #                                                  compare them with the profile (about 1 MiB of traffic)
-#   scripts/bg.sh fetch scripts/fetch/fetch.sh PROFILE     the download: 10.6 GiB for iOS 27.0.1, in tmux
+#   scripts/bg.sh fetch scripts/fetch/fetch.sh PROFILE     the download: 10.9 GiB for iOS 27.2.1, in tmux
 #
 # Options: -j N        parallel range requests per member (default 8)
 #          --only R,.. only these roles (os, systemos, app, trust-static, kernelcache, ...)

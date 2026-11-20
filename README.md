@@ -91,7 +91,7 @@ sensor service (it attaches to our HID device; no reading has gone through it). 
 
 ```
 docs/architecture.md  how the parts fit; docs/building.md  how to build and test; docs/*.md  each part in detail
-profiles/             the pinned IPSW profile (iPhone18,2 iOS 27.0.1 24A446)
+profiles/             the pinned IPSW profile (iPhone18,2 iOS 27.2.1 24B156)
 scripts/fetch/        fetch only the needed IPSW members from Apple's CDN (never from here)
 scripts/image/        build the image set (MysticGSI-style manifest, SHA-256, .tar.zst)
 userland/             iOS 27 root and Data tweaks (the image hook), guest helpers, the camera plug-in

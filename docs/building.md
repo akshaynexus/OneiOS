@@ -37,11 +37,11 @@ kernel/fetch.sh                        # the kernel's sources at the commits of 
 ## 1. The iOS 27 image set
 
 ```sh
-P='profiles/ios-27.0.1-iPhone18,2.toml'
+P='profiles/ios-27.2.1-iPhone18,2.toml'
 scripts/fetch/fetch.sh --list "$P"                  # optional: compare the profile with Apple's IPSW (about 1 MiB)
-scripts/bg.sh fetch scripts/fetch/fetch.sh "$P"     # 10.6 GiB of the IPSW's members from Apple, into inputs/24A446/
-scripts/image/kernel-inputs.sh "$P"                 # Apple's kernelcache and device tree -> out/kernel-inputs/24A446/
-                                                    # (without inputs/24A446/ it fetches only those, 24 MB)
+scripts/bg.sh fetch scripts/fetch/fetch.sh "$P"     # 10.9 GiB of the IPSW's members from Apple, into inputs/24B156/
+scripts/image/kernel-inputs.sh "$P"                 # Apple's kernelcache and device tree -> out/kernel-inputs/24B156/
+                                                    # (without inputs/24B156/ it fetches only those, 24 MB)
 ```
 
 `kernel-inputs.sh` decodes the two IM4P members (the kernelcache's payload is LZFSE) with `oneios-tool image im4p` (since
@@ -51,15 +51,16 @@ program; build it with `cargo build --release --manifest-path tools/oneios-tool/
 `IM4P_TOOL=PATH` names a `oneios-tool` binary and makes it the decoder in either case. Whichever ran, the script then
 checks `kernelcache.macho` against the SHA-256 the kernel profile pins (`kernel/unixnu/profiles/os/ios-27.0.1-24A446/
 profile.toml`, `kernelcache_sha256`) and stops when it differs. On the Linux PC on 2026-11-12, without `lzfse`:
-78135296 bytes, sha256 `349c4692...0c57e3`, the pinned one (which was made with the `lzfse` program on the Mac), in
+78135296 bytes, sha256 `349c4692...0c57e3` (24A446's kernelcache, the then-pinned one; the profile now pins
+24B156's: 78512128 bytes, `f6f31ac4...e9a5939`), in
 0.7 s. Not compared: the two decoders run side by side on one host (no `lzfse` program on the PC).
 
 The set is built after `kernel.kc` exists (step 3), so that it carries the kernel:
 
 ```sh
 scripts/bg.sh image scripts/image/build.sh "$P" --kernel out/kernel/24A446/kernel.kc
-# -> out/image/24A446/ and out/image/OneiOS_iOS27.0.1_24A446_iPhone18-2.tar.zst (+ .sha256), about 11 GB
-scripts/image/verify.sh out/image/OneiOS_iOS27.0.1_24A446_iPhone18-2.tar.zst
+# -> out/image/24B156/ and out/image/OneiOS_iOS27.2.1_24B156_iPhone18-2.tar.zst (+ .sha256), about 11 GB
+scripts/image/verify.sh out/image/OneiOS_iOS27.2.1_24B156_iPhone18-2.tar.zst
 ```
 
 `--no-kernel` builds a set without one (for work on the images only). The userland hook (`userland/image-hook`)
@@ -484,7 +485,7 @@ sched_preemption_disable_debug_mode=0 wdt=-1 sheng-smp=1 oneios-data-wait=3000" 
   `display-capture.py` cannot read (it takes format 1 only). What iOS's render server swapped and what the display
   service publishes: the kernel's `oneios-display: the compositor swaps format ...` and `oneios-display: properties:`
   lines (`kernel/patches/oneios-hosted/display/README.md`, "Colour, depth and the panel"). `--set
-  identity=out/kernel-inputs/24A446/devicetree.bin` gives the guest the iPhone's own `/product` ([booter.md](booter.md) 1).
+  identity=out/kernel-inputs/24B156/devicetree.bin` gives the guest the iPhone's own `/product` ([booter.md](booter.md) 1).
 - Metal's kernel side: add `oneios-gpu-metal=1 oneios-adreno-selftest=1` to the boot arguments (the accelerator is
   not published on a host without 3D unless asked). About ten seconds in: `droidvm-gpu: Metal accelerator stage 5
   status 0` and two `oneios-adreno: selftest:` lines (IOKit's match, the plug-in's open and one call;
@@ -611,7 +612,7 @@ restore the baseline (`phone-baseline.txt` next to that script) before you relea
    preflight checks both); give it a `manifest.json` whose entries list the staged files: xnuhost checks the set against it and
    refuses a file the manifest does not list (2026-11-12: another set's manifest ended a session 2 s in).
    `oneios-tool phone manifest DIR --stage` makes it from the phone's and stages both; `phone image-check` checks. Never stage `data.seed` from the Mac's
-   `out/image/24A446`: it differs from the phone's, and a new seed makes the Data store start over.
+   `out/image/24B156`: it differs from the phone's, and a new seed makes the Data store start over.
    `runtime-asis DIR` puts back a backed-up stage whose files were replaced by hand.
 2. **Start** (the app's own path, the same preflight and the tick):
 
@@ -706,7 +707,7 @@ over several Cloudflare quick tunnels at once, so a download manager fetches it 
 (the server, `oneios-tool rangeserve` (`scripts/serve/rangeserve.py` until 2026-11-13), binds 127.0.0.1 and answers byte ranges; Python's `http.server` does not):
 
 ```sh
-scripts/serve/serve-image.sh out/image/OneiOS_iOS27.0.1_24A446_iPhone18-2.tar.zst 4   # 4 tunnels; prints the URLs
+scripts/serve/serve-image.sh out/image/OneiOS_iOS27.2.1_24B156_iPhone18-2.tar.zst 4   # 4 tunnels; prints the URLs
 # on the phone (Termux, pkg install aria2): aria2c -x 16 -s 16 -k 8M -o <name> <url1> <url2> <url3> <url4>
 scripts/serve/serve-image.sh --stop                                                    # when done
 ```
@@ -832,7 +833,7 @@ for r in \
   '{"id":"4","cmd":"log-list"}' \
   '{"id":"5","cmd":"log","file":"xnuhost","tail":4000}' \
   '{"id":"6","cmd":"ioslog-boots","source":"/data/local/tmp/oneios/data/data.img"}' \
-  '{"id":"7","cmd":"fetch","profile":"/data/local/tmp/oneios/runtime/lib/profiles/ios-27.0.1-iPhone18-2.toml","indir":"/data/local/tmp/oneios/make/inputs","only":["trust-system"],"resume":true}'; do
+  '{"id":"7","cmd":"fetch","profile":"/data/local/tmp/oneios/runtime/lib/profiles/ios-27.2.1-iPhone18-2.toml","indir":"/data/local/tmp/oneios/make/inputs","only":["trust-system"],"resume":true}'; do
   echo "== $r"; time "$T" serve --stage "$S" --request "$r" | grep -E '"ev":"(ok|refused|failed)"'
 done
 EOF
@@ -872,8 +873,8 @@ scripts/bg.sh ios-tbds scripts/setup/ios-toolchain.sh --tbd   # once per image s
 scripts/setup/ios-toolchain.sh --test   # builds, signs and checks out/ios-test/hello
 ```
 
-`--tbd` reads `out/image/24A446/systemos.img`. Before the image set exists, give it the decrypted SystemOS
-image of the fetch: `scripts/setup/ios-toolchain.sh --tbd --image inputs/24A446/043-70037-715.dmg`.
+`--tbd` reads `out/image/24B156/systemos.img`. Before the image set exists, give it the decrypted SystemOS
+image of the fetch: `scripts/setup/ios-toolchain.sh --tbd --image inputs/24B156/141-10617-235.dmg`.
 
 | Part | What | macOS | Linux |
 |---|---|---|---|
@@ -984,7 +985,7 @@ Optional on Linux: **apfs-fuse** (github.com/sgan81/apfs-fuse, with `fusermount3
 `oneios-tool image apfs-ls`, `apfs-copy` and `ioslog` use with `--apfs fuse`, or by themselves when our own reader
 refuses an image (`--apfs auto`, the default); the comparison scripts check our reader against it. Nothing needs
 it: our reader reads the sealed volumes and their compressed files, so the dyld shared cache for `sym` comes out of
-the image with `oneios-tool image apfs-copy out/image/24A446/systemos.img System/Library/Caches/com.apple.dyld DIR`
+the image with `oneios-tool image apfs-copy out/image/24B156/systemos.img System/Library/Caches/com.apple.dyld DIR`
 (no mount, Linux and macOS).
 
 Rust 1.95 or newer (apk-info-zip 1.1.1 needs 1.95; built with 1.98.0 and 1.99.1); the first build downloads the crates and one git dependency

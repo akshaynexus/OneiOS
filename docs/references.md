@@ -4,7 +4,7 @@ Survey date: 2026-11-10. Owner of this file: the references agent. Fetch the pin
 `scripts/setup/get-references.sh` (`-l` lists them and their state; `external/` is git-ignored).
 
 Scope: the Galaxy S24 Ultra (SM8650 "pineapple", Cortex-X4/A720/A520 with PAC, Adreno 750, GKI 6.1) running
-iOS 27.0.1 (iPhone18,2, 24A446) under xnuhost. xnuhost is a process on One UI's kernel that gives XNU a
+iOS 27.2.1 (iPhone18,2, 24B156) under xnuhost. xnuhost is a process on One UI's kernel that gives XNU a
 virtio-mmio board, so the "drivers that fit" are of two kinds: the **guest drivers** in the kernel collection
 (they speak virtio) and the **host side** in xnuhost (it turns virtio into `/dev/kgsl-3d0`, SurfaceFlinger, evdev,
 AAudio and sockets). Bare-metal drivers (GMU, SMMU, UFS, DSI, Wi-Fi radios) are not needed: Linux keeps the hardware.

@@ -1,6 +1,6 @@
 # Working on OneiOS
 
-Goal: iOS 27 (iPhone18,2, 27.0.1 `24A446`) booted next to One UI on a rooted Galaxy S24 Ultra (SM-S928, SM8650,
+Goal: iOS 27 (iPhone18,2, 27.2.1 `24B156`) booted next to One UI on a rooted Galaxy S24 Ultra (SM-S928, SM8650,
 KernelSU), switched to and back the way OneOS switches Androids. XNU runs as a Linux process (xnuhost) on One UI's
 kernel. Read first: [README.md](README.md) (status), [docs/architecture.md](docs/architecture.md),
 [docs/building.md](docs/building.md), and [docs/agents.md](docs/agents.md) (the team board) when several agents work.

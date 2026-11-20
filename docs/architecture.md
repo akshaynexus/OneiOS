@@ -22,14 +22,14 @@ back stay exactly OneOS-shaped.
      ├─ virtio-mmio devices: block (the image set), input (evdev), GPU, sound, net, camera, bridge channel
      ├─ XNU 12377 (UniXNU / Droid-VM fork + OneiOS hosted patches) + Apple's iPhone18,2 kexts = kernel.kc
      └─ iOS tasks = Linux processes forked from one factory (one PAC key set); a stub traps svc and faults
-         └─ launchd → daemons → backboardd → SpringBoard  (iOS 27.0.1, Apple's binaries unchanged)
+         └─ launchd → daemons → backboardd → SpringBoard  (iOS 27.2.1, Apple's binaries unchanged)
 ```
 
 ## The parts
 
 | Part | Where | What it does | Doc |
 |---|---|---|---|
-| Image set | `profiles/`, `scripts/fetch/`, `scripts/image/` | Fetches only the needed members of Apple's iPhone18,2 27.0.1 IPSW from Apple's CDN, decrypts the AEA images, and builds `out/image/24A446/`: `os.img`, `systemos.img`, `app.img` (Apple's APFS images, unchanged), trust caches, the Data seed, the overlay, `kernel.kc`, `manifest.json`, packed as a `.tar.zst`. Never published. | [image-format.md](image-format.md) |
+| Image set | `profiles/`, `scripts/fetch/`, `scripts/image/` | Fetches only the needed members of Apple's iPhone18,2 27.2.1 IPSW from Apple's CDN, decrypts the AEA images, and builds `out/image/24B156/`: `os.img`, `systemos.img`, `app.img` (Apple's APFS images, unchanged), trust caches, the Data seed, the overlay, `kernel.kc`, `manifest.json`, packed as a `.tar.zst`. Never published. | [image-format.md](image-format.md) |
 | Userland tweaks | `userland/` | The image hook: iOS 27 root and Data tweaks for this host (identity, daemon policy, preferences), applied to the Data seed and overlay; Apple's images stay unchanged. | [userland.md](userland.md) |
 | Kernel | `kernel/` | XNU 12377 from Droid-VM's UniXNU fork, built on Linux (`build-linux.sh`, the VM kernel; `build-hosted.sh`, the kernel for xnuhost with `kernel/patches/oneios-hosted/`). Every hosted change is under `XNU_HOSTED`: the kernel runs at `0x2000000000` (the S24's user VA ends at 2^39), with no MMU of its own, interrupts as host upcalls. Hardware the phone cannot give the guest is stood in for in software inside the kernel: the AES accelerator (`aes/`) and the key store (`keystore/`: the AppleKeyStore service with no passcode, class keys from a constant, key wrap in software; there is no Secure Enclave, and this is **not a security boundary**). | [kernel/README.md](../kernel/README.md), [hosted patches](../kernel/patches/oneios-hosted/README.md) |
 | Kernel collection | `kernel/prelink/` | `kernel.kc`: the hosted kernel prelinked with Apple's iPhone18,2 kexts (about 154; those for absent hardware are left out with a reason). Apple's kexts call Apple's kernel; the prelink pairs each called function with ours (matchers, a RELEASE reference build, vtables, reviewed records). Unpaired calls go to a panic stub. Built locally; never committed or released (Apple's kexts). | [kernel/prelink/README.md](../kernel/prelink/README.md) |

@@ -82,7 +82,7 @@ fresh() {
   REPO=$W/series; rm -rf "$REPO"; mkdir -p "$REPO/kernel/tests" "$REPO/kernel/unixnu/profiles/os" "$REPO/profiles"
   cp -R "$ROOT/kernel/device" "$REPO/kernel/device"; cp "$ROOT/kernel/pins.sh" "$REPO/kernel/"
   cp -R "$ROOT/kernel/unixnu/profiles/os/ios-27.0.1-24A446" "$REPO/kernel/unixnu/profiles/os/"
-  cp "$ROOT/profiles/ios-27.0.1-iPhone18,2.toml" "$REPO/profiles/"
+  cp "$ROOT/profiles/ios-27.2.1-iPhone18,2.toml" "$REPO/profiles/"
   [ ! -f "$ROOT/kernel/tests/series-check.py" ] || cp "$ROOT/kernel/tests/series-check.py" "$REPO/kernel/tests/"
 }
 S=kernel/device/patches/xnu-12377
@@ -97,10 +97,10 @@ printf '%s\n' ../../../../external/SomethingElse/a.patch ../../../../external/Dr
 a "series-check: an entry outside the pinned repositories, an external patch that is not at the pin" step series-check
 fresh; printf 'CONFIG_XNU_MADE_UP=maybe\nCONFIG_OTHER=y\n' >> "$REPO/kernel/device/configs/oneios_defconfig"
 a "series-check: two bad defconfig lines" step series-check
-fresh; edit 's/^product = "iPhone18,2"/product = "iPhone17,1"/; s/^build = "24A446"/build = "24A000"/; s/^arch = "arm64e"/arch = "arm64"/' kernel/unixnu/profiles/os/ios-27.0.1-24A446/profile.toml
+fresh; edit 's/^product = "iPhone18,2"/product = "iPhone17,1"/; s/^build = "24B156"/build = "24A000"/; s/^arch = "arm64e"/arch = "arm64"/' kernel/unixnu/profiles/os/ios-27.0.1-24A446/profile.toml
 edit 's/^XNU_COMMIT=.*/XNU_COMMIT=0000/' kernel/pins.sh; edit 's/^os_profile = .*/os_profile = "another"/' kernel/device/board.toml
 a "series-check: another product, build and arch in the OS profile, another pin, another profile in board.toml" step series-check
-fresh; edit 's/^chip_id = .*/chip_id = 1/' profiles/ios-27.0.1-iPhone18,2.toml
+fresh; edit 's/^chip_id = .*/chip_id = 1/' profiles/ios-27.2.1-iPhone18,2.toml
 a "series-check: another chip in the image profile" step series-check
 REPO=$ROOT
 

@@ -51,8 +51,8 @@ grep -q '"path": "bin/oneios-tool"' "$T/x/runtime.json" || fail "bin/oneios-tool
 cmp -s "$TA" "$T/x/bin/oneios-tool" || fail "oneios-tool beside the package is not the package's bin/oneios-tool"
 [ "$(od -An -tx1 -N20 "$TA" | tr -d ' \n')" = 7f454c460201010000000000000000000300b700 ] || fail "oneios-tool is not an arm64 PIE"
 ok "bin/oneios-tool and $(basename "$TA") ($(wc -c < "$TA" | tr -d ' ') bytes, stripped)"
-cmp -s "$T/x/lib/profiles/ios-27.0.1-iPhone18-2.toml" "$ROOT/profiles/ios-27.0.1-iPhone18,2.toml" || fail "lib/profiles/ is not profiles/"
-grep -q '"path": "lib/profiles/ios-27.0.1-iPhone18-2.toml"' "$T/x/runtime.json" || fail "lib/profiles/ is not in runtime.json"
+cmp -s "$T/x/lib/profiles/ios-27.2.1-iPhone18-2.toml" "$ROOT/profiles/ios-27.2.1-iPhone18,2.toml" || fail "lib/profiles/ is not profiles/"
+grep -q '"path": "lib/profiles/ios-27.2.1-iPhone18-2.toml"' "$T/x/runtime.json" || fail "lib/profiles/ is not in runtime.json"
 ok "lib/profiles/: the IPSW profiles for the phone's fetch"
 # Its dynamic ELF files were checked against the NDK's API 30 stubs (elf-check.sh), twice: runtime/build.sh on its
 # stage, then package.sh on the package's content.

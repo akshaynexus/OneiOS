@@ -80,7 +80,7 @@ A tool the package lacks is shown as "Not in this runtime", not as a failure.
   "format": 1,
   "name": "oneios-image",
   "os": "iOS",
-  "version": "27.0.1",
+  "version": "27.2.1",
   "build": "24A...",
   "device": "iPhone18,2",
   "files": [
@@ -360,7 +360,7 @@ the phone": why there and not in the APK). The fork runs it for one flow at a ti
   `unknown`; the app then also sends `tweaks` (refused `not-ported`: the root tweaks are still Python) and shows both
   answers in the tool's words, and stages nothing. Not in the tool either: `scripts/image/build.sh`'s order and checks,
   the AEA decryption.
-- Make iOS image's first request is `fetch` with `profile` `<stage>/runtime/lib/profiles/ios-27.0.1-iPhone18-2.toml`
+- Make iOS image's first request is `fetch` with `profile` `<stage>/runtime/lib/profiles/ios-27.2.1-iPhone18-2.toml`
   (the package carries `profiles/` there; a package path has no comma), `indir` `<stage>/make/inputs` and `resume`.
 - Pause and Resume: the fork sends `{"cmd":"pause","id":...}` and `{"cmd":"resume","id":...}` (the user's buttons;
   and Android's default network lost and back) and shows `paused`, `resumed` and `net` (`state` `waiting`|`resumed`,

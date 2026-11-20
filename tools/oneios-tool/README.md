@@ -594,7 +594,7 @@ it is for. The disk was shared too.
 | `sums` of 8 stand-in files of 150 MB on tmpfs | 5.39 s, 98% CPU | **1.53 s, 343%** (2 threads: 2.69 s) | each row's SHA-256 is `sha256sum`'s |
 | `sums` of the real set against its `image.sha256` (22 files, 17.9 GB) | 104.7 s | 92.2 s | all as listed. One file is 10.4 GB: one SHA-256 stream, 44 s at this CPU's speed; the disk gave under 200 MB/s |
 | `hashes` of `os.img` (10.4 GB, 9,880 chunks) | 81.6 s | 52.5 s, 172% | the list is the set's `os.img.hashes`, byte for byte, both times |
-| `verify` of the set (21 files, every chunk) | | 81.9 s, 183% | `ok: ios-27.0.1-24A446-iPhone18-2 format 1, 21 files` |
+| `verify` of the set (21 files, every chunk) | | 81.9 s, 183% | `ok: ios-27.2.1-24B156-iPhone18-2 format 1, 21 files` |
 | `apfs-copy` of `os.img` `/usr/libexec` onto tmpfs (486 MB, 644 files) | 1.39 s | **0.59 s, 248%** | the same tree as before ("image") |
 | `apfs-copy` of `systemos.img`'s dyld cache onto the disk (82 files, 7,312,005,844 bytes) | 139.8 s | 116.3 s (before this change: 176.3 s) | the same tree; the disk decides (7 to 12% CPU) |
 | `download` of 1.2 GB from `rangeserve` on 127.0.0.1 onto tmpfs | 7.46 s | 6.39 s | the file, byte for byte; 5.2 s of it is the SHA-256 check (one stream) |
@@ -2292,7 +2292,7 @@ The comparison today is with the frozen output of the Python chain (`tests/preli
 size and SHA-256 of every file a step writes and the SHA-256 of every step's stdout; no Apple bytes):
 
 ```sh
-scripts/image/kernel-inputs.sh 'profiles/ios-27.0.1-iPhone18,2.toml'      # out/kernel-inputs/24A446/kernelcache.macho
+scripts/image/kernel-inputs.sh 'profiles/ios-27.2.1-iPhone18,2.toml'      # out/kernel-inputs/24B156/kernelcache.macho
 KERNEL=out/kernel/current-hosted-pc/xnu.macho REFERENCE=out/kernel/current-hosted-pc/reference.macho \
   tools/oneios-tool/tests/prelink/compare-golden.sh     # 40 hashes; without KERNEL: roots and hosted only, 10 hashes
 ```

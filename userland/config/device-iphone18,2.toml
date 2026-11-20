@@ -1,19 +1,19 @@
-# The guest OneiOS presents: iPhone18,2 on iOS 27.0.1. Read by roottweak; the booter builds the device tree
+# The guest OneiOS presents: iPhone18,2 on iOS 27.2.1. Read by roottweak; the booter builds the device tree
 # from the [adt] tables through the boot contract (docs/userland.md, "Boot contract").
 #
 # Marks: [F] taken from a source named beside it, [I] inferred, [U] unknown. "DT" is the IPSW's own device tree
-# for v54ap (24A446), read on the build machine from out/kernel-inputs/24A446/devicetree.bin (image-build's
+# for v54ap (24B156), read on the build machine from out/kernel-inputs/24B156/devicetree.bin (image-build's
 # scripts/image/kernel-inputs.sh); only the few values below are written down here.
 
 [device]
 product = "iPhone18,2"        # [F] owner's target
 board = "v54ap"               # [F] vphone-android android/create/installer/src/cfw.rs IPHONES table
 target_type = "V54"           # [F] DT / target-type
-chip_id = 0x8150              # [F] profiles/ios-27.0.1-iPhone18,2.toml (BuildManifest, T8150)
+chip_id = 0x8150              # [F] profiles/ios-27.2.1-iPhone18,2.toml (BuildManifest, T8150)
 board_id = 0x0E               # [F] the same
 device_class = "iPhone"
 os = "iOS"
-version = "27.0.1"
+version = "27.2.1"
 # The jetsam properties launchd reads follow target-type: com.apple.jetsamproperties.<target_type>.plist
 # [F] vphone-cli Research/Guest/service_trimming.md "iOS 27 and DisableAllowed".
 

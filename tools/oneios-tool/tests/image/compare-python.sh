@@ -33,7 +33,7 @@
 # Env: ONEIOS_MAIN  the checkout whose out/ and inputs/ hold the set (default: this checkout; from a worktree
 #                   under .claude/worktrees/, the main checkout)
 #      TOOL         the Rust binary (default tools/oneios-tool/target/release/oneios-tool)
-#      PROFILE      the profile (default profiles/ios-27.0.1-iPhone18,2.toml)
+#      PROFILE      the profile (default profiles/ios-27.2.1-iPhone18,2.toml)
 #      INPUTS       the folder with the IPSW members (default $ONEIOS_MAIN/inputs/<build>; from a worktree whose
 #                   out/ holds the set, the main checkout's)
 #      WORK, OS_ROOT, SKIP_SLOW, FULL_BUILD  as above
@@ -48,7 +48,7 @@ case "$ROOT" in */.claude/worktrees/*) [ -d "$ROOT/out/image" ] || main=${ROOT%%
 MAIN=${ONEIOS_MAIN:-$main}
 TOOL=${TOOL:-$ROOT/tools/oneios-tool/target/release/oneios-tool}
 PY_TOOL=$ROOT/scripts/image/imagetool.py
-PROFILE=${PROFILE:-$ROOT/profiles/ios-27.0.1-iPhone18,2.toml}
+PROFILE=${PROFILE:-$ROOT/profiles/ios-27.2.1-iPhone18,2.toml}
 WORK=${WORK:-$ROOT/out/rustport-image}
 [ -x "$TOOL" ] || die "no $TOOL (build it: cargo build --release --manifest-path tools/oneios-tool/Cargo.toml, or pass TOOL=)"
 [ -f "$PROFILE" ] || die "no profile $PROFILE"

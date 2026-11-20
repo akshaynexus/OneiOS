@@ -83,7 +83,7 @@ fn profiles(root: &Path, errors: &mut Vec<String>) -> Result<()> {
     if at(&profile, &["adt", "root", "string", "model"])?.as_str() != Some("iPhone18,2") || at(&profile, &["ipsw", "product"])?.as_str() != Some("iPhone18,2") {
         errors.push("OS profile: the identity is not iPhone18,2".to_string());
     }
-    let image_path = root.join("profiles/ios-27.0.1-iPhone18,2.toml");
+    let image_path = root.join("profiles/ios-27.2.1-iPhone18,2.toml");
     if image_path.is_file() {
         let image = table(&image_path)?;
         for (ours, theirs) in [("url", ["ipsw", "url"]), ("build", ["os", "build"]), ("device_class", ["os", "board"]), ("chip_id", ["os", "chip_id"]), ("board_id", ["os", "board_id"])] {

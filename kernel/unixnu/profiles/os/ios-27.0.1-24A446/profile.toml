@@ -1,7 +1,10 @@
-# UniXNU OS profile of OneiOS: iOS 27.0.1 (24A446), iPhone18,2 (iPhone 17 Pro Max, V54AP, T8150), arm64e.
+# UniXNU OS profile of OneiOS: the iOS 27.0.1 (24A446) kernel build for iPhone18,2 (iPhone 17 Pro Max,
+# V54AP, T8150), arm64e. Its kernel INPUTS ([ipsw] and kernelcache_sha256) are re-pinned to iOS 27.2.1 (24B156);
+# 24B156's kernel is xnu-13432.42.3 (Darwin 27.2.0, from the kernelcache string), so the xnu source, prelink
+# roots and the TO PIN items below are still the 24A446 ones and the xnu-13432 re-pin is still to do.
 # Copied into the UniXNU checkout (profiles/os/) by kernel/lib/stage.sh. Made from UniXNU's
 # profiles/os/ipados-27.0.1-24A446/profile.toml; what differs, and what is still to pin, is in
-# kernel/profiles/iphone18-2-ios27.md. The IPSW values are those of profiles/ios-27.0.1-iPhone18,2.toml (image-build).
+# kernel/profiles/iphone18-2-ios27.md. The IPSW values are those of profiles/ios-27.2.1-iPhone18,2.toml (image-build).
 [os]
 name = "ios-27.0.1-24A446"
 arch = "arm64e"
@@ -16,10 +19,10 @@ ios_version = "27.0"
 abi = []
 
 [ipsw]
-url = "https://updates.cdn-apple.com/2026FallFCS/3b7299da-a6a5-4bf6-82db-cd37f8c2d160/iPhone18,2_27.0.1_24A446_Restore.ipsw"
+url = "https://updates.cdn-apple.com/2026FallFCS/5cf23110-0e1e-4f62-aef3-746ff41c71f4/iPhone18,2_27.2.1_24B156_Restore.ipsw"
 product = "iPhone18,2"
-version = "27.0.1"
-build = "24A446"
+version = "27.2.1"
+build = "24B156"
 device_class = "v54ap"
 chip_id = 33104     # 0x8150
 board_id = 14       # 0x0E
@@ -29,11 +32,14 @@ fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustC
 tool = "kits/XnuPrelink/emit_prelink.py"
 kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
 slide = "-0x1000000"
-# The decoded kernelcache.release.v54 (78,135,296 bytes), as scripts/image/kernel-inputs.sh writes it to
-# out/kernel-inputs/24A446/kernelcache.macho (image-build, docs/agents.md).
-kernelcache_sha256 = "349c4692a6a85df0d396681f28d2d48dc04b95c6d60df0f94d84501e3d0c57e3"
+# The decoded kernelcache.release.v54 (78,512,128 bytes), as scripts/image/kernel-inputs.sh writes it to
+# out/kernel-inputs/24B156/kernelcache.macho (image-build, docs/agents.md). Re-pinned from the 24B156 IPSW
+# (decoded with oneios-tool image im4p); the prelink below is still the 24A446 one.
+kernelcache_sha256 = "f6f31ac427bed2cdcf1353a6d84e3c2897354a86b2cc708f0e330a99be9a5939"
 # TO PIN from kernelcache.release.v54 of the owner's IPSW (kernel/profiles/iphone18-2-ios27.md, "Kernelcache pins"):
 #   early_security_init (the AMFI wrapper's address), regression_policy, abi/original-classes.json.
+# And the xnu-13432 re-pin (24B156's kernel; the [os] xnu pins above are still xnu-12377's): xnu source and
+# revision, driverkit/trustcache tags, prelink roots.
 # Until they are here the prelink step refuses this profile; the native kernel (--skip-prelink) needs none of them.
 extra_args = ["--fileset-reference", "build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf", "--allow-missing"]
 # The iPadOS profile's roots, without the two iPad-only audio/video families checked against the iPhone kernelcache yet.

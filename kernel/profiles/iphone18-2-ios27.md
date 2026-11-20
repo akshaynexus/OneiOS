@@ -18,7 +18,7 @@ Sources, at the pins of `kernel/pins.sh`:
 - Droid-VM's board `f9121cd`: [ipados27/board.toml](https://github.com/Droid-VM/UniXNU-droidvm/blob/f9121cdc629d64cbd148980cdeef1f069c7f0068/ipados27/board.toml),
   [its XNU patches](https://github.com/Droid-VM/UniXNU-droidvm/tree/f9121cdc629d64cbd148980cdeef1f069c7f0068/ipados27/patches/xnu-12377),
   [defconfig](https://github.com/Droid-VM/UniXNU-droidvm/blob/f9121cdc629d64cbd148980cdeef1f069c7f0068/ipados27/configs/droidvm_ipados27_defconfig).
-- The IPSW pins: `profiles/ios-27.0.1-iPhone18,2.toml` (image-build), read from Apple's BuildManifest.
+- The IPSW pins: `profiles/ios-27.2.1-iPhone18,2.toml` (image-build), read from Apple's BuildManifest.
 
 The profile itself: `kernel/unixnu/profiles/os/ios-27.0.1-24A446/` (OS layer) and `kernel/device/` (board layer).
 
@@ -37,7 +37,7 @@ Darwin 26 patches, then the board series below. Upstream stays pinned as the ref
 
 | | iPadOS profile [F] | iOS profile |
 |---|---|---|
-| IPSW | `iPad17,1,iPad17,2,iPad17,3,iPad17,4_27.0.1_24A446_Restore.ipsw` | `iPhone18,2_27.0.1_24A446_Restore.ipsw` [F] |
+| IPSW | `iPad17,1,iPad17,2,iPad17,3,iPad17,4_27.0.1_24A446_Restore.ipsw` | `iPhone18,2_27.2.1_24B156_Restore.ipsw` [F] |
 | Product, board | iPad17,3, `j820ap` | iPhone18,2, `v54ap` [F] |
 | Chip, board id | `33090` (0x8142), 12 | `33104` (0x8150), 14 (0x0E) [F] |
 | ADT root `model` / `target-type` / `compatible` | `iPad17,3` / `J820` / `J820AP` | `iPhone18,2` / `V54` / `V54AP` |
@@ -67,8 +67,8 @@ kexts) is made there.
 
 | Pin | iPadOS profile [F] | iOS: where it comes from |
 |---|---|---|
-| IPSW member | `kernelcache.release.j820` [I] | `kernelcache.release.v54`, 23,390,449 bytes, SHA-384 `8180aef0...f86198` of the IM4P as shipped [F: image profile] |
-| `kernelcache_sha256` | `38e6d9fa...1780a` | `349c4692...0c57e3`: the decoded file (78,135,296 bytes) that `scripts/image/kernel-inputs.sh` writes (image-build). **Pinned** in the OS profile |
+| IPSW member | `kernelcache.release.j820` [I] | `kernelcache.release.v54`, 23,545,189 bytes, SHA-384 `6d25a7e3...bcea3` of the IM4P as shipped [F: image profile] |
+| `kernelcache_sha256` | `38e6d9fa...1780a` | `f6f31ac4...e9a5939`: the decoded file (78,512,128 bytes) that `scripts/image/kernel-inputs.sh` writes (image-build). **Pinned** in the OS profile |
 | `early_security_init` | `com.apple.driver.AppleMobileFileIntegrity=0xfffffe00092551ac` | the address of the AMFI wrapper that calls `_initializeAppleMobileFileIntegrity` and returns 0, in the iPhone kernelcache. A different address for certain. **To pin** (UniXNU's audit scripts, `scripts/audit-amfi-pmgr-contract.py` among them) |
 | `abi/original-classes.json` | 1 file | the OSMetaClass list of the iPhone kernelcache. **To generate** |
 | `fileset-reviewed.json` (Droid-VM board) | reviewed for 24A446 J820 | the reviewed fileset placement for the V54 collection. **To review** |
