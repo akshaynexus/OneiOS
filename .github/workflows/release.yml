@@ -312,7 +312,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.apk == 'true'
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 180
     permissions:
       contents: read
       packages: read
