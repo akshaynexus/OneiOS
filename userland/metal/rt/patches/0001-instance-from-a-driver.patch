@@ -1,0 +1,63 @@
+OneiOS rt 0001: Instance::from_driver: iOS has no Vulkan loader, so the bridge hands Turnip's own vk_icdGetInstanceProcAddr to the instance (no loader, no direct driver loading).
+
+diff --git a/crates/metal2vulkan-runtime/src/instance.rs b/crates/metal2vulkan-runtime/src/instance.rs
+index 86ea85bb8..e2933643e 100644
+--- a/crates/metal2vulkan-runtime/src/instance.rs
++++ b/crates/metal2vulkan-runtime/src/instance.rs
+@@ -142,6 +142,56 @@ impl Instance {
+         })
+     }
+ 
++    /// No Metal counterpart: [`Instance::new`] on a system with no Vulkan loader at all (iOS),
++    /// with one driver the consumer loaded itself as the instance's only entry: its
++    /// `vk_icdGetInstanceProcAddr` (or a `vkGetInstanceProcAddr` it exports), which answers the
++    /// global commands for no instance. No loader is loaded and no direct driver loading is asked;
++    /// an instance extension is offered where the driver lists it.
++    ///
++    /// Err: as [`Instance::new`], without [`Error::Loader`].
++    ///
++    /// # Safety
++    ///
++    /// `driver` is a Vulkan driver's instance entry, whose library stays loaded while the
++    /// instance, or anything made from it, lives.
++    pub unsafe fn from_driver(
++        driver: vk::PFN_vkGetInstanceProcAddr,
++        extensions: &[&CStr],
++    ) -> Result<Instance, Error> {
++        // SAFETY: by the caller, a driver's instance entry.
++        let entry = unsafe {
++            ash::Entry::from_static_fn(ash::StaticFn {
++                get_instance_proc_addr: driver,
++            })
++        };
++        // SAFETY: the driver is loaded, by the caller.
++        let offered = names(unsafe { entry.enumerate_instance_extension_properties(None) })?;
++        let names = enabled(&offered, &[], extensions, false)?;
++        let pointers: Vec<*const c_char> = names.iter().map(|name| name.as_ptr()).collect();
++        let application = vk::ApplicationInfo::default().api_version(floor::VERSION);
++        let portability = ash::khr::portability_enumeration::NAME;
++        let flags = match names.iter().any(|name| name.as_c_str() == portability) {
++            true => vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR,
++            false => vk::InstanceCreateFlags::empty(),
++        };
++        let info = vk::InstanceCreateInfo::default()
++            .flags(flags)
++            .application_info(&application)
++            .enabled_extension_names(&pointers);
++        // SAFETY: `info` and everything it points to live through the call; the driver is
++        // loaded, by the caller.
++        let instance = unsafe { entry.create_instance(&info, None) }
++            .map_err(Error::vulkan("vkCreateInstance"))?;
++        Ok(Instance {
++            shared: Arc::new(Shared {
++                entry,
++                instance,
++                extensions: names,
++                teardowns: Arc::default(),
++            }),
++        })
++    }
++
+     /// No Metal counterpart: the instance extensions enabled, the floor's first.
+     pub fn extensions(&self) -> &[CString] {
+         &self.shared.extensions

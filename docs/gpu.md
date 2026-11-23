@@ -1318,6 +1318,12 @@ member `AGXAccelerator::superClass` keeps the parent's unslid link address (noth
 the base script), since an existing directory only gets `meson configure`. The `9xxx` copies of
 `patches/metal2vulkan` (0101-0103) are in no list of the base's bridge script and are not applied; `stage` says so.
 
+**The port to metal2vulkan-rt (2026-11-23, in progress):** [`userland/metal/rt/README.md`](../userland/metal/rt/README.md). Upstream rewrote the runtime
+(`metal2vulkan-runtime` 0.2); the inventory of our 56 patches on it, the loader-free instance (rt patch 0001, run on
+the laptop through ANV: 1000 of 1000 outputs right), Turnip as an Adreno 750 against rt's floor (above it with rt
+patch 0002; no `VK_EXT_device_generated_commands`, so rt refuses Metal indirect command buffers there) and a census
+of the guest's own metallibs. The add-on below is still the 624bab3 one.
+
 Built with the toolchain of [building.md](building.md) section 9: Xcode's on macOS, the cross toolchain on Linux. The
 same command on both; every link is against this guest's own iOS 27 stubs (`out/ios27-tbd`).
 
