@@ -10,6 +10,7 @@
 #include <sys/mman.h>
 
 static int failures;
+size_t m2v_memory_census(uint64_t *out, size_t count);
 #define CHECK(cond, ...) do { int ok_ = (cond); printf(ok_ ? "ok   " : "FAIL "); failures += !ok_; printf(__VA_ARGS__); \
     if (!ok_) { printf(" (%s)", nmb_last_error()); } printf("\n"); } while (0)
 
@@ -210,6 +211,11 @@ int main(int argc, char **argv) {
           "blit: fill, buffer copy, texture to buffer");
     nmb_command_buffer_release(cb);
 
+    /* The GPU memory row's census (CommandPoolRow.inc's GM and RP lines), weak in the plug-in. */
+    uint64_t census[16];
+    CHECK(m2v_memory_census(census, 16) == 16 && census[1] > 0 && census[12] >= 1 && census[13] >= census[12],
+          "m2v_memory_census (allocations %llu MiB, placed %llu MiB, render encoders %llu, passes %llu)", (unsigned long long)(census[1] >> 20),
+          (unsigned long long)(census[2] >> 20), (unsigned long long)census[12], (unsigned long long)census[13]);
     /* Counts the plug-in's telemetry rows read. */
     uint64_t mem[10];
     CHECK(nmb_device_memory_counts(device, mem) && mem[0] > 0, "nmb_device_memory_counts (allocated %llu, placed %llu)", (unsigned long long)mem[0],

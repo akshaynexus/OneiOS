@@ -65,8 +65,10 @@ const TURNIP_CROSS_ARGS_DARWIN: &str =
 const TURNIP_CROSS_ARGS_WHY: &str =
     "Mesa's cross c/cpp/objc args get -D_DARWIN_C_SOURCE (flex 2.6.10's scanners define _POSIX_C_SOURCE, which hides Darwin's Dl_info from ir3_lexer.c)";
 
-/// `ios metal-stage-edit ROOT HOOKS JOBS KNOWS`: what build.sh's `stage` changes in the staged copy ROOT.
-pub fn stage_edit(root: &Path, hooks: &Path, jobs: &str, knows: bool) -> Result<()> {
+/// `ios metal-stage-edit ROOT HOOKS JOBS KNOWS [--rt]`: what build.sh's `stage` changes in the staged copy ROOT. With `rt`, the
+/// plug-in script links the bridge on metal2vulkan-rt (userland/metal/rt/build.sh ios builds it into the place the script
+/// reads) instead of building the old one.
+pub fn stage_edit(root: &Path, hooks: &Path, jobs: &str, knows: bool, rt: bool) -> Result<()> {
     let hooks: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(hooks).with_context(|| hooks.display().to_string())?).with_context(|| hooks.display().to_string())?;
     let pins = root.join("scripts/data/adreno-compiler-inputs.json");
     let mut source = oneios_json::read(&pins.to_string_lossy())?;
@@ -116,6 +118,13 @@ pub fn stage_edit(root: &Path, hooks: &Path, jobs: &str, knows: bool) -> Result<
             "instrument the frontend after the upstream replacements",
         ),
     ];
+    if rt {
+        plugin_pairs.push((
+            "subprocess.run(['python3', ROOT / 'scripts/build-adreno-metal-bridge.py', '--target', BRIDGE_TARGET], check=True)\n",
+            String::new(),
+            "the bridge is metal2vulkan-rt's (userland/metal/rt/build.sh ios put it in build/adreno-metal-bridge/ios27); the old one is not built",
+        ));
+    }
     if knows {
         plugin_pairs.push((
             "'-Wall', '-Wextra', '-Werror',",

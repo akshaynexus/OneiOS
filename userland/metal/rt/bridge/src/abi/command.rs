@@ -593,7 +593,10 @@ pub extern "C" fn nmb_encoder_end(encoder_: *mut NmbEncoder) -> bool {
         let enc = unsafe { Box::from_raw(encoder_) };
         match enc.kind {
             Kind::Compute(c) => c.end_encoding(),
-            Kind::Render(r) => r.end_encoding(),
+            Kind::Render(r) => {
+                r.end_encoding();
+                super::device::RENDER_ENCODERS.fetch_add(1, Ordering::Relaxed);
+            }
             Kind::Blit(b) => b.end_encoding(),
         }
         Ok(true)

@@ -1,0 +1,44 @@
+OneiOS rt 0006: DeviceOptions::queue_global_priority: the queues' global priority where the consumer enables VK_KHR/EXT_global_priority, so the render server's frames do not wait behind an app's (Droid-VM 0012; rt takes no queue priority).
+
+diff --git a/crates/metal2vulkan-runtime/src/device.rs b/crates/metal2vulkan-runtime/src/device.rs
+index ec57929c5..31dbf3bb8 100644
+--- a/crates/metal2vulkan-runtime/src/device.rs
++++ b/crates/metal2vulkan-runtime/src/device.rs
+@@ -474,6 +474,12 @@ pub struct DeviceOptions {
+     /// `STORE` wrote a 4x attachment's samples to memory from every tile (37 ms against 9 ms a
+     /// full-screen pass of 64 blended draws). False, the default, stores them.
+     pub dont_care_stores: bool,
++    /// OneiOS (rt patch 0006): the queues' global priority, the process's against every other user
++    /// of the GPU (`VkDeviceQueueGlobalPriorityCreateInfoKHR`), where the consumer names
++    /// `VK_KHR_global_priority` or `VK_EXT_global_priority` among its extensions
++    /// ([`DeviceOptions::extensions`]) and the device enables it; otherwise the driver's default.
++    /// A compositor's frames then do not wait behind an app's (Droid-VM 0012 on the old runtime).
++    pub queue_global_priority: Option<vk::QueueGlobalPriorityKHR>,
+     /// For the device tests: what the block-maker thread does with the internals asked of it,
+     /// from its first work on.
+     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+@@ -658,6 +664,24 @@ impl Device {
+                 &options.extensions,
+             )
+         };
++        // OneiOS (rt patch 0006): the consumer's global priority, where its extension is enabled.
++        let mut global = vk::DeviceQueueGlobalPriorityCreateInfoKHR::default();
++        let prioritized = match options.queue_global_priority {
++            Some(priority)
++                if extensions.iter().any(|name| {
++                    name.as_c_str() == c"VK_KHR_global_priority"
++                        || name.as_c_str() == c"VK_EXT_global_priority"
++                }) =>
++            {
++                global = global.global_priority(priority);
++                true
++            }
++            _ => false,
++        };
++        let queue_info = match prioritized {
++            true => queue_info.push_next(&mut global),
++            false => queue_info,
++        };
+         let pointers: Vec<*const c_char> = extensions.iter().map(|name| name.as_ptr()).collect();
+         let mut info = vk::DeviceCreateInfo::default()
+             .queue_create_infos(std::slice::from_ref(&queue_info))

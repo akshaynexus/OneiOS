@@ -1,0 +1,141 @@
+OneiOS rt 0005: DeviceOptions::dont_care_stores: Metal's DontCare and MultisampleResolve stores as DONT_CARE where the consumer measured its driver keep either Metal answer (Turnip: 37 ms -> 9 ms a full-screen pass of 64 blended draws; Droid-VM 0021).
+
+diff --git a/crates/metal2vulkan-runtime/src/device.rs b/crates/metal2vulkan-runtime/src/device.rs
+index 313cbf88c..ec57929c5 100644
+--- a/crates/metal2vulkan-runtime/src/device.rs
++++ b/crates/metal2vulkan-runtime/src/device.rs
+@@ -375,6 +375,8 @@ pub(crate) struct Core {
+     pub(crate) caches: Caches,
+     /// [`DeviceOptions::stage_memory_ceiling`], kept with a memory breach and compared at a make.
+     pub(crate) stage_memory_ceiling: u64,
++    /// [`DeviceOptions::dont_care_stores`] (rt patch 0005).
++    pub(crate) dont_care_stores: bool,
+     /// The compiled kernels by content, which every compute pipeline state of a content shares.
+     pub(crate) kernels: KernelMap,
+     /// The runtime's own kernels made so far (`crate::own`).
+@@ -464,6 +466,14 @@ pub struct DeviceOptions {
+     /// breach entry that holds no ceiling counts as kept under 0, the default, so on a device
+     /// given 0 every memory breach refuses.
+     pub stage_memory_ceiling: u64,
++    /// OneiOS (rt patch 0005): Metal's `DontCare` store, and `MultisampleResolve`'s of the
++    /// multisampled attachment itself, as `VK_ATTACHMENT_STORE_OP_DONT_CARE` instead of `STORE`.
++    /// For a consumer that measured its driver keep, at a `DONT_CARE` store, either the
++    /// attachment's earlier texels or the stored ones (both Metal's answers): Turnip on the
++    /// Adreno, by Droid-VM's `gfxprobe dontcare` (Droid-VM 0021 on the old runtime), where
++    /// `STORE` wrote a 4x attachment's samples to memory from every tile (37 ms against 9 ms a
++    /// full-screen pass of 64 blended draws). False, the default, stores them.
++    pub dont_care_stores: bool,
+     /// For the device tests: what the block-maker thread does with the internals asked of it,
+     /// from its first work on.
+     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+@@ -862,6 +872,7 @@ impl Device {
+             translator,
+             caches,
+             stage_memory_ceiling: options.stage_memory_ceiling,
++            dont_care_stores: options.dont_care_stores,
+             kernels: KernelMap::new(),
+             own: crate::own::OwnKernels::default(),
+             entries: metal2vulkan::pipeline::StageEntries::new(),
+diff --git a/crates/metal2vulkan-runtime/src/pass.rs b/crates/metal2vulkan-runtime/src/pass.rs
+index 268346d4b..168f40300 100644
+--- a/crates/metal2vulkan-runtime/src/pass.rs
++++ b/crates/metal2vulkan-runtime/src/pass.rs
+@@ -1037,9 +1037,13 @@ pub(crate) fn linear_shape(
+ /// ([`Target::info`]).
+ ///
+ /// Err: [`Gap::RenderPass`] of [`RenderPassKind::StoreAction`].
++/// With `dont_care` ([`DeviceOptions::dont_care_stores`](crate::DeviceOptions::dont_care_stores), rt
++/// patch 0005), `DontCare` and `MultisampleResolve` store `DONT_CARE`: the multisampled attachment
++/// itself, whose resolve is its own (`Target::info`).
+ pub(crate) fn ops(
+     load: LoadAction,
+     store: StoreAction,
++    dont_care: bool,
+ ) -> Result<(vk::AttachmentLoadOp, vk::AttachmentStoreOp), Error> {
+     let load = match load {
+         LoadAction::DontCare => vk::AttachmentLoadOp::DONT_CARE,
+@@ -1048,6 +1052,9 @@ pub(crate) fn ops(
+     };
+     let gap = |kind| Err(Error::Unsupported(Gap::RenderPass { kind }));
+     let store = match store {
++        StoreAction::DontCare | StoreAction::MultisampleResolve if dont_care => {
++            vk::AttachmentStoreOp::DONT_CARE
++        }
+         StoreAction::DontCare
+         | StoreAction::Store
+         | StoreAction::Unknown
+@@ -1147,7 +1154,7 @@ fn target(
+     clear: vk::ClearValue,
+     resolve: Option<Box<Resolve>>,
+ ) -> Result<Target, Error> {
+-    let (load, store) = ops(load, store)?;
++    let (load, store) = ops(load, store, texture.dont_care_stores())?;
+     let layout = match attachment.home {
+         vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => vk::ImageLayout::ATTACHMENT_OPTIMAL,
+         home => home,
+diff --git a/crates/metal2vulkan-runtime/src/render_encoder.rs b/crates/metal2vulkan-runtime/src/render_encoder.rs
+index d761ed9ce..df10582fd 100644
+--- a/crates/metal2vulkan-runtime/src/render_encoder.rs
++++ b/crates/metal2vulkan-runtime/src/render_encoder.rs
+@@ -3734,7 +3734,7 @@ fn later_store(action: StoreAction, target: Option<&Target>) -> Result<(), Error
+     let Some(target) = target else {
+         return Ok(());
+     };
+-    ops(LoadAction::Load, action)?;
++    ops(LoadAction::Load, action, false)?;
+     match (resolving(action, true)?, target.resolve.is_some()) {
+         (true, false) if action != StoreAction::Unknown => {
+             Err(Error::Refused(Refusal::ResolveTexture))
+diff --git a/crates/metal2vulkan-runtime/src/texture.rs b/crates/metal2vulkan-runtime/src/texture.rs
+index db4366c93..62029544a 100644
+--- a/crates/metal2vulkan-runtime/src/texture.rs
++++ b/crates/metal2vulkan-runtime/src/texture.rs
+@@ -4156,6 +4156,12 @@ impl Texture {
+         TextureObject::gpu_resource_id(self)
+     }
+ 
++    /// Its device's [`DeviceOptions::dont_care_stores`](crate::DeviceOptions::dont_care_stores)
++    /// (rt patch 0005).
++    pub(crate) fn dont_care_stores(&self) -> bool {
++        self.device.core().dont_care_stores
++    }
++
+     /// `textureType`, `pixelFormat`, `width` and the rest, as made.
+     pub fn descriptor(&self) -> &TextureDescriptor {
+         TextureObject::descriptor(self)
+diff --git a/crates/metal2vulkan-runtime/src/tests/pass.rs b/crates/metal2vulkan-runtime/src/tests/pass.rs
+index 94375e8d0..291ee3cd6 100644
+--- a/crates/metal2vulkan-runtime/src/tests/pass.rs
++++ b/crates/metal2vulkan-runtime/src/tests/pass.rs
+@@ -59,17 +59,29 @@ fn load_actions_are_one_to_one_and_plain_store_actions_store() {
+             ),
+         ] {
+             assert!(
+-                ops(load, store).ok() == Some((op, store_op)),
++                ops(load, store, false).ok() == Some((op, store_op)),
+                 "{load:?} {store:?}"
+             );
+         }
+     }
+-    match ops(LoadAction::Load, StoreAction::CustomSampleDepthStore) {
++    match ops(LoadAction::Load, StoreAction::CustomSampleDepthStore, false) {
+         Err(Error::Unsupported(Gap::RenderPass { kind })) => {
+             assert_eq!(kind, RenderPassKind::StoreAction)
+         }
+         other => panic!("CustomSampleDepthStore: {:?}", other.map(|_| "ops")),
+     }
++    // rt patch 0005: with the consumer's DONT_CARE stores, DontCare and MultisampleResolve store
++    // nothing; the other actions as without them.
++    for (store, store_op) in [
++        (StoreAction::DontCare, vk::AttachmentStoreOp::DONT_CARE),
++        (StoreAction::MultisampleResolve, vk::AttachmentStoreOp::DONT_CARE),
++        (StoreAction::Store, vk::AttachmentStoreOp::STORE),
++        (StoreAction::Unknown, vk::AttachmentStoreOp::STORE),
++        (StoreAction::StoreAndMultisampleResolve, vk::AttachmentStoreOp::STORE),
++    ] {
++        let (_, made) = ops(LoadAction::Load, store, true).expect("an action rt takes");
++        assert!(made == store_op, "{store:?} with DONT_CARE stores");
++    }
+ }
+ 
+ /// A pass over images that render as linear colour attachments alone (marked) renders where every

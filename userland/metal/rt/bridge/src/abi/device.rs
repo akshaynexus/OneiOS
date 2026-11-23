@@ -133,11 +133,36 @@ pub fn open(loader: &str, cache: Option<&str>) -> Result<NmbDevice, String> {
             refused.push(format!("{}: {below}", crate::driver::device_name(&instance, &physical)));
             continue;
         }
+        let name = crate::driver::device_name(&instance, &physical);
         let mut options = rt::DeviceOptions::default();
         options.pipeline_cache_dir = cache.map(Into::into);
-        let device = rt::Device::new(&physical, options).map_err(e("device"))?;
+        // rt 0005: Turnip keeps one of Metal's answers at a DONT_CARE store (Droid-VM's gfxprobe dontcare), and storing cost
+        // 37 ms against 9 ms a full-screen pass of 64 blended draws. METAL2VULKAN_DONT_CARE_STORES=0 stores them, for an A/B.
+        options.dont_care_stores =
+            name.starts_with("Turnip") && std::env::var("METAL2VULKAN_DONT_CARE_STORES").map_or(true, |v| v != "0");
+        // rt 0006: the queues' global priority the plug-in asks for (high in the render server, so the compositor's frames do
+        // not wait behind an app's), through whichever of the two extensions the device lists.
+        options.queue_global_priority = match std::env::var("METAL2VULKAN_QUEUE_PRIORITY").as_deref() {
+            Ok("low") => Some(ash::vk::QueueGlobalPriorityKHR::LOW),
+            Ok("medium") => Some(ash::vk::QueueGlobalPriorityKHR::MEDIUM),
+            Ok("high") => Some(ash::vk::QueueGlobalPriorityKHR::HIGH),
+            Ok("realtime") => Some(ash::vk::QueueGlobalPriorityKHR::REALTIME),
+            _ => None,
+        };
+        if options.queue_global_priority.is_some() {
+            options.extensions.push(rt::DeviceExtension::new(c"VK_KHR_global_priority"));
+            options.extensions.push(rt::DeviceExtension::new(c"VK_EXT_global_priority"));
+        }
+        // A driver may refuse the priority (VK_ERROR_NOT_PERMITTED_KHR: ANV without CAP_SYS_NICE): the device is made
+        // at the default one then, as Vulkan asks of an application.
+        let device = match rt::Device::new(&physical, options.clone()) {
+            Err(why) if options.queue_global_priority.is_some() && format!("{why}").contains("NOT_PERMITTED") => {
+                options.queue_global_priority = None;
+                rt::Device::new(&physical, options).map_err(e("device"))?
+            }
+            made => made.map_err(e("device"))?,
+        };
         let indices = Arc::new(Indices::grant(&device).map_err(e("index grants"))?);
-        let name = crate::driver::device_name(&instance, &physical);
         let (_, raw) = instance.raw();
         // SAFETY: the instance listed the device.
         let limits = unsafe { raw.get_physical_device_properties(physical.raw()) }.limits;
@@ -165,14 +190,24 @@ pub unsafe extern "C" fn nmb_device_open(loader: *const c_char, cache: *const c_
         }
         // SAFETY: the caller's contract.
         let (loader, cache) = unsafe { (CStr::from_ptr(loader), CStr::from_ptr(cache)) };
-        Ok(boxed(open(&loader.to_string_lossy(), Some(&cache.to_string_lossy()))?))
+        let device = boxed(open(&loader.to_string_lossy(), Some(&cache.to_string_lossy()))?);
+        // The process's device, for the plug-in's rows that name none (m2v_memory_census).
+        CURRENT.store(device, std::sync::atomic::Ordering::Release);
+        Ok(device)
     })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_device_release(device: *mut NmbDevice) {
+    let _ = CURRENT.compare_exchange(device, std::ptr::null_mut(), std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire);
     release(device)
 }
+
+/// The device nmb_device_open made last in this process (the frontend makes one).
+static CURRENT: std::sync::atomic::AtomicPtr<NmbDevice> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// Render encoders ended (abi::command), for the census's pass words.
+pub(crate) static RENDER_ENCODERS: AtomicU64 = AtomicU64::new(0);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_device_name(device: *const NmbDevice, out: *mut c_char, size: usize) -> usize {
@@ -661,4 +696,68 @@ pub(crate) fn device_of<'a>(d: DeviceRef) -> &'a NmbDevice {
 fn _assert_send() {
     fn is_send<T: Send + Sync>() {}
     is_send::<RetireGate>();
+}
+
+// The old patched runtime's telemetry the plug-in imports weakly (a static link needs them defined): the command pool row
+// (m2v-spare-command-pools.patch), the placement sites (Droid-VM 0028) and the pool report (Droid-VM 0031). rt has none of
+// these structures; each answers nothing, so the rows they feed stay silent.
+
+#[unsafe(no_mangle)]
+pub extern "C" fn m2v_command_pool_census(_out: *mut u64, _count: usize) -> usize {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn m2v_placement_sites(_out: *mut u8, _size: usize) -> usize {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn m2v_pool_report(_out: *mut u8, _size: usize) -> usize {
+    0
+}
+
+/// The GPU memory row's census (userland/metal/CommandPoolRow.inc, the GM and RP lines), in its 16 words, from rt's gauges:
+/// [0] 16 MiB units holding a block, [1] the bytes of rt's allocations, [2] the bytes placed in them (blocks and textures),
+/// [3] idle allocations (counted as units of 16 MiB), [4] their bytes, [5] 0, [6] textures' allocations of their own,
+/// [7], [8] 0 (rt keeps no spare image blocks: an idle allocation goes after 250 ms), [9] imports, [10] their bytes, [11] 0,
+/// [12] render encoders ended, [13] their render passes begun (one each and one per split), [14] splits, [15] splits at a
+/// memory barrier (rt 0008). Returns 16 once a device is open, else 0.
+///
+/// # Safety
+/// `out` holds `count` words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn m2v_memory_census(out: *mut u64, count: usize) -> usize {
+    let device = CURRENT.load(std::sync::atomic::Ordering::Acquire);
+    if device.is_null() || out.is_null() || count < 16 {
+        return 0;
+    }
+    guard(0, || {
+        let d = get(device)?;
+        let g = d.device.counters().gauges();
+        let m = d.device.counters().metrics();
+        let idle = g.shared_idle_bytes + g.private_idle_bytes;
+        let encoders = RENDER_ENCODERS.load(Relaxed);
+        let words = [
+            g.private_units,
+            g.shared_allocation_bytes + g.private_allocation_bytes,
+            g.shared_placed_bytes + g.private_placed_bytes + g.texture_block_bytes,
+            idle.div_ceil(16 << 20),
+            idle,
+            0,
+            g.texture_own_bytes,
+            0,
+            0,
+            g.imports,
+            g.import_bytes,
+            0,
+            encoders,
+            encoders + m.render_pass_splits,
+            m.render_pass_splits,
+            m.render_pass_barrier_splits,
+        ];
+        // SAFETY: the caller's 16 words or more.
+        unsafe { std::slice::from_raw_parts_mut(out, 16) }.copy_from_slice(&words);
+        Ok(16)
+    })
 }

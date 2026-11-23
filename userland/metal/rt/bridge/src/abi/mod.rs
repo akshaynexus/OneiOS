@@ -110,9 +110,6 @@ impl Options {
     pub fn is_private(self) -> bool {
         self.storage() == 2
     }
-    pub fn is_memoryless(self) -> bool {
-        self.storage() == 3
-    }
     pub fn class(self) -> metal2vulkan_runtime::MemoryClass {
         if self.is_private() { metal2vulkan_runtime::MemoryClass::Private } else { metal2vulkan_runtime::MemoryClass::Shared }
     }

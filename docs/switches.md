@@ -16,7 +16,7 @@ Rules for a switch (and for every helper that lands a behaviour change from now 
 xnuhost logs every switch once, after the `versions:` line:
 
 ```text
-switches: session-mode=hosted stop-loop=wait task-trim=1 ram-fit-terms=tasks uclamp-rule=work gpu-down=governor gpu-blob-entries=65532 wifi-ring-wait=1 wifi-send-wait=1 wifi-buffers=1 wifi-joined-scan=cache encoder-10bit=main10 encoder-warmup=1 oneios-wifi-rssi=1 oneios-telemetry-jobs=0 oneios-pool-cut=1 oneios-pressure-big=512 (docs/switches.md); all at their defaults
+switches: session-mode=hosted stop-loop=wait task-trim=1 ram-fit-terms=tasks uclamp-rule=work gpu-down=governor gpu-blob-entries=65532 wifi-ring-wait=1 wifi-send-wait=1 wifi-buffers=1 wifi-joined-scan=cache encoder-10bit=main10 encoder-warmup=1 oneios-wifi-rssi=1 oneios-telemetry-jobs=0 oneios-pool-cut=1 oneios-pressure-big=512 oneios-dont-care=1 oneios-queue-priority=1 (docs/switches.md); all at their defaults
 ```
 
 When some are changed, the end says which: `not at the default: wifi-send-wait gpu-down`. Kernel switches are read
@@ -47,6 +47,22 @@ change (the default value), and whether one has run the other value.
 | `boot-args-add=oneios-telemetry-jobs=1` | `0\|1` | `0` | 0: 0093 and 0094 disable the telemetry group (osanalyticshelper and its agent job, 16 uploaders); 1: the disable list is 0053's loops only and the enable pass enables the telemetry labels again (a store 0093 changed gets them back). Kernel, hosted 0096 | bad88c3, 30bdea6 + 0096 | 0093 alone: 20:23 (osanalyticshelper still ran: 0094) |
 | `boot-args-add=oneios-pool-cut=0` | `0\|1` | `1` | 1: metal2vulkan releases a spare command pool that holds more than its last 10 s need plus 8 command buffers (the render server's small command-stream BOs go back); 0: the pools are kept as before (the plug-in sets `METAL2VULKAN_POOL_USE_WINDOW_S=0`). Metal plug-in only (the boot add-on), docs/gpu.md "Who keeps a blob" | 50873fe | no |
 | `boot-args-add=oneios-pressure-big=0` | `0\|MB` | `512` | 512: at a memory pressure rise a process of at least 512 MiB footprint not yet notified at that level is notified first, the largest first (the render server and the apps that draw hear of it in the first 250 ms steps, not after 150-300 smaller processes); 0: XNU's order (least important band first, 250 ms apart: the GPU clients last). Kernel, hosted 0097; its `oneios-wired` and `oneios-pressure` lines are logging (no switch) | 0097 (fix/wired-names) | no |
+| `boot-args-add=oneios-dont-care=0` | `0\|1` | `1` | rt add-on only: 1: Metal's DontCare and MultisampleResolve stores are Vulkan `DONT_CARE` on Turnip (rt 0005, Droid-VM 0021's measurement: 37 ms against 9 ms a pass); 0: they store (`METAL2VULKAN_DONT_CARE_STORES=0`, `userland/metal/rt/RtSwitches.inc`). The 624bab3 add-on has Droid-VM 0021 always | port/m2v-rt | no |
+| `boot-args-add=oneios-queue-priority=0` | `0\|1` | `1` | rt add-on only: 1: the render server's queues at the high global priority (rt 0006, Droid-VM 0012); 0: the driver's default (`METAL2VULKAN_QUEUE_PRIORITY=default`) | port/m2v-rt | no |
+
+### The Metal add-on: 624bab3 or rt
+
+Not a key of `xnuhost.conf`: which boot add-on (`image/kernel.kc.gpuaddon`) the Mac stages, with
+`oneios-tool phone addon FILE` (and `phone addon --remove` for the image's own plug-in). Both carry the same Turnip and
+the same camera plug-in; they differ in the bridge's runtime (`userland/metal/rt/README.md`).
+
+| Add-on | Built by | Default | What |
+|---|---|---|---|
+| 624bab3 | `userland/metal/build.sh` (`METAL_RUNTIME` unset) | yes, until a phone boot of rt passes | the old runtime and its 56 patches; the fallback |
+| rt | `METAL_RUNTIME=rt userland/metal/build.sh` | no | metal2vulkan `development` 6462199fa (`metal2vulkan-runtime` 0.2) with `userland/metal/rt/patches` 0001-0008 and the rewritten bridge; not booted |
+
+Each build writes `NativeAdrenoMetal.runtime` (`624bab3` or `rt`) beside its bundle; the CDHashes of a pair the Mac
+was given are in that hand-off, and `oneios-tool phone sums` shows the staged one.
 
 Not switched, on purpose:
 
@@ -79,8 +95,8 @@ wifi-buffers=1
 wifi-joined-scan=cache
 encoder-10bit=main10
 encoder-warmup=1
-# kernel switches (boot-args-add appends to boot-args; one line, all four words):
-# boot-args-add=oneios-wifi-rssi=1 oneios-telemetry-jobs=0 oneios-pool-cut=1 oneios-pressure-big=512
+# kernel and plug-in switches (boot-args-add appends to boot-args; one line, all six words):
+# boot-args-add=oneios-wifi-rssi=1 oneios-telemetry-jobs=0 oneios-pool-cut=1 oneios-pressure-big=512 oneios-dont-care=1 oneios-queue-priority=1
 ```
 
 ## Tests

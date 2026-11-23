@@ -1223,6 +1223,11 @@ rustup toolchain install 1.98.0 && rustup +1.98.0 component add rust-src
 # macOS: brew install ninja glslang shaderc spirv-tools bison llvm; uv pip install --python "$(command -v python3)" meson mako pyyaml
 scripts/bg.sh metal userland/metal/build.sh
 # -> out/userland/NativeAdrenoMetal.bundle, NativeAdrenoMetal.build.json, NativeAdrenoMetal.check.txt, NativeAdrenoMetal.gpuaddon
+# The bridge on metal2vulkan-rt instead (userland/metal/rt/README.md), in out/metal-rt and out/userland-rt:
+rustup toolchain install nightly-2026-11-03 && rustup component add rust-src --toolchain nightly-2026-11-03
+scripts/bg.sh metal-rt env METAL_RUNTIME=rt userland/metal/build.sh    # bg.sh passes no METAL_RUNTIME of its own
+userland/metal/rt/build.sh check       # laptop tools: m2v-rt-check, abi_smoke (out/m2v-rt/target/release)
+userland/metal/rt/build.sh test        # rt's unit tests on the pin with userland/metal/rt/patches
 ```
 
 Then rebuild the image set (section 1): the hook places the bundle and lists its two CDHashes. What the build does,

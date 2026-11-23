@@ -3,6 +3,9 @@
 #
 #   scripts/bg.sh metal userland/metal/build.sh            everything (about 25 minutes the first time)
 #   userland/metal/build.sh stage|turnip|plugin|finish|addon   one step
+#   METAL_RUNTIME=rt userland/metal/build.sh ...            the same with the bridge on metal2vulkan-rt (userland/metal/rt: the
+#                               pin development 6462199fa and its patches, the bridge rewritten on its API), in out/metal-rt and
+#                               out/userland-rt unless METAL_WORK and METAL_OUT say otherwise; the default stays 624bab3
 #
 # What is built (docs/gpu.md section 7, docs/userland.md 7.1):
 #   libvulkan_freedreno.dylib   Mesa's Turnip (external/mesa-droidvm cecc0e9 + Droid-VM-UniXNU patches/mesa, the list of
@@ -40,11 +43,18 @@ HERE=$ROOT/userland/metal
 oneios_tool "$ROOT"     # (exported: the codesign shim runs it)
 TARGET_ID=${ONEIOS_METAL_TARGET:-iPhone18,2 24A446}
 HOOKS=$HERE/hooks/${TARGET_ID/ /-}.json
-W=${METAL_WORK:-$ROOT/out/metal}
+# The bridge's runtime: 624bab3 (the default, the base's bridge script) or rt (userland/metal/rt), each in its own folders.
+RUNTIME=${METAL_RUNTIME:-624bab3}
+case "$RUNTIME" in
+  624bab3) DEFAULT_WORK=$ROOT/out/metal DEFAULT_OUT=$ROOT/out/userland ;;
+  rt) DEFAULT_WORK=$ROOT/out/metal-rt DEFAULT_OUT=$ROOT/out/userland-rt ;;
+  *) echo "metal: METAL_RUNTIME=$RUNTIME: 624bab3 or rt" >&2; exit 2 ;;
+esac
+W=${METAL_WORK:-$DEFAULT_WORK}
 R=$W/root
 EXT=$ROOT/external
 BASE=$EXT/Droid-VM-UniXNU
-OUT=${METAL_OUT:-$ROOT/out/userland}
+OUT=${METAL_OUT:-$DEFAULT_OUT}
 JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN)}
 export PATH="$HERE/shim:$PATH"
 AR=llvm-ar
@@ -119,7 +129,9 @@ stage() {
   # warning option an error), so the plug-in script is told about it only when the compiler knows it
   local knows=0
   echo 'int x;' | "$IOS_DIR/ios-clang" -Werror -Wno-error=unused-but-set-global -x c -c - -o /dev/null 2>/dev/null && knows=1
-  "$ONEIOS_TOOL" ios metal-stage-edit "$R" "$HOOKS" "$JOBS" "$knows"
+  local rt=()
+  [ "$RUNTIME" = rt ] && rt=(--rt)
+  "$ONEIOS_TOOL" ios metal-stage-edit "$R" "$HOOKS" "$JOBS" "$knows" "${rt[@]}"
   # drivers/brightness/BacklightMode.inc (owner: brightness): backboardd's CoreBrightness gets BLControl, not the
   # VMBLControl that vmm-present selects, and no frame-synchronous brightness (no handler for it here), so the slider
   # reaches the backlight service as brightness-nits. The plug-in is the OneiOS code
@@ -134,6 +146,12 @@ stage() {
   # (oneios-gpu-text: ... CP pools/command buffers cut ... idle ... tuc ...); metal-stage-edit added its calls.
   cat "$HERE/CommandPoolRow.inc" >> "$R/drivers/AdrenoMetal/NativeAdrenoMetalPlugin.mm"
   say "staged NativeAdrenoMetalPlugin.mm: userland/metal/CommandPoolRow.inc appended (the command pool row)"
+  # userland/metal/rt/RtSwitches.inc (METAL_RUNTIME=rt): the boot words oneios-dont-care=0 and oneios-queue-priority=0
+  # turn rt patches 0005 and 0006 off (docs/switches.md).
+  if [ "$RUNTIME" = rt ]; then
+    cat "$ROOT/userland/metal/rt/RtSwitches.inc" >> "$R/drivers/AdrenoMetal/NativeAdrenoMetalPlugin.mm"
+    say "staged NativeAdrenoMetalPlugin.mm: userland/metal/rt/RtSwitches.inc appended (the rt bridge's switches)"
+  fi
 }
 
 # The base's build-turnip-darwin.py writes build/mesa-tu-ios27.cross each run, but an existing build directory only gets
@@ -158,6 +176,11 @@ turnip() {
 }
 
 plugin() {
+  # METAL_RUNTIME=rt: the bridge library is metal2vulkan-rt's, built into the place the plug-in script links (its stage
+  # edit took the old bridge's build out).
+  if [ "$RUNTIME" = rt ]; then
+    "$ROOT/userland/metal/rt/build.sh" ios "$R/build/adreno-metal-bridge/ios27/libadreno_metal_bridge.a"
+  fi
   (cd "$R" && python3 scripts/build-adreno-metal-plugin.py --target ios27)
 }
 
@@ -171,6 +194,8 @@ finish() {
   echo "$TARGET_ID" > "$bundle/oneios-target"
   "$ONEIOS_TOOL" ios macho-check --local "$bundle/libvulkan_freedreno.dylib" "$bundle/NativeAdrenoMetal" "$bundle/libvulkan_freedreno.dylib" | tee "$OUT/NativeAdrenoMetal.check.txt"
   "$ONEIOS_TOOL" ios metal-record "$ROOT" "$bundle" "$OUT/NativeAdrenoMetal.build.json" "$HOOKS" "$TARGET_ID"
+  # Which bridge runtime the bundle carries, beside the record (the record names the base's pins either way).
+  echo "$RUNTIME" > "$OUT/NativeAdrenoMetal.runtime"
   say "bundle $bundle; record $OUT/NativeAdrenoMetal.build.json"
 }
 
@@ -192,5 +217,5 @@ case "${1:-all}" in
   finish) finish; addon ;;
   addon) addon ;;
   all) stage; turnip; plugin; finish; addon ;;
-  *) sed -n '2,6p' "$0"; exit 2 ;;
+  *) sed -n '2,9p' "$0"; exit 2 ;;
 esac

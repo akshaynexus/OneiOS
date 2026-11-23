@@ -1,0 +1,36 @@
+OneiOS rt 0004: on Apple systems rt's threads take a quality-of-service class: m2v-submit and m2v-complete user-interactive, the others user-initiated (at the default class they woke up to 50 ms late on iOS; NativeMetal 0023 on the old runtime).
+
+diff --git a/crates/metal2vulkan-runtime/src/device.rs b/crates/metal2vulkan-runtime/src/device.rs
+index 3dd130afb..313cbf88c 100644
+--- a/crates/metal2vulkan-runtime/src/device.rs
++++ b/crates/metal2vulkan-runtime/src/device.rs
+@@ -1194,6 +1194,7 @@ pub(crate) fn start(
+         .name(name.to_string())
+         .spawn(move || {
+             let _slot = counters.thread_started();
++            quality_of_service(thread::current().name().unwrap_or(""));
+             drop(holding);
+             body();
+         })?;
+@@ -1773,3 +1774,21 @@ impl Drop for Core {
+         }
+     }
+ }
++
++/// OneiOS (rt patch 0004): on Apple systems, a runtime thread's quality-of-service class. The threads that bring command
++/// buffers to the GPU and their handlers to the program (`m2v-submit`, `m2v-complete`) run at the user-interactive class, the
++/// others at least at user-initiated: at the default class they woke up to 50 ms late behind the program's own threads on iOS
++/// (NativeMetal 0023 on the old runtime). Elsewhere nothing changes.
++#[cfg(target_vendor = "apple")]
++fn quality_of_service(name: &str) {
++    // qos_class_t (sys/qos.h): QOS_CLASS_USER_INTERACTIVE 0x21, QOS_CLASS_USER_INITIATED 0x19.
++    unsafe extern "C" {
++        fn pthread_set_qos_class_self_np(class: u32, relative_priority: i32) -> i32;
++    }
++    let class = if matches!(name, "m2v-submit" | "m2v-complete") { 0x21 } else { 0x19 };
++    // SAFETY: a call on this thread with a valid class; a refusal leaves the class as it was.
++    let _ = unsafe { pthread_set_qos_class_self_np(class, 0) };
++}
++
++#[cfg(not(target_vendor = "apple"))]
++fn quality_of_service(_name: &str) {}

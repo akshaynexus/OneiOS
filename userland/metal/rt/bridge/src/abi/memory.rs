@@ -115,6 +115,8 @@ pub struct NmbBuffer {
     pub(crate) buffer: rt::Buffer,
     pub(crate) device: DeviceRef,
     hold: Option<Hold>,
+    /// The options word it was made with (the frontend keeps its own copy for resourceOptions).
+    #[allow(dead_code)]
     pub(crate) options: u64,
     purgeable: AtomicU64,
 }
@@ -322,8 +324,6 @@ impl HeapInner {
 pub struct NmbHeap {
     pub(crate) inner: Arc<HeapInner>,
     pub(crate) device: DeviceRef,
-    /// 0 automatic, 1 placement.
-    pub(crate) kind: u64,
     pub(crate) options: u64,
     purgeable: AtomicU64,
 }
@@ -339,7 +339,7 @@ pub extern "C" fn nmb_heap_new(device: *mut NmbDevice, kind: u64, size: u64, opt
         let block = d.device.take_block(Options(options).class(), size.max(1)).map_err(e("heap"))?;
         let size = block.len;
         let inner = Arc::new(HeapInner { block, size, free: Mutex::new(vec![(0, size)]), used: AtomicU64::new(0) });
-        Ok(boxed(NmbHeap { inner, device: d as *const NmbDevice, kind, options, purgeable: AtomicU64::new(2) }))
+        Ok(boxed(NmbHeap { inner, device: d as *const NmbDevice, options, purgeable: AtomicU64::new(2) }))
     })
 }
 

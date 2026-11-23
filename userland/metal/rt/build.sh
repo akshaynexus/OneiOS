@@ -6,6 +6,8 @@
 #                                          the commit fetched when it is missing), patches/*.patch applied in name order
 #   userland/metal/rt/build.sh check       m2v-rt-check and abi_smoke for this machine (Linux or macOS), in $M2V_RT_WORK/target/release
 #   userland/metal/rt/build.sh test        rt's unit tests on the patched source (cargo test -p metal2vulkan-runtime --lib)
+#   userland/metal/rt/build.sh ios OUT.a   the arm64e-apple-ios static library of the bridge (fat LTO), for userland/metal/build.sh
+#                                          with METAL_RUNTIME=rt
 #
 # M2V_RT_WORK defaults to out/m2v-rt (never out/metal, the default add-on's). Needs: the toolchain of the pin's
 # rust-toolchain.toml (nightly-2026-11-03, rustup installs it on first use), llvm-as (LLVM 21 or newer).
@@ -64,6 +66,13 @@ metal2vulkan-runtime = { path = "$S/crates/metal2vulkan-runtime" }
 metal2vulkan = { path = "$S/crates/metal2vulkan", features = ["ash"] }
 ash = { version = "0.38", default-features = false, features = ["std"] }
 libc = "0.2"
+# The render server's display thread spends most of a frame in the runtime, much of it in small functions across the
+# translator's crates: one unit with link-time optimisation lets them inline across crates (as the old bridge was built).
+[profile.release]
+panic = "unwind"
+debug = 1
+lto = "fat"
+codegen-units = 1
 EOF
 }
 
@@ -85,6 +94,24 @@ check() {
   say "$W/target/release/m2v-rt-check, $W/target/release/abi_smoke"
 }
 
+# The arm64e-apple-ios static library, for the plug-in (userland/metal/build.sh with METAL_RUNTIME=rt), copied to OUT.a. The
+# environment is userland/metal/build.sh's (scripts/ios/env.sh: the guest's SDK and the cross clang).
+ios() {
+  local out=$1
+  [ -e "$S/.git" ] || source_tree
+  manifest
+  bridge_env
+  . "$ROOT/scripts/ios/env.sh"
+  [ "$IOS_HOST" = Darwin ] || export SDKROOT=$IOS_SDK
+  export CC_arm64e_apple_ios=$IOS_DIR/ios-clang CXX_arm64e_apple_ios=$IOS_DIR/ios-clang++
+  export AR_arm64e_apple_ios=${AR:-llvm-ar} CARGO_TARGET_ARM64E_APPLE_IOS_LINKER=$IOS_DIR/ios-clang
+  export IPHONEOS_DEPLOYMENT_TARGET=27.0 RUSTC_BOOTSTRAP=1
+  (cd "$W/bridge" && CARGO_TARGET_DIR=$W/target cargo build --release --lib -Z build-std=std,panic_unwind --target arm64e-apple-ios)
+  mkdir -p "$(dirname "$out")"
+  cp "$W/target/arm64e-apple-ios/release/libadreno_metal_bridge_rt.a" "$out"
+  say "$out ($(wc -c < "$out") bytes; runtime id $NMB_RUNTIME_ID)"
+}
+
 unit_tests() {
   [ -e "$S/.git" ] || source_tree
   (cd "$S" && CARGO_TARGET_DIR=$W/target cargo test -p metal2vulkan-runtime --lib)
@@ -93,6 +120,7 @@ unit_tests() {
 case "${1:-}" in
   source) source_tree ;;
   check) check ;;
+  ios) ios "${2:?ios OUT.a}" ;;
   test) unit_tests ;;
-  *) sed -n '2,16p' "$0"; exit 2 ;;
+  *) sed -n "2,19p" "$0"; exit 2 ;;
 esac

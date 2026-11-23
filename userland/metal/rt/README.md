@@ -137,12 +137,12 @@ Decisions: **upstream** (the new tip does it), **bridge** (the consumer's job in
 | 0006 batch-barriers-and-key-hash-neutral-maps | old runtime's batch internals | gone | drop |
 | 0007 optional-shader-cache-directory | a cache directory a sandboxed process may not write | `pipeline_cache_dir: Option`, a failed write is a miss | upstream |
 | 0008 llvm-bitreverse | `llvm.bitreverse` | `metal2vulkan-air/src/intrinsics/llvm.rs` | upstream |
-| 0009 patch-with-no-control-points | `[[patch(quad, 0)]]` | still applies; upstream still refuses 0 | port |
+| 0009 patch-with-no-control-points | `[[patch(quad, 0)]]` | still applies; upstream still refuses 0 | **rt 0007** (applies as it was) |
 | 0010 core-image-kernel-libraries | Core Image kernel libraries (file type 1) | `FunctionInfo` names them; the census parses CoreImage's | upstream |
 | 0011 two-plane-shadow-as-memory-lies | a two-plane surface's shadow | gone; rt's `Surface`/`PlaneSpec` | bridge (over rt's surfaces) |
 | 0012 srgb-extended-range-blend-rounded-model | extended-range sRGB blends (Astronomy wallpaper) | gone; rt has extended-range lowering | check |
 | 0013 growing-memory-blocks | pooled blocks from 4 MiB | 16 MiB units, idle allocations freed after 250 ms, one reserve per class | upstream |
-| 0014, 0015 in-place written textures | textures over surfaces and host pages written in place | gone / fails; rt's textures over imports read their memory's bytes | check (bridge over rt's imports) |
+| 0014, 0015 in-place written textures | textures over surfaces and host pages written in place | gone / fails; rt's textures over imports read their memory's bytes | **port, not done**: rt makes a texture over imported host memory an optimal image of its own, copied in and back once a submission (every IOSurface); to measure on the phone first |
 | 0016 refuse-rebinds | no call logs for rebinds | gone | drop |
 | 0017 heap-texture-size-a-multiple-of-its-alignment | heap texture answers rounded to their alignment | heaps are the consumer's in rt | bridge (round the answer) |
 | 0018 memory-census-bytes | live device memory by kind | rt's `Gauges` | upstream (the bridge maps `nmb_device_memory_counts`) |
@@ -150,23 +150,23 @@ Decisions: **upstream** (the new tip does it), **bridge** (the consumer's job in
 | 0020 | not applied | | drop |
 | 0021 spare-image-blocks-and-room-keeper | spare dedicated image blocks, a room keeper thread | rt's texture blocks keep one empty, idle frees | upstream |
 | 0022, 0024 stage trace, diagnostics switch | each command buffer's stages, the `sheng-diag` switch | gone | drop for now (the frontend's `nmb_stage_ring_read` answers no records; rt's `Metrics` instead) |
-| 0023 quality-of-service-on-ios | rt threads at user-interactive on iOS | rt sets no QoS (4 threads per device, `device.rs` `spawn`) | port |
+| 0023 quality-of-service-on-ios | rt threads at user-interactive on iOS | rt sets no QoS (4 threads per device, `device.rs` `spawn`) | **rt 0004** (`m2v-submit`, `m2v-complete` user-interactive; the rest user-initiated) |
 
 ### Droid-VM-UniXNU patches (62d0b11)
 
 | Patch | What it did | On rt | Becomes |
 |---|---|---|---|
 | 0011 rotated-turns-on-the-2d-engine | rotated framebuffer textures through Turnip's 2D engine | rt has no rotated textures | check (the iPhone's framebuffer may not be rotated) |
-| 0012 queue-global-priority | `METAL2VULKAN_QUEUE_PRIORITY` for the render server | rt takes no queue priority (README) | port (a `DeviceOptions` field, not a variable) |
+| 0012 queue-global-priority | `METAL2VULKAN_QUEUE_PRIORITY` for the render server | rt takes no queue priority (README) | **rt 0006** (`DeviceOptions::queue_global_priority`; the bridge reads the plug-in's variable, retries at the default where the driver says `NOT_PERMITTED`) |
 | 0013 trim-kept-memory | frees kept empty blocks on request | idle frees after 250 ms | upstream |
 | 0014 quarter-turn-plane-row | a quarter-turned texture over a plane | no rotated textures | check (with 0011) |
-| 0015 unattached-color-reads | `[[color(n)]]` with no attachment reads zero | census: still refused (`path_blit`) | port |
+| 0015 unattached-color-reads | `[[color(n)]]` with no attachment reads zero | census: still refused (`path_blit`) | **rt 0003** (also lets `color_inputs_attached` pass: upstream refuses on purpose, as macOS's Metal does; iOS's makes them). Census: QuartzCore's 2 `path_blit` pairs made |
 | 0016 specialized-name-links | `specializedName` links | `LinkedFunction::with_specialized_name` | upstream |
 | 0017 spares-within-the-address-space | spares held to 1/16 of the GPU VA | no spares | drop |
 | 0018 specialized-linked-functions-closed | linked functions with constants | `LinkedFunction.constants` | check |
 | 0019 pooled-block-size-from-the-environment | 16 MiB blocks | rt's unit is 16 MiB | upstream |
 | 0020 hold-back-memory-under-pressure | no kept room under pressure | rt keeps one 16 MiB reserve per class | drop (bridge: nothing to hold back but its own pools) |
-| 0021, 0023, 0024 Turnip DontCare stores | Metal's DontCare/MultisampleResolve stores as `DONT_CARE` (37 ms -> 9 ms a pass of 64 blended draws) | rt stores them (`pass.rs`: `STORE`) | port (a `DeviceOptions` field the bridge sets on Turnip) |
+| 0021, 0023, 0024 Turnip DontCare stores | Metal's DontCare/MultisampleResolve stores as `DONT_CARE` (37 ms -> 9 ms a pass of 64 blended draws) | rt stores them (`pass.rs`: `STORE`) | **rt 0005** (`DeviceOptions::dont_care_stores`, set on Turnip; 0023 and 0024's A/B is the switch `oneios-dont-care=0`) |
 | 0022 trim-spare-command-pools | spare command pools trimmed | rt's reaper frees pools past the idle ones it keeps | upstream (per the other helper; to confirm by the GPU blob count on the phone) |
 | 0025 full-barriers-switch | a diagnostic | | drop |
 | 0026 copy-back-drops-carried-shadows | shadow copy-back | rt's own shadows | check |
@@ -188,18 +188,62 @@ Decisions: **upstream** (the new tip does it), **bridge** (the consumer's job in
 | 0102 blob-constant-gep-pointers | GEP constants into the blob | applies | check (with 0101) |
 | 0103 block-bytes-per-process | `M2V_BLOCK_MB` per process | rt's 16 MiB unit | drop |
 | `trace-metal-vulkan-init.patch` | `ONEIOS_VK_INIT` lines of the instance's making | file gone | bridge (the bridge logs its own driver open and floor answer) |
-| `m2v-spare-command-pools.patch` (fix/gpu-blobs) | spare pools follow recent use | see Droid-VM 0022 | upstream (to confirm) |
+| `m2v-spare-command-pools.patch` (fix/gpu-blobs) | spare pools follow recent use | see Droid-VM 0022 | upstream (to confirm on the phone: the plug-in's weak `m2v_command_pool_census` answers nothing on rt, so the CP row stays silent) |
 
-## What is left (milestones 3 to 6)
+### The other effort's fixes (`fix/m2v-update`, on 624bab3, not committed when this was written)
 
-- **3, the bridge**: written (below, "Milestone 3"); not yet in an add-on.
-- **4, our fixes**: the **port** rows above, each its own patch here (0009, 0015, 0023, the queue priority, the
-  DontCare stores).
-- **5, the build**: `userland/metal/build.sh` with a switch that builds this bridge instead of the base's; the add-on
-  with the camera plug-in.
-- **6, the fallback**: both add-ons for the Mac, the row in `docs/switches.md`.
+The owner, 2026-11-24: the two metal2vulkan efforts are one stack on rt; the 624bab3 add-on stays only as the fallback.
 
-## Milestone 3: the bridge on rt (written, tested on the laptop; not yet in an add-on)
+| Its change | On rt | Becomes |
+|---|---|---|
+| `m2v-idle-memory.patch`: the idle trim frees the old runtime's spare dedicated image blocks (`METAL2VULKAN_IDLE_SPARES`, boot word `oneios-idle-spares=0`) | rt keeps no spare image blocks: an idle allocation goes after 250 ms, one 16 MiB reserve per class (rt README, "Memory blocks and buffers") | unnecessary on rt (the switch does nothing there) |
+| `turnip-idle-bo-cache.patch`: Turnip's freed-BO cache trimmed after 60 s idle (boot word `oneios-bo-cache-idle=0`) | Turnip is the same in both add-ons | shared: `userland/metal/build.sh stage` builds the same Mesa for both runtimes, so it reaches the rt add-on once it is on `main` |
+| The GPU memory row (`CommandPoolRow.inc`'s `GM` line, weak `m2v_memory_census`) | rt has the figures in its gauges | the bridge answers `m2v_memory_census` from rt's gauges (`abi/device.rs`; words in its comment); `s` (spares) is 0 on rt |
+| The render-pass split counters (the `RP` line) | rt counted no splits | **rt 0008**: `Metrics::render_pass_splits` and `render_pass_barrier_splits`; the bridge counts the render encoders |
+
+Its findings that hold for rt too: the pipeline cache and preprocess-pool commits do not matter on Turnip (no
+`VK_EXT_device_generated_commands`, so rt refuses indirect command buffers there). The posters'
+`OutOfMemory(Device)` it saw on the old runtime is to be checked on the phone with the rt add-on.
+
+## Milestones 4 to 6
+
+**4, our fixes, on rt** (`patches/`, each with its one-line reason at the top):
+
+| Patch | Is | Test (build laptop, 2026-11-24) |
+|---|---|---|
+| 0001 instance-from-a-driver | the loader-free instance | ANV through it: compute, render and the IOSurface path right |
+| 0002 presenting-is-optional | surface and swapchain optional | the floor's guards updated; rt unit tests |
+| 0003 unattached-color-reads | Droid-VM 0015 | census: QuartzCore pairs 13 -> 15 of 21 (`path_blit_vert_lp[fh]`); the translator's tests of the touched areas: 224 passed, 3 failed before the tests were updated (the one that pinned the refusal now pins the zero read, the inputs encoding takes the new field, a tessellation test's spirv-val temp-file race passes alone); those 3 pass after |
+| 0004 quality-of-service-on-apple | NativeMetal 0023 | builds for arm64e; not run (Linux sets nothing) |
+| 0005 dont-care-stores | Droid-VM 0021 | `tests::pass` checks both mappings |
+| 0006 queue-global-priority | Droid-VM 0012 | ANV refuses high (`NOT_PERMITTED`): the bridge makes the device at the default; Turnip (noop shim) takes it |
+| 0007 patch-with-no-control-points | NativeMetal 0009 | applies as it was |
+| 0008 render-pass-split-counts | the other effort's RP counters | `abi_smoke`'s census check |
+
+With all eight: rt's unit tests 188 passed, 0 failed, 2 ignored (`build.sh test`); `abi_smoke` 35 checks, 0 failed;
+`m2v-rt-check --selftest` 0 wrong outputs, QuartzCore 38 of 41 kernels and 15 of 21 pairs.
+
+Not ported (with why): the in-place textures over host imports (NativeMetal 0014/0015: rt's copies of every
+IOSurface's bytes; a larger change to rt's `over` path, to do once the phone shows its cost), the rotated textures
+(Droid-VM 0011/0014: the iPhone's framebuffer may not be rotated; check), and the "check" rows above (on evidence only).
+
+**5, the build.** `METAL_RUNTIME=rt userland/metal/build.sh` builds the same plug-in with this bridge: `stage` passes
+`--rt` to `oneios-tool ios metal-stage-edit` (the plug-in script links the library `userland/metal/rt/build.sh ios` puts
+in `build/adreno-metal-bridge/ios27` instead of building the old one) and appends `RtSwitches.inc`; its folders are
+`out/metal-rt` and `out/userland-rt`. The plug-in imports the old runtime's telemetry weakly, so the bridge defines
+`m2v_command_pool_census`, `m2v_placement_sites` and `m2v_pool_report` (answering nothing) and `m2v_memory_census`
+(above). One boot add-on with the camera plug-in: `oneios-tool ios addon OUT --metal out/userland-rt/NativeAdrenoMetal.bundle
+--camera out/userland/camera`.
+
+The first-boot cost of re-translation (rt's cache keys are all new, so every pipeline is lowered and compiled again
+once, then kept in the plug-in's cache directory): not measured on the phone. On the laptop (x86, one thread) the census
+of QuartzCore and two CoreImage libraries took 0.11 + 0.05 + 0.14 s through Turnip's compiler (noop shim); the phone's
+cores are slower and the real clients make many more variants than one per function.
+
+**6, the fallback.** Both add-ons are kept: the 624bab3 one (`METAL_RUNTIME` unset, the default) and the rt one; the
+Mac stages either with `oneios-tool phone addon FILE` (docs/switches.md, "The Metal add-on").
+
+## Milestone 3: the bridge on rt (tested on the laptop; in the rt add-on since milestone 5)
 
 `bridge/src/abi/` implements all 184 C functions of NativeMetal's `NativeMetalBridge.h` and `NativeMetalObjects.h`
 (b0d6a07) on rt, the ABI unchanged: `nm` of the static library against the headers' list, 184 and 184, none missing or
@@ -230,7 +274,7 @@ buffers on Turnip anyway).
 Tests on the build laptop (2026-11-24), `userland/metal/rt/build.sh check`, the Intel GPU through ANV and the direct path:
 
 ```
-$ out/m2v-rt/target/release/abi_smoke /usr/lib/libvulkan_intel.so     # 34 checks through NativeMetal's headers
+$ out/m2v-rt/target/release/abi_smoke /usr/lib/libvulkan_intel.so     # 35 checks through NativeMetal's headers
 ... 0 failed
 $ out/m2v-rt/target/release/m2v-rt-check /usr/lib/libvulkan_intel.so --selftest --qc out/m2v-rt/metallibs/QuartzCore-default.metallib
 selftest 0x0 (142 ms): compute_bad 0 render_bad 0 import_bad 0 qc functions 249 kernels 38 ok 3 failed, pairs 13 ok 8 failed

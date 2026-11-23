@@ -87,6 +87,10 @@ pub enum Command {
         jobs: String,
         /// 1 when the compiler knows -Wunused-but-set-global
         knows: String,
+        /// The bridge on metal2vulkan-rt (userland/metal/rt): the plug-in script links the static library
+        /// userland/metal/rt/build.sh ios put in build/adreno-metal-bridge/ios27, and does not build the old one
+        #[arg(long)]
+        rt: bool,
     },
     /// userland/metal/build.sh's `finish`: NativeAdrenoMetal.build.json (the environment is scripts/ios/env.sh's)
     MetalRecord {
@@ -146,7 +150,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
             },
         ),
         Command::TbdDiff { a, b, a_listed, show } => diff::run(&a, &b, a_listed, show),
-        Command::MetalStageEdit { root, hooks, jobs, knows } => metal::stage_edit(&root, &hooks, &jobs, knows == "1").map(|()| 0),
+        Command::MetalStageEdit { root, hooks, jobs, knows, rt } => metal::stage_edit(&root, &hooks, &jobs, knows == "1", rt).map(|()| 0),
         Command::MetalRecord { root, bundle, record, hooks, target } => metal::record(&root, &bundle, &record, &hooks, &target).map(|()| 0),
         Command::Gpuaddon { bundle, output } => metal::gpuaddon(&bundle, &output).map(|()| 0),
         Command::Addon { output, metal, camera } => metal::addon(&output, metal.as_deref(), camera.as_deref()).map(|()| 0),
