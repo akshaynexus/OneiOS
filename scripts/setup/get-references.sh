@@ -24,6 +24,8 @@ DEST=${REF_DIR:-$REPO/external}
 # metal2vulkan, mesa-droidvm  the Metal plug-in's translator and Turnip's source, at the pins of the kernel base's
 #                   scripts/data/gpu-metal-vulkan-inputs.json and adreno-compiler-inputs.json. userland/metal/build.sh
 #                   patches copies of them (patches/metal2vulkan, patches/mesa of Droid-VM-UniXNU); these stay as fetched.
+#                   metal2vulkan stays at 624bab3 (2026-11-23): upstream development replaced the runtime the bridge and its
+#                   51 patches are written for (5d725aeec); docs/gpu.md section 7, "metal2vulkan's upstream".
 # NativeMobileDisplay  the IOMobileFramebuffer backend (GopFramebuffer fork), at the kernel base's drivers/GopFramebuffer.
 # NativeHidInput    UniXNU/ShengHidInput at the commit UniXNU-droidvm's ipados27 build-droidvm-hid-input.py pins (its
 #                   arm64e source): touch, buttons, keyboard HID. kernel/patches/oneios-hosted/hid compiles it.

@@ -2088,6 +2088,8 @@ impl Config {
             ("oneios-telemetry-jobs", arg("oneios-telemetry-jobs", "0"), "0"),
             ("oneios-pool-cut", arg("oneios-pool-cut", "1"), "1"),
             ("oneios-pressure-big", arg("oneios-pressure-big", "512"), "512"),
+            ("oneios-idle-spares", arg("oneios-idle-spares", "1"), "1"),
+            ("oneios-bo-cache-idle", arg("oneios-bo-cache-idle", "1"), "1"),
         ];
         let changed: Vec<&str> = all.iter().filter(|(_, v, d)| v != d).map(|(k, _, _)| *k).collect();
         let words: Vec<String> = all.iter().map(|(k, v, _)| format!("{k}={v}")).collect();

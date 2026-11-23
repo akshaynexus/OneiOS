@@ -1,0 +1,83 @@
+--- a/src/freedreno/vulkan/tu_knl_darwin.cc
++++ b/src/freedreno/vulkan/tu_knl_darwin.cc
+@@ -223,6 +223,7 @@
+    void *mapping;
+    uint32_t token;
+    bool read_only;
++   uint64_t cached_ns;   /* OneiOS: when it was cached (tu_darwin_bo_cache_trim_idle) */
+ };
+ struct darwin_bo_cache_stats {
+    uint64_t lookups, hits, inserts, evictions, flushes, bytes_peak;
+@@ -259,6 +260,7 @@
+    struct darwin_va va;
+ };
+ static struct darwin_retire_state *darwin_stats_state;   /* for tu_darwin_bo_cache_stats */
++static struct tu_device *darwin_stats_dev;   /* OneiOS: its device, for tu_darwin_bo_cache_trim_idle */
+ 
+ extern "C" __attribute__((visibility("default"))) void tu_darwin_bo_cache_stats(uint64_t out[8]);
+ extern "C" __attribute__((visibility("default"))) void
+@@ -805,7 +807,7 @@
+    if (bo->size > (darwin_small(bo->size) ? darwin_cache_small_budget() : darwin_cache_budget()))
+       return false;
+    retire->cache[retire->cache_count++] = {bo->handle, bo->iova, bo->size, ++retire->cache_stamp, bo->mapping, bo->token,
+-                                           bo->read_only};
++                                           bo->read_only, os_time_get_nano()};
+    retire->cache_bytes += bo->size;
+    const bool small = darwin_small(bo->size);
+    if (small)
+@@ -886,6 +888,39 @@
+    darwin_cache_flush(dev, retire);
+ }
+ 
++/* OneiOS: the cached BOs that sat in the cache for `age_ms` or longer, no allocation having taken them, go back to the host: the
++ * bytes released. The Metal plug-in's GPU memory row calls it every 60 s with 30000 (userland/metal/CommandPoolRow.inc; boot
++ * argument oneios-bo-cache-idle=0: never called). The cache went back only past its budgets or at a memory pressure rise, so a
++ * process that went still kept it full: the render server's 78 MiB at a still screen (oneios-gpu-text "tuc 78M", 2026-11-23), every
++ * BO wired guest memory. A BO asked for again within the age is a hit as before; one asked later is a new BO, as past the budget. */
++extern "C" __attribute__((visibility("default"))) uint64_t tu_darwin_bo_cache_trim_idle(uint64_t age_ms);
++extern "C" __attribute__((visibility("default"))) uint64_t
++tu_darwin_bo_cache_trim_idle(uint64_t age_ms)
++{
++   struct darwin_retire_state *retire = darwin_stats_state;
++   struct tu_device *dev = darwin_stats_dev;
++   if (!retire || !dev)
++      return 0;
++   const uint64_t age = age_ms * 1000000ull;
++   uint64_t released = 0;
++   pthread_mutex_lock(&retire->lock);
++   const uint64_t now = os_time_get_nano();
++   /* From the end: an eviction moves the last entry into the slot, one already looked at. */
++   for (unsigned i = retire->cache_count; i-- > 0;) {
++      const struct darwin_cached_bo *e = &retire->cache[i];
++      if (now - e->cached_ns < age)
++         continue;
++      const uint64_t size = e->size;
++      const VkResult result = darwin_cache_evict(dev, retire, i);
++      if (result == VK_SUCCESS)
++         released += size;
++      else if (result != VK_NOT_READY)
++         break;   /* the device is lost (darwin_release_native said so) */
++   }
++   pthread_mutex_unlock(&retire->lock);
++   return released;
++}
++
+ /* The process's memory-pressure source, made once: libdispatch delivers the kernel's memorystatus levels to it. */
+ static void
+ darwin_watch_memory_pressure(void)
+@@ -1707,6 +1742,7 @@
+    }
+    dev->darwin_retire = retire;
+    darwin_stats_state = retire;
++   darwin_stats_dev = dev;
+    darwin_watch_memory_pressure();
+    retire->pressure_seen = p_atomic_read(&darwin_memory_pressure);
+    return VK_SUCCESS;
+@@ -1728,6 +1764,7 @@
+       if (retire->cache_stats.lookups)
+          darwin_cache_log(retire);
+       darwin_stats_state = NULL;
++      darwin_stats_dev = NULL;
+       rb_tree_foreach_safe(struct darwin_va_hole, hole, &retire->va.address, by_address)
+          free(hole);
+       pthread_mutex_destroy(&retire->lock);

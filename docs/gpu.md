@@ -1013,9 +1013,10 @@ pool's first blocks are in the 4-32 MiB columns too.)
 |---|---|---|
 | Core Animation (backboardd's render server) and the app | its `MTLTexture`s, `MTLBuffer`s, render targets, its own texture caches; the `IOSurface`s of every window it composites | its own policy: on memory pressure (iOS's, inside the guest), when the layer goes |
 | NativeMetal (`NativeBridgeMetalFrontend.mm`) | every imported IOSurface while anything in the process still retains it (`gHeldImports`) | the next import, a command buffer's completion, or a memory-pressure rise (`watchImportPressure`) |
-| metal2vulkan (`memory.rs` pools) | the blocks resources are placed in (dedicated allocations for large ones) and up to two empty blocks a pool | an empty block after 2 s (`watchIdleMemory`), every kept block on a pressure rise; never while placements live in it |
+| metal2vulkan (`memory.rs` pools) | the blocks resources are placed in (dedicated allocations for large ones) and up to two empty blocks a pool; a dedicated image block whose image went, as a spare for 10 s | an empty block after 2 s (`watchIdleMemory`), every kept block on a pressure rise; never while placements live in it; a spare past its 10 s at the next return or take, and since 2026-11-23 also at the 2 s idle trim (`m2v-idle-memory.patch`, "The idle memory" below) |
+| metal2vulkan (`recycle.rs`) | images and buffers it made, parked as their last holder goes for the next of the same making (at most 32 images and 128 MiB, 64 buffers and 64 MiB), each with its placement | past their second at the next park or take; since 2026-11-23 also at the 2 s idle trim (`m2v-idle-memory.patch`) |
 | metal2vulkan (`spares.rs`) | spare command pools, each with every command buffer it made and, in Turnip, the last command stream BO of each of their streams (8-64 KiB each; Turnip's reset keeps it); spare descriptor pools (at most 256 of each list) | a pool spare for 20 s, all but the 8 newest (`watchIdleMemory`); all but 2 on a pressure rise; since 2026-11-23 also a pool given back that holds more than 8 command buffers past the most one command buffer used of it in the last 10 s (`userland/metal/m2v-spare-command-pools.patch`, below) |
-| Turnip (`tu_knl_darwin.cc`) | a freed BO until its fence is done (the retire queue), then in its BO cache: at most 16 MiB of BOs up to 1 MiB and 96 MiB of larger ones (`TU_DARWIN_BO_CACHE_SMALL_MB`, `TU_DARWIN_BO_CACHE_MB`) | past the budgets, oldest first: the close below |
+| Turnip (`tu_knl_darwin.cc`) | a freed BO until its fence is done (the retire queue), then in its BO cache: at most 16 MiB of BOs up to 1 MiB and 96 MiB of larger ones (`TU_DARWIN_BO_CACHE_SMALL_MB`, `TU_DARWIN_BO_CACHE_MB`; 8 and 16 MiB in every process but the render server) | past the budgets, oldest first: the close below; all at a pressure rise; since 2026-11-23 a BO no allocation took for 30 s, every 60 s (`turnip-idle-bo-cache.patch`) |
 | the kernel (`DroidVMVirtioGpu3D.cpp`) | a closed blob while the client still has fenced work made before the close ("deferred", "waiting") | at the client's next method or fence wait once that work is done (`reapPending`); every blob at the connection's close |
 | xnuhost (`virtio_gpu.rs`, `gpu3d_kgsl.rs`, drm2kgsl) | the resource, its udmabufs and KGSL's import of them | at `RESOURCE_UNREF`: detached from every context (drm2kgsl unbinds and frees the GPU object), the chunks closed |
 
@@ -1087,6 +1088,62 @@ Live pools / the command buffers made from them; `cut`: pools released since the
 / their command buffers; `idle`: pools the idle trim released, / theirs; `tuc`: Turnip's cache of freed BOs now. With the
 fix, backboardd's command buffers should stay in the low hundreds at a still screen and its `<1` blobs should fall back
 after an app closes (the `oneios-gpu-kinds` `gone` moving without a pressure rise).
+
+**The idle memory (2026-11-23, fix/m2v-update).** Session mac-int (2026-11-23 22:20,
+`out/session-logs/2026-11-23-mac-int/live2.log`): at the end the Metal clients' own GPU blobs were 1.7-2.4 GiB
+(`oneios-gpu-memory` own 2,358-2,662), backboardd 917 MiB own + 300 wired, WebKit's GPU process 475 + 267, and the
+poster extensions got `no-device device: OutOfMemory(Device)`. backboardd's bytes were mostly 7 blobs of 64 MiB and more
+and 11 of 32-64 MiB (`oneios-gpu-sizes`), WebKit's 5 and 2; backboardd's Turnip cache held `tuc 78M`. Three holders
+that let go only when something else happened, never at a still screen, read in the code:
+
+- metal2vulkan's recyclers (`recycle.rs`) park an image or a buffer it made as its last holder goes, for the next of the
+  same making, up to 32 images and 128 MiB and 64 buffers and 64 MiB, "none parked longer than a second"; but the second
+  is checked only as another object is parked or taken. A process that went still kept all of them, each a placement
+  that keeps its block (a 64 MiB image a whole dedicated block).
+- the spare dedicated image blocks (`memory.rs`, NativeMetal bridge patch 0021): an image's dedicated block kept 10 s
+  for the next image of its size; aged only as a placement is returned or a dedicated image is made.
+- Turnip's cache of freed BOs (`tu_knl_darwin.cc`): emptied only past its budgets or at a pressure rise.
+
+The fix: `userland/metal/m2v-idle-memory.patch` (metal2vulkan `memory.rs`, `recycle.rs`, `work_counts.rs`, applied
+after the pool patch): the plug-in's idle trim (`trim_kept_memory`, every 2 s, `watchIdleMemory`) also frees the parked
+images and buffers past their second and the spares past their 10 s. And `userland/metal/turnip-idle-bo-cache.patch`
+(Turnip `tu_knl_darwin.cc`, appended to the Mesa list after the trace patch): `tu_darwin_bo_cache_trim_idle(age_ms)`
+gives back the cached BOs no allocation took for that long; the plug-in's row thread calls it every 60 s with 30000. A
+busy process takes its parked objects and cached BOs back within the spans, so both reach a still one only. Switches:
+`boot-args-add=oneios-idle-spares=0` (the plug-in sets `METAL2VULKAN_IDLE_SPARES=0`) and `oneios-bo-cache-idle=0` (no
+call), `docs/switches.md`.
+
+Two lasting rows with the command pool row (`userland/metal/CommandPoolRow.inc`), from `m2v_memory_census` (the
+runtime's census as of its last idle trim):
+
+```
+oneios-gpu-text: backboardd[64] GM p 7/448M u 210M e 2/128M d 11/400M s 3/150M bo -78M
+oneios-gpu-text: backboardd[64] RP enc +36000 inst +36100 split +100 barrier +0
+```
+
+`GM` (every 60 s when a figure moved by 8 MiB, or the trim gave BOs back): `p` pooled blocks with a placement / MiB, `u`
+MiB placed in them, `e` kept empty pooled blocks / MiB, `d` dedicated blocks / MiB, `s` spare image blocks / MiB, `bo`
+MiB of Turnip's cache given back since the last row. So `p` far above `u` is room in pooled blocks (the 64 MiB block size
+and the room kept ahead, below), `d` is large images, `s` spares. `RP` (every 5 minutes while encoders end): render
+encoders ended, their render pass instances, the splits, of them at the program's memory barriers (section 7,
+"Mobile").
+
+Tested: metal2vulkan's own runtime tests on the build laptop on the patched stack (624bab3 + the 51 bridge patches +
+the trace and pool patches + this one): the lib suite 1148 passed, the same 4 failing as on the stack without it
+(`buffer_texture` x2, `exit_guard` x2); the device tests (`--cfg m2v_gpu`, Intel Iris Xe, ANV) 1397 passed, 15
+failing, and the stack without it 13 failing in a parallel run: 10 in both (`buffer_texture` x2, `exit_guard` x2,
+`completion_here` x2, `recorded_at_the_call`, `render_stage_digests::a_second_device...`, `ycbcr_device`,
+`pipeline_wait_order`), the other 5 and 3 timing tests that failed in one run only; those 8 (and 2 neighbours) run one at a time all pass with
+the patch (on the stack without it `teardown_threads` fails); the new `tests::idle_spares` makes a 4096x4096
+render target (a 64 MiB dedicated block), drops it, and checks that a trim within the second keeps the parked image,
+one past it frees it into a spare, one within 10 s keeps the spare and one past it frees it, and the census words.
+Turnip's change is built for the phone; no host test reaches the darwin backend. Built on the build laptop
+(`userland/metal/build.sh all`, own `METAL_WORK`): `NativeAdrenoMetal` CDHash `4b2f5d98...`, `libvulkan_freedreno.dylib`
+`e674f5ee...` (both export the new entry points); with the camera plug-in (`fda818f2...`) the add-on
+`combined.gpuaddon` is 12,327,696 bytes, sha256 `fa8e8c3a...`. Not booted. The proof on the
+phone: the `GM` rows' `s` and `bo` at a still screen; backboardd's and WebKit's `oneios-gpu-kinds` own-task MiB falling
+at a still screen with `gone` moving and no pressure rise (`oneios-mem`), and `tuc` near 0 in the `CP` rows of a still
+process; frames no slower (`oneios-gpu-report` means).
 
 The host's side, in xnuhost's log every 10 s while it changes (`virtio_gpu.rs`, the blob note): `gpu: 10 s: host blobs N (M
 MiB), made +A unref'd +B`. N against the guest's `oneios-gpu-memory` live count says whether the host keeps blobs the guest
@@ -1318,6 +1375,81 @@ member `AGXAccelerator::superClass` keeps the parent's unslid link address (noth
 the base script), since an existing directory only gets `meson configure`. The `9xxx` copies of
 `patches/metal2vulkan` (0101-0103) are in no list of the base's bridge script and are not applied; `stage` says so.
 
+**metal2vulkan's upstream (2026-11-23, fix/m2v-update): the pin stays 624bab3.** Upstream `development` at
+`6462199fa` (2026-11-23) is 9,217 commits newer. It is a new runtime: `metal2vulkan-rt`, written from 2026-11-17
+(`28b6b0b9d`), replaced the runtime this build uses (`5d725aeec`, 2026-11-20, "Delete metal2vulkan-runtime") and took
+its name; its `src` has 177 files where the pin's has 562. Tried on the build laptop (`git apply --check` of the base's
+recorded list in order): 1 of the 51 bridge patches applies (NativeMetal 0009), and 68 of the 120 files they touch are
+gone. The bridge (`bridge/NativeMetalObjects.rs`, `NativeMetalBridge.rs`, 3,735 lines) names 47 runtime types the new
+one has not (among them `Heap`, `HeapDescriptor`, `BinaryArchive`, `ArgumentEncoder`, `IoSurfacePlane`, `HostMemory`,
+`PurgeableState`, `ShaderCacheOptions`, `DynamicLibrary`, `Function`, the GPU family rows, `MessageSink`): its README's
+"What the consumer implements" makes heaps, archives, reflection and labels the consumer's, over its `Block` and
+`HeapRange`. Its `Instance` loads a Vulkan loader by name, or the consumer's drivers through a loader with
+`VK_LUNARG_direct_driver_loading`; iOS has no loader (the bridge opens Turnip's dylib itself). Its floor (Vulkan 1.3
+and the README's list): Turnip's descriptor and compute limits in `tu_device.cc` meet it (read, not run). So the update
+is a port, not a rebase. What is left for it: (1) an `Instance` over Turnip's `vkGetInstanceProcAddr` without a loader
+(a patch, or Khronos's loader built for iOS); (2) the bridge's heaps, archives, argument encoders, IOSurface imports,
+purgeable states and functions written over the new API; (3) each of the 51 patches judged again (most mend code paths
+the new runtime does not have); (4) a phone boot of every Metal client (backboardd, SpringBoard, WebKit, the camera,
+the posters). Several days of work and boots; not started.
+
+**Upstream commits looked at for our faults** (named in the task, then `git log 624bab3..5d725aeec~1` of the old
+runtime: 2,981 commits on its sources, 995 with words of memory, blocks, pools, spares, free, idle, release or cache in
+their subject; those below are the ones about memory held at rest):
+
+| Commit | What | Taken | Why |
+|---|---|---|---|
+| `50196ba82`, `d20c812be` | the preprocess pool holds nothing at rest; its 64 MiB bound and quarter-second free | no | new runtime; and the pool is `VK_EXT_device_generated_commands`' preprocess memory, which Turnip does not offer: never reached on Adreno |
+| `3674f98a6` | a pooled block that holds no place goes back | no | the validation crate's replay player (a test tool) of the new runtime |
+| `4c808ffa6` | every free of device memory on the block-maker thread | no | new runtime; the old one's free thread (`b8ed1b818`, 2026-11-03) is not in the pin and conflicts in 5 files |
+| `39b0efc6e` | a release waits for the command buffers committed before it | no | new runtime; in the pin a committed command buffer holds every resource it uses until it completes (`texture.rs` `Drop for Image`), and freed memory waits for the batches in flight (`freed_memory.rs`) |
+| `91fed9449`, `015ece492` | the pipeline cache bound (128 MiB) and its counters | no | new runtime's one cache; the pin keeps one `VkPipelineCache` per record family, at most `LIVE` (`shader_cache/driver.rs`) |
+| `c03422017` | private memory past 16 KiB in the runtime's arena | no | new runtime (`arena.rs`); whether our clients' kernels use that much private memory is not measured (Turnip gives each such pipeline a private memory BO of its own) |
+| `89483d65c` (2026-11-12, old runtime) | an idle device lets go of its kept empty blocks and parked objects | ported | the same fault as "The idle memory" (section 5.1): its idle-sweep thread needs the free thread and the 11-08..11-11 block changes (8 files conflict); `userland/metal/m2v-idle-memory.patch` does the same from the plug-in's 2 s trim |
+| `ac9e2adf6`, `011434681`, `5ef0971b1`, `01207df53` (2026-11-09..13, old runtime) | spare command pools follow their recent use | no | the same fault and cure as `m2v-spare-command-pools.patch`, which stays (still applies, still needed); `ac9e2adf6` conflicts with Droid-VM 0022 in `spares.rs` and needs `6ee9db2b6`'s pending audit (12 files conflict) |
+| `e1d9d034b`, `05dcfce04`, `074d8e762` ... (2026-11-08..09) | pooled blocks made ahead | no | more memory held, not less; for desktop GPUs whose block making stalls submissions |
+| `2483178f5`, `186d327fe`, `6be762136` (2026-11-08) | emptied blocks kept within a heap budget | no | keeps more empty blocks than the pin's two a pool; the pin's 1 s plus the plug-in's 2 s trim is less |
+| `653060d6e`, `930e3aa49`, `6346da260` (2026-11-09..11) | image blocks of 68 MiB so four quarter-block images fit | no | the same size question as the 16 MiB blocks below; not measured on the phone |
+
+**Mobile (a tiler: Adreno pays for each attachment load and store), read in the pin's runtime:**
+
+- Load and store actions map one to one (`render_target.rs` `load_op`, `store_op`): `Load`/`Clear`/`DontCare` to
+  `LOAD`/`CLEAR`/`DONT_CARE`; `DontCare` and `MultisampleResolve` stores to `DONT_CARE` on Turnip (Droid-VM 0021,
+  `DriverFact::DontCareStoreIsOneOfMetals`; 0024's per-class mask). Nothing to add.
+- Memoryless textures: `TRANSIENT_ATTACHMENT` usage and the `LAZILY_ALLOCATED` type first (`image_plan.rs`,
+  `memory.rs` `candidates`); Turnip's darwin backend offers that type (`has_lazy_bos`, `TU_DARWIN_LAZY_BOS`), its memory
+  made only where a pass renders in system memory. A pass that splits renders a memoryless color into a backing image
+  (`attachment_stand_in.rs`; Droid-VM 0029 shares them). Nothing to add.
+- Passes: one Vulkan render pass per Metal render encoder, split only where Metal's order needs it (the program's
+  memory barriers, tile dispatches, attached reads, feedback, shape changes: `work_counts.rs` `instance_splits_*`);
+  each split stores and loads every attachment. Consecutive encoders on the same attachments are not merged (Metal's
+  own driver does not merge them either); merging a `Store` then `Load` pair with nothing between is a possible tiler
+  win, not done: the new `RP` row (above) first says how often passes split on the phone.
+- Barriers: Turnip folds a barrier's stages into three (CP, BV, BR; `tu_flush_for_stage` in `tu_cmd_buffer.cc`) and
+  waits for idle whenever the source stage is not before the destination, with the cache flushes its access bits ask;
+  between two passes (fragment or compute to the next pass's reads) that wait comes whatever the masks say, so a
+  narrower stage mask saves little there (read in the code, not measured). The full-barrier switch (Droid-VM 0025) is a
+  diagnostic and stays off.
+- The GPU block size: 64 MiB (`BLOCK_BYTES`). 16 MiB (`METAL2VULKAN_BLOCK_MIB`, Droid-VM 0019, from
+  `/private/var/ngpu/debug/block-mib`) hung the render server's GPU context in 3 of 5 app open and close cycles (0 of 5
+  at 64; NativeMetal `NativeAdrenoMetalPlugin.mm` `boundPooledBlocks`). Why is not known: the only record is that note,
+  which says that with 16 MiB more images take dedicated blocks and spares (anything past 8 MiB). Not fixed upstream in
+  the old runtime (its blocks stayed 64 and 68 MiB); the new runtime has no pooled blocks of its own (the consumer
+  takes them). Left at 64; the `GM` row now says how much of the pooled bytes hold placements.
+- Turnip's own knobs: the plug-in sets `TU_DEBUG=nocb` in every Metal process (concurrent binning off: BV ran ahead
+  of BR and the two stopped waiting on each other inside a pass, int-261p, int-262, int-265), and `sysmem,nocb` with
+  `sheng-fb-bgra=1`; GMEM against system memory is Turnip's autotune per pass. Must stay off in a normal boot:
+  `TU_DEBUG=sysmem` or `gmem` (forces one mode for every pass), `forcebin`, `nolrz`, `noubwc`, any `FD_MESA_DEBUG`,
+  `IR3_SHADER_DEBUG` or `MESA_SHADER_CACHE_DISABLE`-style switch beyond what the plug-in sets, and `TU_DARWIN_BO_CACHE=0`.
+  The base's Turnip build drops every `TU_`, `FD_MESA_`, `IR3_`, `NIR_` and `MESA_SHADER_` variable of the build host.
+
+**The first boot after this add-on.** The translator's records (`v1/<build>/`) are keyed by the translator's source,
+which did not change, so nothing is translated again. Turnip's `pipelineCacheUUID` is the build's `-Dtu-build-id`, a
+hash of the Mesa revision and the source diff (`build-turnip-darwin.py`), and `turnip-idle-bo-cache.patch` changes the
+diff: every pipeline's driver record misses once, and Turnip compiles it again (NIR to ir3) at its first use. How long
+that takes on the phone is not measured (no line times it); each app's first opening after the add-on pays for its own
+pipelines, and later boots hit.
+
 Built with the toolchain of [building.md](building.md) section 9: Xcode's on macOS, the cross toolchain on Linux. The
 same command on both; every link is against this guest's own iOS 27 stubs (`out/ios27-tbd`).
 
@@ -1329,8 +1461,8 @@ scripts/bg.sh metal userland/metal/build.sh      # stage, turnip, plugin, finish
 
 | Piece | Source | Notes |
 |---|---|---|
-| `libvulkan_freedreno.dylib` | `external/mesa-droidvm` cecc0e9 (Droid-VM/mesa, `droidvm`) + the 30 patches listed in Droid-VM-UniXNU `scripts/data/adreno-compiler-inputs.json` (`patches/mesa/`: `turnip-darwin-kmd`, `turnip-darwin-virtgpu`, ...) | meson cross build, `-Dvulkan-drivers=freedreno -Dfreedreno-kmds=darwin`, release. Its 5633 weak flat-namespace imports are bound to the image itself (`macho-weak-self-binds.py`) |
-| `libadreno_metal_bridge.a` | `external/metal2vulkan` 624bab3 + NativeMetal `bridge/patches` 0001-0024 (without 0020) + Droid-VM-UniXNU `patches/metal2vulkan` 0011-0038 + this project's `userland/metal/patches/metal2vulkan/` 0101-0103 (staged as 9xxx so they sort last: the Adreno-generic shader-translation fixes of hakios-arm64e-dada; `0104…NEEDS-REBASE` stays out, and the Mesa/nativemetal sets stay out as the wrong tree), behind `bridge/NativeMetalBridge.rs` | Rust 1.98.0, target `arm64e-apple-ios`, std built from `rust-src`, fat LTO. No `Cargo.lock` is pinned upstream: the crates are the newest that fit at build time |
+| `libvulkan_freedreno.dylib` | `external/mesa-droidvm` cecc0e9 (Droid-VM/mesa, `droidvm`) + the 30 patches listed in Droid-VM-UniXNU `scripts/data/adreno-compiler-inputs.json` (`patches/mesa/`: `turnip-darwin-kmd`, `turnip-darwin-virtgpu`, ...), then this project's `userland/metal/trace-turnip-init.patch` and `turnip-idle-bo-cache.patch` (appended to the staged list by `ios metal-stage-edit`) | meson cross build, `-Dvulkan-drivers=freedreno -Dfreedreno-kmds=darwin`, release. Its 5633 weak flat-namespace imports are bound to the image itself (`macho-weak-self-binds.py`) |
+| `libadreno_metal_bridge.a` | `external/metal2vulkan` 624bab3 + NativeMetal `bridge/patches` 0001-0024 (without 0020) + Droid-VM-UniXNU `patches/metal2vulkan` 0011-0038 + this project's `userland/metal/trace-metal-vulkan-init.patch`, `m2v-spare-command-pools.patch` and `m2v-idle-memory.patch` (appended to the bridge script's list by `ios metal-stage-edit`) + `userland/metal/patches/metal2vulkan/` 0101-0103 (staged as 9xxx, in no list, not applied so they sort last: the Adreno-generic shader-translation fixes of hakios-arm64e-dada; `0104…NEEDS-REBASE` stays out, and the Mesa/nativemetal sets stay out as the wrong tree), behind `bridge/NativeMetalBridge.rs` | Rust 1.98.0, target `arm64e-apple-ios`, std built from `rust-src`, fat LTO. No `Cargo.lock` is pinned upstream: the crates are the newest that fit at build time |
 | `NativeAdrenoMetal` | `external/NativeMetal` b0d6a07 (`NativeAdrenoMetalPlugin.mm`, `NativeBridgeMetalFrontend.mm`), `external/AdrenoPM4`, the bridge | The Rust objects' callback imports go through `RustPacBoundary.c`; their indirect branches through its trampolines (`rust-pac-rewrite.py`) |
 
 The steps are the kernel base's own scripts (`build-turnip-darwin.py`, `build-adreno-metal-bridge.py`,

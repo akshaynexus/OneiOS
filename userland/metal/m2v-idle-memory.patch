@@ -1,0 +1,332 @@
+diff --git a/crates/metal2vulkan-runtime/src/memory.rs b/crates/metal2vulkan-runtime/src/memory.rs
+index fbf151055..ddd1543b9 100644
+--- a/crates/metal2vulkan-runtime/src/memory.rs
++++ b/crates/metal2vulkan-runtime/src/memory.rs
+@@ -56,10 +56,12 @@ use super::range::RangeAllocator;
+ use super::read_only_view::ReadOnlyView;
+ use super::sharing::Sharing;
+ use super::work_counts::Counters;
++use crate::churn_counts::Recycled;
+ use crate::release;
+ use ash::vk;
+ use metal2vulkan::vk::DriverId;
+ use std::ptr::NonNull;
++use std::sync::atomic::{AtomicU64, Ordering};
+ use std::sync::{Arc, Mutex};
+ use std::time::{Duration, Instant};
+ 
+@@ -1283,6 +1285,12 @@ impl Memory {
+         self.allocated
+     }
+ 
++    /// The spare dedicated image blocks it keeps (OneiOS, `tests::idle_spares`).
++    #[cfg(test)]
++    pub(super) fn spare_count(&self) -> usize {
++        self.spare.len()
++    }
++
+     /// Its live blocks, by kind.
+     pub(super) fn census(&self) -> Census {
+         let mut census = Census::default();
+@@ -1632,15 +1640,17 @@ impl Memory {
+         }
+     }
+ 
+-    /// Free the spare blocks that stayed spare for [`SPARE_FOR`] at `now`.
+-    fn age_spare(&mut self, device: &ash::Device, now: Instant) {
++    /// Free the spare blocks that stayed spare for [`SPARE_FOR`] at `now`: how many went.
++    fn age_spare(&mut self, device: &ash::Device, now: Instant) -> usize {
+         let stale: Vec<Spare> = (self.spare)
+             .extract_if(.., |spare| now.saturating_duration_since(spare.since) >= SPARE_FOR)
+             .collect();
++        let count = stale.len();
+         for spare in stale {
+             // SAFETY: nothing is placed in a spare block, and no command reads it.
+             drop(unsafe { self.let_go(device, spare.block, FreeCause::KeptStale, None) });
+         }
++        count
+     }
+ 
+     /// The smallest spare block of `pool` that holds `size` bytes with at most a quarter of it
+@@ -2460,9 +2470,39 @@ impl crate::Device {
+     /// The same calls trim the spare command pools a busier spell left (`spares.rs`): those spare
+     /// for ten times `idle` (at least 20 s), all but the 8 newest; on memory pressure
+     /// (`Duration::ZERO`) all but the 2 newest. The answer counts blocks only.
++    ///
++    /// OneiOS: with an idle span, the images and buffers the recyclers parked past their second
++    /// (`recycle.rs`) and the spare dedicated image blocks past [`SPARE_FOR`] go too, which went
++    /// only as another was parked, taken or returned (switch: `METAL2VULKAN_IDLE_SPARES=0`).
+     pub fn trim_kept_memory(&self, idle: Duration) -> usize {
++        self.trim_kept_memory_at(idle, Instant::now())
++    }
++
++    /// [`Device::trim_kept_memory`] as at `now` (OneiOS: the tests ask it past the spans).
++    pub(crate) fn trim_kept_memory_at(&self, idle: Duration, now: Instant) -> usize {
+         let shared = self.shared();
+-        let blocks = lock(&shared.memory).trim_kept(shared.vk(), idle);
++        if !idle.is_zero() && idle_spares() {
++            let images = lock(&shared.textures.recycled).take_stale(now);
++            let buffers = lock(&shared.recycled_buffers).take_stale(now);
++            let parked = images.len() + buffers.len();
++            if parked > 0 {
++                shared.counts.churn.evicted(Recycled::Image, images.len());
++                shared.counts.churn.evicted(Recycled::Buffer, buffers.len());
++                let mut memory = lock(&shared.memory);
++                crate::recycle::destroy(shared.vk(), &mut memory, images);
++                crate::recycle::destroy(shared.vk(), &mut memory, buffers);
++                IDLE_FREED.fetch_add(parked as u64, Ordering::Relaxed);
++            }
++        }
++        let blocks = {
++            let mut memory = lock(&shared.memory);
++            let blocks = memory.trim_kept_at(shared.vk(), idle, now);
++            memory.publish_census();
++            blocks
++        };
++        for (word, value) in PASS_CENSUS.iter().zip(shared.counts.pass_census()) {
++            word.store(value, Ordering::Relaxed);
++        }
+         let (pool_idle, floor) = if idle.is_zero() {
+             (Duration::ZERO, 2)
+         } else {
+@@ -2485,19 +2525,96 @@ impl crate::Device {
+ }
+ 
+ impl Memory {
+-    /// [`Device::trim_kept_memory`](crate::Device::trim_kept_memory).
+-    fn trim_kept(&mut self, device: &ash::Device, idle: Duration) -> usize {
+-        let now = Instant::now();
++    /// [`Device::trim_kept_memory`](crate::Device::trim_kept_memory) as at `now`.
++    pub(super) fn trim_kept_at(&mut self, device: &ash::Device, idle: Duration, now: Instant) -> usize {
+         let blocks: Vec<Block> = (self.pools.iter_mut())
+             .flat_map(|pool| pool.take_idle(now, idle))
+             .collect();
+-        let count = blocks.len();
++        let mut count = blocks.len();
+         for block in blocks {
+             // SAFETY: nothing is placed in a kept empty block, and no command reads it.
+             drop(unsafe { self.let_go(device, block, FreeCause::KeptStale, None) });
+         }
++        // OneiOS: the spare dedicated image blocks past [`SPARE_FOR`] go with the idle trim too.
++        // They were aged only as a placement was returned or a dedicated image took one, so a
++        // process that went still kept every spare its last busy spell left, each a whole
++        // dedicated block of wired guest memory, until a memory pressure rise.
++        if !idle.is_zero() && idle_spares() {
++            let aged = self.age_spare(device, now);
++            IDLE_FREED.fetch_add(aged as u64, Ordering::Relaxed);
++            count += aged;
++        }
+         count
+     }
++
++    /// OneiOS: publish this device's blocks by kind for [`m2v_memory_census`].
++    fn publish_census(&self) {
++        let census = self.census();
++        // `census` counts the spares among the empty blocks: told apart here.
++        let spares = self.spare.len() as u64;
++        let spare_bytes: u64 = self.spare.iter().map(|spare| spare.block.size).sum();
++        let words = [
++            census.pooled,
++            census.pooled_bytes,
++            census.pooled_used_bytes,
++            census.empty.saturating_sub(spares),
++            census.empty_bytes.saturating_sub(spare_bytes),
++            census.dedicated,
++            census.dedicated_bytes,
++            spares,
++            spare_bytes,
++            census.imported,
++            census.imported_bytes,
++        ];
++        for (word, value) in MEMORY_CENSUS.iter().zip(words) {
++            word.store(value, Ordering::Relaxed);
++        }
++    }
++}
++
++/// OneiOS: whether the idle trim frees the spare dedicated image blocks past [`SPARE_FOR`]
++/// (`METAL2VULKAN_IDLE_SPARES=0` keeps them until a placement's return, a dedicated image's take
++/// or a memory pressure rise, as before; the board's switch: the plug-in sets it for the boot
++/// argument `oneios-idle-spares=0`).
++fn idle_spares() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var("METAL2VULKAN_IDLE_SPARES").map_or(true, |text| text.trim() != "0"))
++}
++
++/// OneiOS: the spare blocks and the parked images and buffers the idle trim freed so far
++/// ([`m2v_memory_census`]'s twelfth word).
++static IDLE_FREED: AtomicU64 = AtomicU64::new(0);
++
++/// OneiOS: the last device's blocks by kind as its last trim found them ([`Memory::publish_census`]).
++static MEMORY_CENSUS: [AtomicU64; 11] = [const { AtomicU64::new(0) }; 11];
++
++/// OneiOS: the last device's render passes as its last trim found them (`Counters::pass_census`).
++static PASS_CENSUS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
++
++/// OneiOS: the process's device memory as its last trim (every idle trim, the plug-in's two
++/// seconds) found it, into `out` (`count` words, at most 16): pooled blocks with a placement and
++/// their bytes, the bytes placed in them; kept empty pooled blocks and their bytes; dedicated
++/// blocks and their bytes; spare dedicated image blocks and their bytes; host memory imports and
++/// their bytes; the spare blocks and parked images and buffers the idle trim freed so far; then its render passes: the render
++/// encoders ended, the render pass instances of their passes begun, the splits of their passes,
++/// and of those the splits at a memory barrier of the program's. The words written.
++#[unsafe(no_mangle)]
++pub extern "C" fn m2v_memory_census(out: *mut u64, count: usize) -> usize {
++    if out.is_null() {
++        return 0;
++    }
++    let words = MEMORY_CENSUS
++        .iter()
++        .map(|word| word.load(Ordering::Relaxed))
++        .chain([IDLE_FREED.load(Ordering::Relaxed)])
++        .chain(PASS_CENSUS.iter().map(|word| word.load(Ordering::Relaxed)));
++    let mut written = 0;
++    for (at, value) in words.take(count).enumerate() {
++        // SAFETY: the caller's `count` words at `out`.
++        unsafe { *out.add(at) = value };
++        written += 1;
++    }
++    written
+ }
+ 
+ impl<T> Pool<T> {
+diff --git a/crates/metal2vulkan-runtime/src/recycle.rs b/crates/metal2vulkan-runtime/src/recycle.rs
+index fc916fdd5..0d25773fc 100644
+--- a/crates/metal2vulkan-runtime/src/recycle.rs
++++ b/crates/metal2vulkan-runtime/src/recycle.rs
+@@ -292,6 +292,15 @@ impl<R: Copy + Eq + Hash, M: Clone + Eq + Hash> Recycler<R, M> {
+         Ok(gone)
+     }
+ 
++    /// OneiOS: the objects parked past the bounds' time at `now`, out of the recycler, for the
++    /// idle trim (`Device::trim_kept_memory`). They went only as another object was parked or
++    /// taken, so a process that went still kept every one its last busy spell parked, up to the
++    /// bounds (32 images and 128 MiB, 64 buffers and 64 MiB), each a placement of wired guest
++    /// memory that kept its block.
++    pub(crate) fn take_stale(&mut self, now: Instant) -> Gone<R> {
++        self.stale(now)
++    }
++
+     /// `raw`, live, goes without parking (it is not recyclable as it goes).
+     pub(crate) fn forget(&mut self, raw: R) {
+         self.live.remove(&raw);
+diff --git a/crates/metal2vulkan-runtime/src/tests/idle_spares.rs b/crates/metal2vulkan-runtime/src/tests/idle_spares.rs
+new file mode 100644
+index 000000000..60ddd0bde
+--- /dev/null
++++ b/crates/metal2vulkan-runtime/src/tests/idle_spares.rs
+@@ -0,0 +1,78 @@
++//! OneiOS: the idle trim (`Device::trim_kept_memory` with an idle span, the Metal plug-in's two
++//! seconds) frees the images the recycler parked past its second (`recycle.rs`) and the spare
++//! dedicated image blocks past `SPARE_FOR` (`memory.rs`), which went only as another object was
++//! parked, taken or returned; and `m2v_memory_census` counts the spares apart from the kept empty
++//! pooled blocks.
++//!
++//! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
++//! `m2v_cpu_icd`), on the kind of device the cfg selects.
++
++use super::blit_holds::{device, Scratch};
++use crate::device::lock;
++use crate::memory::{m2v_memory_census, SPARE_FOR};
++use crate::{ResourceOptions, TextureDescriptor};
++use metal2vulkan::metal::{PixelFormat, TextureUsage};
++use std::time::{Duration, Instant};
++
++/// The census words of `m2v_memory_census`.
++fn census() -> [u64; 16] {
++    let mut words = [0; 16];
++    assert_eq!(m2v_memory_census(words.as_mut_ptr(), words.len()), 16);
++    words
++}
++
++const DEDICATED: usize = 5;
++const SPARES: usize = 7;
++const SPARE_BYTES: usize = 8;
++const IDLE_FREED: usize = 11;
++
++/// The plug-in's idle span.
++const IDLE: Duration = Duration::from_millis(2000);
++
++#[test]
++fn the_idle_trim_frees_parked_images_and_spares_past_their_spans() {
++    let scratch = Scratch::new("idle-spares");
++    let device = device(&scratch.0);
++    let shared = device.shared();
++    let spares = || lock(&shared.memory).spare_count();
++    let dedicated = || lock(&shared.memory).census().dedicated;
++    // A private render target past half a pooled block (64 MiB): a dedicated block of its own.
++    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4096, 4096, false);
++    descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
++    descriptor.resource_options = ResourceOptions::private();
++    let before = dedicated();
++    let texture = device.new_texture(&descriptor).unwrap();
++    assert_eq!(dedicated(), before + 1, "the texture has a dedicated block");
++    // Gone, its image is parked for the next of its making, its block with it.
++    drop(texture);
++    assert_eq!(dedicated(), before + 1, "the parked image keeps its block");
++    let start = Instant::now();
++    let freed_before = census()[IDLE_FREED];
++    // The trim within the recycler's second: the parked image stays.
++    device.trim_kept_memory_at(IDLE, start);
++    assert_eq!(dedicated(), before + 1, "an image parked under a second stays");
++    // Past its second, with nothing parked or taken in between: it goes, its block a spare (where
++    // the device's image memory is plain) or freed.
++    device.trim_kept_memory_at(IDLE, start + Duration::from_millis(1500));
++    assert_eq!(dedicated(), before, "the parked image went with the idle trim");
++    let words = census();
++    let spare = spares();
++    assert_eq!(words[SPARES], spare as u64, "the census counts the spares apart");
++    assert_eq!(words[DEDICATED], before, "the census's dedicated blocks leave the spares out");
++    if spare == 0 {
++        eprintln!("IDLE-SPARES: this device keeps no spare of the image's block (not plain); its block was freed");
++        assert_eq!(words[IDLE_FREED], freed_before + 1);
++        return;
++    }
++    assert_eq!(spare, 1, "the image's dedicated block is kept as a spare");
++    assert!(words[SPARE_BYTES] >= 64 << 20, "the spare's bytes: {}", words[SPARE_BYTES]);
++    // The trim within the spare's span: it stays.
++    device.trim_kept_memory_at(IDLE, start + Duration::from_secs(2));
++    assert_eq!(spares(), 1, "a spare younger than SPARE_FOR stays");
++    // Past the span, with no placement returned and no image made in between: it goes.
++    device.trim_kept_memory_at(IDLE, Instant::now() + SPARE_FOR + Duration::from_secs(1));
++    assert_eq!(spares(), 0, "the idle trim freed the spare past its span");
++    let words = census();
++    assert_eq!((words[SPARES], words[SPARE_BYTES]), (0, 0));
++    assert_eq!(words[IDLE_FREED], freed_before + 2, "the parked image and the spare");
++}
+diff --git a/crates/metal2vulkan-runtime/src/tests/mod.rs b/crates/metal2vulkan-runtime/src/tests/mod.rs
+index cbeec393c..03bafc73d 100644
+--- a/crates/metal2vulkan-runtime/src/tests/mod.rs
++++ b/crates/metal2vulkan-runtime/src/tests/mod.rs
+@@ -154,6 +154,8 @@ mod kept_barriers;
+ #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+ mod kept_images;
+ #[cfg(any(m2v_gpu, m2v_cpu_icd))]
++mod idle_spares;
++#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+ mod layer_claim;
+ mod left;
+ mod linear_attachment;
+diff --git a/crates/metal2vulkan-runtime/src/work_counts.rs b/crates/metal2vulkan-runtime/src/work_counts.rs
+index 692cfa3d4..ee0666f98 100644
+--- a/crates/metal2vulkan-runtime/src/work_counts.rs
++++ b/crates/metal2vulkan-runtime/src/work_counts.rs
+@@ -5692,3 +5692,18 @@ impl Counters {
+     /// `WorkCounts::draw_resident_textures_looked_at`).
+     pub(crate) fn draw_resident_textures_looked_at(&self) {}
+ }
++
++impl Counters {
++    /// OneiOS: the render encoders ended, the render pass instances of their passes begun, the
++    /// splits of their passes, and of those the splits at a memory barrier of the program's, read
++    /// with no lowering of deferred calls (`memory.rs`'s `m2v_memory_census`).
++    pub(crate) fn pass_census(&self) -> [u64; 4] {
++        let sum = |words: &[AtomicU64]| words.iter().map(|word| word.load(Ordering::Relaxed)).sum();
++        [
++            self.render_encoders_ended.load(Ordering::Relaxed),
++            sum(&self.render_passes_begun_by),
++            sum(&self.instance_splits_by),
++            self.instance_splits_by[Split::Barrier as usize].load(Ordering::Relaxed),
++        ]
++    }
++}

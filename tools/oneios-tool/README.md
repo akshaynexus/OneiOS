@@ -698,7 +698,7 @@ oneios-tool ios macho-check [--tbd DIR | --sdk] [--local DYLIB]... [--arch A] FI
 oneios-tool ios tbds [--cache DIR] [--image systemos.img] [--out DIR] [NAME...]   # the guest's .tbd stubs (out/ios27-tbd)
 oneios-tool ios tbd-diff [--a-listed] [--show N] A B                            # two stub trees, by what the linker reads
 oneios-tool ios codesign ARGS...                         # `codesign` for the Metal build's scripts (shim/codesign runs it)
-oneios-tool ios metal-stage-edit ROOT HOOKS JOBS KNOWS   # userland/metal/build.sh stage: the staged copy's changes (since 2026-11-23 also: m2v-spare-command-pools.patch in the bridge's list, the command pool row's calls in the plug-in)
+oneios-tool ios metal-stage-edit ROOT HOOKS JOBS KNOWS   # userland/metal/build.sh stage: the staged copy's changes (since 2026-11-23 also: m2v-spare-command-pools.patch and m2v-idle-memory.patch in the bridge's list, turnip-idle-bo-cache.patch in the Mesa list, the command pool and GPU memory rows' calls in the plug-in)
 oneios-tool ios metal-record ROOT BUNDLE RECORD HOOKS TARGET   # build.sh finish: NativeAdrenoMetal.build.json
 oneios-tool ios gpuaddon BUNDLE OUTPUT                   # build.sh addon: the kernel.kc.gpuaddon sidecar (NGPUADD2)
 oneios-tool ios addon OUTPUT [--metal BUNDLE] [--camera DIR]   # the boot addon with the Metal and/or the capture plug-in, and OUTPUT.cdhashes (hosted 0090)

@@ -72,7 +72,11 @@ pub fn stage_edit(root: &Path, hooks: &Path, jobs: &str, knows: bool) -> Result<
     let mut source = oneios_json::read(&pins.to_string_lossy())?;
     match &mut source {
         Value::Object(m) => match m.get_mut("patches") {
-            Some(Value::Array(a)) => a.push(Value::String("patches/mesa/trace-turnip-init.patch".into())),
+            Some(Value::Array(a)) => {
+                a.push(Value::String("patches/mesa/trace-turnip-init.patch".into()));
+                // userland/metal/turnip-idle-bo-cache.patch: the idle trim of Turnip's BO cache, applied after the trace patch.
+                a.push(Value::String("patches/mesa/turnip-idle-bo-cache.patch".into()));
+            }
             _ => bail!("{}: no list \"patches\"", pins.display()),
         },
         _ => bail!("{}: not an object", pins.display()),
@@ -99,8 +103,8 @@ pub fn stage_edit(root: &Path, hooks: &Path, jobs: &str, knows: bool) -> Result<
             ("timeout=1800)", "timeout=10800)".into(), "a longer limit for the fat-LTO Rust build"),
             (
                 "\n\ndef git_tree(*steps):",
-                "\n\nPATCHES.append(ROOT / 'patches/metal2vulkan/trace-metal-vulkan-init.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/m2v-spare-command-pools.patch')\n\n\ndef git_tree(*steps):".into(),
-                "record Vulkan initialization diagnostics in the translator patch stack; spare command pools follow their recent use (m2v-spare-command-pools.patch)",
+                "\n\nPATCHES.append(ROOT / 'patches/metal2vulkan/trace-metal-vulkan-init.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/m2v-spare-command-pools.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/m2v-idle-memory.patch')\n\n\ndef git_tree(*steps):".into(),
+                "record Vulkan initialization diagnostics in the translator patch stack; spare command pools follow their recent use (m2v-spare-command-pools.patch); the idle trim ages the spare image blocks, the memory census (m2v-idle-memory.patch)",
             ),
         ],
     )?;
