@@ -11,6 +11,9 @@
 //!          2026-11-22)
 //!   done   { "XHDA", seq low, seq high, flags, 0 }   (helper -> xnuhost) the frames up to seq are in the layer; flags
 //!          bit 0 (DONE_FAILED): the last could not be copied, and xnuhost goes back to copying frames itself
+//!   options { "XHDO", flags, 0, 0, 0 }  (xnuhost -> helper, after the hello; an older helper ignores it) bit 0
+//!          (OPTION_SERIAL_POST, xnuhost's display-post=serial): the reader reads no further frame until the poster has
+//!          posted the last (the one loop before 2026-11-24, docs/switches.md)
 //!
 //! The session's folder is writable by the guest, so nothing from the socket is trusted.
 use super::direct::Direct;
@@ -29,6 +32,7 @@ pub enum Kind {
     Memory,
     Frame,
     Done,
+    Options,
 }
 
 impl Kind {
@@ -40,11 +44,12 @@ impl Kind {
             Kind::Memory => *b"XHDM",
             Kind::Frame => *b"XHDS",
             Kind::Done => *b"XHDA",
+            Kind::Options => *b"XHDO",
         }
     }
 
     pub fn from_magic(magic: [u8; 4]) -> Option<Kind> {
-        [Kind::Hello, Kind::Flush, Kind::Panel, Kind::Memory, Kind::Frame, Kind::Done]
+        [Kind::Hello, Kind::Flush, Kind::Panel, Kind::Memory, Kind::Frame, Kind::Done, Kind::Options]
             .into_iter()
             .find(|k| k.magic() == magic)
     }
@@ -56,6 +61,8 @@ pub const PANEL_DIRECT: u32 = 1;
 pub const DONE_FAILED: u32 = 1;
 /// The frame was what the layer showed: nothing was posted.
 pub const DONE_UNCHANGED: u32 = 2;
+/// The options' flags: each frame is posted before the next is read (display-post=serial).
+pub const OPTION_SERIAL_POST: u32 = 1;
 
 /// One message: a magic and four little-endian words (struct xhd_message, 20 bytes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -307,6 +314,11 @@ pub fn drain_direct(
                 // The newest frame wins; the answer for it covers the ones before it.
                 if let Some(d) = direct.as_deref_mut() {
                     d.offer(m.a, Message::wide(m.b, m.c), m.d);
+                }
+            }
+            Some(Kind::Options) => {
+                if let Some(d) = direct.as_deref_mut() {
+                    d.options = m.a;
                 }
             }
             Some(Kind::Flush) => {

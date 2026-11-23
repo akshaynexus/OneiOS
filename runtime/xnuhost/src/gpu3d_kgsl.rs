@@ -382,6 +382,7 @@ fn fence_retired(ctx: u32, ring: u32, fence: u64) {
                 }
                 let took = now - p.at;
                 if c.render {
+                    crate::frame_path::render_retired(now, took);
                     t.render_n += 1;
                     t.render_sum += took;
                     t.render_max = t.render_max.max(took);
@@ -797,6 +798,9 @@ impl Gpu3d for Kgsl {
                     let frame = if c.has_next { c.next } else { Frame::default() };
                     c.pending[r][at] = Pending { fence, at: now_us(), frame, bg: c.cls == Class::Background };
                     c.count[r] += 1;
+                    if c.render {
+                        crate::frame_path::render_submit(now_us());
+                    }
                     if c.cls != Class::Background {
                         fg = 1;
                     }

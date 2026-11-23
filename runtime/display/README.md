@@ -37,7 +37,8 @@ library's NEEDED libraries and undefined symbols against the NDK's API 30 stubs 
 | File | What it is |
 |---|---|
 | `src/xhd/` | the portable core, shared with xnuhost (which links this crate): `mod.rs` (formats, dataspaces, `Rect`, `fit`, `copy`, `hold_first`), `protocol.rs` (the `display.sock` messages, `check_hello`, `connect`, `send_panel`, `recv_hello`, `drain`/`drain_direct`, `send_done`; xnuhost's side: `listen`, `send_hello`, `send_flush`, `memfd`), `direct.rs` (the direct frames: `Direct`, `Slot`, `Seg`, `copy_direct`), `snapshot.rs` (`Snapshot`, `hash_tile`), `buffers.rs` (`Buffers`); its tests in `src/xhd/tests.rs` |
-| `src/jni.rs` | `liboneios-display.so` (feature `jni`, Android only: the `Java_OneiOSDisplay_n*` exports): the socket, the mapped frame, the copy into the layer's buffers, the stop signals |
+| `src/xhd/run.rs` | the run loop, portable (2026-11-24): the reader thread (the socket, the snapshot, the answers) and the poster (the layer's buffer, the fill, the post) over a `Layer` trait; host-tested with a stand-in layer (`test_run_*` in `src/xhd/tests.rs`) |
+| `src/jni.rs` | `liboneios-display.so` (feature `jni`, Android only: the `Java_OneiOSDisplay_n*` exports): the socket, the mapped frame, the layer's `ANativeWindow` as `xhd::run::Layer`, the stop signals |
 | `src/frame_perf.rs` | the bounded, allocation-free frame-timing statistics |
 | `src/sys.rs` | the system calls the helper and xnuhost's display share |
 | `java/OneiOSDisplay.java` | `oneios-display.dex`: the layers (`SurfaceControl`, `BLASTBufferQueue`), the panel's mode, the placement |
@@ -108,8 +109,15 @@ NDK's `ANativeWindow` on that `Surface`, from the mapped memfd straight into the
   guest's flush; then it fills and posts a buffer from the snapshot. Until 2026-11-23 `done` went after the post, so
   the guest's next frame also waited for `ANativeWindow_lock` (a free buffer: to the panel's vsync when the queue is
   full, "buffer wait mean 4.1 ms" on the phone, 2026-11-22) and the fill; now it is drawn while the helper posts
-  (`docs/gpu.md` 2.5; `src/jni.rs`, ported from main's `jni.c` of 91aed58: the Android build only, no host test reaches
-  the run loop; not run on the phone). xnuhost copies nothing then. A frame that only xnuhost's own pixels changed is answered after
+  (`docs/gpu.md` 2.5). **Since 2026-11-24 (fix/frame-path) the read and the post are two threads** (`src/xhd/run.rs`):
+  the reader reads each frame into the snapshot and answers as soon as it comes; the poster waits for a buffer, fills it
+  from the snapshot under the snapshot's lock (so a post is always one whole frame as read) and posts the newest
+  picture, so frames that came while it waited are one post. Before, one loop read a frame only after the post before
+  it: the phone's line of 2026-11-23 19:06 had the read start 5.5 ms after xnuhost sent the frame (buffer wait mean
+  3.6 ms), so the guest's next frame waited for a vsync on top of the read. Host test `test_run_answers_before_the_post`:
+  with every lock of a stand-in layer taking 100 ms, 20 frames are each answered within 50 ms (all of them inside the
+  first lock), and every post is one whole frame, in order. `display-post=serial` in xnuhost.conf (docs/switches.md)
+  gives the one loop's timing back (`test_run_serial`). Not run on the phone yet. xnuhost copies nothing then. A frame that only xnuhost's own pixels changed is answered after
   its post, as before. The memfd stays for what xnuhost still draws itself
   (the boot console, 2D resources): it is put into the snapshot too. A frame that cannot be read (a slot reused, a
   segment outside RAM, no snapshot: half-float frames or no memory for it) is answered with the failure flag and
@@ -120,7 +128,9 @@ NDK's `ANativeWindow` on that `Surface`, from the mapped memfd straight into the
   layer's buffers" below). Protocol: `docs/booter.md` 2.8. Every 10 s the log has `10 s: N frames from xnuhost, U
   unchanged (nothing posted), P posted (M from guest RAM, C% of the rows changed, F% filled); guest pages read in one
   pass for mean ... ms, max ... ms, from ... ms after xnuhost sent the frame (mean; max ... ms); buffer wait mean ...
-  ms; copy mean ... ms, max ... ms; B buffers seen (K forgotten); this process P% of a core`, and once `frames come
+  ms; copy mean ... ms, max ... ms; posted mean ... ms, max ... ms after the read's answer; B buffers seen (K forgotten); this
+  process P% of a core` (the "posted ... after the read's answer" part since 2026-11-24: from the first change the reader
+  put into the snapshot to the post that showed it, the buffer wait and the fill), and once `frames come
   straight from guest RAM now, read once into the snapshot; each buffer gets what it lacks`. Pacing is the buffer queue's: the next buffer is handed out when
   surfaceflinger has taken the last, so the loop runs at the panel's vsync and every flush that came meanwhile is
   one post.

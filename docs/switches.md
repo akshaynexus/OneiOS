@@ -16,7 +16,7 @@ Rules for a switch (and for every helper that lands a behaviour change from now 
 xnuhost logs every switch once, after the `versions:` line:
 
 ```text
-switches: session-mode=hosted stop-loop=wait task-trim=1 ram-fit-terms=tasks uclamp-rule=work gpu-down=governor gpu-blob-entries=65532 wifi-ring-wait=1 wifi-send-wait=1 wifi-buffers=1 wifi-joined-scan=cache encoder-10bit=main10 encoder-warmup=1 oneios-wifi-rssi=1 oneios-telemetry-jobs=0 oneios-pool-cut=1 oneios-pressure-big=512 (docs/switches.md); all at their defaults
+switches: session-mode=hosted stop-loop=wait task-trim=1 ram-fit-terms=tasks uclamp-rule=work gpu-down=governor gpu-blob-entries=65532 wifi-ring-wait=1 wifi-send-wait=1 wifi-buffers=1 wifi-joined-scan=cache encoder-10bit=main10 encoder-warmup=1 display-post=apart oneios-wifi-rssi=1 oneios-telemetry-jobs=0 oneios-pool-cut=1 oneios-pressure-big=512 (docs/switches.md); all at their defaults
 ```
 
 When some are changed, the end says which: `not at the default: wifi-send-wait gpu-down`. Kernel switches are read
@@ -43,6 +43,7 @@ change (the default value), and whether one has run the other value.
 | `wifi-joined-scan` | `cache\|low\|plain` | `cache` | cache: within 120 s of the last scan its networks answer, else a low-priority scan; low: every scan the radio's, low priority (cbf97ea); plain: every scan the radio's, no flags (before cbf97ea) | b704922, cbf97ea + this build | low: 19:40 (the driver took no flags: `flags 0x0`); cache: no |
 | `encoder-10bit` | `main10\|8bit\|nv12` | `main10` | main10: the device takes P010 (iOS's 10-bit tiles) and the helper codes HEVC Main10 where the encoder offers it, else 8-bit of the high bytes; 8bit: P010 taken, Main10 never tried; nv12: the device lists and takes no P010, the guest sends NV12 (its high bytes). Not exact: before b3da193 the guest refused 10-bit tiles itself (stage 101), which the kernel no longer does | b3da193 + this build | no |
 | `encoder-warmup` | `0\|1` | `1` | 1: the encoder helper starts at the guest's first virtio-media session and opens one HEVC encoder at once; 0: it starts at the first encode, no warm-up (its binder threads start either way: that is the fix of the hang, not a choice) | b3da193 + this build | no |
+| `display-post` | `apart\|serial` | `apart` | apart: the display helper reads and answers each frame as it comes (a reader thread) while its poster waits for the layer's buffer, fills it and posts the newest picture; serial: xnuhost sends the helper `options` (`XHDO`, bit 0) and its reader reads nothing more until the last change is posted, the one loop's timing before 2026-11-24 (exact: the same order of read, answer, lock, fill, post). A helper older than this build ignores the message (it has the one loop anyway) | fix/frame-path | no |
 | `boot-args-add=oneios-wifi-rssi=0` | `0\|1` | `1` | 1: the Wi-Fi driver posts RSSI_CHANGED records (the bars follow the signal); 0: none, wifid reads the signal at the join only (before cbf97ea). Kernel (net/OneiOSWifi.cpp) | cbf97ea + this build (db2eb42) | no |
 | `boot-args-add=oneios-telemetry-jobs=1` | `0\|1` | `0` | 0: 0093 and 0094 disable the telemetry group (osanalyticshelper and its agent job, 16 uploaders); 1: the disable list is 0053's loops only and the enable pass enables the telemetry labels again (a store 0093 changed gets them back). Kernel, hosted 0096 | bad88c3, 30bdea6 + 0096 | 0093 alone: 20:23 (osanalyticshelper still ran: 0094) |
 | `boot-args-add=oneios-pool-cut=0` | `0\|1` | `1` | 1: metal2vulkan releases a spare command pool that holds more than its last 10 s need plus 8 command buffers (the render server's small command-stream BOs go back); 0: the pools are kept as before (the plug-in sets `METAL2VULKAN_POOL_USE_WINDOW_S=0`). Metal plug-in only (the boot add-on), docs/gpu.md "Who keeps a blob" | 50873fe | no |
@@ -79,6 +80,7 @@ wifi-buffers=1
 wifi-joined-scan=cache
 encoder-10bit=main10
 encoder-warmup=1
+display-post=apart
 # kernel switches (boot-args-add appends to boot-args; one line, all four words):
 # boot-args-add=oneios-wifi-rssi=1 oneios-telemetry-jobs=0 oneios-pool-cut=1 oneios-pressure-big=512
 ```
@@ -89,6 +91,9 @@ encoder-warmup=1
   it, the switches line), `config::tests::ram_config` (`task-trim=0` 3528 MiB fit; `ram-fit-terms=old` 5688 MiB fit
   with the lock, a given key wins, 1 GiB headroom unlocked), `gpu3d_kgsl::policy::tests::down_with_a_wide_clock_range`
   (`gpu-down=bottom` stays at the top in the phone's case), `cpu::tests::release_floor` (`uclamp-rule=all`'s floor).
+- Display (fix/frame-path): `config::tests::the_switches` (`display-post`), `display::tests::the_serial_post_option` (the
+  options message after the hello with `serial`, none at the default), the helper's `test_run_serial` (a frame waits for
+  the post before it) and `test_run_answers_before_the_post` (the default: answers within 50 ms of 100 ms locks).
 - Bridges: `switches::tests::words_and_defaults`, `wifi::uplink::tests::no_wait_when_switched_off`; the encoder's
   `switches::tests::words`.
 - Metal: metal2vulkan's `tests::spares` (12, fix/gpu-blobs); the plug-in of this build is made with the patch.

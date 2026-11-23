@@ -249,3 +249,42 @@ fn a_posted_frame_ends_the_touch_wait() {
         let _ = helper.join();
     });
 }
+
+/// display-post=serial (docs/switches.md): the helper is sent "options" with OPTION_SERIAL_POST right after the hello;
+/// at the default (apart) nothing comes between the hello and the first flush.
+#[test]
+fn the_serial_post_option() {
+    for (case, serial) in [("post-apart", false), ("post-serial", true)] {
+        in_child("the_serial_post_option", case, |dir| {
+            let mut c = config(dir, Mode::Takeover, (0, 0, 0), None);
+            if serial {
+                c.set("display-post", "serial").unwrap();
+            }
+            let path = dir.join("display.sock");
+            let helper = std::thread::spawn(move || {
+                let fd = xhd::connect(&path, 3000, &xhd::no_stop).ok()?;
+                xhd::send_panel(fd.as_fd(), 1440, 3120, 120, 0).ok()?;
+                let mut kinds = Vec::new();
+                while kinds.len() < 3 && !kinds.contains(&Kind::Flush) {
+                    let (n, _) = dsys::poll(&[(fd.as_fd(), libc::POLLIN)], 15000, true).ok()?;
+                    if n == 0 {
+                        break;
+                    }
+                    let mut packet = [0u8; Message::BYTES];
+                    let got = dsys::recv_packet(fd.as_fd(), &mut packet, 0).ok()?;
+                    let m = Message::parse(&packet[..got.length])?;
+                    if m.is(Kind::Options) {
+                        assert_eq!(m.a, OPTION_SERIAL_POST);
+                    }
+                    kinds.push(m.kind()?);
+                }
+                Some(kinds)
+            });
+            init(&c).expect("display init");
+            let kinds = helper.join().unwrap().expect("the helper's messages");
+            let want =
+                if serial { vec![Kind::Hello, Kind::Options, Kind::Flush] } else { vec![Kind::Hello, Kind::Flush] };
+            assert_eq!(kinds, want);
+        });
+    }
+}

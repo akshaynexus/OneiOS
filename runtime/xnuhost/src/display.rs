@@ -39,7 +39,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use xh_core::bytes::le;
 
 use oneios_display::sys::{self as dsys, Errno, Map};
-use oneios_display::xhd::{Kind, Message, Seg, Slot, DONE_FAILED, PANEL_DIRECT};
+use oneios_display::xhd::{Kind, Message, Seg, Slot, DONE_FAILED, OPTION_SERIAL_POST, PANEL_DIRECT};
 use xh_core::{loge, logi, pixels};
 
 use crate::config::{self, Config, DisplayBackend, Mode, PanelMode};
@@ -190,6 +190,8 @@ struct Display {
     listen: Option<OwnedFd>,
     socket_path: String,
     direct_enabled: bool,
+    /// display-post=serial: the helper is told to post each frame before it reads the next (docs/switches.md)
+    serial_post: bool,
     drm: Option<Mutex<Drm>>,
     client: Mutex<Client>,
 }
@@ -227,6 +229,7 @@ impl Client {
                 self.stats.timeouts += 1;
             } else {
                 let us = (now - o.posted_us) as u64;
+                crate::frame_path::answered(us);
                 self.stats.frames += 1;
                 self.stats.total_us += us;
                 self.stats.max_us = self.stats.max_us.max(us);
@@ -460,6 +463,7 @@ fn reader_main(fd: OwnedFd, gen: u64) {
             }
             figures
         };
+        crate::frame_path::report(now as u64);
         done.answer();
         if report && (frames != 0 || timeouts != 0 || copies != 0) {
             logi!(
@@ -492,6 +496,11 @@ fn helper_attach(d: &Display, fd: OwnedFd, flags: u32) {
     let shm = d.shm.as_ref().expect("the shm frame");
     if hello.send(fd.as_fd(), &[shm.as_fd()], 0).is_err() {
         return;
+    }
+    // display-post=serial: the old timing, asked of the helper (one older than 2026-11-24 ignores the message and has it
+    // anyway). The default sends nothing.
+    if d.serial_post {
+        let _ = Message::new(Kind::Options, OPTION_SERIAL_POST, 0, 0, 0).send(fd.as_fd(), &[], 0);
     }
     let mut done = Taken::new();
     let direct = {
@@ -1013,6 +1022,7 @@ pub fn init(c: &Config) -> Result<(u32, u32, u32), Failed> {
         listen,
         socket_path,
         direct_enabled: c.display_direct,
+        serial_post: c.display_post_serial,
         drm: drm.map(Mutex::new),
         client: Mutex::new(Client {
             fd: None,

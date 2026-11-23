@@ -749,3 +749,275 @@ fn test_slot_layout() {
     assert_eq!(Seg::decode(&Seg { offset: 5, length: 6 }.encode()), Seg { offset: 5, length: 6 });
     assert_eq!(Message::parse(&Message::new(Kind::Frame, 1, 2, 3, 4).to_bytes()).unwrap().kind(), Some(Kind::Frame));
 }
+
+// ---- the run loop (xhd::run): the reader answers while the poster waits for a buffer --------------------------------
+
+/// A stand-in layer: `n` buffers handed out in turn, each lock blocking `lock_ms` (a queue that is full until the
+/// panel's next vsync), every post kept as a copy. `fail_after`: locks after that many fail (the NDK's -22).
+struct FakeLayer {
+    n: usize,
+    lock_ms: u64,
+    fail_after: usize,
+    width: u32,
+    height: u32,
+    state: std::sync::Mutex<FakeState>,
+}
+
+struct FakeState {
+    buffers: Vec<Box<[u8]>>,
+    locks: usize,
+    locked: Option<usize>,
+    posted: Vec<Vec<u8>>,
+}
+
+impl FakeLayer {
+    fn new(n: usize, lock_ms: u64, fail_after: usize, width: u32, height: u32) -> FakeLayer {
+        let bytes = (width * height * 4) as usize;
+        let buffers = (0..n).map(|_| vec![0x77u8; bytes].into_boxed_slice()).collect();
+        FakeLayer {
+            n,
+            lock_ms,
+            fail_after,
+            width,
+            height,
+            state: std::sync::Mutex::new(FakeState { buffers, locks: 0, locked: None, posted: Vec::new() }),
+        }
+    }
+
+    fn posted(&self) -> Vec<Vec<u8>> {
+        self.state.lock().unwrap().posted.clone()
+    }
+}
+
+impl run::Layer for FakeLayer {
+    fn set_geometry(&self, _: u32, _: u32, _: i32) {}
+    fn set_dataspace(&self, _: i32) -> i32 {
+        0
+    }
+    fn dataspace(&self) -> i32 {
+        DATASPACE_SRGB
+    }
+    fn lock(&self, _: u32, _: u32) -> std::result::Result<run::Locked, i32> {
+        sys::nap_ms(self.lock_ms);
+        let mut s = self.state.lock().unwrap();
+        if s.locks >= self.fail_after {
+            return Err(-22);
+        }
+        let i = s.locks % self.n;
+        s.locks += 1;
+        s.locked = Some(i);
+        let bits = s.buffers[i].as_mut_ptr();
+        Ok(run::Locked {
+            width: self.width as i32,
+            height: self.height as i32,
+            stride: self.width as i32,
+            format: BUFFER_BGRA_8888,
+            bits,
+        })
+    }
+    fn unlock_and_post(&self) {
+        let mut s = self.state.lock().unwrap();
+        let i = s.locked.take().unwrap();
+        let copy = s.buffers[i].to_vec();
+        s.posted.push(copy);
+    }
+}
+
+/// Frame k's pixels: B,G,R from k and the byte's place, X 0.
+fn run_pattern(k: u32, bytes: usize) -> Vec<u8> {
+    (0..bytes).map(|i| if i % 4 == 3 { 0 } else { (k as usize * 37 + i * 7 + (i >> 9)) as u8 }).collect()
+}
+
+/// xnuhost's side for the run tests: the hello and its memfd, guest RAM, the table, the frames.
+struct RunGuest {
+    x: std::os::fd::OwnedFd,
+    ram: Map,
+    table: Map,
+    bytes: usize,
+}
+
+const RW: u32 = 64;
+const RH: u32 = 48;
+const RSLOT: usize = 64 + 4 * 16;
+
+fn run_guest() -> (RunGuest, std::os::fd::OwnedFd, Frame) {
+    let bytes = (RW * RH * 4) as usize;
+    let ram = memfd("run-ram", bytes).unwrap();
+    let tab = memfd("run-table", 4 * RSLOT).unwrap();
+    let shm = memfd("run-frame", bytes).unwrap();
+    let (x, helper) = sys::seqpacket_pair().unwrap();
+    send_hello(x.as_fd(), RW, RH, RW * 4, FORMAT_BGRX, shm.as_fd()).unwrap();
+    let frame = recv_hello(helper.as_fd(), 1000).unwrap();
+    Message::new(Kind::Memory, bytes as u32, 0, 4, RSLOT as u32)
+        .send(x.as_fd(), &[ram.as_fd(), tab.as_fd()], 0)
+        .unwrap();
+    let g = RunGuest {
+        x,
+        ram: Map::new(ram.as_fd(), bytes, true).unwrap(),
+        table: Map::new(tab.as_fd(), 4 * RSLOT, true).unwrap(),
+        bytes,
+    };
+    (g, helper, frame)
+}
+
+impl RunGuest {
+    /// Draws frame k into the guest's pages, writes its slot (seq last) and sends it; the time it was sent.
+    fn send(&mut self, k: u32) -> i64 {
+        self.ram.bytes_mut().copy_from_slice(&run_pattern(k, self.bytes));
+        let base = (k as usize % 4) * RSLOT;
+        let s = Slot {
+            seq: k as u64,
+            offset: 0,
+            stride: RW * 4,
+            width: RW,
+            height: RH,
+            nsegs: 1,
+            x: 0,
+            y: 0,
+            w: RW,
+            h: RH,
+            format: 1,
+        };
+        self.table.bytes_mut()[base..base + Slot::BYTES].copy_from_slice(&s.encode());
+        let seg = Seg { offset: 0, length: self.bytes as u64 };
+        self.table.bytes_mut()[base + Slot::BYTES..base + Slot::BYTES + Seg::BYTES].copy_from_slice(&seg.encode());
+        let sent = sys::now_us();
+        Message::new(Kind::Frame, k % 4, k, 0, sent as u32).send(self.x.as_fd(), &[], 0).unwrap();
+        sent
+    }
+
+    /// The helper's done for frame k: its flags, and how long after `sent` it came.
+    fn done(&self, k: u32, sent: i64) -> (u32, i64) {
+        let (n, _) = sys::poll(&[(self.x.as_fd(), libc::POLLIN)], 5000, true).unwrap();
+        assert_eq!(n, 1, "no answer for frame {k} within 5 s");
+        let m = recv_message(self.x.as_fd());
+        assert!(m.is(Kind::Done) && m.a == k, "the answer is for frame {k}: {m:?}");
+        (m.c, sys::now_us() - sent)
+    }
+}
+
+/// The 2026-11-24 split (fix/frame-path): each frame is answered when it is in the snapshot, not after the poster's
+/// buffer wait. With a layer whose every lock blocks 100 ms (the one loop of before answered a frame that came during
+/// a lock only after it: up to 100 ms here, the phone's 5.5 ms late start), twenty frames sent one after another are
+/// each answered within 50 ms; every post is one whole frame as read (never half of the next one, though the guest
+/// draws the next into the same pages right after each answer), in order; the last post is the last frame; the socket's
+/// close ends the run.
+#[test]
+fn test_run_answers_before_the_post() {
+    let (mut g, helper, frame) = run_guest();
+    let layer = std::sync::Arc::new(FakeLayer::new(3, 100, usize::MAX, RW, RH));
+    let l = layer.clone();
+    let poster = std::thread::spawn(move || {
+        let mut d = Direct::new();
+        let end =
+            run::run(helper.as_fd(), &frame, &mut d, &*l, BUFFER_BGRA_8888, DATASPACE_SRGB, None, None, &|| false);
+        (end, d)
+    });
+    let mut worst = 0;
+    for k in 1..=20 {
+        let sent = g.send(k);
+        let (flags, took) = g.done(k, sent);
+        assert_eq!(flags, 0, "frame {k} changed: answered as read");
+        worst = worst.max(took);
+    }
+    assert!(worst < 50_000, "the slowest answer took {worst} us: it waited for the layer's buffer");
+    // The last frame reaches the layer within two of its locks.
+    let last = run_pattern(20, g.bytes);
+    let mut shown = false;
+    for _ in 0..50 {
+        if layer.posted().last() == Some(&last) {
+            shown = true;
+            break;
+        }
+        sys::nap_ms(10);
+    }
+    assert!(shown, "the last frame was posted");
+    drop(g); // xnuhost closed the socket
+    let (end, _) = poster.join().unwrap();
+    assert_eq!(end, run::End::Closed);
+    let posted = layer.posted();
+    assert!(!posted.is_empty() && posted.len() < 20, "frames that came during a lock are one post: {}", posted.len());
+    let mut last_k = 0;
+    for (i, p) in posted.iter().enumerate() {
+        // the first post is the memfd (zeros) or a frame; each one is one whole frame, never older than the last
+        let k = (0..=20).find(|&k| if k == 0 { p.iter().all(|&b| b == 0) } else { *p == run_pattern(k, p.len()) });
+        let k = k.unwrap_or_else(|| panic!("post {i} is no whole frame (torn, or a stale buffer)"));
+        assert!(k >= last_k, "post {i} shows frame {k} after frame {last_k}");
+        last_k = k;
+    }
+}
+
+/// The poster's failure ends the reader (it may sleep in poll for good), and a frame then is still answered; a byte in
+/// the signal pipe ends both with Stopped.
+#[test]
+fn test_run_ends() {
+    // no lock works: the first failure falls back to R,G,B,X (as before the split), the second is LockFailed; the
+    // reader, asleep in poll, ends too
+    let (g, helper, frame) = run_guest();
+    let layer = FakeLayer::new(2, 0, 0, RW, RH);
+    let started = sys::now_us();
+    let mut d = Direct::new();
+    let end = run::run(helper.as_fd(), &frame, &mut d, &layer, BUFFER_BGRA_8888, DATASPACE_SRGB, None, None, &|| false);
+    assert_eq!(end, run::End::LockFailed);
+    assert!(sys::now_us() - started < 3_000_000, "ended at once");
+    assert!(layer.posted().is_empty());
+    drop(g);
+
+    // a stop through the signal pipe
+    let (g, helper, frame) = run_guest();
+    let layer = FakeLayer::new(2, 0, usize::MAX, RW, RH);
+    let (r, w) = sys::pipe().unwrap();
+    let end = std::thread::scope(|s| {
+        let poster = s.spawn(|| {
+            let mut d = Direct::new();
+            run::run(
+                helper.as_fd(),
+                &frame,
+                &mut d,
+                &layer,
+                BUFFER_BGRA_8888,
+                DATASPACE_SRGB,
+                None,
+                Some(r.as_fd()),
+                &|| false,
+            )
+        });
+        sys::nap_ms(50);
+        let byte = 1u8;
+        // SAFETY: one byte from a live buffer into the pipe's write end.
+        unsafe { libc::write(std::os::fd::AsRawFd::as_raw_fd(&w), &byte as *const u8 as *const libc::c_void, 1) };
+        poster.join().unwrap()
+    });
+    assert_eq!(end, run::End::Stopped);
+    drop(g);
+}
+
+/// display-post=serial (xnuhost's options message): the reader reads no frame until the last change is posted, the
+/// one loop's timing of before. With 100 ms locks, a frame sent right after the answer to the one before waits for that
+/// post: its answer takes most of a lock.
+#[test]
+fn test_run_serial() {
+    let (mut g, helper, frame) = run_guest();
+    Message::new(Kind::Options, OPTION_SERIAL_POST, 0, 0, 0).send(g.x.as_fd(), &[], 0).unwrap();
+    let layer = FakeLayer::new(3, 100, usize::MAX, RW, RH);
+    let end = std::thread::scope(|s| {
+        let poster = s.spawn(|| {
+            let mut d = Direct::new();
+            let end =
+                run::run(helper.as_fd(), &frame, &mut d, &layer, BUFFER_BGRA_8888, DATASPACE_SRGB, None, None, &|| {
+                    false
+                });
+            assert_eq!(d.options, OPTION_SERIAL_POST);
+            end
+        });
+        let mut slowest = 0;
+        for k in 1..=3 {
+            let sent = g.send(k);
+            slowest = slowest.max(g.done(k, sent).1);
+        }
+        assert!(slowest >= 50_000, "a frame waited for the post before it: slowest answer {slowest} us");
+        drop(g);
+        poster.join().unwrap()
+    });
+    assert_eq!(end, run::End::Closed);
+}

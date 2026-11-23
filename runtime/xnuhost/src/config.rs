@@ -470,6 +470,7 @@ const GIVEN_KEYS: &[&str] = &[
     "wifi-joined-scan",
     "encoder-10bit",
     "encoder-warmup",
+    "display-post",
     "gpu-blob-entries",
     "gpu-down",
     "stop-loop",
@@ -659,6 +660,9 @@ pub struct Config {
     /// encoder-10bit (main10), encoder-warmup (1): the video encoder
     pub encoder_10bit: Encoder10,
     pub encoder_warmup: bool,
+    /// display-post (apart): the display helper reads and answers each frame while it waits for a buffer and posts
+    /// the last (fix/frame-path); serial: it reads no frame until the last is posted (before 2026-11-24)
+    pub display_post_serial: bool,
     /// gpu-blob-entries=N (65532, 78c4b86; 16384 before): the most entries of a guest 3D blob the device takes
     pub gpu_blob_entries: u32,
     /// gpu-down (governor): when the GPU level leaves the top
@@ -893,6 +897,7 @@ impl Config {
             wifi_joined_scan: WifiJoinedScan::Cache,
             encoder_10bit: Encoder10::Main10,
             encoder_warmup: true,
+            display_post_serial: false,
             gpu_blob_entries: GPU_BLOB_ENTRIES,
             gpu_down: GpuDown::Governor,
             stop_loop: StopLoop::Wait,
@@ -1086,6 +1091,13 @@ impl Config {
             "wifi-joined-scan" => self.wifi_joined_scan = named(WifiJoinedScan::parse(value))?,
             "encoder-10bit" => self.encoder_10bit = named(Encoder10::parse(value))?,
             "encoder-warmup" => self.encoder_warmup = flag(value)?,
+            "display-post" => {
+                self.display_post_serial = named(match value {
+                    "apart" => Some(false),
+                    "serial" => Some(true),
+                    _ => None,
+                })?
+            }
             "gpu-blob-entries" => self.gpu_blob_entries = number(value, 16384, i64::from(GPU_BLOB_ENTRIES))?,
             "gpu-down" => self.gpu_down = named(GpuDown::parse(value))?,
             "stop-loop" => self.stop_loop = named(StopLoop::parse(value))?,
@@ -1318,6 +1330,7 @@ impl Config {
         take!(self, image, "wifi-joined-scan", wifi_joined_scan);
         take!(self, image, "encoder-10bit", encoder_10bit);
         take!(self, image, "encoder-warmup", encoder_warmup);
+        take!(self, image, "display-post", display_post_serial);
         take!(self, image, "gpu-blob-entries", gpu_blob_entries);
         take!(self, image, "gpu-down", gpu_down);
         take!(self, image, "stop-loop", stop_loop);
@@ -2084,6 +2097,7 @@ impl Config {
             ("wifi-joined-scan", self.wifi_joined_scan.as_str().to_string(), "cache"),
             ("encoder-10bit", self.encoder_10bit.as_str().to_string(), "main10"),
             ("encoder-warmup", on(self.encoder_warmup).to_string(), "1"),
+            ("display-post", (if self.display_post_serial { "serial" } else { "apart" }).to_string(), "apart"),
             ("oneios-wifi-rssi", arg("oneios-wifi-rssi", "1"), "1"),
             ("oneios-telemetry-jobs", arg("oneios-telemetry-jobs", "0"), "0"),
             ("oneios-pool-cut", arg("oneios-pool-cut", "1"), "1"),

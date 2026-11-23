@@ -6,13 +6,8 @@
 //! them; without it the library links but app_process cannot load it, the 2026-11-14 phone session: "cannot locate
 //! symbol ANativeWindow_getBuffersDataSpace"); the library is built for 30, so they are there. build.rs links the
 //! cdylib with -z defs, so a symbol no named library has is a link error here, not on the phone.
-use crate::pixels;
-use crate::sys::{self, Errno};
-use crate::xhd::{
-    self, Buffers, Direct, Frame, Rect, Snapshot, BUFFER_BGRA_8888, BUFFER_RGBA_FP16, BUFFER_RGBX_8888,
-    DATASPACE_SCRGB, DATASPACE_SCRGB_LINEAR, DATASPACE_SRGB, DATASPACE_UNKNOWN, DONE_FAILED, DONE_UNCHANGED,
-    FORMAT_BGRX, PANEL_DIRECT,
-};
+use crate::sys;
+use crate::xhd::{self, run, Direct, Frame, DATASPACE_UNKNOWN, PANEL_DIRECT};
 use std::ffi::{c_char, c_void, CStr};
 use std::os::fd::{AsFd, BorrowedFd, IntoRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
@@ -124,15 +119,6 @@ extern "C" {
 /// The layer's window, released when dropped.
 struct Window(*mut ANativeWindow);
 
-/// A locked buffer of the window.
-struct Locked {
-    width: i32,
-    height: i32,
-    stride: i32,
-    format: i32,
-    bits: *mut u8,
-}
-
 impl Window {
     fn from_surface(env: Env, surface: Jobject) -> Option<Window> {
         // SAFETY: env is the VM's and surface the Java half's android.view.Surface.
@@ -156,7 +142,7 @@ impl Window {
     }
 
     /// Locks a buffer whole (dirty: the rectangle asked for). The error is the NDK's (negative) number.
-    fn lock(&self, width: u32, height: u32) -> Result<Locked, i32> {
+    fn lock(&self, width: u32, height: u32) -> Result<run::Locked, i32> {
         let mut dirty = ARect { left: 0, top: 0, right: width as i32, bottom: height as i32 };
         let mut b = ANativeWindowBuffer {
             width: 0,
@@ -171,7 +157,13 @@ impl Window {
         if error != 0 {
             return Err(error);
         }
-        Ok(Locked { width: b.width, height: b.height, stride: b.stride, format: b.format, bits: b.bits as *mut u8 })
+        Ok(run::Locked {
+            width: b.width,
+            height: b.height,
+            stride: b.stride,
+            format: b.format,
+            bits: b.bits as *mut u8,
+        })
     }
 
     fn unlock_and_post(&self) {
@@ -336,143 +328,26 @@ pub extern "C" fn Java_OneiOSDisplay_nClose(_env: Env, _type: Jobject, handle: J
 
 // ---- the run loop -----------------------------------------------------------------------------------------------
 
-/// printf's %#x: 0 is "0", anything else 0x and its hex digits.
-fn alt_hex(v: u32) -> String {
-    if v == 0 {
-        "0".into()
-    } else {
-        format!("{v:#x}")
+impl run::Layer for Window {
+    fn set_geometry(&self, width: u32, height: u32, format: i32) {
+        Window::set_geometry(self, width, height, format)
+    }
+    fn set_dataspace(&self, dataspace: i32) -> i32 {
+        Window::set_dataspace(self, dataspace)
+    }
+    fn dataspace(&self) -> i32 {
+        Window::dataspace(self)
+    }
+    fn lock(&self, width: u32, height: u32) -> Result<run::Locked, i32> {
+        Window::lock(self, width, height)
+    }
+    fn unlock_and_post(&self) {
+        Window::unlock_and_post(self)
     }
 }
 
-fn format_name(format: i32) -> &'static str {
-    match format {
-        BUFFER_BGRA_8888 => "BGRA_8888",
-        BUFFER_RGBX_8888 => "RGBX_8888",
-        BUFFER_RGBA_FP16 => "RGBA_FP16",
-        _ => "other",
-    }
-}
-
-/// Tags the window's buffers with the dataspace: what the numbers in them mean, so that surfaceflinger turns them into
-/// the panel's colours (One UI's colour mode decides how; nothing of it is changed here). Logs what the window has.
-fn set_dataspace(window: &Window, dataspace: i32) {
-    let error = window.set_dataspace(dataspace);
-    let now = window.dataspace();
-    if error != 0 {
-        eprintln!(
-            "oneios-display: the dataspace {} ({}) was refused ({error}); the buffers say {} ({})",
-            xhd::dataspace_name(dataspace),
-            alt_hex(dataspace as u32),
-            xhd::dataspace_name(now),
-            alt_hex(now as u32)
-        );
-    } else {
-        eprintln!("oneios-display: buffers tagged {} (dataspace {})", xhd::dataspace_name(now), alt_hex(now as u32));
-    }
-}
-
-/// The 10 s statistics.
-#[derive(Default)]
-struct Stats {
-    posted: u64,
-    direct: u64,
-    unchanged: u64,
-    reads: u64,
-    delays: u64,
-    lock_us: i64,
-    copy_us: i64,
-    copy_max: i64,
-    rows_changed: i64,
-    rows_filled: i64,
-    read_us: i64,
-    read_max: i64,
-    delay_us: i64,
-    delay_max: i64,
-    since: i64,
-    cpu: i64,
-}
-
-impl Stats {
-    fn new(since: i64, cpu: i64) -> Stats {
-        Stats { since, cpu, ..Stats::default() }
-    }
-
-    /// Reported when a frame comes and 10 s have passed since the last report: no timer, so nothing at all when idle.
-    fn report(&mut self, frame_height: u32, buffers: &Buffers) {
-        let now = sys::now_us();
-        if now - self.since < 10_000_000 {
-            return;
-        }
-        let cpu = sys::cpu_us();
-        let seen = self.posted + self.unchanged;
-        let mean = |sum: i64, n: u64| if n > 0 { sum as f64 / 1000.0 / n as f64 } else { 0.0 };
-        let delay = if self.delays > 0 {
-            format!(
-                "from {:.1} ms after xnuhost sent the frame (mean; max {:.1} ms)",
-                self.delay_us as f64 / 1000.0 / self.delays as f64,
-                self.delay_max as f64 / 1000.0
-            )
-        } else {
-            "the send times not known (an xnuhost before 2026-11-22)".to_string()
-        };
-        let share =
-            |rows: i64, n: u64| if n > 0 { rows as f64 * 100.0 / (n as f64 * frame_height as f64) } else { 0.0 };
-        eprintln!(
-            "oneios-display: {:.0} s: {seen} frames from xnuhost, {} unchanged (nothing posted), {} posted ({} from guest \
-             RAM, {:.0}% of the rows changed, {:.0}% filled); guest pages read in one pass for mean {:.1} ms, max {:.1} \
-             ms, {delay}; buffer wait mean {:.1} ms; copy mean {:.1} ms, max {:.1} ms; {} buffers seen ({} forgotten); \
-             this process {:.0}% of a core",
-            (now - self.since) as f64 / 1e6,
-            self.unchanged,
-            self.posted,
-            self.direct,
-            share(self.rows_changed, self.reads),
-            share(self.rows_filled, self.posted),
-            mean(self.read_us, self.reads),
-            self.read_max as f64 / 1000.0,
-            mean(self.lock_us, self.posted),
-            mean(self.copy_us, self.posted),
-            self.copy_max as f64 / 1000.0,
-            buffers.len(),
-            buffers.forgotten,
-            (cpu - self.cpu) as f64 * 100.0 / (now - self.since) as f64
-        );
-        *self = Stats::new(now, cpu);
-    }
-}
-
-/// How the run loop ended.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum End {
-    Closed = 0,
-    Stopped = 1,
-    LockFailed = -2,
-    PollFailed = -3,
-}
-
-/// The direct frame is answered: done (flags), and no longer pending.
-fn answer(fd: BorrowedFd<'_>, direct: &mut Direct, flags: u32) {
-    if let Some(p) = direct.pending.take() {
-        let _ = xhd::send_done(fd, p.seq, flags);
-    }
-}
-
-/// Posts frames until the socket closes (0) or a signal asks to stop (1); negative on an error.
-/// The picture the layer is to show is the helper's snapshot for 8-bit frames (xhd::snapshot): a direct frame
-/// (xnuhost's "frame") is read into it in one pass as soon as it comes, and xnuhost's own pixels (the memfd's flushes)
-/// are put over it. Unchanged, the frame is answered at once and nothing is locked or posted, so surfaceflinger has
-/// nothing to compose and the panel's refresh rate can drop by itself. Changed, the layer's buffer is locked whole and
-/// the helper fills what that buffer lacks from the snapshot (xhd::buffers: Surface's own copy-back loses changes once
-/// the queue has three buffers or more). The answer ("done") goes as soon as a changed direct frame is in the
-/// snapshot, before the buffer is locked and posted (since 2026-11-23; before, after the post): xnuhost then answers
-/// the guest's flush, and the guest's display driver posts its next frame only after that answer (its frame in flight
-/// lands first: DroidVMVirtioGpuDisplay.cpp), so the guest's next frame is drawn while this one is posted. A frame
-/// that only xnuhost's own pixels changed is still answered after the post. Half-float frames have no snapshot: the
-/// memfd is the picture, and a direct frame is refused (xnuhost then copies the frames itself).
-///
-/// Pacing: the next buffer is only handed out when surfaceflinger has taken the last one, so ANativeWindow_lock blocks
-/// to the panel's vsync, and every flush that came meanwhile is one post.
+/// Posts frames until the socket closes (0) or a signal asks to stop (1); negative on an error (xhd::run: a reader
+/// thread that reads each frame into the snapshot and answers it, and this thread, which posts).
 ///
 /// ready_path: SESSION/ready (--session), or null (--socket): the first post waits for it (xhd::hold_first). Until the
 /// first post the layer has no buffer and the OneOS boot screen under it shows.
@@ -494,271 +369,11 @@ pub extern "C" fn Java_OneiOSDisplay_nRun(
         return -1;
     };
     let ready = java_string(env, ready_path).map(|p| PathBuf::from(std::ffi::OsStr::from_bytes(&p)));
-    let end = run(c.fd.as_fd(), f, &mut c.direct, &window, format, dataspace, ready);
-    drop(window);
-    end as Jint
-}
-
-fn run(
-    fd: BorrowedFd<'_>,
-    f: &Frame,
-    direct: &mut Direct,
-    window: &Window,
-    mut format: i32,
-    mut dataspace: i32,
-    ready: Option<PathBuf>,
-) -> End {
-    window.set_geometry(f.width, f.height, format);
-    set_dataspace(window, dataspace);
-    let ready_name = ready.as_ref().map_or(String::new(), |p| p.display().to_string());
-    let whole = Rect::whole(f.width, f.height);
-    let mut pending = whole;
-    // The picture of 8-bit frames (18 MB at 1440x3120, and its tiles' hashes), made before the first post.
-    let mut snapshot = if f.format == FORMAT_BGRX { Snapshot::new(f.width, f.height).ok() } else { None };
-    if f.format == FORMAT_BGRX && snapshot.is_none() {
-        eprintln!(
-            "oneios-display: no memory for the snapshot: direct frames are refused (xnuhost copies them), the memfd is \
-             posted"
-        );
-    }
-    let mut buffers = Buffers::new(f.width, f.height);
-    let mut unposted = Rect::EMPTY; // in the snapshot, not in the layer yet
-    let (mut frames, mut direct_frames, mut refused, mut held_flushes) = (0u64, 0u64, 0u64, 0u64);
-    let (mut announced, mut held) = (false, false);
-    let mut hold_start = 0i64;
-    let mut st = Stats::new(sys::now_us(), sys::cpu_us());
     let signal = SIGNAL_READ.load(Ordering::SeqCst);
     // SAFETY: the signal pipe's read end is open for the whole process (install_signals); with no pipe (-1) only the
     // socket is polled.
     let signal_fd = (signal >= 0).then(|| unsafe { BorrowedFd::borrow_raw(signal) });
-    let result = loop {
-        // Held: the guest's frame is not shown yet, the damage adds up, and `ready` is looked for at every flush and
-        // every HOLD_POLL_MS between them (a guest that drew its frame with content and then nothing more).
-        let hold = frames == 0 && xhd::hold_first(ready.as_deref());
-        if hold && !held {
-            held = true;
-            hold_start = sys::now_us();
-            eprintln!(
-                "oneios-display: the first frame waits for {ready_name} (xnuhost's first frame of the guest's own with \
-                 content); the boot screen stays"
-            );
-        }
-        let timeout = if hold {
-            xhd::HOLD_POLL_MS
-        } else if pending.w != 0 || direct.pending.is_some() {
-            0
-        } else {
-            -1
-        };
-        let mut watched = vec![(fd, libc::POLLIN)];
-        watched.extend(signal_fd.map(|s| (s, libc::POLLIN)));
-        let (ready_count, revents) = match sys::poll(&watched, timeout, false) {
-            Ok((n, r)) => (n as i32, r),
-            Err(Errno(libc::EINTR)) => (-1, vec![0, 0]),
-            Err(_) => break End::PollFailed,
-        };
-        if stopping() || (ready_count > 0 && revents.get(1).is_some_and(|&r| r != 0)) {
-            break End::Stopped;
-        }
-        if !xhd::drain_direct(fd, f.width, f.height, &mut pending, Some(direct)) {
-            break End::Closed;
-        }
-        if hold {
-            if ready_count > 0 {
-                held_flushes += 1;
-            }
-            continue;
-        }
-        if pending.w == 0 && direct.pending.is_none() {
-            continue;
-        }
-        // What this post changes against the last one: xnuhost's own damage, the direct frame's changed tiles, and what
-        // an earlier round put into the snapshot without posting it.
-        let mut changed = std::mem::take(&mut unposted);
-        if pending.w != 0 {
-            match snapshot.as_mut() {
-                Some(s) => {
-                    // Until the snapshot is whole the memfd is the whole picture. Put first: a direct frame of the same
-                    // round is the guest's scanout, newer than xnuhost's copy, and the put tiles have no hash, so the
-                    // read below takes them.
-                    let put = if s.full { pending } else { whole };
-                    let _ = s.put(&f.view(), put);
-                    changed.union(&put);
-                }
-                None => changed.union(&pending),
-            }
-        }
-        if let Some(p) = direct.pending {
-            // The guest's pages, read once and at once (the time since xnuhost sent the frame is logged: a late start
-            // is as bad as a long read).
-            let t0 = sys::now_us();
-            if p.sent_us != 0 {
-                let delay = (t0 as u32).wrapping_sub(p.sent_us);
-                if delay < 10_000_000 {
-                    st.delays += 1;
-                    st.delay_us += delay as i64;
-                    st.delay_max = st.delay_max.max(delay as i64);
-                }
-            }
-            let (got, error) = match snapshot.as_mut() {
-                Some(s) => s.update(direct),
-                None => (Rect::EMPTY, Err(Errno(libc::ENOMEM))),
-            };
-            let read = sys::now_us() - t0;
-            st.reads += 1;
-            st.read_us += read;
-            st.read_max = st.read_max.max(read);
-            match error {
-                Err(e) => {
-                    // Refused: xnuhost copies the frames itself from now on (they come as flushes of the memfd). What
-                    // was read is in the snapshot and goes to the layer with the next post that has xnuhost's whole
-                    // frame.
-                    refused += 1;
-                    if refused == 1 {
-                        eprintln!("oneios-display: a direct frame could not be read from guest RAM ({e})");
-                    }
-                    answer(fd, direct, DONE_FAILED);
-                    unposted.union(&got);
-                }
-                Ok(()) => {
-                    changed.union(&got);
-                    st.rows_changed += got.h as i64;
-                    // A changed frame is in the snapshot now, the helper's own copy, and the post below fills from
-                    // there: answered at once, so that the guest draws its next frame while this one waits for a buffer
-                    // and is posted. Until 2026-11-23 the answer went after the post: the guest's next frame waited for
-                    // ANativeWindow_lock (to the next vsync when the queue is full: "buffer wait mean 4.1 ms" on the
-                    // phone, 2026-11-22) and the fill as well.
-                    if got.w != 0 {
-                        answer(fd, direct, 0);
-                        direct_frames += 1;
-                        st.direct += 1;
-                    }
-                }
-            }
-        }
-        if changed.w == 0 && frames > 0 {
-            if direct.pending.is_some() {
-                answer(fd, direct, DONE_UNCHANGED); // the layer shows it already
-                st.unchanged += 1;
-            }
-            pending = Rect::EMPTY;
-            st.report(f.height, &buffers);
-            continue;
-        }
-        // Locked whole: Surface then copies nothing back from the last buffer (xhd::buffers), and the helper fills
-        // what this buffer lacks itself.
-        let t0 = sys::now_us();
-        let locked = window.lock(f.width, f.height);
-        let t1 = sys::now_us();
-        let buffer = match locked {
-            Ok(b) => b,
-            Err(error) if frames == 0 && format != BUFFER_RGBX_8888 => {
-                // No B,G,R,A buffers here: R,G,B,X and a swap. No RGBA_FP16 ones: B,G,R,A, the half floats encoded to
-                // sRGB and clamped (what is outside sRGB is lost), tagged sRGB.
-                let next = if format == BUFFER_RGBA_FP16 { BUFFER_BGRA_8888 } else { BUFFER_RGBX_8888 };
-                eprintln!(
-                    "oneios-display: no buffer in format {format} {} ({error}), using {}",
-                    format_name(format),
-                    format_name(next)
-                );
-                format = next;
-                window.set_geometry(f.width, f.height, format);
-                if dataspace == DATASPACE_SCRGB_LINEAR || dataspace == DATASPACE_SCRGB {
-                    dataspace = DATASPACE_SRGB;
-                    set_dataspace(window, dataspace);
-                }
-                buffers.reset(f.width, f.height); // new buffers
-                unposted = changed; // the next round posts it
-                continue;
-            }
-            Err(error) => {
-                eprintln!("oneios-display: the layer's buffer could not be locked ({error})");
-                answer(fd, direct, DONE_FAILED);
-                break End::LockFailed;
-            }
-        };
-        let width = (buffer.width as u32).min(f.width);
-        let height = (buffer.height as u32).min(f.height);
-        let usable = buffer.width > 0 && buffer.height > 0 && buffer.stride >= buffer.width && !buffer.bits.is_null();
-        // Only a buffer of the frame's own size is filled to the last pixel and so known afterwards.
-        let exact = usable && buffer.width as u32 == f.width && buffer.height as u32 == f.height;
-        let bits = buffer.bits as usize;
-        // What this buffer lacks and what this post changes (the first four buffers: whole, as a buffer not seen yet
-        // is).
-        let mut fill = if frames < 4 { whole } else { buffers.fill(bits, &changed) };
-        // The buffer's own format decides the copy (RGBA_8888 and RGBX_8888 are both R,G,B bytes).
-        let layout = if buffer.format == BUFFER_BGRA_8888 || buffer.format == BUFFER_RGBA_FP16 {
-            buffer.format
-        } else {
-            BUFFER_RGBX_8888
-        };
-        let bytes = if layout == BUFFER_RGBA_FP16 { 8 } else { 4 };
-        if usable && fill.clip(width, height) {
-            let dst_stride = buffer.stride as usize * bytes;
-            // SAFETY: the locked buffer is stride x height pixels of `bytes` each, ours until unlockAndPost.
-            let dst = unsafe { std::slice::from_raw_parts_mut(buffer.bits, dst_stride * buffer.height as usize) };
-            let _ = match snapshot.as_ref() {
-                Some(s) => xhd::copy(dst, dst_stride, layout, s.pixels(), s.stride, FORMAT_BGRX, fill),
-                None => xhd::copy(dst, dst_stride, layout, f.pixels(), f.stride as usize, f.format, fill),
-            };
-            st.rows_filled += fill.h as i64;
-        }
-        let t2 = sys::now_us();
-        window.unlock_and_post();
-        if exact {
-            buffers.posted(bits, &changed);
-        } else {
-            buffers.reset(f.width, f.height); // none of them is known then
-        }
-        if direct.pending.is_some() {
-            answer(fd, direct, 0);
-            direct_frames += 1;
-            st.direct += 1;
-        }
-        if frames == 0 {
-            let waited = if held {
-                format!(
-                    "; held {:.1} s for session/ready, {held_flushes} wakes for flushes not shown",
-                    (sys::now_us() - hold_start) as f64 / 1e6
-                )
-            } else {
-                String::new()
-            };
-            let now = window.dataspace();
-            eprintln!(
-                "oneios-display: first frame posted ({}x{} buffer, stride {}, format {} {}, dataspace {} {}; the guest's \
-                 frame: {}{waited})",
-                buffer.width,
-                buffer.height,
-                buffer.stride,
-                buffer.format,
-                format_name(buffer.format),
-                alt_hex(now as u32),
-                xhd::dataspace_name(now),
-                pixels::name(f.format)
-            );
-        }
-        frames += 1;
-        if direct_frames > 0 && !announced {
-            announced = true;
-            eprintln!(
-                "oneios-display: frames come straight from guest RAM now, read once into the snapshot; each buffer gets \
-                 what it lacks"
-            );
-        }
-        pending = Rect::EMPTY;
-        st.posted += 1;
-        st.lock_us += t1 - t0;
-        st.copy_us += t2 - t1;
-        st.copy_max = st.copy_max.max(t2 - t1);
-        st.report(f.height, &buffers);
-    };
-    drop(snapshot);
-    let what = match result {
-        End::Closed => "the socket closed",
-        End::Stopped => "asked to stop",
-        _ => "error",
-    };
-    eprintln!("oneios-display: {what} after {frames} frames");
-    result
+    let end = run::run(c.fd.as_fd(), f, &mut c.direct, &window, format, dataspace, ready, signal_fd, &stopping);
+    drop(window);
+    end as Jint
 }

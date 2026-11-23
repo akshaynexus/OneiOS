@@ -110,6 +110,8 @@ pub struct Direct {
     memory: Option<Memory>,
     /// A frame came: the newest.
     pub pending: Option<PendingFrame>,
+    /// xnuhost's options (OPTION_*), 0 until an "options" message says otherwise.
+    pub options: u32,
 }
 
 impl Direct {

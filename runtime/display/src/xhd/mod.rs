@@ -15,6 +15,7 @@ use std::path::Path;
 pub mod buffers;
 pub mod direct;
 pub mod protocol;
+pub mod run;
 pub mod snapshot;
 
 pub use buffers::{Buffers, BUFFERS};

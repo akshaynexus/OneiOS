@@ -324,6 +324,7 @@ impl<S: EventSink> Source<S> {
             self.frame_began = self.began; // no gesture: nothing was down nor is
             return;
         }
+        crate::frame_path::touch(scan_ns.max(0) as u64 / 1000); // the frame line's touch -> next flush
         let read = if now_ns > scan_ns { now_ns - scan_ns } else { 0 };
         let t = &mut self.timing;
         if t.frames == 0 {

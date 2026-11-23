@@ -674,6 +674,7 @@ impl Gpu {
         w: u32,
         hgt: u32,
     ) -> u32 {
+        crate::frame_path::flush(time::monotonic_ns() / 1000);
         let clipped = Rect { x: rect.x, y: rect.y, w, h: hgt };
         if self.b.is_some() && (c.scan.format == FMT_BGRX || c.scan.format == FMT_BGRA) && self.board.direct() {
             c.display_seq += 1;

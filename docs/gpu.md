@@ -641,6 +641,57 @@ on the CPU), 3 (5-9 ms of fence time beyond the GPU's work), then 5. 1 and the h
 `display: 10 s: ... (its answer: mean X ms ...)` in `runtime/xnuhost/src/display.rs` and the direct kick in
 `src/task.rs` `kick` (check-arm64's boots passed under qemu-aarch64; not on the phone).
 
+### 2.5a One frame's stages in one line, and the helper's two threads (fix/frame-path, 2026-11-24)
+
+The owner (2026-11-24): app open and close animations run at 10 fps or worse; the goal is the panel's 120. What the
+newest session said (`out/session-logs/2026-11-24-mac-gpumem/live.log`, kernel `e79886d9`, takeover): 8-454 frames
+per 10 s in `display: 10 s:` (1-45 fps), the helper's answer 7-18 ms mean (max 25-52 ms), backboardd's fences 5-19 ms
+for 2-6 ms of GPU time at the top, backboardd 94-120% of a vCPU, every vCPU 0% idle and 35-44% waiting for a host CPU,
+the host at 691-737% of 800 with a 95 C SoC. The 10 s means mix still and moving periods, and nothing said how a frame
+splits between the render server's CPU, the GPU and the way to the panel.
+
+**The `frame:` line (lasting, xnuhost's log, `src/frame_path.rs`).** Every 10 s while the guest draws, p50/p95/max in
+milliseconds of each stage, from events xnuhost already sees: the render server's fenced submissions and their
+retirement (`gpu3d_kgsl.rs`), the guest's flush of its scanout (`virtio_gpu.rs`), the helper's answer (`display.rs`)
+and the touch frames sent to the guest (`input.rs`):
+
+```text
+frame: 10 s: 137 guest frames (13.7/s), 120 of them under 0.5 s apart; ms p50/p95/max: interval 8.4/33.0/120.0;
+  flush -> the next frame's first GPU submission (the render server's CPU and its waits) 5.0/20.0/60.0; first
+  submission -> flush 3.0/9.0/20.0, of it GPU (submission -> retired, 119 fences) 2.0/6.0/18.0 and retired -> the
+  guest's flush 1.0/4.0/10.0; the helper's answer 6.0/12.0/40.0; touch -> next flush 20.0/60.0/90.0 (45 touches);
+  3 flushes with no GPU work before them
+```
+
+(the numbers are an example, not a run; one line in the log.) A frame is the span between two flushes. "flush -> the
+next frame's first GPU submission" is what the render server did before its GPU work: CoreAnimation's commit, the
+layout and encoding, and its waits (for the vsync tick, a Mach reply from an app, a CPU). "first submission -> flush" is
+its GPU work and the guest's way back to the swap (the fence's interrupt, the display driver's wake,
+`DroidVMVirtioGpuDisplay.cpp`); "retired -> the guest's flush" is that way back alone. "the helper's answer" is how
+long the guest's flush waited for the display helper. Only intervals under 0.5 s count (a frame after a pause is no
+frame rate). How to read it in an app-open: the stage whose p50 is near the interval's p50 is where the frame goes.
+If "flush -> first submission" is most of it, the render server's CPU is (the kernel cost of its faults and calls, the
+unmap-storm work; `oneios-top: backboardd`); if "GPU" is, the GPU level and the queue (2.2b); if "retired -> flush",
+the guest's interrupt and scheduling; if the helper's answer, the copy. Host tests: `frame_path::tests::stages` (a
+stream of frames with known stages gives those stages back, a pause is no interval, a flush with no GPU work is
+counted), `period` (the 10 s period and what spans two). Cost: a lock and a few stores per event, nothing when idle.
+
+**Fixed: the helper's answer waited for the post before it.** The helper ran one loop: read a frame into its snapshot,
+answer, lock a buffer of the layer (to the panel's vsync when the queue is full), fill, post, and only then look at the
+socket again. A frame that came while the loop waited for the buffer or filled it was read late: the helper's line of
+2026-11-23 19:06 (`out/session-logs/2026-11-23-mac-s1904/return.log`) has the read starting 5.5 ms after xnuhost sent
+the frame, the read 6.8 ms, the buffer wait 3.6 ms; xnuhost's answer 7-18 ms mean is about that sum. The guest's
+display driver posts its next frame only after that answer (it lands the frame in flight first), so the late start was
+on the path of every frame. Now the read and the post are two threads (`runtime/display/src/xhd/run.rs`; README,
+"Frames"): the reader answers as soon as the frame is in the snapshot, the poster posts the newest picture. What it
+removes from the answer: the late start (5.5 ms mean in that line). What stays: the read itself (6.8 ms there), a CPU
+copy of up to 18 MB, which only a copy on the GPU or a scanout of the guest's surface removes (2.5 item 2). The run
+loop is portable now and host-tested (`test_run_answers_before_the_post`, `test_run_ends`, `test_run_serial`).
+Switch: `display-post=serial` (docs/switches.md). Proof on the phone: `display: 10 s: ... (its answer: mean X ms` down
+from 7-18 ms toward the read's time, the helper's `oneios-display: 10 s: ... from Y ms after xnuhost sent the frame`
+under 1 ms, and its new `posted mean Z ms ... after the read's answer` (the buffer wait and fill, now off the guest's
+path); the `frame:` line's "the helper's answer". Not run on the phone.
+
 ## 3. Tests on the PC
 
 `cd runtime && cargo test -p xnuhost -p drm2kgsl-sys` (also part of `runtime/host-tests.sh` and `runtime/build.sh

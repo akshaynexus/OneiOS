@@ -13,6 +13,8 @@ pub mod cpu;
 pub mod discard;
 /// The scanout and the display helper.
 pub mod display;
+/// One frame end to end: the 10 s `frame:` line.
+pub mod frame_path;
 /// The interrupt controller.
 pub mod gic;
 /// The 3D renderer's front.
