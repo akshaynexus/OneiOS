@@ -4,12 +4,13 @@
 #
 #   userland/metal/rt/build.sh source      the pin checked out in $M2V_RT_WORK/src (a worktree of external/metal2vulkan,
 #                                          the commit fetched when it is missing), patches/*.patch applied in name order
-#   userland/metal/rt/build.sh check       m2v-rt-check for this machine (Linux or macOS), in $M2V_RT_WORK/target/release
+#   userland/metal/rt/build.sh check       m2v-rt-check and abi_smoke for this machine (Linux or macOS), in $M2V_RT_WORK/target/release
 #   userland/metal/rt/build.sh test        rt's unit tests on the patched source (cargo test -p metal2vulkan-runtime --lib)
 #
 # M2V_RT_WORK defaults to out/m2v-rt (never out/metal, the default add-on's). Needs: the toolchain of the pin's
 # rust-toolchain.toml (nightly-2026-11-03, rustup installs it on first use), llvm-as (LLVM 21 or newer).
-# m2v-rt-check DRIVER [--floor-only | --census FILE...]: see bridge/src/bin/m2v-rt-check.rs; on the laptop
+# m2v-rt-check DRIVER [--floor-only | --census FILE... | --selftest [--qc FILE]]: see bridge/src/bin/m2v-rt-check.rs;
+# abi_smoke DRIVER: the C ABI through NativeMetal's headers (bridge/tests/abi_smoke.c). On the laptop
 #   m2v-rt-check /usr/lib/libvulkan_intel.so                                   the direct path, one dispatch
 #   FD_CHIP_ID=0x43051401 LD_PRELOAD=<mesa>/libfreedreno_noop_drm_shim.so \
 #     m2v-rt-check <mesa>/libvulkan_freedreno.so --census metallibs/*.metallib  Turnip as an Adreno 750
@@ -42,6 +43,8 @@ manifest() {
   local B=$W/bridge
   mkdir -p "$B"
   llvm-as -o "$B/runtime_examples.air" "$S/crates/metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll"
+  llvm-as -o "$B/function_constant.air" "$S/crates/metal2vulkan-validation/fixtures/public/kernel_function_constant_gate_fold.ll"
+  llvm-as -o "$B/scanout_convert.air" "$ROOT/external/NativeMetal/shaders/scanout_convert.ll"
   cp "$S/rust-toolchain.toml" "$B/"
   cat > "$B/Cargo.toml" <<EOF
 [package]
@@ -64,11 +67,22 @@ libc = "0.2"
 EOF
 }
 
+bridge_env() {
+  export NMB_FIXTURE_AIR=$W/bridge/runtime_examples.air NMB_FC_AIR=$W/bridge/function_constant.air NMB_SCANOUT_AIR=$W/bridge/scanout_convert.air
+  # The translator source the runtime is built from (its pin and our patches), which keys the frontend's shader priming.
+  NMB_RUNTIME_ID=$( (echo "$PIN"; cat "$HERE"/patches/*.patch) | sha256sum | cut -c1-32)
+  export NMB_RUNTIME_ID
+}
+
 check() {
   [ -e "$S/.git" ] || source_tree
   manifest
-  (cd "$W/bridge" && NMB_FIXTURE_AIR=$W/bridge/runtime_examples.air CARGO_TARGET_DIR=$W/target cargo build --release --bin m2v-rt-check)
-  say "$W/target/release/m2v-rt-check"
+  bridge_env
+  (cd "$W/bridge" && CARGO_TARGET_DIR=$W/target cargo build --release)
+  # The C ABI as the frontend calls it, against NativeMetal's own headers (bridge/tests/abi_smoke.c).
+  cc -O1 -Wall -I "$ROOT/external/NativeMetal/bridge" -o "$W/target/release/abi_smoke" "$HERE/bridge/tests/abi_smoke.c" \
+    "$W/target/release/libadreno_metal_bridge_rt.a" -lpthread -ldl -lm
+  say "$W/target/release/m2v-rt-check, $W/target/release/abi_smoke"
 }
 
 unit_tests() {

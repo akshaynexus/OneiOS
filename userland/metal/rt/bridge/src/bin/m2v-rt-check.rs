@@ -22,6 +22,9 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
     let floor_only = args.iter().any(|a| a == "--floor-only");
+    if args.iter().any(|a| a == "--selftest") {
+        return selftest(path, args.iter().position(|a| a == "--qc").and_then(|i| args.get(i + 1)));
+    }
     let opened = match driver::open(path) {
         Ok(opened) => opened,
         Err(why) => {
@@ -188,4 +191,27 @@ fn census_all(physical: &rt::PhysicalDevice, files: &[String]) -> ExitCode {
         }
     }
     if failed == 0 { ExitCode::SUCCESS } else { ExitCode::from(1) }
+}
+
+/// `--selftest [--qc FILE]`: the plug-in's nmb_selftest steps through the bridge's own device open (compute, render, a render
+/// into imported host pages, and the census of FILE, QuartzCore's library on the phone). Exit 0 when every step ran and every
+/// output and texel was right.
+fn selftest(path: &str, qc: Option<&String>) -> ExitCode {
+    let qc = qc.map(|f| std::fs::read(f).expect("the --qc file")).unwrap_or_default();
+    let device = match adreno_metal_bridge_rt::abi::device::open(path, None) {
+        Ok(d) => d,
+        Err(why) => {
+            println!("selftest: device: {why}");
+            return ExitCode::from(1);
+        }
+    };
+    // SAFETY: plain integers and bytes.
+    let mut out: adreno_metal_bridge_rt::selftest::NmbSelftest = unsafe { std::mem::zeroed() };
+    let t = std::time::Instant::now();
+    let code = adreno_metal_bridge_rt::selftest::run_all(&mut out, None, &device, &qc);
+    let message = String::from_utf8_lossy(&out.message).trim_end_matches('\0').to_string();
+    println!("selftest {:#x} ({} ms): compute_bad {} render_bad {} import_bad {} qc functions {} kernels {} ok {} failed, pairs {} ok {} failed{}",
+             code, t.elapsed().as_millis(), out.compute_bad, out.render_bad, out.import_bad, out.qc_functions, out.qc_kernels_ok,
+             out.qc_kernels_failed, out.qc_pairs_ok, out.qc_pairs_failed, if message.is_empty() { String::new() } else { format!(": {message}") });
+    if code == 0 && out.compute_bad == 0 && out.render_bad == 0 && out.import_bad == 0 { ExitCode::SUCCESS } else { ExitCode::from(1) }
 }

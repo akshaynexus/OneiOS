@@ -192,12 +192,56 @@ Decisions: **upstream** (the new tip does it), **bridge** (the consumer's job in
 
 ## What is left (milestones 3 to 6)
 
-- **3, the bridge**: the 183 C functions of `NativeMetalBridge.h` and `NativeMetalObjects.h` on rt's API, the ABI
-  unchanged. In rt the consumer places buffers in blocks it takes (16 MiB units, 64 KiB granularity), so the bridge
-  needs a small-buffer suballocator; it also keeps heaps, labels, reflection (from the library's AIR), binary
-  archives and Memoryless backings itself (rt README, "What the consumer implements"). Not started.
+- **3, the bridge**: written (below, "Milestone 3"); not yet in an add-on.
 - **4, our fixes**: the **port** rows above, each its own patch here (0009, 0015, 0023, the queue priority, the
   DontCare stores).
 - **5, the build**: `userland/metal/build.sh` with a switch that builds this bridge instead of the base's; the add-on
   with the camera plug-in.
 - **6, the fallback**: both add-ons for the Mac, the row in `docs/switches.md`.
+
+## Milestone 3: the bridge on rt (written, tested on the laptop; not yet in an add-on)
+
+`bridge/src/abi/` implements all 184 C functions of NativeMetal's `NativeMetalBridge.h` and `NativeMetalObjects.h`
+(b0d6a07) on rt, the ABI unchanged: `nm` of the static library against the headers' list, 184 and 184, none missing or
+extra. The frontend's other bridge calls (`nmb_slowest_pass`, `nmb_memory_row`, `nmb_memory_top`, `m2v_placement_sites`,
+`m2v_pool_report`) are weak in the plug-in or defined by the frontend itself.
+
+What the bridge does that the old runtime did (rt's README, "What the consumer implements"):
+
+| Piece | How |
+|---|---|
+| The driver | `driver.rs`: `dlopen` of Turnip's dylib, its `vk_icdGetInstanceProcAddr`, `Instance::from_driver` (rt 0001) |
+| Indices | `indices.rs`: rt asks the consumer to number every texture and sampler (1..65,535 and 1..3,999), constexpr samplers one index per state |
+| The retire gate | `abi/device.rs` `RetireGate`: what a released object leaves (an index, a small buffer's slot, a heap range) is handed out again only once every command buffer made before the release retired (rt's rule for indices; the bridge's for its own ranges) |
+| Buffers | `abi/memory.rs`: more than 32 KiB, a block of its own; up to 32 KiB, a slot of a 256 KiB slab of one power-of-two size (256 B..32 KiB), so small buffers do not take rt's 64 KiB granule each; no-copy buffers are `import_host_memory` with Metal's deallocator as the import's release |
+| Heaps | one block per heap and the bridge's first-fit placement for automatic heaps; heap textures' size answers rounded up to their alignment (NativeMetal 0017) |
+| Textures | rt's, at the bridge's indices; Memoryless storage as Private (rt builds no Memoryless texture); the options word, rotation, framebufferOnly, isDrawable and purgeable state kept by the handle |
+| Argument encoders | the translator's `ArgumentBufferLayout`, written by the bridge through the buffer's mapping (8 bytes an argument) |
+| Reflection | the translator's, as the old bridge's JSON (the same code) |
+| Binary archives | their additions make the state (rt's pipeline cache directory keeps it); a serialized archive is an empty file |
+| Device answers | the old runtime's answers on the Adreno 750 (dumped on the laptop: 28 counts, 23 flags, the public queries), the Vulkan limits read where they depend on the device; `supportsFamily:` true for Apple1-3 and Common1-2 as before |
+| Telemetry rows | rt's `Metrics` and `Gauges` where they count the same thing; the stage ring, allocation sites and no-copy remaps answer nothing |
+
+Not made by this bridge (each call fails with its reason in `nmb_last_error`): two-plane YCbCr textures over a surface
+(`supportsYCBCRFormats12` answers NO), sparse heaps, a tessellation factor scale other than 1, patches drawn with a
+control point index buffer, blit option `RowLinearPVRTC`, pipeline states' resource IDs (0; rt refuses indirect command
+buffers on Turnip anyway).
+
+Tests on the build laptop (2026-11-24), `userland/metal/rt/build.sh check`, the Intel GPU through ANV and the direct path:
+
+```
+$ out/m2v-rt/target/release/abi_smoke /usr/lib/libvulkan_intel.so     # 34 checks through NativeMetal's headers
+... 0 failed
+$ out/m2v-rt/target/release/m2v-rt-check /usr/lib/libvulkan_intel.so --selftest --qc out/m2v-rt/metallibs/QuartzCore-default.metallib
+selftest 0x0 (142 ms): compute_bad 0 render_bad 0 import_bad 0 qc functions 249 kernels 38 ok 3 failed, pairs 13 ok 8 failed
+```
+
+`abi_smoke` covers: the device answers (69 answered, 6 without an answer as before), small, large and no-copy buffers
+(its deallocator runs once rt frees the import), the fixture's kernel and quad through the ABI's descriptors, getBytes and
+replaceRegion, a view, a heap with a buffer and a texture, a sampler, a depth/stencil state, an argument encoder, a shared
+event a command buffer signals, a fence, blits, the memory counts. The arm64e-apple-ios static library builds
+(nightly-2026-11-03, `-Z build-std`, 1 min 36 s, 34 MB); it has not run on the phone.
+
+Known performance gap found while porting: rt makes a texture over imported host memory (every IOSurface: the render
+server's client surfaces) an optimal image of its own and copies the bytes in and back once a submission (rt README,
+`Buffer::new_texture`), which NativeMetal 0014/0015 had removed on the old runtime. To port (milestone 4).
