@@ -68,7 +68,7 @@ xnuhost --selftest            # on the phone: page size, address bits, PAC keys 
 | `FILE.trustcache`, `.vroot`, `.gpuaddon`, `.ramdisk`, `.adt` | optional | DarwinBoot's sidecars beside the kernel, same formats and checks. `.gpuaddon` is the boot addon the kernel writes into the Data store: the Metal plug-in (`addons/`) and, since hosted 0090, the capture plug-in (`camera/`); `oneios-tool ios addon` makes it, `phone addon` stages it (the manifest need not list it) |
 | `DIR/identity.adt` | optional | the device's own decoded device tree: model, target-type, board name and `/product` are taken from it. Without it the root has model iPhone18,2 and target-type V54 (since fix-ios-compressor: iOS names its jetsam properties by it, section 2.2). No script writes one (2026-11-13: `scripts/image/build.sh` does not, and the PC's set `out/image-pc/24A446` has none), so `/product` is only `product-name`, `artwork-scale-factor` and `model`: none of the iPhone's own `/product` (`artwork-display-gamut P3`, `oled-display`, `graphics-featureset-class APPLE10`, `ui-background-quality 100`, ...), which MobileGestalt answers from. Since 2026-11-22 (fix-artwork-traits) the no-identity `/product` also has the artwork and GPU feature-set values CoreUI needs (`artwork-device-idiom` phone, `artwork-device-subtype` 2868, `artwork-display-gamut` sRGB, `artwork-dynamic-displaymode` 0, `graphics-featureset-class` APPLE10 and its fallbacks without APPLE2; [userland.md](userland.md) "The artwork answers"). `--set identity=out/kernel-inputs/24A446/devicetree.bin` (the decoded tree as it is) gives them for one run (`kernel/patches/oneios-hosted/display/README.md`, "What iOS reads about the panel") |
 | `--display-format bgrx\|rgba16f` (`display-format=`) | `bgrx` | the frame's pixels (section 2.8): 8-bit sRGB, or half floats that keep wide colour and EDR |
-| `DIR/xnuhost.conf` | optional | `key=value` lines: `boot-args`, `boot-args-add`, `disk`, `disk-rw`, `data-store`, `scale`, `scale-fixup`, `text-fixup`, `ram`, `ram-percent`, `ram-host-floor`, `host-mem-log`, `ram-giveback`, `ram-prefault`, `ram-lock`, `ram-session-reserve`, `ram-unlock-below`, `ram-huge`, `ram-gpu-reserve`, `ram-pagetable-percent`, `ram-hold-percent`, `ram-tasks`, `ram-task-cost`, `ram-tasks-awake`, `ram-task-idle-cost`, `task-trim`, `task-trim-idle`, `ram-fit-terms`, the switches of docs/switches.md (`uclamp-rule`, `gpu-down`, `gpu-blob-entries`, `wifi-ring-wait`, `wifi-send-wait`, `wifi-buffers`, `wifi-joined-scan`, `encoder-10bit`, `encoder-warmup`, `stop-loop`), `ready-content-wait`, `bridges`, `wifi`, `bluetooth`, `haptics`, `pen`, `encoder` (and the others of this table that say so); the command line wins. Until 2026-11-21 `bridges=`, `wifi=`, `bluetooth=` and `haptics=` here were read and then ignored (only the command line's applied); no image this tree makes sets them |
+| `DIR/xnuhost.conf` | optional | `key=value` lines: `boot-args`, `boot-args-add`, `disk`, `disk-rw`, `data-store`, `scale`, `scale-fixup`, `text-fixup`, `ram`, `ram-percent`, `ram-host-floor`, `host-mem-log`, `ram-giveback`, `ram-ondemand`, `ram-prefault`, `ram-lock`, `ram-session-reserve`, `ram-unlock-below`, `ram-huge`, `ram-gpu-reserve`, `ram-pagetable-percent`, `ram-hold-percent`, `ram-tasks`, `ram-task-cost`, `ram-tasks-awake`, `ram-task-idle-cost`, `task-trim`, `task-trim-idle`, `ram-fit-terms`, the switches of docs/switches.md (`uclamp-rule`, `gpu-down`, `gpu-blob-entries`, `wifi-ring-wait`, `wifi-send-wait`, `wifi-buffers`, `wifi-joined-scan`, `encoder-10bit`, `encoder-warmup`, `stop-loop`, `takeover-reclaim`, `takeover-swappiness`), `ready-content-wait`, `bridges`, `wifi`, `bluetooth`, `haptics`, `pen`, `encoder` (and the others of this table that say so); the command line wins. Until 2026-11-21 `bridges=`, `wifi=`, `bluetooth=` and `haptics=` here were read and then ignored (only the command line's applied); no image this tree makes sets them |
 | `boot-args-add=WORDS` (`--set`, or the image set's `xnuhost.conf`; 2026-11-22) | none | boot arguments added to the guest's, whichever gave those (`--boot-args`, the image set's `boot-args`, or the built-in default), each unless they name it already (`NAME` or `NAME=...`): what `boot-args` says wins, and a profile adds one argument (`oneios-disable-jobs=...`, a debugging switch such as `oneios-ubt=`) without repeating the defaults. A `boot-args=` line that replaced the defaults was the cause of logo-only stalls in the S25 Ultra forks ([s25.md](s25.md)). The command line's `boot-args-add` wins over the image set's; a result over 1023 bytes is refused (exit 2). Ported from `YumikoHayamato/OneiOS` (440abb2). A runtime older than this key refuses it as a bad setting and does not start: stage the runtime before an image set that has it |
 | `DIR/overlay/userland/xnuhost.conf` | optional | the same, written by the userland hook: `scale=3` or `scale=2`, the UI scale the image's Data seed was made for (`docs/userland.md` "The screen") |
 | `--width W --height H`, `--hz N` (or `width=`, `height=`, `hz=` in the image set's `xnuhost.conf`) | the display helper's report of the panel | the guest's display mode (section 2.8); for a PC run or another panel |
@@ -114,12 +114,14 @@ xnuhost --selftest            # on the phone: page size, address bits, PAC keys 
 | `--set session-mode=hosted\|takeover` (`session-mode=`, also in `xnuhost.conf`; 2026-11-23) | `hosted` | `takeover`: the opt-in Android takeover (section 2.9d): only with `mode=takeover`, `input=1` and a host-table row that allows it (the S24 Ultra, the S26 Ultra), else exit 2; it grabs the native touchscreen alone (`touch-exclusive` on unless given), the side keys read and never grabbed. `hosted`: the session as before, byte for byte |
 | `--host-info` | - | prints `host-info: device=NAME takeover=yes\|no (why)` for this phone and exits (section 2.9d); no image needed. The OneOS switch's preflight reads it |
 | `--set takeover-stops=default\|none\|NAME,...` (`takeover-stops=`, also in `xnuhost.conf`; 2026-11-23) | `default` | the Android services the OneOS switch stops in `session-mode=takeover` (section 2.9d): each NAME one of `cameraserver`, `mediaextractor`, `mediametrics`, `media.tuner`, `perfmond`, `wificond`, `netd`, `media`, once; anything else is a bad setting (exit 2). xnuhost only checks it and names it in the takeover line; the switch reads it from the image's `xnuhost.conf` and does the stops. Accepted and unused in `hosted` |
+| `--set takeover-reclaim=0\|1`, `takeover-swappiness=N\|keep` (also in `xnuhost.conf`; takeover-ram, 2026-11-23) | `1`, `keep` | the OneOS switch's memory steps in `session-mode=takeover`, after its stops and before xnuhost (section 2.9d, "More RAM in the takeover"): `takeover-reclaim=1` drops the caches (`sync`, `drop_caches` 3) and compacts each zram device; `takeover-swappiness=N` (0-200) sets `vm.swappiness` for the session, One UI's value saved first and written back by every return. xnuhost only checks the words (anything else is a bad setting, exit 2) and names a value that is not the default in the takeover line. Accepted and unused in `hosted` |
 | `--prop-wait SECONDS NAME=VALUE...` (first argument only) | - | waits until one of Android's properties NAME has VALUE (prints each such NAME, exit 0), or SECONDS (0 to 3600) pass (exit 1); 2 for a bad command line or a build without Android's property area (section 2.9d). The OneOS stop loop's wait; nothing of a session runs |
 | `--gpu auto\|3d\|2d` (`gpu=`, also in `xnuhost.conf` since 2026-11-21) | `auto` (the A56's entry: `2d`) | the GPU ([gpu.md](gpu.md) 2): `auto` 3D when KGSL opens, `3d` or do not start, `2d` the scanout only and no GPU pool. Before 2026-11-21 an image set's `gpu=` was read and dropped |
 | `--set usb-log=SECONDS` | 3 | how often the phone's USB gadget is read for its `usb:` line (section 2.9a), which is logged at the start, on every change and at the stop; 0 = off |
 | `--set ready-content-wait=SECONDS` | 120 | `session/ready` comes at the guest's first frame of its own that is not all black, or this long after its first frame of its own when all were black; 0 = at its first frame (the rule before 2026-11-15); 0 to 480 (section 2.8, "the ready rule") |
 | `--set ram-meminfo=FILE` | `/proc/meminfo` | where `ram=auto` reads `MemTotal` and `MemAvailable` (tests) |
 | `--set ram-giveback=0\|1` | **0** (since fix-ram-locked, 2026-11-15) | 0: the RAM is **held fixed and locked for the session** (section 2.2, "Fixed RAM": prefaulted, `mlock`ed, no free pages given back; the owner's rule: iOS's RAM is never swapped). 1: 0058's way again (faulted in as used, free pages given back, the host may swap it); one setting flips it back |
+| `--set ram-ondemand=0\|1` (also in `xnuhost.conf`; takeover-ram, 2026-11-23) | **0** | **Option C, for the owner to choose; against the rule that iOS's RAM is fixed (2026-11-15).** 1: the RAM is not prefaulted; each page is locked as iOS first touches it (`mlock2` `MLOCK_ONFAULT`: the host never swaps a page it holds), iOS's free pages are given back (`ram-giveback=1`'s way, kernel 0058), the valve and the locked headroom stay. With `ram=SIZE` above what fits the top is backed only while iOS uses it; when iOS fills it the valve opens (the host may swap it from there) or the kernel's OOM killer ends xnuhost (section 2.2, "On demand") |
 | `--set ram-prefault=0\|1`, `ram-lock=0\|1` | 1, 1 (with `ram-giveback=0`) | prefault the whole memfd on a nice-19 thread, `mlock`ing it as it goes; at the first `mlock` that fails the prefault stops and what is locked stays locked (where it fails at the first step, EPERM or an RLIMIT_MEMLOCK under 16 MiB, nothing is prefaulted); nothing is prefaulted unlocked unless `ram-lock=0`; neither if the RAM is more than fits |
 | `--set ram-session-reserve=SIZE` | 1536M where the lock can work (CAP_IPC_LOCK, or no RLIMIT_MEMLOCK), else 1792M (768M and 1G before 2026-11-23) | the headroom: MemAvailable what fits leaves the host at the session's peak, and the level of the pressure line (section 2.2, "What fits"); with the lock never less than `ram-unlock-below` + 256 MiB; the lock is tried only if the RAM is within what fits |
 | `--set ram-view=SIZE\|auto\|off` (also in `xnuhost.conf`) | **off** (until a phone boot proves it) | the memory view (section 2.2, "The memory view"): iOS is told SIZE of DRAM (`auto` = 12 GiB, an iPhone18,2's) over the same locked RAM: `hw.memsize_physical`, an iPhone18,2's per-process limits scaled to SIZE, and room in iOS's compressor for SIZE (`kern.compressor_pool_multiplier`). The RAM itself stays `ram=` (with `ram=auto`, the most that fits locked) |
@@ -511,6 +513,51 @@ multiple of 2 MiB away from the link base, which is the slide the kernel finds w
     before any One UI service that is left: that is the session's end and the way back, by design ("The way back",
     below). The pressure line prints `oom_score` and `oom_score_adj` as read, so a log shows it. The fix is the size:
     enough room that the OOM killer has no reason to run.
+  - **The host's breakdown (takeover-ram, 2026-11-23, `src/hostmem.rs`; lasting, read only).** The takeover session of
+    2026-11-23 21:11 had MemTotal 11,084 MiB and MemAvailable 8,458 MiB at xnuhost's start, and no line said what held
+    the other 2,626 MiB. Two lines now do. At the start, before the guest's RAM is held: `memory: the host at the start
+    (before the guest's RAM is held; MiB): MemTotal T, MemFree F, MemAvailable A; anonymous .., page cache .. (dirty ..),
+    shmem .., mlocked .., unevictable ..; the kernel's: unreclaimable slab .., reclaimable slab .., kernel stacks ..,
+    page tables .., vmalloc .., per-CPU ..; swap U of S used (swap cache ..); other keys: KEY N, ...; zramN: P MiB of
+    pages in R MiB of RAM (compressed .., most .. MiB; same pages ..), backing_dev ..; dma-buf heap pools .. MiB; KGSL
+    (MiB): page_alloc .., ...; min_free_kbytes .., watermark_scale_factor .., swappiness .., the zones' high watermarks
+    .. MiB; processes by anonymous memory (MiB): NAME[ xCOUNT] ANON[ (swap .., shmem ..)], ... (14 names); all N
+    processes: anonymous .. MiB, swap .. MiB`. `other keys` is every /proc/meminfo key the line does not name otherwise
+    with 1 MiB or more, as the kernel names it (CMA, Samsung's `Rbin*`, `ION_*`, a vendor's GPU keys). The processes are
+    grouped by name (the iOS tasks share one), largest anonymous memory and swap first: the kept services of a takeover
+    and their swapped pages, surfaceflinger, the composer, the display helper. At the stop, for the session's lowest
+    MemAvailable (the pressure watch's 5 s look, a new look at each 64 MiB further down, the processes walked at most
+    once a minute): `memory: the host at its lowest MemAvailable (M MiB, T s after the start; MiB): ...` with the same
+    parts. Cost: a few small files per look, a handful of looks in a session, one /proc walk at the start and at most
+    one a minute while MemAvailable falls. Host tests: `hostmem::tests` (the meminfo part with CMA and RBIN keys, zram's
+    mm_stat, the zones' high marks, processes by name).
+  - **On demand (`ram-ondemand=1`, option C, takeover-ram 2026-11-23; off by default, for the owner to choose, against
+    the rule of 2026-11-15 that iOS's RAM is fixed).** The owner's goal of 2026-11-23 ("at least 10 GB of RAM for iOS")
+    is more than fits locked on this phone (section 2.9d, "More RAM in the takeover"). This option lets a guest be
+    larger than what fits: `ram-giveback=1`'s way (not prefaulted, no `XH_FEATURE_RAM_FIXED`, iOS's free pages given back
+    by 0058's reporting) with the whole window locked on fault (`ramfix::lock_on_fault`: `mlock2(MLOCK_ONFAULT)`, the raw
+    system call; bionic has `mlock2` only from API 30). A page iOS touches comes in locked, so the host never swaps a
+    page it holds; a page never touched costs nothing; a page given back (a hole punched) is freed, and comes back
+    locked when touched again. What stops a shmem page of the memfd from going to zram is the lock alone: the memfd's
+    pages are shmem, which Linux swaps like anonymous memory; `oneios_session` has no `memory.swap.max` (the facts line
+    prints `-`), and xnuhost writes no cgroup file. What happens when iOS fills it: iOS keeps few free pages (its file
+    cache takes the rest: the 21:11 session's 4.3 GiB guest had free 677 MiB 69 s after the start and 31 MiB at 132 s,
+    with 1.7-2.7 GiB of file pages), so a guest larger than what fits is filled within minutes of use. Then, in order: the host's MemAvailable
+    falls, the trim's pressure mode trims every task idle 2 s, the pressure line names the users, the host reclaims
+    page cache and swaps the kept services; under `ram-unlock-below` the valve unlocks the RAM once (from there the host
+    may swap iOS's pages: against the rule, but the way back fits); past that the kernel's OOM killer ends xnuhost (the
+    largest RSS, `oom_score_adj` 500) and the watcher returns to One UI, as for any end of xnuhost. `ram=auto` with it is
+    still what fits; the size above that is `ram=SIZE` by hand, and the start says so: `memory: ram=N MiB with
+    ram-ondemand=1 is X MiB more than fits locked beside the session's needs (F MiB): ...`. Lines: `memory: ram-ondemand=1
+    (option C, against the fixed-RAM rule): the guest's RAM, N MiB (X MiB of it more than fits locked beside the
+    session), is faulted in as iOS uses it and each page is locked as it comes in ...`, and the `memory: fixed RAM:` line
+    says `on demand, each page locked as it comes in, free pages given back (ram-ondemand=1)` (`on demand, unlocked by
+    the valve` after it opened); its `in the host's RAM` is a mincore of the whole RAM. Host tests:
+    `ramfix::tests::lock_on_fault_takes_pages_as_touched` (a real `MLOCK_ONFAULT` memfd on the build laptop: nothing in
+    before a touch, two touches bring two pages, a punched hole frees one, the valve's munlock), `config::tests::ram_config`
+    (the setting, the image set's, the locked headroom, a size above what fits taken). **Not run on a phone.** The
+    measured alternative inside the rule is `ram-view=` (above): iOS is told 10-12 GiB over the locked RAM and its own
+    compressor holds the rest.
 - **Fixed RAM (`ram-giveback=0`, `src/ramfix.rs`, fix-fixed-memory, 2026-11-13; the default since fix-ram-locked,
   2026-11-15, the owner's rule that iOS's RAM is never swapped; `ram-giveback=1` turns it off).** The owner's requirement:
   iOS's RAM must not grow and shrink during a session. The phone's c2d281a session showed why: the memfd was faulted in
@@ -1942,6 +1989,63 @@ cache, none of which the takeover's stops end. The stops are idle daemons (no wo
 headroom can go down with stage 3 (surfaceflinger, the composer and the helper gone), from a takeover session's own
 `memory:` lines. The proof lines: the switch's `Android takeover: stopped ...; host MemAvailable A -> B MiB`, then
 xnuhost's `memory: ram=auto: host MemTotal ... MemAvailable B' MiB; the guest gets N MiB`.
+
+**More RAM in the takeover (takeover-ram, 2026-11-23).** The owner (2026-11-23 21:30): "We need at least 10 GB of RAM
+for iOS. Find ways to do it", in `session-mode=takeover` only. What the logs say (`out/session-logs/2026-11-23-mac-takeover/`,
+the session of 21:11, 4608 MiB locked, before the trim):
+
+- RAM chips 12 GiB; Linux MemTotal 11,084 MiB (the rest is the firmware's carve-outs). The switch: `Android takeover:
+  stopped cameraserver mediaextractor mediametrics wificond ...; host MemAvailable 6933 -> 8441 MiB` (system_server's
+  late end may be in that too [guess]). xnuhost's start: MemAvailable 8,458 MiB, so 2,626 MiB of MemTotal is the kernel, the kept
+  services, zram's pool (547 MiB of Android's pages swapped) and caches MemAvailable does not count: nothing named them
+  (the start line of 2.2, "The host's breakdown", names them from the next boot).
+- 6 s after the start, the guest held and locked: MemAvailable 3,412 MiB, 438 MiB beyond the guest's 4,608 (9.5 %: the
+  hold, the display helper's start, the boot's first host buffers). The lowest: 2,172 MiB at 126 s, page tables 662
+  MiB (57 at the start); then 2.3-2.5 GiB with page tables 337-478 MiB. KGSL's own memory 2.1 MiB (`kernel 2166784`,
+  `kernel_max 2363392`); `imported_mem` 2.2-2.4 GB is the GPU's blobs, inside the guest's RAM.
+- With the trim (07b10a8) the same start gives `ram=auto` (8,458 - 1,536 - 256 - 850) / 1.07 = 5,435 -> **5,376 MiB**.
+
+**10 GB locked does not fit on this phone.** 10 GB (9,537 MiB) locked needs, with today's terms, 9,537 x 1.07 + 850
+(tasks) + 256 (GPU) + 1,536 (headroom) = 12,847 MiB of MemAvailable at the start, and even with every term cut hard
+(headroom 512, tasks 400, GPU 64, hold 3 %) 10,799 MiB: MemTotal is 11,084, and the kernel's own share (its page
+array for 12 GiB alone is about 190 MiB, the slab, stacks, zram's pool) never leaves it. 10 GiB (10,240 MiB) is more
+than MemTotal less any kernel at all. What is possible:
+
+| Way | Switch (default) | What it gives | State |
+|---|---|---|---|
+| A1. The caches, the page pools, zram's free space: `sync`, `drop_caches` 3 (it runs every shrinker: the dma-buf heaps' and KGSL's pools, the slab, zsmalloc's compaction) and each zram device's `compact`, after the stops, before xnuhost | `takeover-reclaim=1` (on; `0` off) | what MemAvailable did not count before; its line measures it: `Android takeover: caches dropped, zram compacted on N device(s) ...; host MemAvailable A -> B MiB, MemFree .., zram's RAM .., dma-buf heap pools ..`. [U] until a boot, 50-300 MiB [guess] | built; nothing to put back |
+| A2. More stops: the kept services that no bridge uses | `takeover-stops=` (names to add to `TAKEOVER_STOPPABLE` after a boot) | the start line's process list names them with their anonymous memory and swap | the list is the next step: the start line (or `phone procs --sort mem`) first |
+| A3. Stage 3: surfaceflinger, the composer and the display helper stopped (`display=drm`) | (not built) | their anonymous memory (the start line names it; 150-300 MiB [guess]) and a lower headroom (their working set is in it) | plan only: [plan-ios-first-session.md](plan-ios-first-session.md) 5b, 3b-3d |
+| A4. zram's pool | none | the pool shrinks only as the kept services' swapped pages are freed (the stops) and by A1's compaction; a pool cannot be made smaller with pages in it (a `disksize` change needs a reset, which drops them). Writing its pages out needs a `backing_dev` (the start line prints it) | nothing more to build |
+| A5. logd's buffers, CMA, Samsung's RBIN | none | logd: in the process list; CMA pages take the memfd's movable pages, so no loss; RBIN: the start line's `Rbin*` keys say how much there is; no switch of this tree gives it back | measured only |
+| B1. The headroom (1,536 MiB, the host's swap-in floor of 2026-11-23) | `takeover-swappiness=N` (`keep`) | with a low swappiness the host drops page cache before it swaps the kept services, which is what the floor was; then the headroom can go down (Integrate's `ram-session-reserve` for the takeover, from a takeover boot's pressure and swap-in lines): 256-512 MiB [guess] | built, off |
+| B2. The tasks (850 MiB with the trim) | `task-trim` | the trim's `tasks: trim:` line measures awake and trimmed tasks | on main's way (fix/task-trim) |
+| B3. Holding the RAM (7 %, 376 MiB at 5,376) | - | the hold line (`memory: holding the guest's RAM: ... by user`) names it | measured from the next boot |
+| B4. The GPU's 256 MiB | `ram-gpu-reserve=` | KGSL's own is 2.1 MiB; the blobs' udmabuf tables about 1 % of 2.2 GB [estimate]: 128 MiB would do [estimate] | not changed (the task cost was derived with the 256 in it) |
+| C. A guest larger than what fits, the top backed on demand | `ram-ondemand=1` (**off**) with `ram=SIZE` | iOS is told SIZE; the host holds only what iOS uses, each page locked as it comes in; iOS fills it within minutes (its file cache), then the valve (the host swaps iOS) or the OOM kill of xnuhost (the return) | built, off: the owner decides (2.2, "On demand") |
+| Inside the rule: iOS told more than its RAM | `ram-view=10G` or `auto` (**off**) | iOS's own compressor holds up to twice the RAM's pages, never the host's swap (2.2, "The memory view") | built 2026-11-15, not yet proven on a phone |
+
+**The largest guest (D), with the fixed, locked RAM kept** (each line `(MemAvailable - headroom - GPU - tasks) / 1.07`,
+in 256 MiB steps; [estimate] until the next boot's lines measure the gains): today with the trim 5,376 MiB; with A1
+and A2 at +300 MiB, B4 at 128 and B1 at 1,280: (8,758 - 1,280 - 128 - 850) / 1.07 = 6,074 -> 5,888 MiB; with stage 3
+too (+250 MiB, headroom 1,024): (9,008 - 1,024 - 128 - 850) / 1.07 = 6,547 -> **6,400 MiB**, about 6.3 GiB. The bound
+with nothing of Android left but the kernel (1.0-1.5 GiB [guess]): about 8 GiB. With C the guest can be 9.5 or 10 GiB,
+but only what fits (the figures above) is safe: past it iOS is swapped or the session ends. With `ram-view=10G` over a
+locked 5.4-6.4 GiB, iOS's apps get a 10 GiB device's limits and its compressor's room (at 2-3:1 [guess] 9-12 GiB of
+pages) without the host swapping anything: the way to "10 GB for iOS" that keeps the rule.
+
+The three keys (`takeover-reclaim`, `takeover-swappiness`, `ram-ondemand`) are rows of [switches.md](switches.md) and words of
+the `switches:` line. The proof lines for the next takeover boot (the Mac): the switch's `Android takeover: caches dropped ...` line (A1's
+MiB); xnuhost's `memory: the host at the start ...` (A2, A5: the processes and the kernel's parts),
+`memory: holding the guest's RAM: ...` (B3), `tasks: trim: ...` (B2), and at the stop `memory: the host at its lowest
+MemAvailable ...` (the peak by user). A boot with `takeover-swappiness=20` in `overlay/userland/xnuhost.conf` then
+gives B1: `Android takeover: vm.swappiness 100 -> 20 ...`, the pressure and `thermal:` swap-in figures at the lowest
+MemAvailable, and the return's `vm.swappiness back: 100`.
+Host tests: `config::tests::session_mode` (the two words, the image set's and the command line's, the takeover line naming
+them, words refused), the fork's `OneiosScriptTest.theTakeoversMemoryStepsAndTheReturnPutsSwappinessBack` (the default
+steps on a fake phone's nodes and their line, `takeover-reclaim=0`, `takeover-swappiness=20` saved, written and put back
+by the return, words that change nothing) and its order check (the steps after the stops, before the stop loop; the
+return's put-back on both of its ways). **Not run on a phone.**
 
 Tests. The C runtime (`runtime/xnuhost/tests/test_xnuhost.c` `test_session_mode`, on `main`, on the build laptop,
 2026-11-23: 14325 checks, 0 failed): the table (only the two rows), hosted equal to no setting, takeover on both phones

@@ -14,6 +14,9 @@ use crate::discard::{self, DISCARD, FIXED_REFUSED};
 use crate::mem;
 use crate::ramfix::{self, Counters, Ramfix};
 
+/// The host at its lowest (low_watch): a new look at each 64 MiB further down.
+const LOW_STEP: u64 = 64 << 20;
+
 /// The memfd's held bytes (st_blocks: swapped pages count too).
 fn held(fd: i32) -> Option<u64> {
     let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
@@ -54,6 +57,11 @@ pub struct MemoryWatch {
     /// counters; and whether the hold line was written
     start: Option<HostLook>,
     held_said: bool,
+    /// the host at its lowest MemAvailable since the start (the breakdown at the stop, hostmem.rs): when (s), MemAvailable,
+    /// the line's text; the last walk of the processes (when, its list); the start (s)
+    low: Option<(u64, u64, String)>,
+    low_procs: Option<(u64, String)>,
+    started: Option<u64>,
 }
 
 /// One look at the host's memory (the hold line).
@@ -87,6 +95,17 @@ impl MemoryWatch {
     pub fn ram_fix_start(&mut self, config: &Config) {
         self.was = Some(ramfix::sample());
         self.start = host_look(config);
+        self.started = Some(mono_s());
+        // The host in full before the guest takes anything (hostmem.rs): where the RAM that MemAvailable does not
+        // count is, and the processes that are left (the takeover's kept services among them).
+        let b = crate::hostmem::breakdown(&config.ram_meminfo, true);
+        if !b.is_empty() {
+            logi!("memory: the host at the start (before the guest's RAM is held; MiB): {b}");
+        }
+        if config.ram_ondemand {
+            self.on_demand_start(config);
+            return;
+        }
         if config.ram_giveback {
             logi!("memory: ram-giveback=1: the guest's RAM is faulted in as it is used and its free pages are given back (0058); not prefaulted, not locked");
             return;
@@ -144,6 +163,36 @@ impl MemoryWatch {
         );
         if ramfix::start(r, m.host, m.size).is_err() {
             loge!("memory: the guest's RAM is not prefaulted");
+        }
+    }
+
+    /// ram-ondemand=1 (option C, docs/booter.md 2.2 "On demand"; off by default, against the owner's fixed-RAM rule of
+    /// 2026-11-15, for the owner to choose): the RAM is locked on fault, never prefaulted, and its free pages are given
+    /// back (no XH_FEATURE_RAM_FIXED: kernel 0058 reports them). The valve runs as for a whole lock.
+    fn on_demand_start(&mut self, config: &Config) {
+        let m = mem::state();
+        let over = m.size.saturating_sub(config.ram_fit);
+        match ramfix::lock_on_fault(m.host, m.size as usize) {
+            Ok(()) => {
+                let opts = ramfix::Options {
+                    unlock_below: config.ram_unlock_below,
+                    meminfo: Some(config.ram_meminfo.clone()),
+                    ..ramfix::Options::default()
+                };
+                self.ramfix = Some(Box::leak(Box::new(Ramfix::on_demand(opts, m.size))));
+                logi!(
+                    "memory: ram-ondemand=1 (option C, against the fixed-RAM rule): the guest's RAM, {} MiB ({} MiB of it more than fits locked beside the session), is faulted in as iOS uses it and each page is locked as it comes in (mlock2 MLOCK_ONFAULT: the host never swaps it); iOS's free pages are given back (0058); the valve: unlocked once if host MemAvailable falls under {} MiB (then the host may swap it); past that the kernel's OOM killer ends xnuhost and the watcher returns to One UI; {}",
+                    m.size >> 20,
+                    over >> 20,
+                    config.ram_unlock_below >> 20,
+                    ramfix::facts()
+                );
+            }
+            Err(e) => loge!(
+                "memory: ram-ondemand=1: mlock2(MLOCK_ONFAULT) of {} MiB failed ({}): the guest's RAM is faulted in as used and given back when free, not locked: the host may swap it",
+                m.size >> 20,
+                xh_core::sys::strerror(e)
+            ),
         }
     }
 
@@ -223,6 +272,7 @@ impl MemoryWatch {
         let v = config::proc_values(&config.ram_meminfo, &config::HOST_MEMORY_KEYS);
         let Some(available) = v[9] else { return };
         let reserve = config.ram_session_reserve;
+        self.low_watch(config, now, available);
         // The trim's pressure mode (task.rs, "The trim"): with MemAvailable under the headroom and its margin, every task
         // idle 2 s is trimmed; off again 128 MiB above that (no flapping at the line).
         let near = reserve + config::TRIM_PRESSURE_MARGIN;
@@ -295,6 +345,23 @@ impl MemoryWatch {
                     available >> 20
                 );
             }
+        }
+    }
+
+    /// The host at its lowest (hostmem.rs): at each new low of MemAvailable, 64 MiB under the last, a look in full (the
+    /// processes walked at most once a minute), kept for the stop's line. Cheap: a handful of looks in a session.
+    fn low_watch(&mut self, config: &Config, now: u64, available: u64) {
+        if self.started.is_none() || self.low.as_ref().is_some_and(|l| available + LOW_STEP > l.1) {
+            return;
+        }
+        let b = crate::hostmem::breakdown(&config.ram_meminfo, false);
+        if b.is_empty() {
+            return;
+        }
+        self.low = Some((now, available, b));
+        // The processes (one read of each /proc/PID/status, the iOS tasks among them): at most once a minute.
+        if self.low_procs.as_ref().is_none_or(|(walked, _)| now - walked >= 60) {
+            self.low_procs = Some((now, crate::hostmem::procs_text(&crate::hostmem::walk_procs(), 14)));
         }
     }
 
@@ -380,7 +447,11 @@ impl MemoryWatch {
         let k = ramfix::kgsl_memory(std::process::id() as i32);
         let kgsl = if k.is_empty() { String::new() } else { format!("; KGSL: {k}") };
         let r = self.ramfix;
-        let state = if config.ram_giveback {
+        let state = if config.ram_ondemand && r.is_some_and(|r| r.unlocked.load(Relaxed)) {
+            "on demand, unlocked by the valve (ram-ondemand=1)"
+        } else if config.ram_ondemand && r.is_some() {
+            "on demand, each page locked as it comes in, free pages given back (ram-ondemand=1)"
+        } else if config.ram_giveback {
             "given back as freed (ram-giveback=1)"
         } else if !config.ram_prefault {
             "held, not prefaulted"
@@ -469,7 +540,8 @@ impl MemoryWatch {
     /// now, and by user (ram-hold-percent, config.rs: 5.9-7.3 % of 5632 MiB on 2026-11-23, nothing named it). Two reads
     /// of /proc/meminfo and of /proc/vmstat in a session.
     fn held_tick(&mut self, config: &Config) {
-        if self.held_said || !self.ramfix.is_some_and(|r| r.done.load(Acquire)) {
+        // ram-ondemand holds nothing up front: there is no hold to measure (the 30 s lines show what comes in).
+        if self.held_said || config.ram_ondemand || !self.ramfix.is_some_and(|r| r.done.load(Acquire)) {
             return;
         }
         self.held_said = true;
@@ -522,6 +594,22 @@ impl MemoryWatch {
 
     /// The stop: what was held to the end; the prefault ends.
     pub fn stop(&self) {
+        if let Some((at, available, text)) = &self.low {
+            let start = self.started.unwrap_or(0);
+            let procs = self.low_procs.as_ref().map_or(String::new(), |(walked, list)| {
+                format!(
+                    "; processes by anonymous memory ({} s after the start; MiB): {list}",
+                    walked.saturating_sub(start)
+                )
+            });
+            logi!(
+                "memory: the host at its lowest MemAvailable ({} MiB, {} s after the start; MiB): {}{}",
+                available >> 20,
+                at.saturating_sub(start),
+                text,
+                procs
+            );
+        }
         let locked = self.ramfix.map_or(0, |r| {
             ramfix::stop(r);
             r.locked.load(Relaxed)
@@ -593,6 +681,15 @@ pub fn ram_choice_log(config: &Config) {
         // A size given by hand that the host cannot hold: Linux will swap the guest (zram), and every page iOS touches
         // there stalls it.
         if config.ram_fit_available != 0 && config.ram_bytes > config.ram_fit {
+            if config.ram_ondemand {
+                loge!(
+                    "memory: ram={} MiB with ram-ondemand=1 is {} MiB more than fits locked beside the session's needs ({} MiB): that part is backed only while iOS uses it; when iOS fills it the host runs short: the trim's pressure mode, then the valve (the host may swap iOS's RAM from there), then the kernel's OOM killer ends xnuhost and the watcher returns to One UI",
+                    config.ram_bytes >> 20,
+                    config.ram_bytes.saturating_sub(config.ram_fit) >> 20,
+                    config.ram_fit >> 20
+                );
+                return;
+            }
             loge!(
                 "memory: ram={} MiB is more than this host can hold without swapping it ({} MiB fit): the host will swap iOS's RAM; give ram=auto or ram={}M",
                 config.ram_bytes >> 20,

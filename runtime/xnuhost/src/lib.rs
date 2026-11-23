@@ -21,6 +21,8 @@ pub mod gpu3d;
 pub mod gpu3d_kgsl;
 /// The host-call vector.
 pub mod hostcalls;
+/// The host's memory in full: the breakdown lines (docs/booter.md 2.2).
+pub mod hostmem;
 /// The image set.
 pub mod imageset;
 /// /dev/input into virtio-input.

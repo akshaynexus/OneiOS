@@ -75,6 +75,7 @@ fn settings_and_sizes() {
     );
     assert!(c.set("ram-session-reserve", "lots").is_err() && c.set("ram-unlock-below", "2T").is_err());
     assert!(c.set("ram-fit", "x").is_err() && c.set("ram-pagetable-percent", "51").is_err());
+    assert!(c.set("ram-ondemand", "2").is_err() && c.set("ram-ondemand", "1").is_ok());
     assert!(
         c.set("ram-hold-percent", "51").is_err()
             && c.set("ram-tasks", "4097").is_err()
@@ -787,6 +788,19 @@ fn ram_config() {
     let c = go(&with(&["ram-giveback=1"]), true).unwrap();
     assert!(c.ram_bytes == 3840 * M && c.ram_giveback && !c.ram_prefault && !c.ram_lock && !c.ram_lock_expected);
     assert_eq!(c.ram_session_reserve, RAM_SESSION_RESERVE);
+    // Option C (ram-ondemand=1, 2026-11-23, off by default): ram-giveback=1's way (nothing prefaulted or locked whole,
+    // free pages given back) with each page locked as it comes in: the locked headroom and the valve. ram=auto stays what
+    // fits (4096 MiB); a size by hand above that is taken (the start says what happens when iOS fills it).
+    let c = go(&with(&["ram-ondemand=1"]), true).unwrap();
+    assert!(c.ram_ondemand && c.ram_giveback && !c.ram_prefault && !c.ram_lock && c.ram_lock_expected);
+    assert!(c.ram_bytes == 4096 * M && c.ram_session_reserve == RAM_SESSION_RESERVE_LOCKED);
+    let c = go(&with(&["ram-ondemand=1", "ram-unlock-below=0"]), true).unwrap();
+    assert_eq!(c.ram_unlock_below, RAM_UNLOCK_MIN);
+    let mut big = with(&["ram-ondemand=1"]);
+    big.extend(["--ram".to_owned(), "9G".to_owned()]);
+    let c = go(&big, true).unwrap();
+    assert!(c.ram_bytes == 9 * G && c.ram_fit / M == 4229 && c.ram_ondemand);
+    assert!(!go(&with(&[]), true).unwrap().ram_ondemand);
     // The valve stays on with the lock: ram-unlock-below=0 or 64M becomes 128 MiB; a headroom under the valve's level
     // and 256 MiB is raised to that (else the valve would open as soon as the session is up).
     let c = go(&with(&["ram-unlock-below=0", "ram-session-reserve=200M"]), true).unwrap();
@@ -837,6 +851,12 @@ fn ram_config() {
     assert!(c.ram_bytes == 3840 * M && !c.ram_giveback && c.ram_lock);
     let c = run(&["--image", &image, "--set", "ram-giveback=1"]).unwrap(); // the command line wins
     assert!(c.ram_bytes == 3840 * M && c.ram_giveback && !c.ram_lock);
+    // ... and its ram-ondemand=1 too; the command line's =0 wins
+    write(&path, &format!("boot-args=-v debug=0x8\nram-ondemand=1\n{set_meminfo}\n"));
+    let c = run(&["--image", &image]).unwrap();
+    assert!(c.ram_ondemand && c.ram_giveback && !c.ram_prefault);
+    let c = run(&["--image", &image, "--set", "ram-ondemand=0"]).unwrap();
+    assert!(!c.ram_ondemand && !c.ram_giveback && c.ram_prefault);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -1388,6 +1408,28 @@ fn session_mode() {
     assert!(c.session_mode == SessionMode::Hosted && c.takeover_line().is_none());
     write(&conf, "session-mode=takeover\ntakeover-stops=vold\n");
     assert!(mode_finish(&rig, &s24, &[]).is_err());
+
+    // takeover-reclaim= and takeover-swappiness= (2026-11-23): the switch's memory steps, checked here, named in the
+    // takeover line only when not the default (takeover-reclaim=1, keep); words xnuhost does not take are refused.
+    let mut c = Config::new();
+    assert!(c.takeover_reclaim && c.takeover_swappiness.is_none());
+    assert!(c.set("takeover-reclaim", "0").is_ok() && !c.takeover_reclaim);
+    assert!(c.set("takeover-swappiness", "20").is_ok() && c.takeover_swappiness == Some(20));
+    assert!(c.set("takeover-swappiness", "keep").is_ok() && c.takeover_swappiness.is_none());
+    for bad in ["201", "-1", "", "low"] {
+        assert!(c.set("takeover-swappiness", bad).is_err(), "{bad}");
+    }
+    assert!(c.set("takeover-reclaim", "2").is_err());
+    write(&conf, "session-mode=takeover\ntakeover-reclaim=0\ntakeover-swappiness=10\n");
+    let line = mode_finish(&rig, &s24, &[]).unwrap().takeover_line().unwrap();
+    assert!(
+        line.contains("takeover-stops=default; takeover-reclaim=0 (the switch drops no cache); takeover-swappiness=10 (vm.swappiness for the session, put back by the return); the switch's CPU cap"),
+        "{line}"
+    );
+    let c = mode_finish(&rig, &s24, &["--set", "takeover-reclaim=1", "--set", "takeover-swappiness=keep"]).unwrap();
+    assert!(c.takeover_line().unwrap().contains("takeover-stops=default; the switch's CPU cap"));
+    write(&conf, "session-mode=takeover\ntakeover-swappiness=300\n");
+    assert!(mode_finish(&rig, &s24, &[]).is_err());
     fs::remove_file(&conf).unwrap();
 
     // --host-info: one line, no image needed.
@@ -1462,6 +1504,20 @@ fn the_switches() {
         ),
         "{line}"
     );
+    // takeover-ram (2026-11-23): the takeover's memory steps and option C, in the line after stop-loop and ram-fit-terms.
+    let mut m = Config::default();
+    assert!(m.switches_line().contains(
+        " stop-loop=wait takeover-reclaim=1 takeover-swappiness=keep task-trim=1 ram-fit-terms=tasks ram-ondemand=0 "
+    ));
+    for (k, v) in [("takeover-reclaim", "0"), ("takeover-swappiness", "20"), ("ram-ondemand", "1")] {
+        assert!(m.set(k, v).is_ok(), "{k}={v}");
+    }
+    let line = m.switches_line();
+    assert!(
+        line.contains(" takeover-reclaim=0 takeover-swappiness=20 ") && line.contains(" ram-ondemand=1 "),
+        "{line}"
+    );
+    assert!(line.ends_with("not at the default: takeover-reclaim takeover-swappiness ram-ondemand"), "{line}");
     // From the image's xnuhost.conf, and the command line over it.
     let dir = testdir("switches");
     let image = image_set(&dir, "image");

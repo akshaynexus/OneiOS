@@ -424,6 +424,7 @@ const GIVEN_KEYS: &[&str] = &[
     "host-mem-log",
     "usb-log",
     "ram-giveback",
+    "ram-ondemand",
     "ram-prefault",
     "ram-lock",
     "ram-session-reserve",
@@ -446,6 +447,8 @@ const GIVEN_KEYS: &[&str] = &[
     "touch-exclusive",
     "session-mode",
     "takeover-stops",
+    "takeover-reclaim",
+    "takeover-swappiness",
     "pen",
     "pen-rotate",
     "pen-mirror",
@@ -523,6 +526,12 @@ pub struct Config {
     /// locked, free pages given back (and ram=auto as before, without the MemAvailable bound). 0 since fix-ram-locked,
     /// 2026-11-15: the RAM held fixed and locked.
     pub ram_giveback: bool,
+    /// ram-ondemand=0|1 (0; option C of 2026-11-23, the owner's to choose, against the rule that iOS's RAM is
+    /// fixed): the guest's RAM is not prefaulted; each page is locked as it is first touched (mlock2 MLOCK_ONFAULT, so
+    /// the host never swaps it) and iOS's free pages are given back (ram-giveback=1's way). A guest larger than what
+    /// fits is backed only as iOS uses it; when it fills, the valve or the host's OOM killer ends it (docs/booter.md
+    /// 2.2, "On demand").
+    pub ram_ondemand: bool,
     /// ram-prefault=0|1 (1)
     pub ram_prefault: bool,
     /// ram-lock=0|1 (1): mlock the prefaulted RAM where Linux allows and it fits
@@ -612,6 +621,12 @@ pub struct Config {
     /// names it in the takeover line; the switch reads it from the image's xnuhost.conf and does the stops. "" = not
     /// given (the switch's default list)
     pub takeover_stops: String,
+    /// takeover-reclaim=0|1 (1) and takeover-swappiness=N|keep (keep; N 0-200): the OneOS switch's memory steps in
+    /// session-mode=takeover, after its stops and before xnuhost (docs/booter.md 2.9d, "More RAM in the takeover";
+    /// oneos/interface.md 4a): the caches dropped and zram compacted; vm.swappiness for the session, put back by the
+    /// return. xnuhost only checks the words and names a value other than the default in the takeover line.
+    pub takeover_reclaim: bool,
+    pub takeover_swappiness: Option<u32>,
     /// --host-info: print the host table's answer for this phone (host-info: device=... takeover=...) and exit
     pub host_info: bool,
     /// touch-sleep=0: the brightness bridge never puts the touch IC to sleep (ONEIOS_TSP_OFF=0)
@@ -827,6 +842,7 @@ impl Config {
             ram_auto_available: 0,
             ram_auto_bound: None,
             ram_giveback: false,
+            ram_ondemand: false,
             ram_prefault: true,
             ram_lock: true,
             ram_lock_expected: false,
@@ -867,6 +883,8 @@ impl Config {
             touch_exclusive: false, // the touchscreen grab: a bench preview, or session-mode=takeover (which turns it on)
             session_mode: SessionMode::Hosted, // the default session, byte for byte as before session-mode existed
             takeover_stops: String::new(),
+            takeover_reclaim: true,
+            takeover_swappiness: None,
             host_info: false,
             touch_sleep: true,
             input_script: String::new(),
@@ -995,6 +1013,7 @@ impl Config {
             "host-mem-log" => self.host_mem_log = number(value, 0, 86400)?,
             "usb-log" => self.usb_log = number(value, 0, 3600)?,
             "ram-giveback" => self.ram_giveback = flag(value)?,
+            "ram-ondemand" => self.ram_ondemand = flag(value)?,
             "ram-prefault" => self.ram_prefault = flag(value)?,
             "ram-lock" => self.ram_lock = flag(value)?,
             "ram-session-reserve" => self.ram_session_reserve = size_below_tib(value)?,
@@ -1044,6 +1063,9 @@ impl Config {
             // the switch's stop list in session-mode=takeover: checked here, done by the switch
             "takeover-stops" if takeover_stops_ok(value) => self.takeover_stops = value.to_owned(),
             "takeover-stops" => return Err(BadSetting),
+            "takeover-reclaim" => self.takeover_reclaim = flag(value)?,
+            "takeover-swappiness" if value == "keep" => self.takeover_swappiness = None,
+            "takeover-swappiness" => self.takeover_swappiness = Some(number(value, 0, 200)?),
             "input-script" => self.input_script = text(value, 512)?,
             "tasks" => self.tasks = flag(value)?,
             "task-uid" => self.task_uid = u32::try_from(parse::atoi(value)).ok(),
@@ -1253,6 +1275,8 @@ impl Config {
         take!(self, image, "camera-vm", camera_vm);
         take!(self, image, "camera-model", camera_model);
         take!(self, image, "takeover-stops", takeover_stops);
+        take!(self, image, "takeover-reclaim", takeover_reclaim);
+        take!(self, image, "takeover-swappiness", takeover_swappiness);
         // session-mode= of the image set (its overlay/userland/xnuhost.conf) when the command line has none.
         take!(self, image, "session-mode", session_mode);
         let takeover_mode = self.session_mode == SessionMode::Takeover;
@@ -1455,6 +1479,12 @@ impl Config {
         // at a fitted 6656 MiB Linux still swapped iOS's RAM (shmem) with 1.9 GB of other page cache there, 138 -> 604
         // MiB at up to 37.9 MB/s of swap-outs, and only a lock stops that. ram-giveback=1 is 0058's way again.
         take!(self, image, "ram-giveback", ram_giveback);
+        // Option C (2026-11-23, off unless asked): faulted in as used, each page locked as it comes in, free pages given
+        // back: ram-giveback=1's way with a lock on fault (session/memory.rs ram_fix_start). Never prefaulted.
+        take!(self, image, "ram-ondemand", ram_ondemand);
+        if self.ram_ondemand {
+            self.ram_giveback = true;
+        }
         if !self.given("ram-prefault") {
             self.ram_prefault = if image.given("ram-prefault") { image.ram_prefault } else { !self.ram_giveback };
         }
@@ -1472,7 +1502,7 @@ impl Config {
         take!(self, image, "ram-unlock-below", ram_unlock_below);
         // A locked RAM always has its valve: under it the host may swap the guest again rather than reclaim every other
         // process's pages (the fork's watcher's, surfaceflinger's) on the way to its OOM killer. The way back must fit.
-        if self.ram_lock && self.ram_unlock_below < RAM_UNLOCK_MIN {
+        if (self.ram_lock || self.ram_ondemand) && self.ram_unlock_below < RAM_UNLOCK_MIN {
             eprintln!(
                 "xnuhost: ram-unlock-below={} MiB is under {} MiB with the RAM locked: {} MiB is used (the valve stays on)",
                 self.ram_unlock_below >> 20,
@@ -1484,7 +1514,8 @@ impl Config {
         // The headroom: smaller with a lock that can work (no zram pool or working set for the guest's pages), which is
         // asked here, before the size is known (ramfix::can_lock: CAP_IPC_LOCK, or no RLIMIT_MEMLOCK).
         take!(self, image, "ram-fit-terms", ram_fit_terms_old);
-        self.ram_lock_expected = self.ram_lock && can_lock();
+        // ram-ondemand locks each page as it comes in: the same headroom as a whole lock.
+        self.ram_lock_expected = (self.ram_lock || self.ram_ondemand) && can_lock();
         if !self.given("ram-session-reserve") {
             self.ram_session_reserve = if image.given("ram-session-reserve") {
                 image.ram_session_reserve
@@ -1499,7 +1530,7 @@ impl Config {
         }
         // With the lock, what fits leaves at least the valve's level and a margin: else the valve would open as soon
         // as the session is up.
-        if self.ram_lock && self.ram_session_reserve < self.ram_unlock_below + RAM_VALVE_MARGIN {
+        if (self.ram_lock || self.ram_ondemand) && self.ram_session_reserve < self.ram_unlock_below + RAM_VALVE_MARGIN {
             self.ram_session_reserve = self.ram_unlock_below + RAM_VALVE_MARGIN;
         }
         take!(self, image, "ram-fit", ram_fit_on);
@@ -1675,11 +1706,20 @@ impl Config {
     /// docs/booter.md 2.9d).
     pub fn takeover_line(&self) -> Option<String> {
         (self.session_mode == SessionMode::Takeover).then(|| {
+            // The switch's memory steps, named only when they are not the default (takeover-reclaim=1, keep).
+            let mut memory = String::new();
+            if !self.takeover_reclaim {
+                memory.push_str("; takeover-reclaim=0 (the switch drops no cache)");
+            }
+            if let Some(n) = self.takeover_swappiness {
+                memory.push_str(&format!("; takeover-swappiness={n} (vm.swappiness for the session, put back by the return)"));
+            }
             format!(
-                "session: Android takeover (session-mode=takeover; {} allows it): the native touchscreen is grabbed for iOS{}; the side keys are read, never grabbed; Android's services stopped by the switch: takeover-stops={}; the switch's CPU cap, its stops and the way back are the OneOS fork's",
+                "session: Android takeover (session-mode=takeover; {} allows it): the native touchscreen is grabbed for iOS{}; the side keys are read, never grabbed; Android's services stopped by the switch: takeover-stops={}{}; the switch's CPU cap, its stops and the way back are the OneOS fork's",
                 self.host.map_or("?", |h| h.0.name),
                 if self.touch_exclusive { "" } else { " (not: touch-exclusive=0 was given)" },
-                if self.takeover_stops.is_empty() { "default" } else { &self.takeover_stops }
+                if self.takeover_stops.is_empty() { "default" } else { &self.takeover_stops },
+                memory
             )
         })
     }
@@ -2073,8 +2113,11 @@ impl Config {
         let all = [
             ("session-mode", self.session_mode.as_str().to_string(), "hosted"),
             ("stop-loop", self.stop_loop.as_str().to_string(), "wait"),
+            ("takeover-reclaim", on(self.takeover_reclaim).to_string(), "1"),
+            ("takeover-swappiness", self.takeover_swappiness.map_or("keep".to_string(), |n| n.to_string()), "keep"),
             ("task-trim", on(self.task_trim).to_string(), "1"),
             ("ram-fit-terms", (if self.ram_fit_terms_old { "old" } else { "tasks" }).to_string(), "tasks"),
+            ("ram-ondemand", on(self.ram_ondemand).to_string(), "0"),
             ("uclamp-rule", self.uclamp_rule.as_str().to_string(), "work"),
             ("gpu-down", self.gpu_down.as_str().to_string(), "governor"),
             ("gpu-blob-entries", self.gpu_blob_entries.to_string(), "65532"),

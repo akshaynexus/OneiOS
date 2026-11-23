@@ -61,11 +61,22 @@ pub struct Options {
     /// where the prefault and the valve read MemAvailable; None: the prefault does not look
     pub meminfo: Option<String>,
     pub locker: Arc<dyn MemLock>,
+    /// ram-ondemand: the RAM is locked on fault (lock_on_fault), not prefaulted: `locked` is the range so marked, not
+    /// pages in the host's RAM
+    pub on_fault: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { lock: false, lock_why: None, step: 0, unlock_below: 0, meminfo: None, locker: Arc::new(SystemLock) }
+        Options {
+            lock: false,
+            lock_why: None,
+            step: 0,
+            unlock_below: 0,
+            meminfo: None,
+            locker: Arc::new(SystemLock),
+            on_fault: false,
+        }
     }
 }
 
@@ -77,6 +88,7 @@ impl std::fmt::Debug for Options {
             .field("step", &self.step)
             .field("unlock_below", &self.unlock_below)
             .field("meminfo", &self.meminfo)
+            .field("on_fault", &self.on_fault)
             .finish()
     }
 }
@@ -112,6 +124,18 @@ fn ms_now() -> u64 {
 impl Ramfix {
     pub fn new(opts: Options) -> Ramfix {
         Ramfix { opts, ..Ramfix::default() }
+    }
+
+    /// ram-ondemand: [0, size) was locked on fault (lock_on_fault) by the caller. Nothing to prefault (done); the valve
+    /// unlocks the range as for a whole lock; the resident count looks at all of it (unlocked_from).
+    pub fn on_demand(mut opts: Options, size: u64) -> Ramfix {
+        opts.lock = true;
+        opts.on_fault = true;
+        let r = Ramfix::new(opts);
+        r.size.store(size, Relaxed);
+        r.locked.store(size, Relaxed);
+        r.done.store(true, Release);
+        r
     }
 
     /// One step: locked (and so in the host's RAM) when the lock still holds, else read once a page through the
@@ -230,6 +254,10 @@ impl Ramfix {
     /// Where the part of the guest's RAM that the host may have swapped out begins: [0, locked) is resident while
     /// this process's VmLck covers it, so a resident count (mincore) need only look at [returned, size).
     pub fn unlocked_from(&self, vm_locked: u64) -> u64 {
+        // Locked on fault: the range is marked, its pages come in as iOS touches them; count them all.
+        if self.opts.on_fault {
+            return 0;
+        }
         let locked = self.locked.load(Relaxed);
         // VmLck is the size of this process's locked mappings: when it does not cover what the prefault locked (it
         // should always), count everything.
@@ -284,6 +312,28 @@ impl Ramfix {
             if self.opts.lock { "" } else { ", read once a page" },
             short_by
         );
+    }
+}
+
+/// ram-ondemand (option C, docs/booter.md 2.2 "On demand"): mlock2(MLOCK_ONFAULT) of [at, at + len), so that each
+/// page is locked as it is first touched and the host never swaps it, while a page never touched costs nothing and a
+/// page given back (a hole punched) is freed. Err(errno); ENOSYS where there is no mlock2.
+pub fn lock_on_fault(at: *const u8, len: usize) -> Result<(), i32> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        // SAFETY: mlock2 only marks pages of our own mapping; a bad range is an error return. The raw call: bionic has
+        // mlock2 only from API 30.
+        let r = unsafe { libc::syscall(libc::SYS_mlock2, at as usize, len, libc::MLOCK_ONFAULT as libc::c_long) };
+        if r == 0 {
+            Ok(())
+        } else {
+            Err(xh_core::sys::errno())
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        let _ = (at, len);
+        Err(libc::ENOSYS)
     }
 }
 
@@ -573,6 +623,9 @@ mod tests {
     use std::os::fd::RawFd;
     use std::sync::atomic::AtomicU32;
 
+    /// The tests that lock real memory and read VmLck, one at a time (VmLck is the whole process's).
+    static REAL_LOCKS: Mutex<()> = Mutex::new(());
+
     const M: u64 = 1 << 20;
 
     /// Locks nothing: allocates the step in the memfd as a real mlock populates it, `ok` times, then fails.
@@ -760,6 +813,7 @@ mod tests {
 
     #[test]
     fn real_lock() {
+        let _one = REAL_LOCKS.lock().unwrap_or_else(|e| e.into_inner());
         // A real lock within this host's RLIMIT_MEMLOCK (8 MiB on the PC; root with CAP_IPC_LOCK has none): VmLck shows
         // it.
         let l = memlock_limit();
@@ -793,6 +847,40 @@ mod tests {
             );
             assert_eq!(memfd_held(ram.raw()), 0);
         }
+    }
+
+    #[test]
+    fn lock_on_fault_takes_pages_as_touched() {
+        let _one = REAL_LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+        // ram-ondemand (option C): the range is marked, a page comes in only when touched, a hole punched frees it, and
+        // the valve's munlock ends it. Within this host's RLIMIT_MEMLOCK (the range counts in full in VmLck).
+        let l = memlock_limit();
+        if l.rlim_cur != libc::RLIM_INFINITY && l.rlim_cur < 6 * M {
+            println!("ramfix: RLIMIT_MEMLOCK {} KiB here: the lock on fault is not tried", l.rlim_cur >> 10);
+            return;
+        }
+        let ram = TestRam::new(4 * M).expect("memfd");
+        let before = sample();
+        lock_on_fault(ram.base, (4 * M) as usize).expect("mlock2 MLOCK_ONFAULT");
+        assert!(sample().vm_locked >= before.vm_locked + 4 * M);
+        assert_eq!(memfd_held(ram.raw()), 0, "nothing comes in before a touch");
+        ram.bytes()[0] = 1;
+        ram.bytes()[(2 * M) as usize] = 2;
+        // (a host with shmem THP "always" brings 2 MiB at a touch: two pages or two 2 MiB folios)
+        let held = memfd_held(ram.raw());
+        assert!((2 * 4096..=4 * M).contains(&held), "{held}");
+        // A hole punched (ram_discard's way, the free pages given back) frees a locked page.
+        // SAFETY: fallocate on our own memfd.
+        let punched = unsafe {
+            libc::fallocate(ram.raw(), libc::FALLOC_FL_PUNCH_HOLE | libc::FALLOC_FL_KEEP_SIZE, 0, (2 * M) as i64)
+        };
+        assert_eq!(punched, 0);
+        let left = memfd_held(ram.raw());
+        assert!(left < held && left != 0, "{left} of {held}");
+        let r = Ramfix::on_demand(Options { unlock_below: 1, ..Options::default() }, 4 * M);
+        assert!(r.done.load(Relaxed) && r.opts.on_fault && r.locked.load(Relaxed) == 4 * M);
+        assert_eq!(r.unlocked_from(u64::MAX), 0, "the resident count looks at the whole RAM");
+        assert!(r.valve(ram.base, 0) && r.unlocked.load(Relaxed) && r.locked.load(Relaxed) == 0);
     }
 
     #[test]

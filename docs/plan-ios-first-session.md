@@ -363,6 +363,17 @@ to `control/base/stopped` after the boot screen ends, starts no display helper a
 existing composer and surfaceflinger restarts (Gate B) put them back; one 60 s session with the automatic return,
 `return.log` showing both started. 3c (xnuhost's KMS back end, atomic, two buffers) only after 3a's output.
 
+**The RAM, takeover-ram (2026-11-23; the owner: "at least 10 GB of RAM for iOS").** The full judgement and the
+numbers are `docs/booter.md` 2.9d, "More RAM in the takeover": 10 GB locked does not fit on this phone (it needs 12.5
+GiB of MemAvailable with today's terms, 10.5 GiB with every term cut hard; MemTotal is 10.8 GiB); the largest locked
+guest is 5,376 MiB today and about 6.4 GiB with every way below [estimate]. Built for the takeover, behind switches:
+`takeover-reclaim=1` (on: the caches dropped and zram compacted after the stops, its line measures the MiB),
+`takeover-swappiness=N` (off: vm.swappiness for the session, put back by the return; the lever for a lower headroom),
+xnuhost's `memory: the host at the start ...` and `... at its lowest MemAvailable ...` lines (every kernel part and the
+processes by name: they give stage 2's next stops and stage 3's gain: surfaceflinger's, the composer's and the display
+helper's anonymous memory), and `ram-ondemand=1` (option C, off: a guest above what fits, backed on demand and never
+swapped while it fits, for the owner to choose). Stage 3 stays as above: 3a first.
+
 ## 6. Stage 1 as built: `oneios-tool phone procs`
 
 `oneios-tool phone procs [--seconds 5] [--sort cpu|mem] [--top N] [--kernel] [--raw] [--from FILE]`

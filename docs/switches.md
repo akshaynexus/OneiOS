@@ -16,7 +16,7 @@ Rules for a switch (and for every helper that lands a behaviour change from now 
 xnuhost logs every switch once, after the `versions:` line:
 
 ```text
-switches: session-mode=hosted stop-loop=wait task-trim=1 ram-fit-terms=tasks uclamp-rule=work gpu-down=governor gpu-blob-entries=65532 wifi-ring-wait=1 wifi-send-wait=1 wifi-buffers=1 wifi-joined-scan=cache encoder-10bit=main10 encoder-warmup=1 oneios-wifi-rssi=1 oneios-telemetry-jobs=0 (docs/switches.md); all at their defaults
+switches: session-mode=hosted stop-loop=wait takeover-reclaim=1 takeover-swappiness=keep task-trim=1 ram-fit-terms=tasks ram-ondemand=0 uclamp-rule=work gpu-down=governor gpu-blob-entries=65532 wifi-ring-wait=1 wifi-send-wait=1 wifi-buffers=1 wifi-joined-scan=cache encoder-10bit=main10 encoder-warmup=1 oneios-wifi-rssi=1 oneios-telemetry-jobs=0 (docs/switches.md); all at their defaults
 ```
 
 When some are changed, the end says which: `not at the default: wifi-send-wait gpu-down`. Kernel switches are read
@@ -32,7 +32,10 @@ change (the default value), and whether one has run the other value.
 | `session-mode` | `hosted\|takeover` | `hosted` | takeover: the opt-in Android takeover (docs/booter.md 2.9d) | a3077a9, fork 1d9b58f | takeover booted 2026-11-23 21:11 (kernel b5f5378a), not with this build |
 | `takeover-stops` | `default\|none\|NAME,...` | `default` | takeover only: the services the switch stops (`none`: none) | a3077a9, fork 1d9b58f | 21:11 boot: default list |
 | `stop-loop` | `wait\|poll` | `wait` | wait: the fork's stop loop sleeps on init's properties (`xnuhost --prop-wait`); poll: one `getprop` look a second, no `--prop-wait` (the 0.2 s loop of before is not brought back). Read by the fork's switch; xnuhost checks it | a3077a9, fork 1d9b58f + this build | wait: 21:11 boot; poll: no |
+| `takeover-reclaim` | `0\|1` | `1` | takeover only: 1: after the stops, before xnuhost, the fork's switch runs `sync`, `drop_caches` 3 and each zram device's `compact`, so that the page pools and caches MemAvailable did not count are in it for ram=auto (its line measures the MiB); nothing to put back. 0: none of it (before takeover-ram). Read by the fork's switch; xnuhost checks it | takeover-ram (docs/booter.md 2.9d, "More RAM in the takeover"), fork takeover-ram | no |
+| `takeover-swappiness` | `keep\|0..200` | `keep` | takeover only: N: `vm.swappiness` N for the session (One UI's saved first; every return writes it back); keep: not touched (as before). The lever for a lower headroom. Read by the fork's switch; xnuhost checks it | takeover-ram, fork takeover-ram | no |
 | `task-trim` | `0\|1` | `1` | 1: an idle task's host mappings are dropped and ram=auto counts 150 tasks awake (5376 MiB on the S24 Ultra); 0: no trim, every task at 4 MiB: exactly 3b8742a's sizing (`config::tests::ram_config`: 3528 MiB fit) | 07b10a8 | no |
+| `ram-ondemand` | `0\|1` | `0` | **option C, off; against the fixed-RAM rule of 2026-11-15, for the owner to choose.** 1: the guest's RAM is not prefaulted; each page is locked as iOS first touches it (`MLOCK_ONFAULT`: never swapped while held) and free pages are given back; with `ram=SIZE` above what fits, the top is backed only while iOS uses it, and when iOS fills it the valve opens or the OOM killer ends xnuhost (docs/booter.md 2.2, "On demand"). 0: the fixed, locked RAM | takeover-ram | no |
 | `ram-fit-terms` | `tasks\|old` | `tasks` | tasks: ram=auto's 3b8742a terms (tasks, hold share, 1536 MiB headroom locked); old: the terms before 3b8742a (headroom 768 MiB locked / 1 GiB unlocked, page tables 8 %, no task cost, no hold share; any of those keys given still wins). With `task-trim=0` too this is the v0.1.19 sizing | this build (3b8742a) | tasks: no; old: v0.1.19's sessions |
 | `uclamp-rule` | `work\|all` | `work` | work: xnuhost alone sets a vCPU thread's uclamp (0 at idle, the released thread's floor, the guest's request); drm2kgsl's animation boost only for the frame's threads; background/utility 0. all: before 03d85ac: drm2kgsl's boost on every started vCPU thread and every iOS thread not background, the cpufreq device sets the vCPU thread's clamp, nothing at idle | 03d85ac + this build | no |
 | `gpu-down` | `governor\|bottom` | `governor` | governor: the GPU level leaves the top when a frame fits at the governor's clock in a burst (learned ratio); bottom: when it fits at KGSL's lowest clock (before 3b36ff0: on the S24 Ultra it never came down) | 3b36ff0 + this build | bottom: every session up to 21:11 (the GPU at the top all session); governor: no |
@@ -66,8 +69,11 @@ Every switch at its default (the build's behaviour). Change one line to turn one
 session-mode=hosted
 takeover-stops=default
 stop-loop=wait
+takeover-reclaim=1
+takeover-swappiness=keep
 task-trim=1
 ram-fit-terms=tasks
+ram-ondemand=0
 uclamp-rule=work
 gpu-down=governor
 gpu-blob-entries=65532
