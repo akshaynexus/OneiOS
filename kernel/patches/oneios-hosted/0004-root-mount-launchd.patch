@@ -77,7 +77,7 @@ new file mode 100644
 index 0000000..1ba41df
 --- /dev/null
 +++ b/bsd/kern/oneios_hosted_root.c
-@@ -0,0 +1,1218 @@
+@@ -0,0 +1,1230 @@
 +/*
 + * OneiOS: what the hosted kernel does between its root mount and launchd, on top of UniXNU's owner-root path
 + * (load_init_program in kern_exec.c: the SystemOS union mount, the Data mount, the board launch policy).
@@ -367,13 +367,25 @@ index 0000000..1ba41df
 +			return ENOENT;
 +		}
 +		/* Case-sensitive, with expanded records, as the image build's own APFS seed (scripts/image/seed-apfs-macos.sh).
-+		 * No -U: the volume is found by its disk, whatever UUID it gets. */
++		 * No -U: the volume is found by its disk, whatever UUID it gets.
++		 * iOS 16.5's newfs_apfs (20F66, the Galaxy A56) has no -x: it ends with EX_USAGE (64) and formats nothing
++		 * (OneiOS issue 73, 2026-11-24: "newfs_apfs failed: wait status 0x4000", then "offline scratch Data mount
++		 * failed: 5"). Then it runs again without -x, case-sensitive still. */
 +		const char *const argv[] = {tool, "-e", "-x", "-v", volume_name, whole_path, NULL};
++		const char *const argv_plain[] = {tool, "-e", "-v", volume_name, whole_path, NULL};
 +		printf("OneiOS Data: first start: %s -e -x -v %s %s\n", tool, volume_name, whole_path);
-+		if ((error = oneios_spawn(p, scratch, argv, &pid)) || (error = oneios_wait(p, scratch, pid, 300, &status))) {
-+			printf("OneiOS Data: newfs_apfs did not run: %d\n", error);
-+			oneios_data_format_status = error;
-+			return error;
++		for (int plain = 0;; plain = 1) {
++			if ((error = oneios_spawn(p, scratch, plain ? argv_plain : argv, &pid)) ||
++			    (error = oneios_wait(p, scratch, pid, 300, &status))) {
++				printf("OneiOS Data: newfs_apfs did not run: %d\n", error);
++				oneios_data_format_status = error;
++				return error;
++			}
++			if (plain || !WIFEXITED(status) || WEXITSTATUS(status) != 64) {
++				break;
++			}
++			printf("OneiOS Data: %s has no -x (exit 64, usage): again as %s -e -v %s %s\n", tool, tool, volume_name,
++			    whole_path);
 +		}
 +		if (!WIFEXITED(status) || WEXITSTATUS(status)) {
 +			printf("OneiOS Data: newfs_apfs failed: wait status %#x\n", status);
