@@ -462,3 +462,12 @@
 # unified log reaches the Data store before the kill. Only on xnuhost's ask (return-graceful-ms > 0). Not a power-off.
 # Line "oneios-power: return asked: SIGTERM to logd (N process(es))".
 0106-return-logd-flush.patch
+# 0107 (a56-full, 2026-11-24, issue 73's logs of 20:05 and 20:31): iOS 27's port policy against an iOS 16.5 userland.
+# Past the lock screen SpringBoard (46 times in a boot, then the Apple logo), assistantd, coreduetd, contactsd,
+# IMDPersistenceAgent, maild and searchd died with EXC_GUARD (FATAL exception type=0xc reason=0x17), not jetsam: flavor
+# 0x42 (kGUARD_EXC_INVALID_MPO_ENTITLEMENT: mach_port_construct of a weak reply port, iOS 16's provisional one, without
+# iOS 27's entitlement) and flavor 0x6 (kGUARD_EXC_EXCEPTION_BEHAVIOR_ENFORCE, thid_should_crash). With
+# oneios-ios16-port-policy=1, default the value of oneios-legacy-registered-ports (0068: a 20F66 image's boot arguments
+# carry it), neither is applied. iOS 27 has neither switch. Line "oneios-ios16-port-policy: on: ...". ipc_policy.c and
+# ipc_tt.c's set_exception_behavior_violation are no other patch's hunks. README.md, "0107".
+0107-ios16-port-policy.patch

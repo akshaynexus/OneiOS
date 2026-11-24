@@ -1,0 +1,89 @@
+diff --git a/osfmk/ipc/ipc_policy.c b/osfmk/ipc/ipc_policy.c
+--- a/osfmk/ipc/ipc_policy.c
++++ b/osfmk/ipc/ipc_policy.c
+@@ -1838,9 +1838,61 @@
+ }
+ #endif /* XNU_TARGET_OS_OSX && CONFIG_CSR */
+ 
++#if XNU_HOSTED
++#include <pexpert/pexpert.h>
++/*
++ * OneiOS hosted (0107, 2026-11-24, OneiOS issue 73): iOS 27's port policy against an iOS 16.5 userland (the Galaxy
++ * A56's 20F66). On the A56, past the lock screen, SpringBoard (46 times in one boot, which then hung at the Apple
++ * logo), assistantd, coreduetd, contactsd, IMDPersistenceAgent, maild and searchd died again and again with
++ * "EXC_GUARD AST" then "FATAL exception: type=0xc reason=0x17", not jetsam (no kill since boot, 2.3 GiB available):
++ *  - flavor 0x42, kGUARD_EXC_INVALID_MPO_ENTITLEMENT, target 0x4010: mach_port_construct with MPO_WEAK_REPLY_PORT
++ *    (0x4000, iOS 16's MPO_PROVISIONAL_REPLY_PORT) | MPO_INSERT_SEND_RIGHT by a binary without the reply-port
++ *    entitlement iOS 27 wants: IPC_SEC_POLICY_DISALLOW_CONSTRUCT_WEAK_REPLY_PORT_WITHOUT_ENTITLEMENT, enforced on iOS
++ *    by the callback below;
++ *  - flavor 0x6, kGUARD_EXC_EXCEPTION_BEHAVIOR_ENFORCE (searchd, subcode 0x22): ipc_tt.c's
++ *    set_exception_behavior_violation, a thread exception behaviour iOS 27 refuses, by the tunable thid_should_crash.
++ * Those were the only two guard flavors in the two boots' logs (20:05 and 20:31). For an iOS 16 userland the two are
++ * not applied (iOS 16's own kernel had neither): the construct goes on as iOS 16 meant it, and the behaviour is set,
++ * as with thid_should_crash=0. On with oneios-ios16-port-policy=1; its default is the value of
++ * oneios-legacy-registered-ports (hosted 0068), which a 20F66 image's boot arguments already carry (roottweak), so no
++ * image is made again; iOS 27 has neither and keeps both policies. One line at boot when on:
++ *   oneios-ios16-port-policy: on: weak reply port construct and exception behaviour not enforced (iOS 16 userland)
++ */
++static int hosted_ios16_ports = -1;
++
++bool hosted_ios16_port_policy(void);
++bool
++hosted_ios16_port_policy(void)
++{
++	if (hosted_ios16_ports < 0) {
++		int legacy = 0, on;
++		(void)PE_parse_boot_argn("oneios-legacy-registered-ports", &legacy, sizeof(legacy));
++		on = legacy != 0;
++		(void)PE_parse_boot_argn("oneios-ios16-port-policy", &on, sizeof(on));
++		hosted_ios16_ports = on != 0;
++	}
++	return hosted_ios16_ports != 0;
++}
++
++static void
++hosted_ios16_port_policy_init(void)
++{
++	if (hosted_ios16_port_policy()) {
++		printf("oneios-ios16-port-policy: on: weak reply port construct and exception behaviour not enforced "
++		    "(iOS 16 userland)\n");
++	}
++}
++STARTUP(MACH_IPC, STARTUP_RANK_LAST, hosted_ios16_port_policy_init);   /* beside 0068's line (mig_init) */
++#endif /* XNU_HOSTED */
++
+ static bool
+ ipc_sec_policy_should_apply_weak_reply_port(void)
+ {
++#if XNU_HOSTED
++	if (hosted_ios16_port_policy()) {
++		return false;   /* 0107: an iOS 16 userland constructs weak (provisional) reply ports without the entitlement */
++	}
++#endif
+ #if XNU_TARGET_OS_OSX && CONFIG_CSR
+ 	/* Apply policy if SIP is enabled */
+ 	return SIP_is_enabled();
+diff --git a/osfmk/kern/ipc_tt.c b/osfmk/kern/ipc_tt.c
+--- a/osfmk/kern/ipc_tt.c
++++ b/osfmk/kern/ipc_tt.c
+@@ -3893,10 +3893,20 @@
+ 	       ((new_behavior & ~MACH_EXCEPTION_MASK) == EXCEPTION_STATE_IDENTITY_PROTECTED);
+ }
+ 
++#if XNU_HOSTED
++/* 0107 (osfmk/ipc/ipc_policy.c): an iOS 16 userland's exception behaviours are set as with thid_should_crash=0. */
++extern bool hosted_ios16_port_policy(void);
++#endif
++
+ /* Returns whether the violation should be ignored */
+ static boolean_t
+ set_exception_behavior_violation(__unused const task_t excepting_task, const exception_mask_t mask, int new_behavior)
+ {
++#if XNU_HOSTED
++	if (hosted_ios16_port_policy()) {
++		return TRUE;
++	}
++#endif
+ 	if (thid_should_crash) {
+ 		/* create lightweight corpse */
+ 		mach_port_guard_exception(new_behavior, mask, kGUARD_EXC_EXCEPTION_BEHAVIOR_ENFORCE);
