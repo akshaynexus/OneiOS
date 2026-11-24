@@ -1,0 +1,64 @@
+diff --git a/bsd/dev/arm/kern_machdep.c b/bsd/dev/arm/kern_machdep.c
+--- a/bsd/dev/arm/kern_machdep.c
++++ b/bsd/dev/arm/kern_machdep.c
+@@ -39,9 +39,60 @@
+ 	}
+ }
+ 
++#if XNU_HOSTED
++#include <kern/startup.h>
++#include <pexpert/pexpert.h>
++/*
++ * OneiOS hosted (0109, 2026-11-24, OneiOS issue 73): an iOS 16 userland's fat binaries run their arm64 slice. The
++ * Galaxy A56's image is iOS 16.5 of the iPhone X (20F66, an A11: no pointer authentication), whose dyld shared cache
++ * is arm64 only (dyld_shared_cache_arm64, no arm64e cache) and whose /usr/lib/dyld is arm64 only. Its App cryptex
++ * is shared across iPhones, so some of its programs are fat, arm64 + arm64e (webbookmarksd: "arm64" and "arm64e
++ * (caps: PAC00)"). An A11 kernel grades arm64e 0 (its host subtype is ARM64_V8) and runs the arm64 slice; this
++ * kernel is arm64e (the 24A446 collection), graded the arm64e slice 12 and ran it: its shared region (keyed by
++ * the CPU subtype) had no cache mapped ("shared_region: ... [216(webbookmarksd)] check_np(...)
++ * vm_shared_region_start_address() returned 0x1", the only process with that line), and it died at once with a
++ * data abort on an arm64e chained pointer nobody resolved (far 0x61f80001c0b0), 27 times in the A56's boot of
++ * 2026-11-24 21:47. With oneios-arm64e-slices=0 an arm64e slice grades 0, as on the iPhone X: a fat binary runs its
++ * arm64 slice, an arm64e-only one is refused (it could not run on this userland anyway). The default is 0 when
++ * oneios-legacy-registered-ports (hosted 0068) is on, which only a 20F66 image's boot arguments carry, and 1
++ * otherwise, so iOS 27 grades as before. One line at boot when off:
++ *   oneios-arm64e-slices: off: fat binaries run their arm64 slice, arm64e-only ones are refused (iOS 16 userland,
++ *       arm64 shared cache)
++ */
++static int hosted_arm64e_slices = -1;
++
++static bool
++hosted_arm64e_slices_on(void)
++{
++	if (hosted_arm64e_slices < 0) {
++		int legacy = 0, on;
++		(void)PE_parse_boot_argn("oneios-legacy-registered-ports", &legacy, sizeof(legacy));
++		on = legacy == 0;
++		(void)PE_parse_boot_argn("oneios-arm64e-slices", &on, sizeof(on));
++		hosted_arm64e_slices = on != 0;
++	}
++	return hosted_arm64e_slices != 0;
++}
++
++static void
++hosted_arm64e_slices_init(void)
++{
++	if (!hosted_arm64e_slices_on()) {
++		printf("oneios-arm64e-slices: off: fat binaries run their arm64 slice, arm64e-only ones are refused "
++		    "(iOS 16 userland, arm64 shared cache)\n");
++	}
++}
++STARTUP(MACH_IPC, STARTUP_RANK_LAST, hosted_arm64e_slices_init);
++#endif /* XNU_HOSTED */
++
+ static int
+ grade_arm64e_binary(cpu_subtype_t execfeatures)
+ {
++#if XNU_HOSTED
++	if (!hosted_arm64e_slices_on()) {
++		return 0;   /* 0109: an iOS 16 userland (arm64 shared cache): the arm64 slice, as on an A11 */
++	}
++#endif
+ #if XNU_TARGET_OS_IOS || XNU_TARGET_OS_XR
+ 	/*
+ 	 * iOS 13 toolchains produced unversioned arm64e slices which are not

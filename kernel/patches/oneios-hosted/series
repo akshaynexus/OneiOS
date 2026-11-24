@@ -479,3 +479,11 @@
 # accelerator's MetalPluginName): visible (0)", only for a plug-in that is not NativeAdrenoMetal), and 0031's dyld lines
 # name OneiOSRadeon* files too. Edits 0031's and 0039's code (kern_exec.c, kern_descrip.c). README.md, "0108".
 0108-a56-gpu-plugin.patch
+# 0109 (fix/a56-ios16-faults, 2026-11-24, issue 73's boot of 21:47): an iOS 16 userland's fat binaries run their arm64
+# slice. 20F66 is the iPhone X's (an A11): its shared cache and dyld are arm64 only, but its App cryptex's programs are
+# fat (webbookmarksd: arm64 + arm64e). This arm64e kernel graded the arm64e slice first; that process got an empty
+# shared region (its "check_np ... returned 0x1" lines) and died on an unresolved arm64e pointer (far 0x61f80001c0b0),
+# 27 times a boot. oneios-arm64e-slices=0 grades arm64e 0, as an A11 kernel does; default 0 with 0068's
+# oneios-legacy-registered-ports=1 (only a 20F66 image passes it), else 1. Line "oneios-arm64e-slices: off: ...".
+# bsd/dev/arm/kern_machdep.c is no other patch's. README.md, "0109".
+0109-ios16-arm64-slices.patch
