@@ -2023,3 +2023,20 @@ it: the fault, the rule, the sandbox, the lines).
     (the 24A446 collection, which the A56's 20F66 image set also carries): `kernel.kc` 96,321,536 bytes, SHA-256
     `f090804df3460214c776a4d065692d5d9b3b494d81c04f7e7cd4b9517ce73693`, audit 2711 paired, 93 on the stub, 0 failures.
   - This is main's series, not the release branch's. It is not a release kernel.
+- **The release branch, prepared, not published** (build laptop, 2026-11-24):
+  - The branch: local `a56gpu/release-kernel-a56`, pushed to origin under that name. It is `release-kernel-a56`
+    (`82fa3b0`) plus this change's kernel part (`b5e706a`: `gpu/`, 0108 and its series entry, the edit lists and
+    their tests, `kernel/tests/host.sh`'s gpu case, this section).
+  - The build: `HOSTED_OUT=a56gpu-rel ONEIOS_CRYPTO=original kernel/build-hosted.sh`, 442 s.
+    `xnu-12377.121.6-ios-27.0.1-24A446-f8def7dad866`, `xnu.macho` 24,657,296 bytes, SHA-256
+    `21bc9f9f2337cfd62cea9b66d96d777d7430fc9ec10c22626a4070b133528419`, 184 patches, releasable.
+  - Its prelink: `kernel.kc` 96,272,384 bytes, `780ca6ec5efff7ebe1d3c29ae9eb854cbf76b88b0ab3130f2e49e2aefef04668`,
+    audit 2711 paired, 93 on the stub, 0 failures.
+  - Tests there: `kernel/tests/host.sh` 9 of 9, `cargo test --test golden` 15 of 15.
+  - To release it, on the Mac's say:
+    1. `git push origin a56gpu/release-kernel-a56:release-kernel-a56`.
+    2. `kernel/publish.sh --hosted a56gpu-rel --upload` in that worktree
+       (`/home/akshay/Documents/GitHub/OneiOS/out/a56gpu-relwt`).
+    3. On main, `kernel/release-kernel.txt` gets
+       `kernel-xnu-12377.121.6-ios-27.0.1-24A446-f8def7dad866 <the archive's SHA-256>`, and docs/releases.md its paragraph.
+  - Not booted.
