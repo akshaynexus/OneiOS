@@ -62,3 +62,5 @@ uint32_t(sizeof request), 1, 0}, ioctl
             stage(9, 0);
             IOLog("virtgpu-selftest: shmem at pool %llx, seqno %u; GET_PARAM(GPU_ID) ret %d value %llu\n", droidvm_virtgpu_selftest[4],
                   shmem->seqno, ret, answered.value);
+// next anchor: the context made
+    c->context = context; c->rings = in.num_rings; out.context_id = context; count(1);

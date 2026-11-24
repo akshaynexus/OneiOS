@@ -17,7 +17,8 @@
 //! its accelerator step (so with its edits to NativeAdrenoPublish.cpp and NativeAdrenoMemory.cpp), and then what that
 //! step does, for this kernel collection:
 //!
-//!   NativeAdrenoAccelerator.late.o   NativeAdreno's staged AGXAccelerator, a subclass of the collection's
+//!   NativeAdrenoAccelerator.late.o   NativeAdreno's staged AGXAccelerator (staged/gpu.rs ACCELERATOR: the A56
+//!                                    accelerator's open types and discovery filter), a subclass of the collection's
 //!                                    IOAcceleratorES (com.apple.iokit.IOGPUFamily); its static initializer is taken
 //!                                    out of __mod_init_func and made global, DroidVMGpu.cpp runs it after the family
 //!                                    has loaded
@@ -49,7 +50,7 @@
 use crate::class_record::{pylist, ClassRecord};
 use crate::drivers_build::Record;
 use crate::gen::{self, fail, Compile, Ctx};
-use crate::staged::gpu::{GPU, GPU3D};
+use crate::staged::gpu::{ACCELERATOR, GPU, GPU3D};
 use anyhow::{Context, Result};
 use oneios_common::json::Value;
 use std::collections::BTreeSet;
@@ -101,7 +102,9 @@ fn accelerator(ctx: &Ctx, places: &Places, out: &Path, record: &Record) -> Resul
     // The source includes "../AdrenoMetal/OriginalAcceleratorABI.h": NativeMetal's header, beside the driver as in UniXNU's tree.
     copyfile(&places.accelerator_abi, &stage.join("AdrenoMetal/OriginalAcceleratorABI.h"))?;
     let source = stage.join("Adreno740/NativeAdrenoAccelerator.cpp"); // the same file name: the static initializer is named after it
-    copyfile(&places.adreno.join("NativeAdrenoAccelerator.cpp"), &source)?;
+    // Staged with the changes of staged/gpu.rs ACCELERATOR (the A56 accelerator's open types and discovery filter).
+    gen::write_text(&source, &staged_accelerator_text(gen::read_text(&places.adreno.join("NativeAdrenoAccelerator.cpp"))?)
+        .map_err(|e| anyhow::anyhow!("build-oneios-gpu: {e}"))?)?;
     let compile = Compile { ctx, shown: 6000 };
     let include = ["-I".to_string(), gen::s(&places.adreno), "-I".to_string(), gen::s(&ctx.tree.join(".cache/xnu-work/osfmk"))];
     let mut objects = Vec::new();
@@ -161,6 +164,18 @@ pub fn staged_3d_text(text: String) -> std::result::Result<String, String> {
     for (anchor, replacement) in GPU3D {
         if text.matches(anchor).count() != 1 {
             return Err(format!("DroidVMVirtioGpu3D.cpp no longer has exactly one {}", anchor.trim()));
+        }
+        text = text.replace(anchor, replacement);
+    }
+    Ok(text)
+}
+
+/// NativeAdrenoAccelerator.cpp with the changes of staged/gpu.rs ACCELERATOR; Err is the anchor that is not there exactly once.
+pub fn staged_accelerator_text(text: String) -> std::result::Result<String, String> {
+    let mut text = text;
+    for (anchor, replacement) in ACCELERATOR {
+        if text.matches(anchor).count() != 1 {
+            return Err(format!("NativeAdrenoAccelerator.cpp no longer has exactly one {}", anchor.trim()));
         }
         text = text.replace(anchor, replacement);
     }
@@ -240,7 +255,7 @@ pub fn main() -> Result<()> {
     let mut needed = vec![ctx.repo.join("drivers/sources.txt"), places.adreno.join("DroidVMVirtgpuABI.h"),
                           ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json")];
     needed.extend(sources.iter().cloned());
-    needed.extend([places.here.join("OneiOSAdreno.cpp"), places.classes.clone()]);
+    needed.extend([places.here.join("OneiOSAdreno.cpp"), places.here.join("OneiOSGpuChoice.h"), places.classes.clone()]);
     gen::need_files(&needed, |path| format!("build-oneios-gpu: {} missing (scripts/setup/get-references.sh UniXNU-droidvm NativeAdreno)", path.display()))?;
     let out = ctx.tree.join("build/oneios-gpu");
     gen::mkdirs(&out)?;
@@ -298,7 +313,7 @@ pub fn main() -> Result<()> {
     gen::require_definitions(&ctx, &archive, &required)?;
     let mut listed = sources.to_vec();
     if link {
-        listed.extend([places.here.join("OneiOSAdreno.cpp"), places.classes.clone(), places.accelerator_abi.clone(), places.package.join("DroidVMGpu.cpp"),
+        listed.extend([places.here.join("OneiOSAdreno.cpp"), places.here.join("OneiOSGpuChoice.h"), places.classes.clone(), places.accelerator_abi.clone(), places.package.join("DroidVMGpu.cpp"),
                        ctx.repo.join("external/AdrenoPM4/AdrenoPM4.c")]);
         listed.extend(["Accelerator", "Publish", "UserClient", "Submit", "Memory", "Cpu"].map(|name| places.adreno.join(format!("NativeAdreno{name}.cpp"))));
     }

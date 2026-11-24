@@ -34,6 +34,19 @@ pub const GPU: &[(&str, &str)] = &[
     ("    if (PE_parse_boot_argn(\"droidvm-gpu-clients\", clients, sizeof clients - 1)) {\n",
      concat!("    oneios_gpu_client_list(clients, sizeof clients);\n",
              "    {\n")),
+    // The Metal plug-in's names are OneiOSAdreno.cpp's (a56-gpu, 2026-11-24): NativeAdrenoMetal and
+    // NativeAdrenoMetalDevice as before for the Adreno accelerator; OneiOSRadeonMetal and OneiOSRadeonMetalDevice, and
+    // OneiOSDrmContext "amdgpu", for the A56's (oneios-gpu-amd=1 on an AMDGPU capset; docs/a56-gpu.md 5).
+    ("extern \"C\" void oneios_gpu_client_list(char *, size_t);\n",
+     concat!("extern \"C\" void oneios_gpu_client_list(char *, size_t);\n",
+             "extern \"C\" const char *oneios_gpu_metal_plugin(void);\n",
+             "extern \"C\" const char *oneios_gpu_metal_class(void);\n",
+             "extern \"C\" void oneios_gpu_accelerator_properties(IOService *);\n")),
+    ("    accelerator->setProperty(\"MetalPluginName\", \"NativeAdrenoMetal\");\n",
+     "    accelerator->setProperty(\"MetalPluginName\", oneios_gpu_metal_plugin());\n"),
+    ("    accelerator->setProperty(\"MetalPluginClassName\", \"NativeAdrenoMetalDevice\");\n",
+     concat!("    accelerator->setProperty(\"MetalPluginClassName\", oneios_gpu_metal_class());\n",
+             "    oneios_gpu_accelerator_properties(accelerator);\n")),
 ];
 
 /// DroidVMVirtioGpu3D.cpp's lines that change (hang, 2026-11-13): each blob's life goes to OneiOSAdreno.cpp, which
@@ -195,4 +208,62 @@ void stage(uint64_t"#),
             stage(9, !ret && words[0] == responseSize && value ? 0 : kIOReturnIOError);
             IOLog("virtgpu-selftest: %s ret %d value %llu response %u seqno %u\n",
                   amd ? "AMDGPU ACCEL_WORKING" : "MSM GPU_ID", ret, value, words[0], shmem->seqno);"#),
+    // Each DRM context made (a56-gpu, 2026-11-24): OneiOSAdreno.cpp logs the first 32 on the A56's accelerator
+    // ("oneios-gpu-amd: NAME[PID] DRM context N on capset 6 ..."), nothing on the Adreno one. Weak, as above.
+    // (in the file's extern "C" block at file scope, after the surface trail's hooks above)
+    ("bool oneios_gpu_reader_waits(int) __attribute__((weak));\n",
+     concat!("bool oneios_gpu_reader_waits(int) __attribute__((weak));\n",
+             "void oneios_gpu_context_made(uint32_t, uint32_t) __attribute__((weak));\n")),
+    ("    c->context = context; c->rings = in.num_rings; out.context_id = context; count(1);\n",
+     concat!("    c->context = context; c->rings = in.num_rings; out.context_id = context; count(1);\n",
+             "    if (oneios_gpu_context_made) oneios_gpu_context_made(context, in.capset_id);\n")),
+];
+
+/// NativeAdrenoAccelerator.cpp's lines that change (a56-gpu, 2026-11-24; docs/a56-gpu.md 5): the A56's accelerator
+/// (OneiOSAdreno.cpp, oneios-gpu-amd=1 on an AMDGPU capset) refuses every open type but 0x4149 and the plug-in's
+/// markers, and hides Metal's and GL's discovery keys from its CPU-composition processes (oneios-gpu-amd-cpu), in
+/// copyProperty and in the whole-table read (serializeProperties, IORegistryEntryCreateCFProperties). With the Adreno
+/// accelerator each hook answers false and every method does what it did before. Each anchor must be there exactly once.
+pub const ACCELERATOR: &[(&str, &str)] = &[
+    ("extern \"C\" void native_adreno_note_property_read(const char *);\n",
+     concat!("extern \"C\" void native_adreno_note_property_read(const char *);\n",
+             "// OneiOS (OneiOSAdreno.cpp): the A56 accelerator's open types and its CPU-composition processes.\n",
+             "extern \"C\" bool oneios_gpu_open_refused(uint32_t type);\n",
+             "extern \"C\" bool oneios_gpu_discovery_hidden(const char *key);\n",
+             "extern \"C\" bool oneios_gpu_discovery_hidden_here(void);\n")),
+    ("    OSObject *copyProperty(const char *key) const APPLE_KEXT_OVERRIDE;\n};\n",
+     concat!("    OSObject *copyProperty(const char *key) const APPLE_KEXT_OVERRIDE;\n",
+             "    bool serializeProperties(OSSerialize *s) const APPLE_KEXT_OVERRIDE;\n",
+             "};\n")),
+    ("    unsigned limit=40;",
+     concat!("    if(oneios_gpu_open_refused(type))return kIOReturnUnsupported;\n",
+             "    unsigned limit=40;")),
+    ("OSObject *AGXAccelerator::copyProperty(const OSSymbol *key) const\n{\n    native_adreno_note_property_read(key?key->getCStringNoCopy():nullptr);\n",
+     concat!("OSObject *AGXAccelerator::copyProperty(const OSSymbol *key) const\n{\n",
+             "    native_adreno_note_property_read(key?key->getCStringNoCopy():nullptr);\n",
+             "    if(oneios_gpu_discovery_hidden(key?key->getCStringNoCopy():nullptr))return nullptr;\n")),
+    ("OSObject *AGXAccelerator::copyProperty(const OSString *key) const\n{\n    native_adreno_note_property_read(key?key->getCStringNoCopy():nullptr);\n",
+     concat!("OSObject *AGXAccelerator::copyProperty(const OSString *key) const\n{\n",
+             "    native_adreno_note_property_read(key?key->getCStringNoCopy():nullptr);\n",
+             "    if(oneios_gpu_discovery_hidden(key?key->getCStringNoCopy():nullptr))return nullptr;\n")),
+    ("OSObject *AGXAccelerator::copyProperty(const char *key) const\n{\n    native_adreno_note_property_read(key);\n",
+     concat!("OSObject *AGXAccelerator::copyProperty(const char *key) const\n{\n",
+             "    native_adreno_note_property_read(key);\n",
+             "    if(oneios_gpu_discovery_hidden(key))return nullptr;\n")),
+    ("extern \"C\" IOService *native_adreno_accelerator_allocate(void) {return new AGXAccelerator;}\n",
+     concat!("// OneiOS: the whole table without the discovery keys for the A56 accelerator's CPU-composition processes, as\n",
+             "// copyProperty answers them one by one; for everyone else IOService's, as before.\n",
+             "bool AGXAccelerator::serializeProperties(OSSerialize *s) const\n",
+             "{\n",
+             "    if(!oneios_gpu_discovery_hidden_here())return IOService::serializeProperties(s);\n",
+             "    OSDictionary *table=dictionaryWithProperties();\n",
+             "    if(!table)return false;\n",
+             "    static const char *const keys[]={\"MetalPluginName\",\"MetalPluginClassName\",\"IOGLESBundleName\",\"IOGLESMetalBundleName\",\n",
+             "        \"IOGLESDefaultUseMetal\"};\n",
+             "    for(const char *key:keys)table->removeObject(key);\n",
+             "    const bool done=table->serialize(s);\n",
+             "    table->release();\n",
+             "    return done;\n",
+             "}\n",
+             "extern \"C\" IOService *native_adreno_accelerator_allocate(void) {return new AGXAccelerator;}\n")),
 ];

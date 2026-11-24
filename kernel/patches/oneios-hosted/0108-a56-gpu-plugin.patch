@@ -1,0 +1,71 @@
+diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
+--- a/bsd/kern/kern_descrip.c
++++ b/bsd/kern/kern_descrip.c
+@@ -2892,7 +2892,9 @@
+ 	if (!file) {
+ 		return;
+ 	}
+-	if (lines < 64 && (!strncmp(file, "NativeAdrenoMetal", 17) || !strncmp(file, "libvulkan_freedreno", 19))) {
++	/* 0108 (a56-gpu): and the A56 accelerator's plug-in, OneiOSRadeonMetal (and any OneiOSRadeon* file beside it). */
++	if (lines < 64 && (!strncmp(file, "NativeAdrenoMetal", 17) || !strncmp(file, "libvulkan_freedreno", 19) ||
++	    !strncmp(file, "OneiOSRadeon", 12))) {
+ 		char process[33] = {};
+ 		lines++;
+ 		proc_selfname(process, sizeof(process));
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -9828,6 +9828,36 @@
+  *   oneios-gpu-list: /private/var/oneios/addons/Extensions/NativeAdrenoMetal.clients "a,b": written (0)
+  */
+ extern void oneios_gpu_plugin_client_list(char *, size_t) __attribute__((weak_import));
++/*
++ * 0108 (a56-gpu, 2026-11-24): the plug-in is the one the published accelerator names (the GPU archive's
++ * oneios_gpu_metal_plugin, OneiOSAdreno.cpp): NativeAdrenoMetal as before, OneiOSRadeonMetal on the Galaxy A56's
++ * accelerator (oneios-gpu-amd=1 on an AMDGPU capset, docs/a56-gpu.md 5). Its list is written beside its bundle, and for
++ * the A56's one line says whether Metal can see the bundle (0031's stage 5 looks for NativeAdrenoMetal's alone):
++ *   oneios-gpu-addon: /System/Library/Extensions/OneiOSRadeonMetal.bundle/Info.plist (the accelerator's MetalPluginName): visible (0)
++ */
++extern const char *oneios_gpu_metal_plugin(void) __attribute__((weak_import));
++static const char *
++oneios_gpu_plugin_name(void)
++{
++	return oneios_gpu_metal_plugin ? oneios_gpu_metal_plugin() : "NativeAdrenoMetal";
++}
++static void
++oneios_gpu_plugin_visible(void)
++{
++	const char *name = oneios_gpu_plugin_name();
++	char path[128];
++	vnode_t vp = NULLVP;
++	if (!strcmp(name, "NativeAdrenoMetal")) {
++		return;
++	}
++	snprintf(path, sizeof(path), "/System/Library/Extensions/%s.bundle/Info.plist", name);
++	int error = vnode_lookup(path, 0, &vp, vfs_context_current());
++	if (!error) {
++		vnode_put(vp);
++	}
++	printf("oneios-gpu-addon: %s (the accelerator's MetalPluginName): %s (%d)\n", path,
++	    error ? "not there: Metal finds no plug-in and every process draws on the CPU" : "visible", error);
++}
+ static void
+ oneios_gpu_clients_file(const char *folder)
+ {
+@@ -9841,7 +9871,7 @@
+ 		text[length++] = *at == ',' ? '\n' : *at;
+ 	}
+ 	text[length++] = '\n';
+-	snprintf(path, sizeof(path), "%s/NativeAdrenoMetal.clients", folder);
++	snprintf(path, sizeof(path), "%s/%s.clients", folder, oneios_gpu_plugin_name());   /* 0108 */
+ 	int error = native_gpu_addon_write(path, (const uint8_t *)text, length, 0644, vfs_context_current());
+ 	printf("oneios-gpu-list: %s \"%s\": %s (%d)\n", path, list, error < 0 ? "unchanged" : error ? "not written" : "written", error);
+ }
+@@ -10601,6 +10631,7 @@
+ 	    native_gpu_addon_files, native_gpu_addon_written, native_gpu_addon_same, native_gpu_addon_failed, native_gpu_addon_error);
+ 	printf("oneios-gpu-addon: %s over %s: stage %d, status %d (stage 5 status 0: mounted, the sealed driver and the plug-in both visible)\n",
+ 	    from_addon ? extensions_source : seed_source, extensions_point, native_gpu_addon_stage, native_gpu_addon_status);
++	oneios_gpu_plugin_visible();                  /* 0108: the A56 accelerator's plug-in */
+ #else
+ 	native_gpu_addon_mount(p, scratch, 0x400, extensions_source, sizeof(extensions_source), extensions_point,
+ 	    sizeof(extensions_point), "/System/Library/Extensions/AGXMetalG17G.bundle",

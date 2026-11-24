@@ -471,3 +471,11 @@
 # carry it), neither is applied. iOS 27 has neither switch. Line "oneios-ios16-port-policy: on: ...". ipc_policy.c and
 # ipc_tt.c's set_exception_behavior_violation are no other patch's hunks. README.md, "0107".
 0107-ios16-port-policy.patch
+# 0108 (a56-gpu, 2026-11-24, docs/a56-gpu.md 5): the Galaxy A56's Metal plug-in in the kernel's two plug-in hooks. The
+# GPU archive publishes the A56's accelerator (MetalPluginName OneiOSRadeonMetal) with oneios-gpu-amd=1 on an AMDGPU
+# capset (gpu/OneiOSAdreno.cpp, gpu/OneiOSGpuChoice.h); 0039's list is written as <its MetalPluginName>.clients (the GPU
+# archive's oneios_gpu_metal_plugin: NativeAdrenoMetal as before on every other boot), one line says whether that
+# bundle is visible ("oneios-gpu-addon: /System/Library/Extensions/OneiOSRadeonMetal.bundle/Info.plist (the
+# accelerator's MetalPluginName): visible (0)", only for a plug-in that is not NativeAdrenoMetal), and 0031's dyld lines
+# name OneiOSRadeon* files too. Edits 0031's and 0039's code (kern_exec.c, kern_descrip.c). README.md, "0108".
+0108-a56-gpu-plugin.patch

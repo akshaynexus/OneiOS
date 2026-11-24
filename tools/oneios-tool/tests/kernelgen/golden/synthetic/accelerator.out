@@ -1,0 +1,50 @@
+// A made-up source for the edit list "accelerator": every anchor once, between lines of its own.
+extern "C" void native_adreno_note_property_read(const char *);
+// OneiOS (OneiOSAdreno.cpp): the A56 accelerator's open types and its CPU-composition processes.
+extern "C" bool oneios_gpu_open_refused(uint32_t type);
+extern "C" bool oneios_gpu_discovery_hidden(const char *key);
+extern "C" bool oneios_gpu_discovery_hidden_here(void);
+// (before anchor 1)
+class AGXAccelerator : public IOAcceleratorES {
+    OSObject *copyProperty(const char *key) const APPLE_KEXT_OVERRIDE;
+    bool serializeProperties(OSSerialize *s) const APPLE_KEXT_OVERRIDE;
+};
+// (before anchor 2)
+{
+    if(oneios_gpu_open_refused(type))return kIOReturnUnsupported;
+    unsigned limit=40;   /* a comment after it */
+}
+OSObject *AGXAccelerator::copyProperty(const OSSymbol *key) const
+{
+    native_adreno_note_property_read(key?key->getCStringNoCopy():nullptr);
+    if(oneios_gpu_discovery_hidden(key?key->getCStringNoCopy():nullptr))return nullptr;
+    return IORegistryEntry::copyProperty(key);
+}
+OSObject *AGXAccelerator::copyProperty(const OSString *key) const
+{
+    native_adreno_note_property_read(key?key->getCStringNoCopy():nullptr);
+    if(oneios_gpu_discovery_hidden(key?key->getCStringNoCopy():nullptr))return nullptr;
+    return IORegistryEntry::copyProperty(key);
+}
+OSObject *AGXAccelerator::copyProperty(const char *key) const
+{
+    native_adreno_note_property_read(key);
+    if(oneios_gpu_discovery_hidden(key))return nullptr;
+    return IORegistryEntry::copyProperty(key);
+}
+// OneiOS: the whole table without the discovery keys for the A56 accelerator's CPU-composition processes, as
+// copyProperty answers them one by one; for everyone else IOService's, as before.
+bool AGXAccelerator::serializeProperties(OSSerialize *s) const
+{
+    if(!oneios_gpu_discovery_hidden_here())return IOService::serializeProperties(s);
+    OSDictionary *table=dictionaryWithProperties();
+    if(!table)return false;
+    static const char *const keys[]={"MetalPluginName","MetalPluginClassName","IOGLESBundleName","IOGLESMetalBundleName",
+        "IOGLESDefaultUseMetal"};
+    for(const char *key:keys)table->removeObject(key);
+    const bool done=table->serialize(s);
+    table->release();
+    return done;
+}
+extern "C" IOService *native_adreno_accelerator_allocate(void) {return new AGXAccelerator;}
+// (the end)

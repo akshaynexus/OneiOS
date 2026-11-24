@@ -28,6 +28,7 @@ void oneios_gpu_surface_lock(uint32_t, uint32_t) __attribute__((weak));
 void oneios_gpu_submit(uint32_t) __attribute__((weak));
 void oneios_gpu_blob_segments(uint32_t, uint32_t, uint64_t, const void *, uint32_t) __attribute__((weak));
 bool oneios_gpu_reader_waits(int) __attribute__((weak));
+void oneios_gpu_context_made(uint32_t, uint32_t) __attribute__((weak));
 // (before anchor 5)
             gSurfaceUses[gSurfaceUseCount++] = {record.surface, record.written != 0, c, answer};
             if (oneios_gpu_surface_use) oneios_gpu_surface_use(record.surface, record.written != 0, c->slot, answer);
@@ -126,3 +127,6 @@ requestSize, 1, 0}, ioctl
             stage(9, !ret && words[0] == responseSize && value ? 0 : kIOReturnIOError);
             IOLog("virtgpu-selftest: %s ret %d value %llu response %u seqno %u\n",
                   amd ? "AMDGPU ACCEL_WORKING" : "MSM GPU_ID", ret, value, words[0], shmem->seqno);
+// next anchor: the context made
+    c->context = context; c->rings = in.num_rings; out.context_id = context; count(1);
+    if (oneios_gpu_context_made) oneios_gpu_context_made(context, in.capset_id);

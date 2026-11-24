@@ -77,6 +77,8 @@ fn the_edit_lists_write_what_the_python_functions_wrote() {
     assert_eq!(build_oneios_gpu::staged_text(made_up("gpu")).unwrap(), expected("gpu"));
     assert_eq!(build_oneios_gpu::staged_3d_text(made_up("gpu3d")).unwrap(), expected("gpu3d"));   // no Python original
     assert!(build_oneios_gpu::staged_3d_text(made_up("gpu3d").repeat(2)).is_err());
+    assert_eq!(build_oneios_gpu::staged_accelerator_text(made_up("accelerator")).unwrap(), expected("accelerator"));   // no Python original
+    assert!(build_oneios_gpu::staged_accelerator_text(made_up("accelerator").repeat(2)).is_err());
     assert_eq!(build_oneios_display::staged_text(made_up("display")).unwrap(), expected("display"));
     assert_eq!(build_oneios_display::staged_scanout(made_up("display_scanout")).unwrap(), expected("display_scanout"));
 }
@@ -269,4 +271,25 @@ fn the_hosted_record_is_of_the_final_file() {
     // nothing below out/kernel/builds, no current link: the VM kernel's place is not touched
     assert!(!root.join("out/kernel/builds").exists() && !root.join("out/kernel/current").exists());
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_gpu_edits_fit_the_pinned_sources() {
+    // a56-gpu, 2026-11-24: the three edit lists of `kernel gen gpu` (staged/gpu.rs) on the real DroidVMGpu.cpp,
+    // DroidVMVirtioGpu3D.cpp and NativeAdrenoAccelerator.cpp where external/ has them: each anchor there exactly once, and
+    // the Adreno accelerator's names now asked of OneiOSAdreno.cpp, nowhere written as literals.
+    let package = repo().join("external/UniXNU-droidvm/package");
+    let accelerator = repo().join("external/NativeAdreno/NativeAdrenoAccelerator.cpp");
+    if !package.join("DroidVMGpu.cpp").exists() || !accelerator.exists() {
+        eprintln!("external/UniXNU-droidvm or external/NativeAdreno is not here: the gpu edits were checked on the synthetic sources only");
+        return;
+    }
+    let gpu = build_oneios_gpu::staged_text(std::fs::read_to_string(package.join("DroidVMGpu.cpp")).unwrap()).unwrap();
+    assert!(gpu.contains("accelerator->setProperty(\"MetalPluginName\", oneios_gpu_metal_plugin());"));
+    assert!(!gpu.contains("\"NativeAdrenoMetal\""));
+    let gpu3d = build_oneios_gpu::staged_3d_text(std::fs::read_to_string(package.join("DroidVMVirtioGpu3D.cpp")).unwrap()).unwrap();
+    assert_eq!(gpu3d.matches("oneios_gpu_context_made(context, in.capset_id)").count(), 1);
+    let staged = build_oneios_gpu::staged_accelerator_text(std::fs::read_to_string(&accelerator).unwrap()).unwrap();
+    assert_eq!(staged.matches("oneios_gpu_discovery_hidden(").count(), 4);   // its declaration and the three copyProperty
+    assert!(staged.contains("if(oneios_gpu_open_refused(type))return kIOReturnUnsupported;"));
 }

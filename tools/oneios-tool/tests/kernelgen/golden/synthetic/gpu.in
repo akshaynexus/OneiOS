@@ -13,4 +13,8 @@
     status = OSMetaClass::postModLoad(handle);
 // (before anchor 5)
     if (PE_parse_boot_argn("droidvm-gpu-clients", clients, sizeof clients - 1)) {
+// (before anchor 6)
+    accelerator->setProperty("MetalPluginName", "NativeAdrenoMetal");
+// (before anchor 7)
+    accelerator->setProperty("MetalPluginClassName", "NativeAdrenoMetalDevice");
 // (the end)

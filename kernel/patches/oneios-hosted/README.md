@@ -1971,3 +1971,55 @@ crash loops stay off. `tools/oneios-tool/crates/oneios-tweaks/tests/roottweak.rs
 FairPlayIOKit kext; this kernel does not carry it either), and `oneios-cpu` / `oneios-mem` for the jobs that run again.
 A job that loops goes back with `boot-args-add=oneios-disable-jobs=` (0053's list and it) and then into the policy's
 loops group.
+
+## 0108-a56-gpu-plugin.patch and the GPU archive's A56 accelerator (a56-gpu, 2026-11-24)
+
+The guest kernel's half of the Galaxy A56's GPU Metal ([docs/a56-gpu.md](../../../docs/a56-gpu.md) 5 has the whole of
+it: the fault, the rule, the sandbox, the lines).
+
+- **The fault** (read from the code; the A56 has no amdgpu host yet). The start counted the host's 3D features
+  alone and then published NativeAdreno's accelerator (`MetalPluginName` `NativeAdrenoMetal`) on any 3D host unless
+  `oneios-gpu-metal=0`. On an amdgpu host that publish is wrong: Turnip needs an msm context, and on iOS 16.5 the
+  accelerator handed backboardd a Metal device that could not draw. 20F66's `oneios-gpu-metal=0` hid this.
+  The kernel itself sends no msm ccmd outside `vgpu-selftest=1`, whose staged form already branches on the context
+  type. So there was no panic and no hang.
+- **The fix, in the GPU archive** (`gpu/`, built by `oneios-tool kernel gen gpu`, no numbered patch):
+  - `OneiOSGpu.cpp` reads the DRM capset's `context_type`.
+  - `OneiOSAdreno.cpp` decides with `gpu/OneiOSGpuChoice.h`:
+    - Adreno on an MSM capset (or none read), by the old rule;
+    - nothing on a capset that is read and is not MSM;
+    - the A56's accelerator with `oneios-gpu-amd=1` on an AMDGPU capset, whatever `oneios-gpu-metal` says;
+    - never Adreno with `oneios-gpu-amd=1`.
+  - The A56's accelerator is the same `AGXAccelerator`, with these differences:
+    - `MetalPluginName` `OneiOSRadeonMetal`, `MetalPluginClassName` `OneiOSRadeonMetalDevice`, `OneiOSDrmContext`
+      `amdgpu`;
+    - only open type 0x4149 and the plug-in's markers;
+    - Metal's and GL's discovery keys hidden from the processes of `oneios-gpu-amd-cpu` (by default backboardd,
+      SpringBoard and the rest of Jesvi-iOS's "core renderers"), in `copyProperty` and in `serializeProperties`;
+    - one line for each of the first 32 DRM contexts.
+  - The staged edits are `staged/gpu.rs` `GPU`, `GPU3D` and `ACCELERATOR`.
+- **0108** (kern_exec.c, kern_descrip.c: 0031's and 0039's code):
+  - 0039's list file is named after the published `MetalPluginName` (the archive's `oneios_gpu_metal_plugin`, weak;
+    `NativeAdrenoMetal` without it).
+  - One `oneios-gpu-addon:` line says whether a plug-in other than NativeAdrenoMetal is visible under
+    `/System/Library/Extensions`.
+  - 0031's dyld lines name `OneiOSRadeon*` files.
+- **The S24 Ultra and iOS 27 are unchanged:**
+  - The capset is MSM and no `oneios-gpu-amd` is passed, so the decision is the old rule. `test_choice.c` checks it
+    for every gpu state and `oneios-gpu-metal` value.
+  - The names are the old literals, the hooks answer false, 0039's file is `NativeAdrenoMetal.clients`, and 0108's
+    new line is not printed.
+  - The one difference is two read-only capset queries at the start.
+- **Tested:** `kernel/tests/host.sh` (the new `gpu: the accelerator's choice ...` case, `gpu/tests/test_choice.c`), `cargo
+  test --test golden` in `tools/oneios-tool/crates/oneios-kernel` (15 of 15, with the edit lists on the real pinned
+  sources), 0108 applied in order on main's series (190 patches) and on `release-kernel-a56`'s (183), and the hosted
+  build below. **Not booted** (no A56 here, no qemu boot: qemu has no 3D).
+- **The build** (build laptop, 2026-11-24): `HOSTED_OUT=a56gpu ONEIOS_CRYPTO=original kernel/build-hosted.sh`, 376 s:
+  - `xnu-12377.121.6-ios-27.0.1-24A446-b14aa6445129`, `xnu.macho` 24,717,776 bytes, SHA-256 `39fba0f6bee80890267eaaedb7947da746e43cbb90e1330271c765776e86f878`;
+  - 192 patches (main's series to 0108), releasable;
+  - `kernel gen gpu`: no warning in any GPU archive object's log; `adreno/status.json` compiled and linked;
+    `OneiOSAdreno.o` defines the new hooks, and `AGXAccelerator::serializeProperties` is in the archive.
+  - The prelink, `KERNEL=out/kernel/current-hosted-a56gpu/xnu.macho OUT=out/kernel/24A446-a56gpu kernel/prelink/build.sh`
+    (the 24A446 collection, which the A56's 20F66 image set also carries): `kernel.kc` 96,321,536 bytes, SHA-256
+    `f090804df3460214c776a4d065692d5d9b3b494d81c04f7e7cd4b9517ce73693`, audit 2711 paired, 93 on the stub, 0 failures.
+  - This is main's series, not the release branch's. It is not a release kernel.
