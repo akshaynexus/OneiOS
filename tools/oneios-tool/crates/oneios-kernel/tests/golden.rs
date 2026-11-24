@@ -287,9 +287,13 @@ fn the_gpu_edits_fit_the_pinned_sources() {
     let gpu = build_oneios_gpu::staged_text(std::fs::read_to_string(package.join("DroidVMGpu.cpp")).unwrap()).unwrap();
     assert!(gpu.contains("accelerator->setProperty(\"MetalPluginName\", oneios_gpu_metal_plugin());"));
     assert!(!gpu.contains("\"NativeAdrenoMetal\""));
+    // the GL stage (2026-11-24): OpenGL ES's bundle asked of OneiOSAdreno.cpp too (OneiOSRadeonGL with oneios-gpu-amd-gl=1)
+    assert!(gpu.contains("accelerator->setProperty(\"IOGLESBundleName\", oneios_gpu_gles_bundle());"));
+    assert!(!gpu.contains("\"AppleMetalGLRenderer\""));
     let gpu3d = build_oneios_gpu::staged_3d_text(std::fs::read_to_string(package.join("DroidVMVirtioGpu3D.cpp")).unwrap()).unwrap();
     assert_eq!(gpu3d.matches("oneios_gpu_context_made(context, in.capset_id)").count(), 1);
     let staged = build_oneios_gpu::staged_accelerator_text(std::fs::read_to_string(&accelerator).unwrap()).unwrap();
-    assert_eq!(staged.matches("oneios_gpu_discovery_hidden(").count(), 4);   // its declaration and the three copyProperty
+    // its declaration, the three copyProperty and serializeProperties' loop (one rule for both reads since the GL stage)
+    assert_eq!(staged.matches("oneios_gpu_discovery_hidden(").count(), 5);
     assert!(staged.contains("if(oneios_gpu_open_refused(type))return kIOReturnUnsupported;"));
 }

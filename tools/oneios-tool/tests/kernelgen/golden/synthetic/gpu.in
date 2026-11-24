@@ -17,4 +17,6 @@
     accelerator->setProperty("MetalPluginName", "NativeAdrenoMetal");
 // (before anchor 7)
     accelerator->setProperty("MetalPluginClassName", "NativeAdrenoMetalDevice");
+// (before anchor 8)
+    accelerator->setProperty("IOGLESBundleName", "AppleMetalGLRenderer");
 // (the end)

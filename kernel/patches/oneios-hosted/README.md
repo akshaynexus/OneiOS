@@ -1998,6 +1998,14 @@ it: the fault, the rule, the sandbox, the lines).
       SpringBoard and the rest of Jesvi-iOS's "core renderers"), in `copyProperty` and in `serializeProperties`;
     - one line for each of the first 32 DRM contexts.
   - The staged edits are `staged/gpu.rs` `GPU`, `GPU3D` and `ACCELERATOR`.
+  - **OpenGL ES** (the GL stage, 2026-11-25; docs/a56-gpu.md 4a and 5.3): with `oneios-gpu-amd-gl=1` (xnuhost adds it
+    when the gpuaddon carries `OneiOSRadeonGL.bundle`) the A56's accelerator names `IOGLESBundleName` `OneiOSRadeonGL`
+    for every process (`oneios_gpu_gles_bundle`, staged into `DroidVMGpu.cpp`'s `setProperty`; `AppleMetalGLRenderer`
+    as before otherwise), and the `oneios-gpu-amd-cpu` processes see it: only the four Metal keys stay hidden
+    (`OneiOSGpuChoice.h` `oneios_gpu_cpu_hides`), and `serializeProperties` removes each key by the same rule as
+    `copyProperty`. Tested: `test_choice.c` (the bundle name for every kind and value, what the CPU-composition
+    processes see), `cargo test --test golden` (15 of 15). Not built into a kernel here: **the A56 release kernel needs a
+    rebuild** on top of release-kernel-a56 0888d97 with this archive.
 - **0108** (kern_exec.c, kern_descrip.c: 0031's and 0039's code):
   - 0039's list file is named after the published `MetalPluginName` (the archive's `oneios_gpu_metal_plugin`, weak;
     `NativeAdrenoMetal` without it).

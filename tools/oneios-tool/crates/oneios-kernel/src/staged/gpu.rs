@@ -41,12 +41,17 @@ pub const GPU: &[(&str, &str)] = &[
      concat!("extern \"C\" void oneios_gpu_client_list(char *, size_t);\n",
              "extern \"C\" const char *oneios_gpu_metal_plugin(void);\n",
              "extern \"C\" const char *oneios_gpu_metal_class(void);\n",
+             "extern \"C\" const char *oneios_gpu_gles_bundle(void);\n",
              "extern \"C\" void oneios_gpu_accelerator_properties(IOService *);\n")),
     ("    accelerator->setProperty(\"MetalPluginName\", \"NativeAdrenoMetal\");\n",
      "    accelerator->setProperty(\"MetalPluginName\", oneios_gpu_metal_plugin());\n"),
     ("    accelerator->setProperty(\"MetalPluginClassName\", \"NativeAdrenoMetalDevice\");\n",
      concat!("    accelerator->setProperty(\"MetalPluginClassName\", oneios_gpu_metal_class());\n",
              "    oneios_gpu_accelerator_properties(accelerator);\n")),
+    // OpenGL ES's bundle is OneiOSAdreno.cpp's too (the A56 GPU port's GL stage, 2026-11-24; docs/a56-gpu.md 4a):
+    // AppleMetalGLRenderer as before, OneiOSRadeonGL on the A56's accelerator with oneios-gpu-amd-gl=1.
+    ("    accelerator->setProperty(\"IOGLESBundleName\", \"AppleMetalGLRenderer\");\n",
+     "    accelerator->setProperty(\"IOGLESBundleName\", oneios_gpu_gles_bundle());\n"),
 ];
 
 /// DroidVMVirtioGpu3D.cpp's lines that change (hang, 2026-11-13): each blob's life goes to OneiOSAdreno.cpp, which
@@ -251,8 +256,8 @@ pub const ACCELERATOR: &[(&str, &str)] = &[
              "    native_adreno_note_property_read(key);\n",
              "    if(oneios_gpu_discovery_hidden(key))return nullptr;\n")),
     ("extern \"C\" IOService *native_adreno_accelerator_allocate(void) {return new AGXAccelerator;}\n",
-     concat!("// OneiOS: the whole table without the discovery keys for the A56 accelerator's CPU-composition processes, as\n",
-             "// copyProperty answers them one by one; for everyone else IOService's, as before.\n",
+     concat!("// OneiOS: the whole table without the discovery keys the A56 accelerator hides from its CPU-composition processes\n",
+             "// (oneios_gpu_discovery_hidden, as copyProperty answers them one by one); for everyone else IOService's, as before.\n",
              "bool AGXAccelerator::serializeProperties(OSSerialize *s) const\n",
              "{\n",
              "    if(!oneios_gpu_discovery_hidden_here())return IOService::serializeProperties(s);\n",
@@ -260,7 +265,7 @@ pub const ACCELERATOR: &[(&str, &str)] = &[
              "    if(!table)return false;\n",
              "    static const char *const keys[]={\"MetalPluginName\",\"MetalPluginClassName\",\"IOGLESBundleName\",\"IOGLESMetalBundleName\",\n",
              "        \"IOGLESDefaultUseMetal\"};\n",
-             "    for(const char *key:keys)table->removeObject(key);\n",
+             "    for(const char *key:keys)if(oneios_gpu_discovery_hidden(key))table->removeObject(key);\n",
              "    const bool done=table->serialize(s);\n",
              "    table->release();\n",
              "    return done;\n",
