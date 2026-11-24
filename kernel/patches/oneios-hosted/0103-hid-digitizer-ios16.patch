@@ -1,0 +1,211 @@
+diff --git a/iokit/Kernel/IODataQueue.cpp b/iokit/Kernel/IODataQueue.cpp
+--- a/iokit/Kernel/IODataQueue.cpp
++++ b/iokit/Kernel/IODataQueue.cpp
+@@ -319,6 +319,199 @@
+ }
+ #endif /* XNU_HOSTED */
+ 
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0103, from the Galaxy A56 fork's 0079, Musicalista/OneiOS-A56 f0cc630): iOS 27's IOHIDFamily writes
++ * digitizer events in a layout iOS 16.5's IOKit does not read, so a 16.5 backboardd (the A56's 20F66 sessions)
++ * counted every touch and found no finger in it. 20F66's IOKit (IOHIDEventCreateWithBytes,
++ * IOHIDEventGetFloatValueWithOptions in its shared cache) reads a queue element as a 28-byte header {timestamp,
++ * sender, options, attribute size, event count} and then the events back to back; its digitizer event is 0x68 bytes:
++ * x, y, z as IOFixed at 16/20/24, six words at 28..52 (index, transducer type, identity, event mask, a word, button
++ * mask), pressure, auxiliary pressure and twist as floats at 52/56/60, the orientation type at 64, six orientation
++ * floats at 68..92, three words at 92..104. iOS 27's (the fork's phone dump with 0102) is 0xa0 bytes: the same header,
++ * x/y/z as doubles at 16/24/32, the six words at 40..64, three doubles at 64..88, the orientation type at 88, six
++ * doubles at 96..144, three words at 144..156; and every event after the first is preceded by a header of its own.
++ * With oneios-hid16=1 (xnuhost passes it for an image of build 20F66; iOS 27 never gets it), each "data available"
++ * notification first rewrites the queue's unread elements made only of such digitizer events into 20F66's layout, in
++ * place (the entry keeps its size; the bytes after the rewritten element are zeroed). A rewritten element no longer
++ * matches (its events are 0x68 bytes), so a second pass leaves it alone. An element written while the queue was not
++ * empty gets no notification of its own: it is rewritten at the next one if the reader has not taken it yet. Off
++ * without the argument. One line at the first conversion, and a count every 1000:
++ *   oneios-hid16: digitizer events rewritten for iOS 16.5 (first: 2 events)
++ * The fork's phone (2026-11-21, kernel.kc e831dec7): touch works; the test session drew 371 frames against about 10.
++ */
++static int hosted_hid16 = -1;
++static uint64_t hosted_hid16_done;
++
++static uint32_t
++hosted_hid16_rd32(const uint8_t *p)
++{
++	uint32_t v;
++	memcpy(&v, p, 4);
++	return v;
++}
++
++static uint64_t
++hosted_hid16_rd64(const uint8_t *p)
++{
++	uint64_t v;
++	memcpy(&v, p, 8);
++	return v;
++}
++
++static void
++hosted_hid16_wr32(uint8_t *p, uint32_t v)
++{
++	memcpy(p, &v, 4);
++}
++
++/* A double's bits as IOFixed (16.16), without floating point (the kernel has none): saturated, truncated. */
++static uint32_t
++hosted_hid16_fixed(uint64_t b)
++{
++	int e = (int)((b >> 52) & 0x7ff);
++	if (e == 0 || e == 0x7ff) {
++		return 0;
++	}
++	uint64_t m = (b & ((1ULL << 52) - 1)) | (1ULL << 52);
++	int shift = e - 1059;                          /* value * 65536 = m * 2^(e - 1075 + 16) */
++	uint64_t v;
++	if (shift >= 0) {
++		v = shift >= 11 ? 0x7fffffffULL : m << shift;
++	} else {
++		v = -shift >= 64 ? 0 : m >> -shift;
++	}
++	if (v > 0x7fffffffULL) {
++		v = 0x7fffffffULL;
++	}
++	int32_t s = (int32_t)v;
++	return (uint32_t)((b >> 63) ? -s : s);
++}
++
++/* A double's bits as a float's (the mantissa truncated; out of range: 0 or infinity). */
++static uint32_t
++hosted_hid16_float(uint64_t b)
++{
++	int e = (int)((b >> 52) & 0x7ff);
++	uint32_t sign = (uint32_t)(b >> 63) << 31;
++	if (e == 0) {
++		return sign;
++	}
++	if (e == 0x7ff) {
++		return sign | 0x7f800000u | (uint32_t)((b >> 29) & 0x7fffff);
++	}
++	int f = e - 1023 + 127;
++	if (f <= 0) {
++		return sign;
++	}
++	if (f >= 255) {
++		return sign | 0x7f800000u;
++	}
++	return sign | ((uint32_t)f << 23) | (uint32_t)((b >> 29) & 0x7fffff);
++}
++
++static void
++hosted_hid16_digitizer(const uint8_t *in, uint8_t *out)
++{
++	memset(out, 0, 0x68);
++	hosted_hid16_wr32(out + 0, 0x68);
++	hosted_hid16_wr32(out + 4, 11);
++	hosted_hid16_wr32(out + 8, hosted_hid16_rd32(in + 8));
++	hosted_hid16_wr32(out + 12, hosted_hid16_rd32(in + 12));
++	for (unsigned i = 0; i < 3; i++) {
++		hosted_hid16_wr32(out + 16 + 4 * i, hosted_hid16_fixed(hosted_hid16_rd64(in + 16 + 8 * i)));
++	}
++	for (unsigned i = 0; i < 6; i++) {
++		hosted_hid16_wr32(out + 28 + 4 * i, hosted_hid16_rd32(in + 40 + 4 * i));
++	}
++	for (unsigned i = 0; i < 3; i++) {
++		hosted_hid16_wr32(out + 52 + 4 * i, hosted_hid16_float(hosted_hid16_rd64(in + 64 + 8 * i)));
++	}
++	hosted_hid16_wr32(out + 64, hosted_hid16_rd32(in + 88));
++	for (unsigned i = 0; i < 6; i++) {
++		hosted_hid16_wr32(out + 68 + 4 * i, hosted_hid16_float(hosted_hid16_rd64(in + 96 + 8 * i)));
++	}
++	for (unsigned i = 0; i < 3; i++) {
++		hosted_hid16_wr32(out + 92 + 4 * i, hosted_hid16_rd32(in + 144 + 4 * i));
++	}
++}
++
++/* One queue element; false (and nothing written) unless it is all iOS 27 digitizer events. */
++static bool
++hosted_hid16_element(uint8_t *p, uint32_t len)
++{
++	enum { HEADER = 28, IN = 0xa0, OUT = 0x68, MAX = 8 };
++	if (len < HEADER + IN || hosted_hid16_rd32(p + 20) != 0) {
++		return false;
++	}
++	uint32_t n = hosted_hid16_rd32(p + 24);
++	if (n == 0 || n > MAX || len < HEADER + n * IN + (n - 1) * HEADER) {
++		return false;
++	}
++	for (uint32_t i = 0; i < n; i++) {
++		const uint8_t *ev = p + HEADER + i * (IN + HEADER);
++		if (hosted_hid16_rd32(ev) != IN || hosted_hid16_rd32(ev + 4) != 11) {
++			return false;
++		}
++		if (i > 0 && hosted_hid16_rd64(ev - HEADER + 8) != hosted_hid16_rd64(p + 8)) {   /* its own header: same sender */
++			return false;
++		}
++	}
++	uint8_t out[HEADER + MAX * OUT];
++	memcpy(out, p, HEADER);
++	for (uint32_t i = 0; i < n; i++) {
++		hosted_hid16_digitizer(p + HEADER + i * (IN + HEADER), out + HEADER + i * OUT);
++	}
++	memcpy(p, out, HEADER + n * OUT);
++	memset(p + HEADER + n * OUT, 0, len - (HEADER + n * OUT));
++	uint64_t done = __atomic_fetch_add(&hosted_hid16_done, 1, __ATOMIC_RELAXED);
++	if (done == 0) {
++		printf("oneios-hid16: digitizer events rewritten for iOS 16.5 (first: %u events)\n", n);
++	} else if ((done + 1) % 1000 == 0) {
++		printf("oneios-hid16: %llu touch elements rewritten for iOS 16.5\n", (unsigned long long)(done + 1));
++	}
++	return true;
++}
++
++/* The unread elements, head to tail, as IODataQueue::dequeue walks them. */
++static void
++hosted_hid16_queue(IODataQueueMemory *dq, UInt32 queueSize)
++{
++	if (hosted_hid16 < 0) {
++		int on = 0;
++		hosted_hid16 = PE_parse_boot_argn("oneios-hid16", &on, sizeof(on)) && on;
++	}
++	if (!hosted_hid16 || dq == NULL) {
++		return;
++	}
++	UInt32 head = __c11_atomic_load((_Atomic UInt32 *)&dq->head, __ATOMIC_RELAXED);
++	UInt32 tail = __c11_atomic_load((_Atomic UInt32 *)&dq->tail, __ATOMIC_ACQUIRE);
++	for (unsigned guard = 0; head != tail && guard < 64; guard++) {
++		if (head > queueSize) {
++			return;
++		}
++		if (queueSize - head < DATA_QUEUE_ENTRY_HEADER_SIZE) {
++			if (head == 0) {
++				return;
++			}
++			head = 0;                              /* no room for a header at the end: the next entry is at the start */
++			continue;
++		}
++		IODataQueueEntry *entry = (IODataQueueEntry *)((uint8_t *)dq->queue + head);
++		UInt32 size = entry->size;
++		if (size > queueSize - head - DATA_QUEUE_ENTRY_HEADER_SIZE) {
++			if (head == 0) {
++				return;
++			}
++			head = 0;                              /* the writer wrapped: this entry is at the start */
++			continue;
++		}
++		(void)hosted_hid16_element((uint8_t *)&entry->data, size);
++		head += DATA_QUEUE_ENTRY_HEADER_SIZE + size;
++	}
++}
++#endif /* XNU_HOSTED */
++
+ void
+ IODataQueue::sendDataAvailableNotification()
+ {
+@@ -327,6 +520,7 @@
+ 
+ 	msgh = &((IODataQueueInternal *) notifyMsg)->msg;
+ #if XNU_HOSTED
++	hosted_hid16_queue(dataQueue, ((IODataQueueInternal *) notifyMsg)->queueSize);
+ 	hosted_dqh_dump(dataQueue, ((IODataQueueInternal *) notifyMsg)->queueSize);
+ #endif
+ 	if (msgh->msgh_remote_port) {

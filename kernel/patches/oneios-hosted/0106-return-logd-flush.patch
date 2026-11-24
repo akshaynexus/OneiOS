@@ -1,0 +1,54 @@
+diff --git a/bsd/kern/kern_sig.c b/bsd/kern/kern_sig.c
+--- a/bsd/kern/kern_sig.c
++++ b/bsd/kern/kern_sig.c
+@@ -3694,3 +3694,50 @@
+ 	}
+ 	return 1;
+ }
++
++#if XNU_HOSTED
++/*
++ * OneiOS hosted (0106, from the Galaxy A56 fork's 0076, Musicalista/OneiOS-A56 3601ccd): the return's graceful window
++ * (xnuhost return-graceful-ms, the bridge's OB_CTL_SHUTDOWN) did nothing in the guest, so xnuhost killed iOS with
++ * logd's buffers still in memory: iOS's unified log on the Data store held only what logd had written by then (the
++ * fork's A56: the first ~40 s of each boot). This is the first, small part of the guest half (docs/booter.md "The
++ * return"): logd gets SIGTERM, which is what launchd sends it at a power-off, so it writes what it holds; launchd starts
++ * a new logd. Not a power-off: iOS keeps running until xnuhost's deadline. It runs only when xnuhost asks, which it
++ * does only with return-graceful-ms > 0 (default 0; the galaxy-a56 host row sets 4000): the S24 Ultra's returns are
++ * as before. A clean power-off can replace this definition later. One line:
++ *   oneios-power: return asked: SIGTERM to logd (N process(es))
++ */
++static thread_call_t oneios_power_call;
++
++static int
++oneios_power_logd(proc_t p, void *arg)
++{
++	if (!strncmp(p->p_comm, "logd", sizeof(p->p_comm))) {
++		psignal(p, SIGTERM);
++		(*(int *)arg)++;
++	}
++	return PROC_RETURNED;
++}
++
++static void
++oneios_power_work(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	int sent = 0;
++	proc_iterate(PROC_ALLPROCLIST, oneios_power_logd, &sent, NULL, NULL);
++	printf("oneios-power: return asked: SIGTERM to logd (%d process(es))\n", sent);
++}
++
++/* Overrides the bridge's weak default (drivers/bridge/OneiOSBridge.c); called on the bridge's receive path, so the
++ * signal goes from a thread call. */
++void oneios_power_request(void);
++void
++oneios_power_request(void)
++{
++	if (oneios_power_call == NULL) {
++		oneios_power_call = thread_call_allocate_with_options(oneios_power_work, NULL, THREAD_CALL_PRIORITY_KERNEL, 0);
++	}
++	if (oneios_power_call != NULL) {
++		thread_call_enter(oneios_power_call);
++	}
++}
++#endif /* XNU_HOSTED */

@@ -1,0 +1,70 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8835,7 +8835,8 @@
+  * only by a rebuild and a database saved before they were registered kept them out. So a database is kept when it
+  * already names every app of /Applications (the system's and the staged view's) as "NAME.app" in its strings: a
+  * database saved before the registration ended lacks some of them and is dropped as before.
+- *   oneios-ls-keep=2 (default) that test; 1 keep every one; 0 drop every one (the old behaviour)
++ *   oneios-ls-keep=2 (default) that test; 3 the same without the bundles that have no Info.plist (0105); 1 keep every
++ *   one; 0 drop every one (the old behaviour)
+  * One line per container: oneios-ls: CONTAINER/FILE: N bytes, names K of M apps of /Applications: kept|dropped
+  */
+ #define ONEIOS_LS_APPS 320
+@@ -8845,9 +8846,9 @@
+ 	unsigned count;
+ };
+ 
+-/* The ".app" entries of /Applications. */
++/* The ".app" entries of /Applications (with_plist: only those with an Info.plist of their own, 0105). */
+ static void
+-oneios_ls_apps_list(struct oneios_ls_apps *apps)
++oneios_ls_apps_list(struct oneios_ls_apps *apps, bool with_plist)
+ {
+ 	unsigned found = 0;
+ 	apps->count = 0;
+@@ -8855,6 +8856,23 @@
+ 	for (unsigned i = 0; i < found; i++) {
+ 		size_t length = strlen(apps->name[i]);
+ 		if (length > 4 && !strcmp(apps->name[i] + length - 4, ".app")) {
++			/*
++			 * OneiOS hosted (0105, from the Galaxy A56 fork's 0043 change, Musicalista/OneiOS-A56 3601ccd): with
++			 * oneios-ls-keep=3, a bundle without an Info.plist of its own (a macOS bundle such as 20F66's
++			 * DisplayCal.app, whose plist is Contents/Info.plist) is not counted. lsd never registers it, so with it
++			 * counted no database ever named every app and each boot dropped the database: SpringBoard's main thread
++			 * then waited about 66 s for lsd after the first frame (the fork's A56). xnuhost passes oneios-ls-keep=3
++			 * for an image of build 20F66; iOS 27 keeps the default, 2 (every ".app" counted, as before).
++			 */
++			if (with_plist) {
++				char plist[96];
++				vnode_t plist_vp = NULLVP;
++				snprintf(plist, sizeof(plist), "/Applications/%s/Info.plist", apps->name[i]);
++				if (vnode_lookup(plist, 0, &plist_vp, vfs_context_current()) != 0) {
++					continue;
++				}
++				vnode_put(plist_vp);
++			}
+ 			if (apps->count != i) {
+ 				memcpy(apps->name[apps->count], apps->name[i], length + 1);
+ 			}
+@@ -9759,9 +9777,9 @@
+ 						}
+ 					}
+ 				}
+-				struct oneios_ls_apps *apps = keep_mode == 2 ? kalloc_data(sizeof(struct oneios_ls_apps), Z_WAITOK | Z_ZERO) : NULL;
++				struct oneios_ls_apps *apps = keep_mode == 2 || keep_mode == 3 ? kalloc_data(sizeof(struct oneios_ls_apps), Z_WAITOK | Z_ZERO) : NULL;
+ 				if (apps != NULL) {
+-					oneios_ls_apps_list(apps);
++					oneios_ls_apps_list(apps, keep_mode == 3);
+ 					snprintf(path, 256, "%s/%s/Library/Caches/%s", parents[k], containers[i], files[largest_file]);
+ 					named = oneios_ls_apps_named(apps, path, &size, ctx);
+ 					keep = apps->count != 0 && named == (int)apps->count;
+@@ -9769,7 +9787,7 @@
+ 				printf("oneios-ls: %s/%s: %lld bytes, names %d of %u apps of /Applications: %s\n", containers[i], files[largest_file],
+ 				    (long long)largest, named, apps != NULL ? apps->count : 0,
+ 				    keep ? (keep_mode == 1 ? "kept (oneios-ls-keep=1)" : "kept") :
+-				    keep_mode == 2 ? "dropped (lsd rebuilds it and registers every app again)" : "dropped");
++				    keep_mode >= 2 ? "dropped (lsd rebuilds it and registers every app again)" : "dropped");
+ 				if (apps != NULL) {
+ 					kfree_data(apps, sizeof(struct oneios_ls_apps));
+ 				}

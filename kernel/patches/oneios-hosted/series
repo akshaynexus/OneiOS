@@ -431,3 +431,34 @@
 # "Add New Wallpaper" loaded forever, PosterBoard's gallery waits on duetexpertd's FaceSuggestions.xpc ("No such
 # process"). The roottweak test checks that the list is the policy's. README.md, "0092".
 0092-enable-jobs-policy.patch
+# a56-full (2026-11-24, port/a56-full; OneiOS issue 73): the Galaxy A56 fork's (Musicalista/OneiOS-A56) kernel fixes for
+# iOS 16.5 (20F66) not taken before, renumbered (fork -> here: 0078 -> 0102, 0079 -> 0103, 0080 -> 0104, its 0043
+# change -> 0105, 0076 -> 0106). Each is off for iOS 27: a boot argument that xnuhost adds only for an image set of
+# build 20F66 (0103-0105), a boot argument nobody passes (0102), or a call only return-graceful-ms > 0 makes (0106; set
+# by the galaxy-a56 host row only). IODataQueue.cpp, IOUserClient.cpp's copyClientEntitlement and kern_sig.c's end are
+# no other patch's; 0105 edits 0043's code. Apply after 0101 here and after 0092 on release-kernel-a56 (git apply
+# --check on both patched trees). README.md, "0102-0106". kernel/tests/host.sh runs 0103's conversion on the fork's
+# dumped touch entry (tests/test_hid16.c).
+# 0102: a lasting tool. oneios-dq-head=N prints, at each data queue "data available" notification, the entry at the
+# queue's head in hex ("oneios-dq-head: I size 0xS @0xO: ..."); IOHIDFamily writes its event queues without
+# IOSharedDataQueue::enqueue. It found 0103's cause on the fork's A56. Off without it.
+0102-data-queue-head-dump.patch
+# 0103: the A56's touch. iOS 27's IOHIDFamily writes digitizer events (0xa0 bytes, x/y/z as doubles, a header before
+# each child) that iOS 16.5's IOKit misreads (0x68 bytes, x/y/z as IOFixed): backboardd counted the touches and found no
+# finger. oneios-hid16=1 rewrites the queue's unread digitizer elements in place, in 20F66's layout, at each "data
+# available" notification. Line "oneios-hid16: digitizer events rewritten for iOS 16.5 (first: N events)". The fork's
+# A56 (2026-11-21): touch works, 371 frames in its test session against about 10.
+0103-hid-digitizer-ios16.patch
+# 0104: the A56's Wi-Fi interface. oneios-grant=PROC:ENTITLEMENT[,...] answers true for an entitlement the binary lacks
+# (IOUserClient::copyClientEntitlement): 20F66's configd lacks com.apple.networking.ionetworkstack.user-client, which iOS
+# 27's IONetworkStackUserClient wants, so en0 was never named. Line "oneios-grant: configd[N] given ...". The fork's A56:
+# en0 named and up, wifid's Apple80211 requests; no scan or join seen there.
+0104-entitlement-grant.patch
+# 0105: LaunchServices' database kept on iOS 16.5. oneios-ls-keep=3 is 0043's test (=2) with the /Applications bundles
+# that have no Info.plist of their own left out (20F66's DisplayCal.app, a macOS bundle lsd never registers): counted,
+# every boot dropped the database, and SpringBoard waited about 66 s for lsd after the first frame (the fork's A56).
+0105-ls-keep-plist.patch
+# 0106: the return's graceful window sends logd SIGTERM (oneios_power_request, over the bridge's weak default), so iOS's
+# unified log reaches the Data store before the kill. Only on xnuhost's ask (return-graceful-ms > 0). Not a power-off.
+# Line "oneios-power: return asked: SIGTERM to logd (N process(es))".
+0106-return-logd-flush.patch

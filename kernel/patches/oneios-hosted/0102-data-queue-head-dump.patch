@@ -1,0 +1,70 @@
+diff --git a/iokit/Kernel/IODataQueue.cpp b/iokit/Kernel/IODataQueue.cpp
+--- a/iokit/Kernel/IODataQueue.cpp
++++ b/iokit/Kernel/IODataQueue.cpp
+@@ -269,6 +269,56 @@
+ 	msgh->msgh_remote_port = port;
+ }
+ 
++#if XNU_HOSTED
++#include <pexpert/pexpert.h>
++/*
++ * OneiOS hosted (0102, from the Galaxy A56 fork's 0078, Musicalista/OneiOS-A56 f0cc630), a lasting debugging tool: the
++ * bytes of the entry at the head of a data queue each time the queue tells its reader that data is available.
++ * IOHIDFamily's event queues to backboardd write their entries without IOSharedDataQueue::enqueue; the notification
++ * is sent when a write made the queue non-empty, so the head is that write. Boot argument oneios-dq-head=N: the first
++ * N such entries of 0x20..0x800 bytes, at most 0x200 bytes each, as lines of 32 bytes in hex:
++ *   oneios-dq-head: 7 size 0x9c @0x00: 9c000000 ...
++ * Off without it (one boot-arg read, then a compare per notification). It found the A56's touch fault (0103).
++ */
++static int hosted_dqh_left = -1;
++static void
++hosted_dqh_dump(IODataQueueMemory *dq, UInt32 queueSize)
++{
++	if (hosted_dqh_left < 0) {
++		int n = 0;
++		hosted_dqh_left = PE_parse_boot_argn("oneios-dq-head", &n, sizeof(n)) && n > 0 ? (n > 2000 ? 2000 : n) : 0;
++	}
++	if (hosted_dqh_left <= 0 || dq == NULL) {
++		return;
++	}
++	UInt32 head = __c11_atomic_load((_Atomic UInt32 *)&dq->head, __ATOMIC_RELAXED);
++	if (head > queueSize || queueSize - head < DATA_QUEUE_ENTRY_HEADER_SIZE) {
++		return;
++	}
++	IODataQueueEntry *entry = (IODataQueueEntry *)((uint8_t *)dq->queue + head);
++	UInt32 size = entry->size;
++	if (size < 0x20 || size > 0x800 || queueSize - head - DATA_QUEUE_ENTRY_HEADER_SIZE < size) {
++		return;
++	}
++	int index = --hosted_dqh_left;
++	const uint8_t *p = (const uint8_t *)&entry->data;
++	for (UInt32 off = 0; off < size && off < 0x200; off += 32) {
++		char line[32 * 2 + 16];
++		unsigned at = 0;
++		for (UInt32 i = off; i < size && i < off + 32; i++) {
++			static const char hx[] = "0123456789abcdef";
++			line[at++] = hx[p[i] >> 4];
++			line[at++] = hx[p[i] & 15];
++			if ((i & 3) == 3) {
++				line[at++] = ' ';
++			}
++		}
++		line[at] = 0;
++		printf("oneios-dq-head: %d size 0x%x @0x%02x: %s\n", index, (unsigned)size, (unsigned)off, line);
++	}
++}
++#endif /* XNU_HOSTED */
++
+ void
+ IODataQueue::sendDataAvailableNotification()
+ {
+@@ -276,6 +326,9 @@
+ 	mach_msg_header_t * msgh;
+ 
+ 	msgh = &((IODataQueueInternal *) notifyMsg)->msg;
++#if XNU_HOSTED
++	hosted_dqh_dump(dataQueue, ((IODataQueueInternal *) notifyMsg)->queueSize);
++#endif
+ 	if (msgh->msgh_remote_port) {
+ 		kr = mach_msg_send_from_kernel_with_options(msgh, msgh->msgh_size,
+ 		    MACH64_SEND_TIMEOUT, MACH_MSG_TIMEOUT_NONE);

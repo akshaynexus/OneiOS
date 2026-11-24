@@ -1,0 +1,69 @@
+diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
+--- a/iokit/Kernel/IOUserClient.cpp
++++ b/iokit/Kernel/IOUserClient.cpp
+@@ -1571,6 +1571,52 @@
+ 	return entitlements;
+ }
+ 
++#if XNU_HOSTED
++#include <pexpert/pexpert.h>
++/*
++ * OneiOS hosted (0104, from the Galaxy A56 fork's 0080, Musicalista/OneiOS-A56 e8747cc): entitlements an older iOS's
++ * binaries lack but iOS 27's kexts ask for. The A56's iOS 16.5 configd opens IONetworkStack to name en0
++ * (InterfaceNamer); iOS 27's IONetworkStackUserClient::initWithTask wants root and
++ * com.apple.networking.ionetworkstack.user-client, which 20F66's configd does not carry, so the open failed
++ * (0xe00002c2), en0 was never named and wifid found no Wi-Fi interface ("Device manager not present").
++ * oneios-grant=PROC:ENTITLEMENT[,...] (the process name as proc_name gives it) answers kOSBooleanTrue for those pairs
++ * when the binary has no value of its own. xnuhost passes configd's pair for an image of build 20F66; off without the
++ * argument (iOS 27 never gets it). One line per pair, the first time it is given:
++ *   oneios-grant: configd[66] given com.apple.networking.ionetworkstack.user-client
++ */
++static bool
++hosted_grant(proc_t proc, const char *entitlement)
++{
++	static char list[256];
++	static int state = -1;
++	static uint32_t said;
++	if (state < 0) {
++		state = PE_parse_boot_argn("oneios-grant", list, sizeof(list)) && list[0] ? 1 : 0;
++	}
++	if (!state || proc == NULL || entitlement == NULL) {
++		return false;
++	}
++	char name[32];
++	proc_name(proc_pid(proc), name, sizeof(name));
++	size_t nlen = strlen(name), elen = strlen(entitlement);
++	unsigned index = 0;
++	for (const char *p = list; *p; index++) {
++		const char *end = strchr(p, ',');
++		size_t len = end ? (size_t)(end - p) : strlen(p);
++		const char *colon = (const char *)memchr(p, ':', len);
++		if (colon && (size_t)(colon - p) == nlen && !strncmp(p, name, nlen) &&
++		    len - (size_t)(colon - p) - 1 == elen && !strncmp(colon + 1, entitlement, elen)) {
++			if (index < 32 && !(__atomic_fetch_or(&said, 1u << index, __ATOMIC_RELAXED) & (1u << index))) {
++				printf("oneios-grant: %s[%d] given %s\n", name, proc_pid(proc), entitlement);
++			}
++			return true;
++		}
++		p = end ? end + 1 : p + len;
++	}
++	return false;
++}
++#endif /* XNU_HOSTED */
++
+ OSObject *
+ IOUserClient::copyClientEntitlement( task_t task,
+     const char * entitlement )
+@@ -1597,6 +1643,12 @@
+ 		&entitlement_object);
+ 
+ 	if (ret != KERN_SUCCESS) {
++#if XNU_HOSTED
++		if (hosted_grant(proc, entitlement)) {
++			kOSBooleanTrue->retain();
++			return kOSBooleanTrue;
++		}
++#endif
+ 		return NULL;
+ 	}
+ 	assert(entitlement_object != NULL);
