@@ -25,6 +25,13 @@
 //   oneios-adreno-selftest=1 after the publish: IOKit's match of IOAcceleratorES, an in-kernel open of the Metal
 //                            plug-in's connection (type 0x4149) and one GETPARAM through its tunnel; one log line
 //                            with each result.
+//   oneios-gpu-amd=1         (a56-gpu, 2026-11-24; xnuhost adds it when it picks its amdgpu renderer) with an AMDGPU
+//                            DRM capset: the A56's accelerator instead (MetalPluginName OneiOSRadeonMetal, open type
+//                            0x4149 alone), whatever oneios-gpu-metal says. A capset that is not MSM never gets the
+//                            Adreno accelerator. gpu/OneiOSGpuChoice.h has the whole rule, docs/a56-gpu.md 5 the why.
+//   oneios-gpu-amd-cpu=a,... the processes that keep CPU composition on the A56's accelerator (its discovery keys read
+//                            as absent there). Not given: ONEIOS_GPU_AMD_CPU_DEFAULT (backboardd, SpringBoard, ...);
+//                            empty: none.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
@@ -38,6 +45,7 @@
 #include <mach/task_info.h>
 extern "C" uint64_t gPhysBase, gPhysSize;
 #include "DroidVMVirtgpuABI.h"
+#include "OneiOSGpuChoice.h"
 
 extern vm_offset_t vm_kernel_slide;
 extern "C" {
@@ -106,11 +114,122 @@ extern "C" void oneios_gpu_plugin_client_list(char *out, size_t size)
     if (!PE_parse_boot_argn("oneios-gpu-plugin-clients", out, int(size - 1))) oneios_gpu_client_list(out, size);
 }
 
+// Which accelerator (gpu/OneiOSGpuChoice.h): decided once, at the first call (oneios_adreno_start, in bsd_init before
+// launchd), from the gpu state, the DRM capset's context type (OneiOSGpu.cpp) and the boot arguments. On an MSM capset
+// (or none read) without oneios-gpu-amd=1 it is the rule this function had before: the host offers 3D, or
+// oneios-gpu-metal / droidvm-gpu-metal when given.
+namespace {
+char gCpuList[256];   // the RADEON accelerator's CPU-composition processes (oneios-gpu-amd-cpu)
+}
+extern "C" {
+volatile uint32_t oneios_gpu_accelerator, oneios_gpu_accelerator_why, oneios_gpu_accelerator_decided;
+extern volatile uint32_t oneios_gpu3d_context_type;            // OneiOSGpu.cpp
+}
+static uint32_t acceleratorKind(void)
+{
+    if (oneios_gpu_accelerator_decided) return oneios_gpu_accelerator;
+    int metal = -1, amd = -1;
+    uint32_t value = 0;
+    if (PE_parse_boot_argn("oneios-gpu-metal", &value, sizeof value) || PE_parse_boot_argn("droidvm-gpu-metal", &value, sizeof value))
+        metal = value != 0;
+    value = 0;
+    if (PE_parse_boot_argn("oneios-gpu-amd", &value, sizeof value)) amd = value != 0;
+    unsigned why = 0;
+    const unsigned kind = oneios_gpu_accelerator_choice(oneios_gpu3d_state, oneios_gpu3d_context_type, metal, amd, &why);
+    if (kind == ONEIOS_ACCEL_RADEON && !PE_parse_boot_argn("oneios-gpu-amd-cpu", gCpuList, int(sizeof gCpuList - 1)))
+        strlcpy(gCpuList, ONEIOS_GPU_AMD_CPU_DEFAULT, sizeof gCpuList);
+    oneios_gpu_accelerator = kind;
+    oneios_gpu_accelerator_why = why;
+    oneios_gpu_accelerator_decided = 1;
+    return kind;
+}
+
 bool oneios_adreno_wanted(void)
 {
-    uint32_t wanted = oneios_gpu3d_state == 3;
-    if (!PE_parse_boot_argn("oneios-gpu-metal", &wanted, sizeof wanted)) PE_parse_boot_argn("droidvm-gpu-metal", &wanted, sizeof wanted);
-    return wanted != 0;
+    return acceleratorKind() != ONEIOS_ACCEL_NONE;
+}
+
+// The A56's accelerator (RADEON): what differs from the Adreno one. The class (AGXAccelerator), its user client
+// (AGXDeviceUserClient), the class chains, the sandbox grant (NativeSandboxGrantProcess, the list above) and the
+// virtgpu methods (droidvm_virtgpu_call) are the same; the staged DroidVMGpu.cpp and NativeAdrenoAccelerator.cpp ask
+// these (staged/gpu.rs GPU and ACCELERATOR). In the Adreno case each answers what those files had before.
+extern "C" {
+int proc_selfpid(void);
+void proc_selfname(char *, int);
+const char *oneios_gpu_metal_plugin(void);
+const char *oneios_gpu_metal_class(void);
+void oneios_gpu_accelerator_properties(IOService *accelerator);
+bool oneios_gpu_open_refused(uint32_t type);
+bool oneios_gpu_discovery_hidden(const char *key);
+bool oneios_gpu_discovery_hidden_here(void);
+void oneios_gpu_context_made(uint32_t context, uint32_t capset);
+}
+static bool radeon(void) {return oneios_gpu_accelerator_decided && oneios_gpu_accelerator == ONEIOS_ACCEL_RADEON;}
+// MetalPluginName and MetalPluginClassName (K3, docs/a56-gpu.md): Metal loads /System/Library/Extensions/<name>.bundle
+// (0031's union shows the Data seed's folder there) and makes the device with [[class alloc] initWithAcceleratorPort:].
+const char *oneios_gpu_metal_plugin(void) {return radeon() ? "OneiOSRadeonMetal" : "NativeAdrenoMetal";}
+const char *oneios_gpu_metal_class(void) {return radeon() ? "OneiOSRadeonMetalDevice" : "NativeAdrenoMetalDevice";}
+// One property more on the A56's, for the plug-in and for ioreg: the host's DRM driver.
+void oneios_gpu_accelerator_properties(IOService *accelerator)
+{
+    if (radeon() && accelerator) accelerator->setProperty("OneiOSDrmContext", "amdgpu");
+}
+// The A56's accelerator serves open type 0x4149 (the virtgpu methods) and the plug-in's progress markers alone: no
+// NativeAdreno GPU core (0x4147, KGSL-shaped, unattached here), no display hand-off (0x4148), no IOGPU device (type 1,
+// iOS 16.5's stock Metal: NativeAdreno refuses it too). The first 16 refusals of a boot are logged.
+bool oneios_gpu_open_refused(uint32_t type)
+{
+    if (!radeon() || oneios_gpu_radeon_open_allowed(type)) return false;
+    static volatile uint32_t refused;
+    if (OSIncrementAtomic(reinterpret_cast<volatile SInt32 *>(&refused)) < 16) {
+        char name[33] = {};
+        proc_selfname(name, sizeof name);
+        IOLog("oneios-gpu-amd: %s[%d] open type %#x refused: the A56 accelerator serves type %#x (virtgpu) alone\n", name,
+              proc_selfpid(), type, DROIDVM_VIRTGPU_OPEN_TYPE);
+    }
+    return true;
+}
+// Jesvi-iOS's "incompatible core renderers" filter (redwood_graphics_policy.h, docs/a56-gpu.md 5): Metal's and GL's
+// discovery keys read as absent by the processes of oneios-gpu-amd-cpu (default ONEIOS_GPU_AMD_CPU_DEFAULT, backboardd
+// first), so they find no plug-in and draw on the CPU as with no accelerator: CoreAnimation's render server stays on the
+// CPU until it is shown to work on this Metal. Per request, in the reading process; the registry is not changed. One
+// line for each of the first 32 processes it hides them from.
+static bool cpuProcess(char (&name)[33])
+{
+    memset(name, 0, sizeof name);
+    proc_selfname(name, sizeof name);
+    return oneios_gpu_name_listed(gCpuList, name);
+}
+bool oneios_gpu_discovery_hidden_here(void)
+{
+    char name[33];
+    return radeon() && cpuProcess(name);
+}
+bool oneios_gpu_discovery_hidden(const char *key)
+{
+    char name[33];
+    if (!radeon() || !oneios_gpu_discovery_key(key) || !cpuProcess(name)) return false;
+    static volatile SInt32 seen[32];
+    const int pid = proc_selfpid();
+    for (auto &slot : seen) {
+        if (slot == pid) break;
+        if (!slot && OSCompareAndSwap(0, UInt32(pid), reinterpret_cast<volatile UInt32 *>(&slot))) {
+            IOLog("oneios-gpu-amd: %s[%d] keeps CPU composition: %s hidden (oneios-gpu-amd-cpu)\n", name, pid, key);
+            break;
+        }
+    }
+    return true;
+}
+// The first 32 DRM contexts made on the A56's accelerator (DroidVMVirtioGpu3D.cpp's CONTEXT_INIT, staged/gpu.rs GPU3D):
+// a process's Mesa reached the host's amdgpu context.
+void oneios_gpu_context_made(uint32_t context, uint32_t capset)
+{
+    static volatile uint32_t made;
+    if (!radeon() || OSIncrementAtomic(reinterpret_cast<volatile SInt32 *>(&made)) >= 32) return;
+    char name[33] = {};
+    proc_selfname(name, sizeof name);
+    IOLog("oneios-gpu-amd: %s[%d] DRM context %u on capset %u (the host's context type %u, AMDGPU)\n", name, proc_selfpid(), context,
+          capset, oneios_gpu3d_context_type);
 }
 
 bool oneios_adreno_parent_bound(void)
@@ -1060,7 +1179,15 @@ void oneios_adreno_start(void)
     if (oneios_adreno_stage) return;
     if (!oneios_adreno_wanted()) {
         oneios_adreno_stage = 1;
-        IOLog("oneios-adreno: no Metal accelerator (gpu state %u; oneios-gpu-metal=1 publishes it anyway)\n", oneios_gpu3d_state);
+        if (oneios_gpu_accelerator_why == ONEIOS_WHY_NOT_MSM)
+            IOLog("oneios-adreno: no Metal accelerator: the host's DRM context type is %u (%s), not MSM; the A56's accelerator "
+                  "is published with oneios-gpu-amd=1 alone (gpu state %u)\n", oneios_gpu3d_context_type,
+                  oneios_gpu3d_context_type == ONEIOS_DRM_CONTEXT_AMDGPU ? "AMDGPU" : "another", oneios_gpu3d_state);
+        else if (oneios_gpu_accelerator_why == ONEIOS_WHY_AMD_NOT_AMDGPU)
+            IOLog("oneios-gpu-amd: no Metal accelerator: oneios-gpu-amd=1, but gpu state %u and DRM context type %u (the A56's needs "
+                  "3D with an AMDGPU capset; never the Adreno one with oneios-gpu-amd=1)\n", oneios_gpu3d_state, oneios_gpu3d_context_type);
+        else
+            IOLog("oneios-adreno: no Metal accelerator (gpu state %u; oneios-gpu-metal=1 publishes it anyway)\n", oneios_gpu3d_state);
         // The report thread all the same: its oneios-cpu lines are the only per-process CPU figures of a boot, and a
         // host with no 3D (the PC under qemu) needs them as much (its GPU lines stay quiet: nothing submits).
         thread_t reporter = nullptr;
@@ -1068,6 +1195,10 @@ void oneios_adreno_start(void)
         return;
     }
     oneios_adreno_stage = 2;
+    if (radeon())
+        IOLog("oneios-gpu-amd: the A56 accelerator: AGXAccelerator, MetalPluginName %s, MetalPluginClassName %s, open type %#x alone "
+              "(DRM context type %u); CPU composition kept by %s\n", oneios_gpu_metal_plugin(), oneios_gpu_metal_class(),
+              DROIDVM_VIRTGPU_OPEN_TYPE, oneios_gpu3d_context_type, gCpuList[0] ? gCpuList : "(none)");
     sheng_gpu_power_probe();
     uint32_t test = 0;
     PE_parse_boot_argn("oneios-adreno-selftest", &test, sizeof test);

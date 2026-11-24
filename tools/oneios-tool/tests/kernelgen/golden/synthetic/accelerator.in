@@ -1,0 +1,27 @@
+// A made-up source for the edit list "accelerator": every anchor once, between lines of its own.
+extern "C" void native_adreno_note_property_read(const char *);
+// (before anchor 1)
+class AGXAccelerator : public IOAcceleratorES {
+    OSObject *copyProperty(const char *key) const APPLE_KEXT_OVERRIDE;
+};
+// (before anchor 2)
+{
+    unsigned limit=40;   /* a comment after it */
+}
+OSObject *AGXAccelerator::copyProperty(const OSSymbol *key) const
+{
+    native_adreno_note_property_read(key?key->getCStringNoCopy():nullptr);
+    return IORegistryEntry::copyProperty(key);
+}
+OSObject *AGXAccelerator::copyProperty(const OSString *key) const
+{
+    native_adreno_note_property_read(key?key->getCStringNoCopy():nullptr);
+    return IORegistryEntry::copyProperty(key);
+}
+OSObject *AGXAccelerator::copyProperty(const char *key) const
+{
+    native_adreno_note_property_read(key);
+    return IORegistryEntry::copyProperty(key);
+}
+extern "C" IOService *native_adreno_accelerator_allocate(void) {return new AGXAccelerator;}
+// (the end)
