@@ -498,6 +498,8 @@ const GIVEN_KEYS: &[&str] = &[
     "astc",
     "gpu-blob-entries",
     "gpu-down",
+    "gpu-kgsl-ui-rb",
+    "gpu-off-level",
     "stop-loop",
     "uclamp-rule",
     "task-trim",
@@ -725,6 +727,10 @@ pub struct Config {
     pub gpu_blob_entries: u32,
     /// gpu-down (governor): when the GPU level leaves the top
     pub gpu_down: GpuDown,
+    /// gpu-kgsl-ui-rb (0): keep render server and front app out of Android's UI ringbuffer (4-7)
+    pub gpu_kgsl_ui_rb: bool,
+    /// gpu-off-level (1): hold KGSL at its lowest level while iOS's display is off
+    pub gpu_off_level: bool,
     /// stop-loop (wait): for the fork's stop loop; xnuhost checks it and names it in the switches line
     pub stop_loop: StopLoop,
     /// uclamp-rule (work): who sets the vCPU threads' clamps and where drm2kgsl's boost goes
@@ -971,6 +977,8 @@ impl Config {
             decoder_codecs: oneencoder::switches::ALL_CODECS,
             gpu_blob_entries: GPU_BLOB_ENTRIES,
             gpu_down: GpuDown::Governor,
+            gpu_kgsl_ui_rb: false,
+            gpu_off_level: true,
             stop_loop: StopLoop::Wait,
             uclamp_rule: UclampRule::Work,
             task_trim: true,
@@ -1193,6 +1201,8 @@ impl Config {
             "decoder-codecs" => self.decoder_codecs = named(oneencoder::switches::parse_codecs(value))?,
             "gpu-blob-entries" => self.gpu_blob_entries = number(value, 16384, i64::from(GPU_BLOB_ENTRIES))?,
             "gpu-down" => self.gpu_down = named(GpuDown::parse(value))?,
+            "gpu-kgsl-ui-rb" => self.gpu_kgsl_ui_rb = flag(value)?,
+            "gpu-off-level" => self.gpu_off_level = flag(value)?,
             "stop-loop" => self.stop_loop = named(StopLoop::parse(value))?,
             "uclamp-rule" => self.uclamp_rule = named(UclampRule::parse(value))?,
             "task-trim" => self.task_trim = flag(value)?,
@@ -1440,6 +1450,8 @@ impl Config {
         take!(self, image, "astc", astc);
         take!(self, image, "gpu-blob-entries", gpu_blob_entries);
         take!(self, image, "gpu-down", gpu_down);
+        take!(self, image, "gpu-kgsl-ui-rb", gpu_kgsl_ui_rb);
+        take!(self, image, "gpu-off-level", gpu_off_level);
         take!(self, image, "stop-loop", stop_loop);
         take!(self, image, "uclamp-rule", uclamp_rule);
         take!(self, image, "task-trim", task_trim);
@@ -2369,6 +2381,8 @@ impl Config {
             "ram-ondemand" => on(self.ram_ondemand),
             "uclamp-rule" => self.uclamp_rule.as_str().to_string(),
             "gpu-down" => self.gpu_down.as_str().to_string(),
+            "gpu-kgsl-ui-rb" => on(self.gpu_kgsl_ui_rb),
+            "gpu-off-level" => on(self.gpu_off_level),
             "gpu-blob-entries" => self.gpu_blob_entries.to_string(),
             "wifi-ring-wait" => on(self.wifi_ring_wait),
             "wifi-send-wait" => on(self.wifi_send_wait),

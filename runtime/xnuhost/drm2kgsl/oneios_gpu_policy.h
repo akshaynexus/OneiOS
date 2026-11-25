@@ -123,9 +123,14 @@ static inline enum og_class og_class_of(const char *name, size_t n, uint8_t hint
 // fences had no bound, and the class a queue was made with (by name or by role at the context's creation) stays its
 // priority for good. None takes the first ringbuffer (0-3, Android's compositor's). Every class gets an explicit one, so
 // the order holds whatever the kernel's default for KGSL_CONTEXT_PRIORITY_UNDEF is.
+static inline unsigned og_kgsl_priority_for(enum og_class c, bool ui_rb)
+{
+  return (c == OG_CLASS_RENDER || c == OG_CLASS_FRONT) && ui_rb ? 4u : 8u;
+}
+
 static inline unsigned og_kgsl_priority(enum og_class c)
 {
-  return c == OG_CLASS_RENDER || c == OG_CLASS_FRONT ? 4u : 8u;
+  return og_kgsl_priority_for(c, true);
 }
 
 // ---- whose surfaces another process reads ----------------------------------------------------------------------------

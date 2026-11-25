@@ -26,6 +26,10 @@ use crate::gpu3d::{self, Chunk, Entry, Errno, Gpu3d, LogFn, Retire};
 static SINK: AtomicUsize = AtomicUsize::new(0);
 /// gpu-down=bottom (docs/switches.md), set once by session.rs before the GPU opens.
 pub static DOWN_AT_BOTTOM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// gpu-kgsl-ui-rb=1 (docs/switches.md), set once by session.rs before the GPU opens.
+pub static UI_RB: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// gpu-off-level=1 (docs/switches.md), set once by session.rs before the GPU opens.
+pub static OFF_LEVEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// A line to the sink set at the open: at most 511 bytes, line breaks at its end dropped (as say() did).
 fn say(level: u8, line: &str) {
@@ -706,7 +710,7 @@ impl Gpu3d for Kgsl {
                 h[0] & policy::HINT_ROLE,
                 if h[0] & policy::HINT_DARWINBG != 0 { ", DarwinBG" } else { "" },
                 h[1] & 7,
-                policy::kgsl_priority(cls)
+                policy::kgsl_priority_for(cls, UI_RB.load(Ordering::Relaxed))
             );
         }
     }
@@ -744,14 +748,28 @@ impl Gpu3d for Kgsl {
                     Some(i) => {
                         let now = now_us() * 1000;
                         let c = s.ctx[i];
-                        let (action, next) = s.pol.frame_start(c.cls, now, c.hint[2] as u32 * policy::HINT_DEADLINE_US);
-                        // KGSL's lowest level for a background context (gpu-priority=1) at a still screen, unless other
-                        // work is queued, another process reads its surfaces, or its own oldest fence has waited past
-                        // the bound (lowest_for).
-                        let oldest = (0..STAT_RINGS).filter_map(|r| c.oldest(r)).map(|p| p.at).min().unwrap_or(0);
-                        let lowest = c.cls == Class::Background
-                            && s.priority_on
-                            && s.pol.lowest_for(now, s.fg_pending, c.shared, oldest * 1000);
+                        let display_off =
+                            OFF_LEVEL.load(Ordering::Relaxed) && !onebridges::brightness::display_on();
+                        let (action, next, lowest) = if display_off {
+                            let action = if s.pol.level == policy::Level::Top {
+                                s.pol.level = policy::Level::Governor;
+                                Action::Governor
+                            } else {
+                                Action::None
+                            };
+                            (action, Frame::default(), s.priority_on)
+                        } else {
+                            let (action, next) =
+                                s.pol.frame_start(c.cls, now, c.hint[2] as u32 * policy::HINT_DEADLINE_US);
+                            // KGSL's lowest level for a background context (gpu-priority=1) at a still screen, unless other
+                            // work is queued, another process reads its surfaces, or its own oldest fence has waited past
+                            // the bound (lowest_for).
+                            let oldest = (0..STAT_RINGS).filter_map(|r| c.oldest(r)).map(|p| p.at).min().unwrap_or(0);
+                            let lowest = c.cls == Class::Background
+                                && s.priority_on
+                                && s.pol.lowest_for(now, s.fg_pending, c.shared, oldest * 1000);
+                            (action, next, lowest)
+                        };
                         if lowest {
                             s.lowest_n += 1;
                         }
@@ -934,8 +952,10 @@ fn level_start(s: &mut St) {
         s.pol.ratio_x16 % 16 * 100 / 16,
         if off {
             "off (gpu-priority=0)"
-        } else {
+        } else if UI_RB.load(Ordering::Relaxed) {
             "on (render server and front 4, default and background 8; background at the lowest level at a still screen)"
+        } else {
+            "on (all classes 8, out of Android UI ringbuffer; lowest level on idle background or display off)"
         },
         s.background.as_deref().unwrap_or(policy::DEFAULT_BACKGROUND)
     );

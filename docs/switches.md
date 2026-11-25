@@ -28,7 +28,7 @@ a new switch is on the screen with the runtime that has it.
 xnuhost logs every switch once, after the `versions:` line:
 
 ```text
-switches: session-mode=hosted stop-loop=wait takeover-reclaim=1 takeover-swappiness=keep task-trim=1 timer-coalesce=1 ram-fit-terms=tasks ram-ondemand=0 uclamp-rule=work gpu-down=governor gpu-blob-entries=65532 wifi-ring-wait=1 wifi-send-wait=1 wifi-buffers=1 wifi-joined-scan=cache encoder-10bit=main10 encoder-warmup=1 display-post=apart display-present=ahb decoder=auto decoder-codecs=h264,hevc,vp9,av1 astc=1 sensors=auto sensors-hz=50 sensors-light=auto oneios-motion=0 oneios-als-spu=0 oneios-wifi-rssi=1 oneios-telemetry-jobs=0 oneios-pool-cut=1 oneios-pressure-big=512 oneios-disable-allowed=1 oneios-nested-exact=1 oneios-upgrade-flush=0 oneios-fill-fast-fault=1 oneios-audio-rt=1 oneios-audio-curve=1 oneios-codec-irq=1 oneios-idle-spares=1 oneios-bo-cache-idle=1 oneios-keep-room=8 oneios-dl-full=1 sheng-vsync-min=60 oneios-compile-s=120 oneios-snapshot-astc=0 oneios-camera-notify=1 oneios-m2v-shader-fix=1 oneios-dont-care=1 oneios-queue-priority=1 (docs/switches.md); all at their defaults
+switches: session-mode=hosted stop-loop=wait takeover-reclaim=1 takeover-swappiness=keep task-trim=1 timer-coalesce=1 ram-fit-terms=tasks ram-ondemand=0 uclamp-rule=work gpu-down=governor gpu-kgsl-ui-rb=0 gpu-off-level=1 gpu-blob-entries=65532 wifi-ring-wait=1 wifi-send-wait=1 wifi-buffers=1 wifi-joined-scan=cache encoder-10bit=main10 encoder-warmup=1 display-post=apart display-present=ahb decoder=auto decoder-codecs=h264,hevc,vp9,av1 astc=1 sensors=auto sensors-hz=50 sensors-light=auto oneios-motion=0 oneios-als-spu=0 oneios-wifi-rssi=1 oneios-telemetry-jobs=0 oneios-pool-cut=1 oneios-pressure-big=512 oneios-disable-allowed=1 oneios-nested-exact=1 oneios-upgrade-flush=0 oneios-fill-fast-fault=1 oneios-audio-rt=1 oneios-audio-curve=1 oneios-codec-irq=1 oneios-idle-spares=1 oneios-bo-cache-idle=1 oneios-keep-room=8 oneios-dl-full=1 sheng-vsync-min=60 oneios-compile-s=120 oneios-snapshot-astc=0 oneios-camera-notify=1 oneios-m2v-shader-fix=1 oneios-dont-care=1 oneios-queue-priority=1 (docs/switches.md); all at their defaults
 ```
 
 When some are changed, the end says which: `not at the default: wifi-send-wait gpu-down`. Kernel switches are read
@@ -52,6 +52,8 @@ change (the default value), and whether one has run the other value.
 | `ram-fit-terms` | `tasks\|old` | `tasks` | tasks: ram=auto's 3b8742a terms (tasks, hold share, 1536 MiB headroom locked); old: the terms before 3b8742a (headroom 768 MiB locked / 1 GiB unlocked, page tables 8 %, no task cost, no hold share; any of those keys given still wins). With `task-trim=0` too this is the v0.1.19 sizing | this build (3b8742a) | tasks: no; old: v0.1.19's sessions |
 | `uclamp-rule` | `work\|all` | `work` | work: xnuhost alone sets a vCPU thread's uclamp (0 at idle, the released thread's floor, the guest's request); drm2kgsl's animation boost only for the frame's threads; background/utility 0. all: before 03d85ac: drm2kgsl's boost on every started vCPU thread and every iOS thread not background, the cpufreq device sets the vCPU thread's clamp, nothing at idle | 03d85ac + this build | no |
 | `gpu-down` | `governor\|bottom` | `governor` | governor: the GPU level leaves the top when a frame fits at the governor's clock in a burst (learned ratio); bottom: when it fits at KGSL's lowest clock (before 3b36ff0: on the S24 Ultra it never came down) | 3b36ff0 + this build | bottom: every session up to 21:11 (the GPU at the top all session); governor: no |
+| `gpu-kgsl-ui-rb` | `0\|1` | `0` | 0: render server and front app run at KGSL priority 8 (out of Android's 4-7 UI ringbuffer, avoiding tile-memory collisions with One UI; drm2kgsl patch 0011, G5 of `docs/ports-2026-11-25-gpu.md`); 1: priority 4 (in the UI ringbuffer, as before) | `feat/takeover-drm-gpu` | no |
+| `gpu-off-level` | `0\|1` | `1` | 1: hold KGSL at `KGSL_CONSTRAINT_PWR_MIN` while iOS's display is off (`brightness::display_on() == false`, drm2kgsl patch 0011, T4 of `docs/ports-2026-11-25-gpu.md`) so standby wakes do not boost the GPU; 0: render server stays at the governor's choice (as before) | `feat/takeover-drm-gpu` | no |
 | `gpu-blob-entries` | `16384..65532` | `65532` | the most entries of a guest 3D blob the device takes; 16384: the limit before 78c4b86 (an 80 MiB blob of single pages refused; drm2kgsl 0010 keeps that from aborting) | 78c4b86 + this build | no |
 | `wifi-ring-wait` | `0\|1` | `1` | 1: a frame for iOS that finds its receive ring full waits for the guest's kick (20 ms data, 50 ms the station's own); 0: dropped at once (before cbf97ea) | cbf97ea + this build | 1: 2026-11-23 19:40 |
 | `wifi-send-wait` | `0\|1` | `1` | 1: a frame of iOS's that finds wlan0's send buffer full waits (256 at most, 20 ms); 0: it fails at once (`send failed, last errno 11`, before b704922) | b704922 + this build | 0: 19:40 (the old code); 1: no |
@@ -134,6 +136,8 @@ ram-fit-terms=tasks
 ram-ondemand=0
 uclamp-rule=work
 gpu-down=governor
+gpu-kgsl-ui-rb=0
+gpu-off-level=1
 gpu-blob-entries=65532
 wifi-ring-wait=1
 wifi-send-wait=1

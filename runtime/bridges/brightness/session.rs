@@ -10,6 +10,14 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+/// Whether iOS's display is currently on (updated by [`Bright::display`]).
+pub static DISPLAY_ON: AtomicBool = AtomicBool::new(true);
+
+/// Returns whether iOS's display is currently on.
+pub fn display_on() -> bool {
+    DISPLAY_ON.load(Ordering::Relaxed)
+}
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -615,6 +623,7 @@ impl Bright {
     /// off when nothing has set another, then the IC woken. A level of 0 alone does neither: it is a dim panel, not an
     /// off one.
     pub fn display(&self, on: bool, why: Option<&str>) {
+        DISPLAY_ON.store(on, Ordering::Relaxed);
         {
             let mut s = lock(&self.panel.state);
             let was = s.display_on;

@@ -1,0 +1,58 @@
+--- a/src/drm/drm2kgsl/drm2kgsl_renderer.c
++++ b/src/drm/drm2kgsl/drm2kgsl_renderer.c
+@@ -1989,14 +1989,23 @@
+ void
+ drm2kgsl_renderer_set_class(struct virgl_context *vctx, unsigned cls, bool lowest)
+ {
+    struct kgsl_context *kctx = to_kgsl_context(to_drm_context(vctx));
+    kctx->oneios_class = cls;
+-   kctx->oneios_lowest = lowest && cls == OG_CLASS_BACKGROUND;
++   kctx->oneios_lowest = lowest;
+ }
+ 
+ static void
+ kgsl_constraint_update(struct kgsl_context *kctx, uint32_t drawctxt_id)
+ {
+    if (!__atomic_load_n(&g_oneios_driven, __ATOMIC_ACQUIRE))
+       oneios_hold_extend();                /* ONEIOS (0008): xnuhost holds the clock itself (drm2kgsl_renderer_set_level) */
++   if (kctx->oneios_lowest) {
++      if (kctx->constraint_on && kgsl_set_pwr_constraint(kctx->base.fd, drawctxt_id, false))
++         kctx->constraint_on = false;
++      oneios_lowest_update(kctx, drawctxt_id);
++      return;
++   }
++   oneios_lowest_update(kctx, drawctxt_id);
+    const bool want = kgsl_constraint_now(kctx);
+    if (want != kctx->constraint_on && kgsl_set_pwr_constraint(kctx->base.fd, drawctxt_id, want)) {
+       kctx->constraint_on = want;
+@@ -2035,13 +2044,18 @@
+    static int by_class = -1;
++   static int ui_rb = -1;
+    if (by_class < 0) {
+       const char *env = getenv("ONEIOS_GPU_PRIORITY");
+       by_class = !env || strcmp(env, "off");
++      const char *rb = getenv("ONEIOS_GPU_KGSL_UI_RB");
++      ui_rb = rb && !strcmp(rb, "1");
+    }
+-   const bool background = kctx->oneios_class == OG_CLASS_BACKGROUND;
+-   const uint32_t priority = by_class ? ((og_kgsl_priority(kctx->oneios_class) << KGSL_CONTEXT_PRIORITY_SHIFT) & KGSL_CONTEXT_PRIORITY_MASK)
++   const uint32_t priority = by_class ? ((og_kgsl_priority_for(kctx->oneios_class, ui_rb) << KGSL_CONTEXT_PRIORITY_SHIFT) & KGSL_CONTEXT_PRIORITY_MASK)
+                                       : kgsl_priority_flags(prio);
+    struct kgsl_drawctxt_create req = {
+       .flags = KGSL_CONTEXT_SAVE_GMEM |
+                KGSL_CONTEXT_NO_GMEM_ALLOC |
+                KGSL_CONTEXT_PREAMBLE |
+                KGSL_CONTEXT_USER_GENERATED_TS |
+-               (constrained || (by_class && background) ? KGSL_CONTEXT_PWR_CONSTRAINT : 0) |
++               (constrained || by_class ? KGSL_CONTEXT_PWR_CONSTRAINT : 0) |
+                priority,
+    };
+@@ -2141,7 +2155,7 @@
+          _drm_log(VIRGL_LOG_LEVEL_WARNING, "context %u: %s\n", id, __atomic_load_n(&g_oneios_driven, __ATOMIC_ACQUIRE)
+                   ? "a deadline queue: at the top level only for frames that would miss their deadline (xnuhost's policy)"
+                   : "constrained while it submits at an animation's rate");
+-         const bool lowest = kctx->oneios_class == OG_CLASS_BACKGROUND && (!getenv("ONEIOS_GPU_PRIORITY") || strcmp(getenv("ONEIOS_GPU_PRIORITY"), "off"));
++         const bool lowest = !getenv("ONEIOS_GPU_PRIORITY") || strcmp(getenv("ONEIOS_GPU_PRIORITY"), "off");
+          unsigned ring_idx = (MIN2(q->prio, g_nr_timelines - 1) + 1) |
+                              (constrained ? KGSL_RING_IDX_CONSTRAINED : 0) | (lowest && !constrained ? KGSL_RING_IDX_LOWEST : 0);
+          _mesa_hash_table_insert(kctx->sq_to_ring_idx_table,

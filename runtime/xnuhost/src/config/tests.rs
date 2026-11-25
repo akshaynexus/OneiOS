@@ -1569,6 +1569,8 @@ fn the_switches() {
         ("decoder-codecs", "vp9,av1"),
         ("gpu-blob-entries", "16384"),
         ("gpu-down", "bottom"),
+        ("gpu-kgsl-ui-rb", "1"),
+        ("gpu-off-level", "0"),
         ("stop-loop", "poll"),
         ("uclamp-rule", "all"),
         ("display-post", "serial"),
@@ -1589,6 +1591,8 @@ fn the_switches() {
         ("decoder-codecs", "vp8"),
         ("decoder-codecs", ""),
         ("gpu-down", "top"),
+        ("gpu-kgsl-ui-rb", "on"),
+        ("gpu-off-level", "off"),
         ("stop-loop", "sleep"),
         ("uclamp-rule", "some"),
         ("wifi-buffers", "off"),
@@ -1623,7 +1627,7 @@ fn the_switches() {
     );
     assert!(
         line.ends_with(
-            "not at the default: stop-loop timer-coalesce uclamp-rule gpu-down gpu-blob-entries wifi-ring-wait wifi-send-wait \
+            "not at the default: stop-loop timer-coalesce uclamp-rule gpu-down gpu-kgsl-ui-rb gpu-off-level gpu-blob-entries wifi-ring-wait wifi-send-wait \
              wifi-buffers wifi-joined-scan encoder-10bit encoder-warmup display-post display-present decoder decoder-codecs astc \
              oneios-wifi-rssi oneios-telemetry-jobs oneios-pool-cut oneios-pressure-big oneios-disable-allowed \
              oneios-nested-exact oneios-upgrade-flush oneios-fill-fast-fault oneios-audio-rt oneios-audio-curve \
