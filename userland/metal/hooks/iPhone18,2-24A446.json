@@ -13,6 +13,10 @@
     {"upstream": "0x1e7020780", "value": "0x1e7024780", "what": "CADeviceIsVirtualized::once (dispatch_once token); read at 0x184461914"},
     {"upstream": "0x1e9021680", "value": "0x1e9025680", "what": "the constant CFString the block at 0x184541f10 passes to MobileGestalt (a diagnostic note reads its text)"}
   ],
+  "options": {"base": "0x1e702116c", "what": "QuartzCore's bool debug options: init_debug stores option N at _ca_debug_options + N (the plug-in writes and reads two of them, DisplayWide.inc one); the numbers are this build's, read in init_debug's table of 293 option names", "bool": [
+    {"name": "CA_FORCE_FP16_FRAMEBUFFER", "upstream": 128, "value": 128, "what": "read by framebuffer_pixel_format at 0x1844618c4"},
+    {"name": "CA_ALLOW_EDR_MIRRORING", "upstream": 156, "value": 156, "what": "read by framebuffer_pixel_format at 0x1844618d0"}
+  ]},
   "same": [
     {"value": "0x1846dce88", "what": "CARenderServerStart, the anchor the slide is taken from"},
     {"value": "0x184461838", "what": "framebuffer_pixel_format"},

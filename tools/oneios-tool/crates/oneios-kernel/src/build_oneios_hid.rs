@@ -11,8 +11,14 @@
 //!                             side keys (staged/hid_transport.rs, OneiOSSideKeys.inc): xnuhost's /arm-io/input-N
 //!   OneiOSHidInput.cpp        oneios_hid_input_start (oneios_drivers_start calls it, drivers/bridge/OneiOSBridge.c):
 //!                             loads the family, registers the classes, publishes the devices, says what attached
-//!   OneiOSALSDevice.cpp       drivers/brightness: the host's light sensor as a HID device (fable-brightness)
-//!   bindings                  generated: one stub per original IOHIDDevice function the objects name
+//!   OneiOSALSDevice.cpp       drivers/brightness: the host's light sensor as a HID device (fable-brightness); with
+//!                             oneios-als-spu=1 an iPhone's SPU ambient light sensor (sensors-als, 2026-11-25)
+//!   OneiOSALSEvents.cpp       that sensor's event driver's dispatch wrapped: its lux event made an ambient light event
+//!   DroidVMMotionHid.cpp      UniXNU-droidvm's DroidVMMotionHid.inc in a unit of its own (staged/hid_motion.rs): the
+//!                             accelerometer, gyroscope, device orientation and compass as AppleSPUHIDDevices, fed by
+//!                             xnuhost's motion device (oneios-motion=MASK)
+//!   DroidVMSensorProcessor.cpp, DroidVMMotion.c   UniXNU-droidvm's: the SPU command channel, kern.droidvm_motion
+//!   bindings                 generated: one stub per original IOHIDDevice function the objects name
 //!
 //! The layout of the original class is OriginalHidDeviceABI.h (the patch folder); IOHIDDevice-24A446-v54.json is what
 //! the kernelcache says about it (`oneios-tool kernel layout hid`). Before anything is built the header is checked
@@ -40,7 +46,8 @@
 use crate::class_record::pylist;
 use crate::gen::{self, fail, Compile, Ctx, Stubs};
 use crate::macho_object::{Entry, Object};
-use crate::staged::{hid::HID, hid_pen::{HID_PEN, HID_PEN_ALLOCATE}, hid_transport::HID_TRANSPORT};
+use crate::staged::{hid::HID, hid_motion::{HID_SLOTS, MOTION_HID, MOTION_KICK, MOTION_PRELUDE, MOTION_TRANSPORT},
+                    hid_pen::{HID_PEN, HID_PEN_ALLOCATE}, hid_transport::HID_TRANSPORT};
 use anyhow::{anyhow, Result};
 use indexmap::IndexMap;
 use oneios_common::json::Value;
@@ -53,10 +60,14 @@ const CONSTRUCTOR: &str = "__ZN11IOHIDDeviceC2EPK11OSMetaClass";
 const DESTRUCTOR: &str = "__ZN11IOHIDDeviceD2Ev";
 const META: &str = "__ZN11IOHIDDevice10gMetaClassE";
 const VTABLE: &str = "__ZTV11IOHIDDevice";
-const REQUIRED: [&str; 10] = ["_oneios_hid_input_start", "_droidvm_input_start", "_native_hid_touch_allocate", "_native_hid_input_allocate",
+pub const REQUIRED: [&str; 19] = ["_oneios_hid_input_start", "_droidvm_input_start", "_native_hid_touch_allocate", "_native_hid_input_allocate",
                               "_native_hid_pen_allocate",
                              "_oneios_als_device_start", "__GLOBAL__sub_I_NativeHidInput.cpp", "__GLOBAL__sub_I_OneiOSALSDevice.cpp",
-                             "_oneios_hid_parent_meta_link", CONSTRUCTOR];
+                             "_oneios_hid_parent_meta_link", CONSTRUCTOR,
+                             // sensors-als, 2026-11-25: the motion devices, the SPU channel, the sysctl, the light sensor's wrapper
+                             "_droidvm_motion_hid_allocate", "_oneios_motion_kick", "__GLOBAL__sub_I_DroidVMMotionHid.cpp",
+                             "_droidvm_sensor_processor_register", "__GLOBAL__sub_I_DroidVMSensorProcessor.cpp", "_droidvm_motion_register",
+                             "_oneios_hid_driver_slots", "_oneios_als_spu_wrap", "_oneios_als_spu_wrapped"];
 const NOT_AN_OBJECT: &str = "build-oneios-hid: not an arm64 Mach-O object";
 
 // ---- The header against the kernelcache's record ----
@@ -199,6 +210,21 @@ pub fn staged_transport(text: String, side_keys: &str, touch_time: &str) -> Resu
     Ok(gen::replace_once(text, HID_TRANSPORT, gone("DroidVMVirtioInput.c"))? + "\n" + side_keys + "\n" + touch_time)
 }
 
+/// The motion device's magnetometer and the frame-driven ticks (staged/hid_motion.rs), on staged_transport's output.
+pub fn staged_motion_transport(text: String) -> Result<String> {
+    gen::replace_once(text, MOTION_TRANSPORT, gone("DroidVMVirtioInput.c (the motion edits)"))
+}
+
+/// DroidVMMotionHid.inc as a translation unit of its own: the head, the edited source, the wake-up (staged/hid_motion.rs).
+pub fn staged_motion_hid(text: String) -> Result<String> {
+    Ok(MOTION_PRELUDE.to_string() + &gen::replace_once(text, MOTION_HID, gone("DroidVMMotionHid.inc"))? + MOTION_KICK)
+}
+
+/// NativeHidInput.cpp's IOHIDEventDriver slot table exported (staged/hid_motion.rs), on staged_hid_pen's output.
+pub fn staged_hid_slots(text: String) -> Result<String> {
+    gen::replace_once(text, HID_SLOTS, gone("NativeHidInput.cpp (the slot table's export)"))
+}
+
 /// The assembly of the original functions' stubs and of their targets, for the IOHIDDevice names the objects import;
 /// and the functions bound, by name.
 pub fn bindings(layout: &Value, layout_name: &str, slot_of: &IndexMap<String, usize>, table: &[Entry], imports: &BTreeSet<String>)
@@ -287,8 +313,14 @@ pub fn main() -> Result<()> {
     let hid_source = ctx.repo.join("external/NativeHidInput/NativeHidInput.cpp");
     let transport_source = ctx.repo.join("external/UniXNU-droidvm/package/DroidVMVirtioInput.c");
     let als_source = ctx.repo.join("drivers/brightness/OneiOSALSDevice.cpp");
-    let (layout_path, header_path) = (here.join("IOHIDDevice-24A446-v54.json"), here.join("OriginalHidDeviceABI.h"));
+    // sensors-als, 2026-11-25: the motion sensors (UniXNU-droidvm f9121cd) and the light sensor's dispatch wrapper.
+    let package = ctx.repo.join("external/UniXNU-droidvm/package");
+    let (motion_source, spu_source, sysctl_source) =
+        (package.join("DroidVMMotionHid.inc"), package.join("DroidVMSensorProcessor.cpp"), package.join("DroidVMMotion.c"));
+    let als_events = here.join("OneiOSALSEvents.cpp");
+    let (layout_path, header_path) = (ctx.layout(&here, "IOHIDDevice")?, here.join("OriginalHidDeviceABI.h"));
     gen::need_files(&[ctx.repo.join("drivers/sources.txt"), hid_source.clone(), transport_source.clone(), als_source.clone(), layout_path.clone(),
+                      motion_source.clone(), spu_source.clone(), sysctl_source.clone(), als_events.clone(),
                       header_path.clone(), here.join("OneiOSHidInput.cpp"), here.join("OneiOSSideKeys.inc"), here.join("OneiOSTouchTime.inc"),
                       ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json")],
                     |path| format!("build-oneios-hid: {} missing (scripts/setup/get-references.sh NativeHidInput; kernel/fetch.sh)", path.display()))?;
@@ -319,24 +351,35 @@ pub fn main() -> Result<()> {
               discriminators, {} functions of the family placed, 0xd0 bytes", slot_of.len());
 
     let staged = out.join("NativeHidInput.cpp"); // the same file name: the static initializer is named after it
-    gen::write_text(&staged, &staged_hid_pen(staged_hid(hid_text)?)?)?;
+    gen::write_text(&staged, &staged_hid_slots(staged_hid_pen(staged_hid(hid_text)?)?)?)?;
     let hid = compile_source("iokit", &staged, out.join("NativeHidInput.o"), &["-DNATIVE_HID_SOURCE_API=1"])?;
     let start = compile_source("iokit", &here.join("OneiOSHidInput.cpp"), out.join("OneiOSHidInput.o"), &[])?;
     let als = compile_source("iokit", &als_source, out.join("OneiOSALSDevice.o"), &[])?;
     // Its queue and event pages come from the kernel map (DROIDVM_INPUT_DYNAMIC), as on the iPadOS 27 board.
     let staged = out.join("DroidVMVirtioInput.c");
-    gen::write_text(&staged, &staged_transport(gen::read_text(&transport_source)?, &gen::read_text(&here.join("OneiOSSideKeys.inc"))?,
-                                               &gen::read_text(&here.join("OneiOSTouchTime.inc"))?)?)?;
+    gen::write_text(&staged, &staged_motion_transport(staged_transport(gen::read_text(&transport_source)?,
+                                               &gen::read_text(&here.join("OneiOSSideKeys.inc"))?,
+                                               &gen::read_text(&here.join("OneiOSTouchTime.inc"))?)?)?)?;
     let transport = compile_source("mach", &staged, out.join("DroidVMVirtioInput.o"), &["-DDROIDVM_INPUT_DYNAMIC=1", "-mgeneral-regs-only"])?;
+    // The motion sensors (sensors-als, 2026-11-25): DroidVMMotionHid.inc in a unit of its own (its class registers in a
+    // module load of its own, OneiOSHidInput.cpp), the SPU command channel (its own module load, as upstream), the sysctl.
+    let staged = out.join("DroidVMMotionHid.cpp"); // the static initializer is named after it
+    gen::write_text(&staged, &staged_motion_hid(gen::read_text(&motion_source)?)?)?;
+    let motion = compile_source("iokit", &staged, out.join("DroidVMMotionHid.o"), &["-DNATIVE_HID_SOURCE_API=1"])?;
+    let spu = compile_source("iokit", &spu_source, out.join("DroidVMSensorProcessor.o"), &[])?;
+    let sysctl = compile_source("bsd", &sysctl_source, out.join("DroidVMMotion.o"), &["-mgeneral-regs-only"])?;
+    let events = compile_source("iokit", &als_events, out.join("OneiOSALSEvents.o"), &[])?;
     let objcopy = gen::which("llvm-objcopy", "objcopy");
     let mut objects = vec![start, transport];
-    // The classes' static initializers register them below the original class: they run inside the module load of
-    // oneios_hid_input_start, not with the kernel's own initializers. Out of __mod_init_func, and global.
-    for object in [hid, als] {
+    // The classes' static initializers register them below the original class: they run inside the module loads of
+    // oneios_hid_input_start, not with the kernel's own initializers. Out of __mod_init_func, and global. The IOHIDDevice
+    // subclasses (NativeHidInput, OneiOSALSDevice, AppleSPUHIDDevice) are objects[2..5], for owned_slots below.
+    for object in [hid, als, motion, spu] {
         let late = object.with_extension("late.o");
         gen::late_object(&objcopy, &object, &late, &["__DATA,__mod_init_func"], &format!("__GLOBAL__sub_I_{}.cpp", gen::stem(&object)))?;
         objects.push(late);
     }
+    objects.extend([sysctl, events]);
 
     // Every function of the family gets a stub: the table for calls by qualified name (bindings) names them all.
     let mut imports: BTreeSet<String> = slot_of.keys().cloned().collect();
@@ -357,17 +400,17 @@ pub fn main() -> Result<()> {
     }
     let (stubs, targets, functions) = bindings(&layout, &layout_name, &slot_of, &table, &imports)?;
     objects.extend(gen::assemble(&ctx.record("iokit")?, &out, &[("IOHIDDevice-bindings", &stubs), ("IOHIDDevice-originals", &targets)])?);
-    let owned = owned_slots(&objects[2..4], &layout, &slot_of)?;
+    let owned = owned_slots(&objects[2..5], &layout, &slot_of)?;
 
     let archive = out.join("liboneioshid.a");
     gen::archive(&archive, &objects)?;
     gen::require_definitions(&ctx, &archive, &REQUIRED)?;
     gen::write_objects(&ctx, &out, None, &[hid_source, transport_source, here.join("OneiOSSideKeys.inc"), here.join("OneiOSHidInput.cpp"), als_source,
-                                           header_path, layout_path])?;
+                                           header_path, layout_path, motion_source, spu_source, sysctl_source, als_events])?;
     write_report(&out, &layout, &functions, &owned)?;
     let owns: Vec<String> = owned.iter().map(|(name, slots)| format!("{} owns {} slots", &name[5..], slots.len())).collect();
-    println!("build-oneios-hid: {} ({} objects, {} original IOHIDDevice functions bound at their 24A446 iPhone18,2 addresses; {})",
-             archive.display(), objects.len(), functions.len(), owns.join(", "));
+    println!("build-oneios-hid: {} ({} objects, {} original IOHIDDevice functions bound at their {} iPhone18,2 addresses; {})",
+             archive.display(), objects.len(), functions.len(), ctx.build, owns.join(", "));
     Ok(())
 }
 

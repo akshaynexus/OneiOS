@@ -52,6 +52,9 @@ impl Coding {
     }
 }
 
+/// The device's worker's wake-up, which a session calls when a coded unit (or a drain's end) is ready for its poll.
+pub type Wakeup = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 /// One encoder session on a backend (`br_enc_session`). Dropping it closes it.
 pub trait Session: Send {
     /// Feeds one frame, tightly packed in the session's input format (NV12: w*h luma + w*h/2 chroma; P010: the same
@@ -65,6 +68,16 @@ pub trait Session: Send {
     /// How this session codes its pictures.
     fn coding(&self) -> Coding {
         Coding::Eight
+    }
+    /// The device's worker hands its wake-up over once, when the session opens (2026-11-25). A session that keeps it
+    /// and calls it each time a poll would find something (a coded unit, a drain's end, its helper gone) says true;
+    /// so does one whose units are ready only after a `feed` or `drain`, which come in a guest's command, and a
+    /// command wakes the worker anyway (the stand-in). The worker then sleeps until it is woken, its guard at most
+    /// (`media_device::MEDIA_IDLE_MS`). False, the default (the NDK's MediaCodec in-process: encctl): the worker asks
+    /// every millisecond for `media_device::MEDIA_BUSY_MS` after each command, as it did for every backend before.
+    fn wakes(&mut self, wake: Wakeup) -> bool {
+        let _ = wake;
+        false
     }
 }
 

@@ -107,7 +107,7 @@ pub fn main() -> Result<()> {
     let here = ctx.repo.join("kernel/patches/oneios-hosted/aes");
     let software_aes = ctx.repo.join("external/Droid-VM-UniXNU/drivers/SoftwareAES");
     let keys = ctx.repo.join("external/UniXNU-droidvm/package/SoftwareAESKeys.inc");
-    let classes = here.join("IOAESAccelerator-24A446-v54.json");
+    let classes = ctx.layout(&here, "IOAESAccelerator")?;
     gen::need_files(&[ctx.repo.join("drivers/sources.txt"), software_aes.join("NativeAES.cpp"), software_aes.join("OriginalAESABI.h"), keys.clone(),
                       ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json"), here.join("OneiOSSoftwareAES.cpp")],
                     |path| format!("build-oneios-aes: {} missing (external/Droid-VM-UniXNU: git submodule update --init drivers/SoftwareAES; \
@@ -137,6 +137,6 @@ pub fn main() -> Result<()> {
     gen::require_definitions(&ctx, &archive, &REQUIRED)?;
     gen::write_objects(&ctx, &out, Some("iokit"), &[here.join("OneiOSSoftwareAES.cpp"), software_aes.join("NativeAES.cpp"),
                                                     software_aes.join("OriginalAESABI.h"), keys, classes])?;
-    println!("build-oneios-aes: {} ({} objects, {CLASS} bound at its 24A446 iPhone18,2 addresses)", archive.display(), objects.len());
+    println!("build-oneios-aes: {} ({} objects, {CLASS} bound at its {} iPhone18,2 addresses)", archive.display(), objects.len(), ctx.build);
     Ok(())
 }

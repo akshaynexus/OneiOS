@@ -73,12 +73,19 @@ OneiOS-A56           https://github.com/Musicalista/OneiOS-A56.git        c83b9c
 # UniXNU-shennong   Xiaomi 14 Pro (SM8650): the only public iPhone iOS 27.0.1 (24A446, iPhone17,1) OS profile. No licence.
 # UniXNU-houji      Xiaomi 14 (SM8650): bare-metal Adreno 750 command submission on iOS 16. Mixed licences.
 # hakios-sm8650     HakiOS device layer for the Xiaomi 14 Pro: the SM8650 facts (soc/). No licence.
-# UniXNU-sheng      package/WifiNet.cpp: the Apple80211 request layouts DroidVMWifi.inc follows.
+# UniXNU-sheng      package/WifiNet.cpp: the Apple80211 request layouts DroidVMWifi.inc follows; hal/ShengAudioPlugIn.c: the
+#                   speaker volume curve of iPadOS 27.0.1 (docs/ports-2026-11-25-hw.md 4.2, read at c8f92b2;
+#                   the pin stays at 6bc0ce1, where the Wi-Fi layouts were taken).
 # tahoe-on-linux    macOS 26 userland on Linux with the XNU personality in user space (x86_64): trap-layer design notes.
 # vphone-linux      reims-vgpu + metal2vulkan on Linux: the fallback GPU path of docs/plan.md 5.5.
 # Portsmith-iOS     the catalogue of every UniXNU / HakiOS / ios-sweet device port (ports/catalog/unixnu-devices.toml).
 # pixelios-kernel, pixelios-userland  PixOS-Project, iOS on the Pixel 6a (Mali via Panfrost), MIT: ideas for the A56 GPU port.
-# hakios-xnu-kernel oosexgang, the HakiOS XNU kernel: no licence stated, read only (ideas).
+# hakios-xnu-kernel oosexgang, the HakiOS XNU kernel: MIT for its own work, APSL-2.0 for what extends XNU (README
+#                   "Licence"; GitHub detects none). Ideas; Documentation/bluetooth.md read 2026-11-25.
+# ios-redfin        DenialOfGravity, iOS 16.7.16 on the Pixel 5, MIT: phone/sensors/ (a Qualcomm SEE client over QRTR) and the
+#                   sensor and light sensor HID patches (docs/ports-2026-11-25-hw.md sections 1-2).
+# ios-guacamole     coreycusick, iOS 27.2 on the OnePlus 7 Pro, MIT: userland/camera/ (the capture plug-in and graph hooks that
+#                   give a live preview on iOS 27; docs/ports-2026-11-25-hw.md section 3).
 # mapple_gpu_mali   open-mapple, a Mali GPU driver for XNU: GPL-3.0, read only (ideas; no code into MIT or APSL files).
 EXTRA='
 UniXNU-shennong      https://github.com/YX2748198202-lab/UniXNU-shennong.git 363cc770793ca998a70801b70798e17aadb64261 main
@@ -92,6 +99,8 @@ pixelios-kernel      https://github.com/PixOS-Project/pixelios-kernel.git f084ce
 pixelios-userland    https://github.com/PixOS-Project/pixelios-userland.git d5b20792cc13c09be3fc04276874607ba59775c6 main
 hakios-xnu-kernel    https://github.com/oosexgang/hakios-xnu-kernel.git  62e09f850f1f713192228cb9031da256033ede93 common
 mapple_gpu_mali      https://github.com/open-mapple/mapple_gpu_mali.git  f893fed9bd8ff26daf1a3303e42b96ac29335b8b main
+ios-redfin           https://github.com/DenialOfGravity/ios-redfin.git    23019ab4ef9fcb7be0039da63e4b16d70201ccf4 main
+ios-guacamole        https://github.com/coreycusick/ios-guacamole.git     53e6c5ead4522768cb8ff568309651459bfdf15c ios27
 '
 
 rows() { printf '%s\n' "$1" | sed '/^[[:space:]]*$/d'; }

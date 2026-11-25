@@ -445,6 +445,8 @@ struct Session {
     boot_fb_pa: u64,
     /// the host's pen was given to the guest (its IC is woken with the touch IC)
     pen_ic: bool,
+    /// the sensor hub (sensors=auto|ssc found it): streamed by the bridges, closed with them
+    sensors: Option<std::sync::Arc<onebridges::sensors::Hub>>,
     memory: memory::MemoryWatch,
     bridges: bridges::Bridges,
     usb: UsbWatch,

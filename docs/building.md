@@ -195,6 +195,15 @@ scripts/bg.sh prelink-release env KERNEL=out/kernel/current-hosted-release/xnu.m
 kernel/publish.sh --hosted release      # the archive for a release and its line for kernel/release-kernel.txt
 ```
 
+iOS 27.2.1 (24B156) has its own kernel (the board archives bind each build's original classes: kernel/prelink/README.md
+"Another build"). `ONEIOS_OS_PROFILE` picks the OS profile (default `ios-27.0.1-24A446`), `BUILD` the prelink's
+kernelcache and records:
+
+```sh
+scripts/bg.sh k272 env HOSTED_OUT=ios272 ONEIOS_OS_PROFILE=ios-27.2.1-24B156 ONEIOS_CRYPTO=original kernel/build-hosted.sh
+scripts/bg.sh p272 env BUILD=24B156 KERNEL=out/kernel/current-hosted-ios272/xnu.macho OUT=out/kernel/24B156-ios272 kernel/prelink/build.sh
+```
+
 The kernel then uses the kernel collection's own `com.apple.kec.corecrypto` (which the source-mode bootstrap already
 starts early) and has no source fallback (`kernel/patches/oneios-hosted/optional/original-corecrypto-only.patch`,
 added to this build's series only). Nothing is sealed (`kernel/patches/unixnu/0003-skip-source-seal.patch`), and the
@@ -251,7 +260,7 @@ with `wc -c`, CPUs with `getconf _NPROCESSORS_ONLN`, checksums with `sha256sum` 
 ```sh
 runtime/build.sh STAGE            # -> STAGE/bin/xnuhost (static, the task stub inside it), the bridges' helpers, the
                                   #    display helper, and the phone checks (gpuctl, bridgectl, wifictl, brightctl,
-                                  #    batteryctl, thermalctl, displayctl, camctl, encctl: its `encctl decode FILE` tests the decoder, 2026-11-24); then the NEEDED and symbol
+                                  #    batteryctl, thermalctl, sensorctl: `sensorctl qrtr` is read only, 2026-11-25, displayctl, camctl, encctl: its `encctl decode FILE` tests the decoder, 2026-11-24); then the NEEDED and symbol
                                   #    check of the stage (runtime/package/elf-check.sh, below)
 runtime/package.sh 0.1.0-dev      # -> out/release/oneios-runtime-0.1.0-dev-arm64.tar.zst + .sha256 + runtime.json,
                                   #    with bin/oneios-tool (below), and oneios-tool-0.1.0-dev-android-arm64 + .sha256;
@@ -266,7 +275,7 @@ runtime/tests/host.sh             # what CI runs for the runtime: cargo test, fm
 
 `runtime/build.sh STAGE` runs `cargo build --release --locked --target aarch64-linux-android` twice: the static programs
 (`crt-static`; target dir `runtime/target/android-static`: `xnuhost` and `gpuctl` of the `xnuhost` crate; `bridgectl`,
-`wifictl`, `brightctl`, `batteryctl`, `thermalctl` of `onebridges`) and the dynamic ones that call Android's libraries
+`wifictl`, `brightctl`, `batteryctl`, `thermalctl`, `sensorctl` of `onebridges`) and the dynamic ones that call Android's libraries
 (`runtime/target/android`: `oneios-audio` of `onebridges`, `oneios-camera` and `camctl` of `onecamera`,
 `oneios-encoder` and `encctl` of `oneencoder`), then `runtime/display/build-android.sh` (`oneios-display`,
 `displayctl`, `liboneios-display.so`, `oneios-display.dex`) and copies `runtime/bridges/net/oneios-net.sh`; every
@@ -324,7 +333,7 @@ checks still run there.
 | `lint` | `cargo fmt --all --check` and `cargo clippy --workspace --all-targets --locked -- -D warnings` |
 | `boot` | only with `QEMU=1` (skipped by default since 2026-11-24: the phone is the test, CLAUDE.md): `runtime/xnuhost/check-arm64.sh smoke check` (when the NDK is there): the vCPU machinery alone, then the static Android xnuhost booting the Rust test kernel three times, under qemu-aarch64 on an x86_64 PC, as it is on an arm64 host |
 | `port` | `sh scripts/port/test-verify-host.sh` (the read-only phone preflight against stand-in phones) |
-| `metal-amd` | only with `METAL_AMD=1`, on Linux (a Mesa build of several minutes): `userland/metal-amd/host-test.sh`, the A56's guest Mesa (section 9, "The A56's guest Mesa"). It is not a `tests/host.sh`, so CI does not run it |
+| `metal-amd` | only with `METAL_AMD=1`, on Linux (a Mesa build of several minutes): `userland/metal-amd/host-test.sh`, the A56's guest Mesa (section 9, "The A56's guest Mesa"); then `metal-amd-air` (`userland/metal-amd/air/host-test.sh`) and `metal-amd-gl` (`userland/metal-amd/gl/host-test.sh`, the A56's OpenGL ES: section 9). It is not a `tests/host.sh`, so CI does not run it |
 | `links` | `runtime/package/elf-check-test.sh`, the link rule and the check of the next section (needs the NDK) |
 | `package` | `runtime/package/test.sh` (needs the NDK) |
 
@@ -761,6 +770,10 @@ $T phone wifi p2p                  # the staged wifictl p2p as root (read only):
                                    #   AirDrop verdicts, Wonder's files; then a summary of those lines (--save FILE keeps the report)
 $T phone wifi wonder --seconds 30 --freq 5745   # wifictl wonder: a monitor interface on Wonder's radio beside wlan0,
                                    #   AWDL's frames counted, everything closed after, wlan0's link checked (docs/hardware.md 4a)
+$T phone qrtr                      # read only: whether a root process reaches the sensor hub (SSC) over QRTR (the staged
+                                   #   sensorctl qrtr: QRTR's nodes and services, service 400 and one lookup); --sensors: each
+                                   #   SUID with its attributes; --binary STAGE/bin/sensorctl before the runtime is staged (pushed,
+                                   #   run, removed); --save FILE. Decides sensors=auto (runtime/bridges/sensors/README.md)
 $T phone procs                     # every process with its CPU share and RAM (read only, with or without a session):
                                    #   what of One UI still runs beside iOS and what it costs (docs/plan-ios-first-session.md)
 $T phone procs --seconds 30 --raw > procs.raw; $T phone procs --from procs.raw --sort mem   # keep a capture; its report by RAM
@@ -995,6 +1008,7 @@ $T app build             # cd app-android && ./gradlew test assembleFullDebug (-
 $T app install           # adb install -r of that APK; refuses another signing certificate (never uninstall: that wipes the app's data)
 $T app install --release 0.4.86      # the CI prerelease oneios-0.4.86 instead, through gh
 $T app stage-scripts     # the fork's oneios_switch.sh, oneios_return.sh, oneios_root.sh into the stage, sha256 before and after
+$T app kb 24B156         # iOS 27.2.1's pairing files into the fork's assets/kb-24B156/ from this checkout (--check: compare only)
 ```
 
 The checkout is the first of: `--oneos DIR`; `ONEOS_DIR`; the current folder when it is a checkout; `app/` of the
@@ -1101,11 +1115,15 @@ A tag `vN.N.N` on `main` (or a dispatch with a version) runs `.github/workflows/
 S24 Ultra Metal and camera plug-ins with Xcode 27.2, then packages them into the runtime alongside the pinned kernel;
 the fork's APK (submodule `app/`, the head of `oneios`) builds in parallel. No image or package set is released. See
 [releases.md](releases.md).
+Since 2026-11-25 a release takes each plug-in build (the Metal plug-in of 27.0.1 and of 27.2.1, the capture plug-in, the
+A56's) from `out/release-cache/NAME/KEY/` when its inputs (the git trees it reads, the reference checkouts' commits, the
+toolchain) are those of an earlier build, and builds only what changed: a runtime-only release no longer rebuilds them
+(10-20 minutes before).
 `scripts/release/release.sh VERSION [--build-only]` (run under `scripts/bg.sh`) builds the same files on the build
 machine, runs CI's checks and the host tests in parallel, and publishes the release without waiting for the
 runners. Its runtime carries the Metal plug-in and the capture plug-in, built from HEAD in the runtime lane
 (`userland/metal/build.sh`, `userland/camera/build.sh`; `--metal-dir DIR` takes a built one, `--no-metal` leaves them
-out); CI builds the same plug-ins for iPhone18,2 / 24A446 and requires them in the runtime artifact. It signs the APK with the debug key CI uses, `secrets/oneios-debug.keystore`, which is git-ignored (releases.md,
+out), and the Galaxy A56's GPU plug-ins (`userland/metal-amd`, or `--metal-amd-dir DIR`, `--no-metal-amd`: releases.md); CI's runtime has neither, so a phone-made image with a CI runtime composites on the CPU. It signs the APK with the debug key CI uses, `secrets/oneios-debug.keystore`, which is git-ignored (releases.md,
 "Releasing from a build machine" and "The debug key").
 `runtime/package.sh VERSION` builds the phone's `bin/oneios-tool` with `ONEIOS_VERSION=VERSION`: its `serve` hello's
 `tool` is the release's version (up to v0.1.16 every release said the crate's `0.1.0`; issue 75).
@@ -1235,6 +1253,8 @@ rustup toolchain install 1.98.0 && rustup +1.98.0 component add rust-src
 # macOS: brew install ninja glslang shaderc spirv-tools bison llvm; uv pip install --python "$(command -v python3)" meson mako pyyaml
 scripts/bg.sh metal userland/metal/build.sh
 # -> out/userland/NativeAdrenoMetal.bundle, NativeAdrenoMetal.build.json, NativeAdrenoMetal.check.txt, NativeAdrenoMetal.gpuaddon
+# iOS 27.2.1 (24B156; userland/metal/hooks/iPhone18,2-24B156.json): the same into out/userland-24B156 (METAL_OUT for another)
+scripts/bg.sh metal272 env ONEIOS_METAL_TARGET="iPhone18,2 24B156" userland/metal/build.sh
 # The bridge on metal2vulkan-rt instead (userland/metal/rt/README.md), in out/metal-rt and out/userland-rt:
 rustup toolchain install nightly-2026-11-03 && rustup component add rust-src --toolchain nightly-2026-11-03
 scripts/bg.sh metal-rt env METAL_RUNTIME=rt userland/metal/build.sh    # bg.sh passes no METAL_RUNTIME of its own
@@ -1272,7 +1292,9 @@ IOS_TARGET=arm64-apple-ios16.5` (the script's defaults) and `-D_DARWIN_C_SOURCE`
 `-Dgallium-drivers=radeonsi -Damdgpu-virtio=true -Dllvm=disabled -Damd-use-llvm=false -Doneios-radeonsi-screen=true
 -Doneios-libdrm-dir=...`, every GL, EGL, GBM and Vulkan part off. Both binaries are signed by `oneios-tool ios sign`
 and checked by `oneios-tool ios macho-check --arch arm64 --tbd out/ios16-tbd` (arm64: the default `--arch arm64e` is
-iOS 27's). After `mesa`, `userland/metal-amd/air/build.sh MESA_SOURCE BUILD_DIR` runs when it exists. Needs: the
+iOS 27's). After `mesa`, `userland/metal-amd/air/build.sh MESA_SOURCE BUILD_DIR` runs when it exists, then
+`userland/metal-amd/gl/build.sh MESA_SOURCE BUILD_DIR` (the A56's OpenGL ES: GLES and softpipe turned on in BUILD_DIR, the
+bundle in `/gl`; "The Galaxy A56's OpenGL ES" below). Needs: the
 toolchain of this section, meson, ninja, bison, flex, `llvm-ar`, python3 with mako and PyYAML (Mesa's build). Disk:
 about 0.7 GB for the iOS build, 1 GB more for the host test (`out/metal-amd/host`). `METAL_AMD_OUT=DIR` puts all of it
 elsewhere.
@@ -1315,6 +1337,43 @@ no GPU: its device open says so (a56-gpu.md section 4). Built from `out/metal-am
 `libOneiOSRadeonAir.dylib` 16,912,464 bytes with radeonsi, both Mach-Os PASS (175 and 206 imports bound), the
 gpuaddon 5 files, 3,844,888 bytes. No image places it yet, and nothing of it has run in iOS.
 
+### The Galaxy A56's OpenGL ES (iOS 16.5, `userland/metal-amd/gl`)
+
+NegroniGL (iOSPlus10) ported: Mesa's GLES over the A56's radeonsi as the GL plug-in iOS's OpenGLES loads, so that
+backboardd's CoreAnimation composites on the GPU ([a56-gpu.md](a56-gpu.md) section 4a). On the build laptop, each step
+in tmux:
+
+```sh
+sh userland/metal-amd/gl/host-test.sh         # Mesa cecc0e9 + gl/patches/mesa/5101, GLES, softpipe, in out/metal-amd-gl/host-build
+                                              # (4 minutes the first time, 700 MB); the checks with IOSurfaces in place,
+                                              # then copied (ONEIOS_GL_SURFACE=copy), then the no-screen gate
+userland/metal-amd/gl/build.sh mesa-ios       # the same Mesa for arm64-apple-ios16.5 (out/ios16-tbd), softpipe only
+userland/metal-amd/gl/build.sh plugin [MESA_BUILD]   # the bundle from MESA_BUILD (default: mesa-ios's)
+# -> out/metal-amd-gl/OneiOSRadeonGL.bundle (Info.plist, OneiOSRadeonGL, oneios-target "iPhone10,3 20F66"),
+#    out/metal-amd-gl/oneios-gl-probe, OneiOSRadeonGL.check.txt (ios macho-check --arch arm64 against out/ios16-tbd)
+# The A56's bundle with radeonsi: the guest Mesa build runs this hook after the Metal layer's (userland/metal-amd/build.sh
+# mesa); it copies gl/ to MESA_SRC/src/gallium/targets/oneios-gl, applies 5101, turns on -Dgles2=enabled and
+# -Dgallium-drivers=radeonsi,softpipe in MESA_BUILD, builds, and makes the bundle in $METAL_AMD_OUT/gl:
+userland/metal-amd/gl/build.sh MESA_SRC MESA_BUILD
+# then the Metal plug-in's step puts both bundles in one gpuaddon (OneiOSRadeonMetal.gpuaddon):
+userland/metal-amd/build.sh mesa && userland/metal-amd/air/build.sh plugin out/metal-amd/build-ios
+```
+
+- `METAL_AMD=1 runtime/host-tests.sh` runs `gl/host-test.sh` as the suite's `metal-amd-gl` part.
+- `METAL_AMD_GL_OUT=DIR` puts the GL folder elsewhere (default `out/metal-amd-gl`; the guest hook uses
+  `$METAL_AMD_OUT/gl`).
+- `IOS_TBD` and `IOS_LD` default to the main checkout's when the work tree has none.
+- The generators are POSIX sh and awk (`gen-gli.sh`, `plugin/gen-gld.sh`); Mesa's own meson build still runs Mesa's
+  Python.
+
+Built on the build laptop on 2026-11-25 (iPhoneOS 26.5 SDK headers, the 20F66 stubs):
+- the softpipe-only bundle: 14,093,408 bytes;
+- the radeonsi one, from a scratch `METAL_AMD_OUT` with the guest Mesa stage's patches: 20,197,168 bytes;
+- both MH_BUNDLE arm64 minos 16.5 with 151 exports, `macho-check` PASS (220 and 265 imports bound);
+- `oneios-gl-probe` PASS;
+- the gpuaddon with both bundles: 8 files, 8,819,328 bytes.
+Nothing of it has run in iOS.
+
 ## 10. Rust tools (`oneios-tool`)
 
 `tools/oneios-tool` is one binary with the project's host tools in Rust: `sym` (the backtrace symbolizer; it replaced
@@ -1327,7 +1386,7 @@ Apple-file check, manifest and archive) and `debug` (the tests' helpers). `image
 (the key from Apple's key service, every byte authenticated), on the PC and, as `serve`'s `aea`, on the phone. Since the third Linux round also `phone` (the adb
 workflow of section 6: status, stage, sums, switch, return, log, the Data store's copy, and in a session the display
 helper's restart, the touch IC's wake and the panel's level; since 2026-11-23 `phone procs`, the process list with CPU
-and RAM), `app` (the fork's app of
+and RAM; since 2026-11-25 `phone qrtr`, whether the sensor hub answers over QRTR, read only), `app` (the fork's app of
 section 7: version, doctor, build, install, stage-scripts) and `cycle` (one test cycle: build, tests, stage, switch, watch, hold, return, collect). Since 2026-11-21 also
 `image tweaks` (the root tweaks and the image build's userland hook: the port of `userland/roottweak` and
 `userland/image-hook`, `apply`, `hook`, `daemons`, `cdhash`, `boot-check`; compared with the Python by
@@ -1341,6 +1400,29 @@ scripts and adb lines that were run. Commands, crates, and each tool's compariso
 cargo build --release --manifest-path tools/oneios-tool/Cargo.toml     # -> tools/oneios-tool/target/release/oneios-tool
 cargo test  --release --manifest-path tools/oneios-tool/Cargo.toml     # unit tests, no Apple file
 ```
+
+Since 2026-11-25 also `switches` and `conf`, which the OneOS app's Switches screen runs as root from the staged
+runtime's `bin/oneios-tool` (the app parses no conf file and keeps no switch list of its own). The catalog is one
+list, `runtime/switches` (crate `oneios-switches`), from which xnuhost's own `switches:` line is made; xnuhost's
+`config::tests::the_catalog` fails when the two disagree. The runtime package carries it as `lib/switches.json`
+(`runtime/package.sh` step 1d). The JSON of each command, the checks and the write rules:
+[tools/oneios-tool/README.md](../tools/oneios-tool/README.md) "switches and conf".
+
+```sh
+oneios-tool switches --json [--runtime DIR]          # every switch: where, kind, values, default, off, group, title, help, phone, warning
+oneios-tool conf show FILE --json                    # text, set, boot_args_add, unknown, errors, warnings (a missing FILE is empty)
+oneios-tool conf check FILE --json                   # errors (what xnuhost would refuse) and unknown keys; exit 1 with an error
+oneios-tool conf set FILE NAME=VALUE... [--json]     # a boot-arg switch into boot-args-add=, a conf one as its own line; all or none
+oneios-tool conf unset FILE NAME... [--json]         # back to the default (the line or word removed)
+oneios-tool conf write FILE [--force] --json < TEXT  # the whole text, written only without errors (--force: anyway)
+oneios-tool conf restore FILE                        # FILE.bak back (the replaced text becomes FILE.bak)
+# e.g. the image's overlay on the phone (as root):
+#   $STAGE/runtime/bin/oneios-tool conf set $IMAGE/overlay/userland/xnuhost.conf gpu-down=bottom oneios-pool-cut=0 --json
+```
+
+Every write is atomic (a temporary file in the folder, the file's mode, owner and SELinux label kept, renamed over
+it) and keeps one backup, `FILE.bak`. Exit status: 0, 1 refused (`{"error": "..."}` with `--json`, the file
+untouched), 2 a wrong command line.
 
 Optional on Linux: **apfs-fuse** (github.com/sgan81/apfs-fuse, with `fusermount3`), a second APFS reader that
 `oneios-tool image apfs-ls`, `apfs-copy` and `ioslog` use with `--apfs fuse`, or by themselves when our own reader
@@ -1364,7 +1446,8 @@ original, the image tool, `scripts/ios/` and the scripts' inline `python3`). The
 | `kernel/prelink/build.sh` | none: Rust only since 2026-11-12 (`ONEIOS_TOOL=PATH` for another binary) | `oneios-tool prelink` runs all twelve steps; the Python steps were deleted after every step's output was compared byte for byte, and `tests/prelink/compare-golden.sh` checks the chain against a recorded run (the released kernel, since 2026-11-22; the matcher signature is over the Rust matcher and the fixtures, no Python file is read). 14 s instead of two minutes |
 | `runtime/package.sh` (and CI) | none: Rust only since 2026-11-13 (`ONEIOS_TOOL=PATH` for another binary) | `oneios-tool package check\|manifest\|archive`: the Apple-file check, `runtime.json`, the archive without GNU tar; since 2026-11-24 the check takes our ad hoc signed iOS plug-ins under `lib/guest/` (a bundle's files with its record's CDHashes) and `runtime.json` names them (`metal`, `camera`; `debug fixture guest-*` makes the tests' signed Mach-Os); `runtime/package/pack.py` was deleted after 91 frozen cases and the 19 package tests gave the same |
 | `kernel/tests/host.sh`, `drivers/tests/host.sh`, by hand | none | `oneios-tool kernel series-check`, `kernel hosted-series` and `kernel hosted-archives` on copies of the committed `board.toml` and hosted defconfig, `kernel drivers --check`, `kernel hosted-fixup`, `kernel kdk-headers`, `kernel iig-fix`, `prelink classes\|stubs-check\|unmapped\|port-fixture\|lead-between\|lead-imports`: the scripts of those names were deleted on 2026-11-13 (README, the group 2 section); since 2026-11-23 `kernel/tests/host.sh` also refuses a hosted patch that reads recount's current-thread time with interrupts on, or strips a typed function pointer with `ptrauth_strip` (shell and awk; the two 0095 panics, kernel/patches/oneios-hosted/README.md) |
-| `userland/metal-amd/air/build.sh plugin` (the Galaxy A56's Metal plug-in, section 9) | none | `oneios-tool ios sign`, `ios macho-check --arch arm64 --tbd out/ios16-tbd`, `ios gpuaddon`: since 2026-11-24 a bundle folder named `OneiOSRadeonMetal.bundle` keeps its name in the sidecar (`addons/OneiOSRadeonMetal.bundle/...`, `addons/OneiOSRadeonMetal.publish`); every other folder is `NativeAdrenoMetal` as before |
+| `userland/metal-amd/air/build.sh plugin` (the Galaxy A56's Metal plug-in, section 9) | none | `oneios-tool ios sign`, `ios macho-check --arch arm64 --tbd out/ios16-tbd`, `ios gpuaddon`: since 2026-11-24 a bundle folder named `OneiOSRadeonMetal.bundle` keeps its name in the sidecar (`addons/OneiOSRadeonMetal.bundle/...`, `addons/OneiOSRadeonMetal.publish`); every other folder is `NativeAdrenoMetal` as before; since 2026-11-25 `--gl OneiOSRadeonGL.bundle` adds the A56's OpenGL ES beside it (`addons/OneiOSRadeonGL.bundle/...`, no marker) when `out/metal-amd/gl` has it |
+| `userland/metal-amd/gl/build.sh plugin` (the Galaxy A56's OpenGL ES, section 9) | none | `oneios-tool ios sign`, `ios macho-check --arch arm64 --tbd out/ios16-tbd` |
 
 `oneios-tool image seed-pack` writes `data.seed`'s members in parallel, each at its own offset (the same bytes as
 `imagetool.py`'s; the SHA-256 is the one the trust list pins). `ONEIOS_IMAGE_TIMING=1` prints each phase's time;
@@ -1445,10 +1528,12 @@ boot's `oneios-srprot: ... vm_protect A-B` lines (A less the unslid start of the
 ONEIOS_DSC_DIR=out/ios16-cache oneios-tool sym --slide 0x2db08000 0x1c261c58c     # SpringBoard's lr: CI::GLContext::init + 0xcc
 ONEIOS_DSC_DIR=out/ios16-cache oneios-tool sym find EAGLContext:                 # the images that send ...EAGLContext: selectors
 ONEIOS_DSC_DIR=out/ios16-cache oneios-tool sym callers 0x194c99a00               # the branches to that stub (unslid)
+ONEIOS_DSC_DIR=out/ios272-cache oneios-tool sym dis 0x18434cff4 0x60          # 24B156's framebuffer_pixel_format, with the addresses it reads
+ONEIOS_DSC_DIR=out/ios272-cache oneios-tool sym find --no-index _ca_debug_options   # a data symbol (the index keeps code only)
 ONEIOS_DSC_DIR=out/ios27-cache oneios-tool sym cstr PrimaryScaler                 # where a name stands as a C string (2026-11-25)
 ONEIOS_DSC_DIR=out/ios27-cache oneios-tool sym ptrs 0x1f5fdcb7c                    # the words that point at it (selrefs, CFStrings)
 ONEIOS_DSC_DIR=out/ios27-cache oneios-tool sym refs 0x256d8f92e                    # the adrp pairs that form it, named
-ONEIOS_DSC_DIR=out/ios27-cache oneios-tool sym dis 0x2ad2b51e4 40                   # code, with branches, pages and strings named
+ONEIOS_DSC_DIR=out/ios27-cache oneios-tool sym dis 0x2ad2b51e4 0x10                 # 16 instructions, with branches, pages and strings named
 ```
 
 A kernel panic of a session (`panic(cpu N caller 0x...)`, also when the console lost its first letters: `anic(cpu 0 caller 0x...)`, the fault's pc and lr, the `frame 0x...` lines), named in

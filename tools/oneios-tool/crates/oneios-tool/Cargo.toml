@@ -25,6 +25,7 @@ oneios-tweaks.workspace = true
 oneios-imagebuild.workspace = true
 oneios-json.workspace = true
 oneios-ios.workspace = true
+oneios-conf.workspace = true
 oneios-common.workspace = true
 rayon.workspace = true
 

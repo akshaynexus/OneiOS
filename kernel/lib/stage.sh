@@ -4,7 +4,12 @@
 . "$ROOT/kernel/pins.sh"
 UNIXNU=$ROOT/external/Droid-VM-UniXNU
 DEVICE=$ROOT/kernel/device
-OS_PROFILE=ios-27.0.1-24A446
+# ONEIOS_OS_PROFILE: the OS profile (kernel/unixnu/profiles/os/NAME) to build for: ios-27.0.1-24A446 (the default) or
+# ios-27.2.1-24B156. kernel/build-hosted.sh writes it into its device copy's board.toml (os_profile), which UniXNU's
+# driver and the board archives read (`oneios-tool kernel gen`: the build, the name's last part, picks the original
+# classes' records <Class>-<build>-v54.json). build-linux.sh and build-macos.sh (the VM kernel) build the default only.
+OS_PROFILE=${ONEIOS_OS_PROFILE:-ios-27.0.1-24A446}
+[ -d "$ROOT/kernel/unixnu/profiles/os/$OS_PROFILE" ] || { echo "stage: no OS profile kernel/unixnu/profiles/os/$OS_PROFILE" >&2; exit 1; }
 UNIXNU_OUT_DIR=${KERNEL_OUT:-$ROOT/out/kernel}/unixnu
 CONFIG_NAME=${KERNEL_DEFCONFIG:-oneios_defconfig}
 TREE=$UNIXNU_OUT_DIR/oneios/$OS_PROFILE/${CONFIG_NAME%_defconfig}/tree

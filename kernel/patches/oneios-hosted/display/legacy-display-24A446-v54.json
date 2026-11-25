@@ -1632,7 +1632,8 @@
   "width": 7152,
   "height": 7156,
   "default_surface": 7000,
-  "surface_root": 6976
+  "surface_root": 6976,
+  "power": 7180
  },
  "request": {
   "rect0": 17,

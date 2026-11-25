@@ -1110,10 +1110,15 @@ fn cpu(rq: &Rq) -> Result<Done, Fail> {
 /// fork for another device sends "profile".
 const DEFAULT_DEVICE: &str = "iPhone18,2";
 
+/// The iOS build of [`DEFAULT_DEVICE`] a request without "profile" gets when the runtime packs several (iOS 27.0.1;
+/// 27.2.1, 24B156, is offered second until a phone boot of it passes: the app names its profile).
+const DEFAULT_BUILD: &str = "24A446";
+
 /// The IPSW profile of a stage's runtime (`runtime/lib/profiles/`) for a request without "profile": the only file
 /// there; else the one the fetch's `inputs.json` names; else, of the IPSW profiles there (`image profile` reads them;
 /// a host profile `host-*.toml` is not one), the only one, else the only one of the staged kernel's iOS build
-/// (`runtime.json` `kernel.profile`, `ios-<version>-<build>`), else the only one of those for [`DEFAULT_DEVICE`].
+/// (`runtime.json` `kernel.profile`, `ios-<version>-<build>`), else the only one of those for [`DEFAULT_DEVICE`]. Of
+/// several for it (27.0.1 and 27.2.1 since 2026-11-25), [`DEFAULT_BUILD`]'s.
 /// A released runtime packs every file of `profiles/` (v0.1.16: two host profiles and three IPSW profiles, two of
 /// them 24A446). Until 2026-11-23 this took only a folder of one file and refused `usage` there, so the app's
 /// request, which named no profile, never got past it (issue 75).
@@ -1141,6 +1146,7 @@ fn stage_profile(stage: &str, indir: &str) -> Result<String, Fail> {
     let kernel = stage_kernel_profile(stage);
     narrow(&mut pick, |os| kernel.as_deref() == Some(format!("ios-{}-{}", os.version, os.build).as_str()));
     narrow(&mut pick, |os| os.device == DEFAULT_DEVICE);
+    narrow(&mut pick, |os| os.device == DEFAULT_DEVICE && os.build == DEFAULT_BUILD);
     match pick.as_slice() {
         [(name, _)] => Ok(format!("{dir}/{name}")),
         _ => Err(Fail::usage(format!(
@@ -1158,29 +1164,69 @@ fn stage_kernel_profile(stage: &str) -> Option<String> {
     v["kernel"]["profile"].as_str().map(str::to_string)
 }
 
-/// The staged runtime's kernel (`runtime.json`'s `kernel.path`, below the runtime).
-fn stage_kernel(stage: &str) -> Result<String, Fail> {
+/// The `runtime.json` "kernels" entry of `build` (iOS 27.2.1's 24B156: `kernel/24B156/xnu.macho`), when the
+/// runtime has one and it is not the "kernel" itself (24A446's, which the A56's 20F66 set uses too).
+fn kernels_entry(v: &serde_json::Value, build: Option<&str>) -> Option<serde_json::Value> {
+    let build = build?;
+    let default = v["kernel"]["profile"].as_str().and_then(|p| p.rsplit('-').next());
+    if default == Some(build) {
+        return None;
+    }
+    v["kernels"].as_array()?.iter().find(|k| k["build"].as_str() == Some(build)).cloned()
+}
+
+fn runtime_json(stage: &str) -> Result<serde_json::Value, Fail> {
     let json = format!("{stage}/runtime/runtime.json");
     let text = std::fs::read_to_string(&json).map_err(|e| Fail::refused("not-found", format!("{json}: {e}")))?;
-    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| Fail::refused("mismatch", format!("{json}: {e}")))?;
-    match v["kernel"]["path"].as_str() {
+    serde_json::from_str(&text).map_err(|e| Fail::refused("mismatch", format!("{json}: {e}")))
+}
+
+/// The staged runtime's kernel for an image of `build` (`runtime.json`'s "kernels" entry of that build, else its
+/// "kernel"; the path below the runtime).
+fn stage_kernel(stage: &str, build: Option<&str>) -> Result<String, Fail> {
+    let v = runtime_json(stage)?;
+    let entry = kernels_entry(&v, build).unwrap_or_else(|| v["kernel"].clone());
+    match entry["path"].as_str() {
         Some(path) if !path.starts_with('/') && !path.split('/').any(|p| p == "..") => Ok(format!("{stage}/runtime/{path}")),
         _ => Err(Fail::refused("not-found", "the staged runtime has no kernel (runtime.json \"kernel\" is null): stage a runtime with one (v0.1.12 or newer), or give \"kc\"")),
     }
 }
 
-/// The staged runtime's guest plug-ins (`runtime.json` "metal" `bundle` and "camera" `path`, below the runtime:
-/// runtime/package.sh's lib/guest/), each when it is there. Older runtimes have neither.
-fn stage_guest(stage: &str) -> (Option<String>, Option<String>) {
+/// The stage's pairing files for that kernel: `<stage>/kb-<build>` for a "kernels" entry (the app writes it from its
+/// `assets/kb-<build>/`), else `<stage>/kb`.
+fn stage_kb(stage: &str, build: Option<&str>) -> String {
+    match runtime_json(stage).ok().and_then(|v| kernels_entry(&v, build)).and_then(|k| k["build"].as_str().map(str::to_string)) {
+        Some(b) => format!("{stage}/kb-{b}"),
+        None => format!("{stage}/kb"),
+    }
+}
+
+/// The staged runtime's guest plug-ins: the default target's (`runtime.json` "metal" `bundle` and "camera" `path`,
+/// runtime/package.sh's lib/guest/) and every other target's ("metals" after it, each with the "cameras" entry of its
+/// target: lib/guest/<build>/), each when it is there below the runtime. Older runtimes have neither.
+fn stage_guest(stage: &str) -> (Option<String>, Option<String>, Vec<(String, Option<String>)>) {
     let Some(v) = std::fs::read_to_string(format!("{stage}/runtime/runtime.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else {
-        return (None, None);
+        return (None, None, Vec::new());
     };
     let below = |path: Option<&str>| {
         path.filter(|p| !p.is_empty() && !p.starts_with('/') && !p.split('/').any(|s| s == ".."))
             .map(|p| format!("{stage}/runtime/{p}"))
             .filter(|p| Path::new(p).is_dir())
     };
-    (below(v["metal"]["bundle"].as_str()), below(v["camera"]["path"].as_str()))
+    let default = v["metal"]["bundle"].as_str();
+    let cameras = v["cameras"].as_array().cloned().unwrap_or_default();
+    let more = v["metals"].as_array().into_iter().flatten().filter(|m| m["bundle"].as_str() != default).filter_map(|m| {
+        let bundle = below(m["bundle"].as_str())?;
+        let camera = cameras.iter().find(|c| c["target"] == m["target"]).and_then(|c| below(c["path"].as_str()));
+        Some((bundle, camera))
+    });
+    (below(default), below(v["camera"]["path"].as_str()), more.collect())
+}
+
+/// The staged runtime's folder when its runtime.json names the Galaxy A56's GPU plug-ins ("metal_a56", not null).
+fn stage_a56(stage: &str) -> Option<String> {
+    let v = std::fs::read_to_string(format!("{stage}/runtime/runtime.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())?;
+    (!v["metal_a56"].is_null()).then(|| format!("{stage}/runtime"))
 }
 
 /// The whole image set (`image build`): scripts/image/build.sh's steps in this process (README "make-image").
@@ -1211,7 +1257,9 @@ fn make_image(rq: &Rq) -> Result<Done, Fail> {
     };
     // the staged runtime's Metal bundle and capture plug-in (lib/guest/) stand in for the ones not given, when the
     // bundle is for this image (Tweak::for_image); "runtime_plugins": false leaves them out
-    let (runtime_metal, runtime_camera) = if rq.req.opt_flag("runtime_plugins")?.unwrap_or(true) { stage_guest(&stage) } else { (None, None) };
+    let (runtime_metal, runtime_camera, runtime_more) = if rq.req.opt_flag("runtime_plugins")?.unwrap_or(true) { stage_guest(&stage) } else { (None, None, Vec::new()) };
+    // the image's build (the profile's): its kernel and pairing files when the runtime carries a kernel for it
+    let image_build = oneios_image::profile_os(&profile).map(|os| os.build);
     let tweak = oneios_imagebuild::Tweak {
         helpers: read_opt("helpers")?,
         metal_plugin: read_opt("metal_plugin")?,
@@ -1222,6 +1270,9 @@ fn make_image(rq: &Rq) -> Result<Done, Fail> {
         args: rq.req.list("tweak_args")?,
         runtime_metal,
         runtime_camera,
+        runtime_more,
+        // the Galaxy A56's GPU plug-ins (runtime.json "metal_a56"): an iOS 16.5 set they are for gets its gpuaddon of them
+        runtime_a56: if rq.req.opt_flag("runtime_plugins")?.unwrap_or(true) { stage_a56(&stage) } else { None },
     };
     let no_kernel = rq.req.flag("no_kernel")?;
     let kc = match rq.req.opt_str("kc")? {
@@ -1234,7 +1285,7 @@ fn make_image(rq: &Rq) -> Result<Done, Fail> {
     };
     let kb = match rq.req.opt_str("kb")? {
         Some(_) => rq.read_path("kb")?,
-        None => format!("{stage}/kb"),
+        None => stage_kb(&stage, image_build.as_deref()),
     };
     let kernelcache = match rq.req.opt_str("kernelcache")? {
         Some(_) => Some(rq.existing("kernelcache")?),
@@ -1250,7 +1301,7 @@ fn make_image(rq: &Rq) -> Result<Done, Fail> {
         (None, false) => {
             let xnu = match xnu {
                 Some(xnu) => xnu,
-                None => stage_kernel(&stage)?,
+                None => stage_kernel(&stage, image_build.as_deref())?,
             };
             let mut prelink = Prelink::from_kb(&xnu, &kb);
             if kernelcache.is_some() {

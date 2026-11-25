@@ -117,6 +117,7 @@ The A56 port's design and what each stage takes: [a56-gpu.md](a56-gpu.md) sectio
 | --- | --- | --- | --- |
 | `package/DroidVMAudio.cpp`: two `IOAudio2Device`s with UIDs "Speaker" and "Mic", which VirtualAudio turns into routable ports; `DroidVMVirtioSnd.c`: the virtio-snd transport (48 kHz S16, 240-frame periods) | `UniXNU-droidvm`, built by `ipados27/scripts/build-droidvm-devices.py` | BSD-2-Clause-Patent | **Direct**; the host side is new: a virtio-snd device in xnuhost over AAudio (crosvm's is `devices/src/virtio/snd/`; its AAudio helper is in the DroidVM app, GPL-3.0, not pinned here) |
 | Why UID "Codec" is the wrong target, DSP chain notes | `droidvm-meta-repo/todo/audio-media.md`, `macOS-DroidVM/docs/k27-audio.md` | | Reference |
+| The speaker's volume curve, -36 x (1 - s)^2 dB (`kMinDb`, `toDb`): a third of full volume about -16 dB instead of -42.5 dB on our linear -64..0 dB range (half: -9 instead of -32 dB) | [UniXNU/UniXNU-sheng](https://github.com/UniXNU/UniXNU-sheng) c8f92b2 `hal/ShengAudioPlugIn.c` 204-210 (iPadOS 27.0.1 24A446) | BSD-2-Clause-Patent | **Taken** (2026-11-25, fix/audio-volume-rt): the staged `DroidVMAudio.cpp`'s gain per step (`staged/audio.rs` block "fix-audio-curve", `oneios-audio-curve`), docs/hardware.md 6 "The volume curve"; CREDITS.md |
 
 ### Network
 
@@ -138,7 +139,7 @@ The A56 port's design and what each stage takes: [a56-gpu.md](a56-gpu.md) sectio
 | Disks: `NativeVirtioBlock` + patches `ipados27/patches/VirtioMmioBlock/0001..0006`, `DroidVMDataStore.c`, `DroidVMSourceStorage.cpp`, `build-droidvm-source-storage.py`, root policies (`build-droidvm-root-policies.py`) | `UniXNU-droidvm`; UniXNU/VirtioMmioBlock, RamBlock, VerifiedRoot | BSD-2-Clause-Patent | **Direct** against xnuhost's `virtio_blk.c` |
 | `DroidVMBattery.cpp` (goldfish battery -> `IOPMPowerSource`), `DroidVMCpufreq.c` (XNU's perf-control class -> host uclamp per vCPU thread) | `UniXNU-droidvm`; device side `crosvm/devices/src/bat.rs`, `virtcpufreq_v2.rs` | BSD-2-Clause-Patent / BSD-3-Clause | **Direct**; cpufreq is what lets the Linux governor follow the guest's bursts (0.2-7 ms instead of 40-116 ms) |
 | `AppleKeyStoreState`, `SoftwareAES` (`DroidVMSoftwareAES.cpp`, `SoftwareAES-24A446.S`), `KeyStoreProbe.cpp`, `KeyStoreWrap.inc` | UniXNU components + `UniXNU-droidvm`. Both components are submodules of the kernel base at its pin (`external/Droid-VM-UniXNU/drivers/AppleKeyStoreState` 42ff83e, `drivers/SoftwareAES` 4a45326), checked out by `kernel/lib/stage.sh`; no row of their own in `get-references.sh` | BSD-2-Clause-Patent | **In use**, no SEP: `kernel/patches/oneios-hosted/aes` and `keystore` (the service and its state answers are the component's; the class keys and the key wrap are OneiOS's, where Droid-VM's `KeyStoreWrap.inc` only adds a header) |
-| Video codecs: `DroidVMVTHost.cpp`, `DroidVMVTParavirt.cpp`, `DroidVMVirtioMedia.c` over virtio-media | `UniXNU-droidvm`; Droid-VM/virtio-media `32d7366` | BSD-2-Clause-Patent | **In use** (hevc-encoder, 2026-11-15): the three files are staged into the `codec` archive (`kernel/patches/oneios-hosted/codec`); the host side is OneiOS's own virtio-media device + MediaCodec helper (`runtime/bridges/encoder`), so iOS's paravirtualized VideoToolbox encodes HEVC and CMPhoto writes HEIC. Host done and PC-tested; the guest archive's generator and a kernel build are the next step (`docs/hardware.md` 7g) |
+| Video codecs: `DroidVMVTHost.cpp`, `DroidVMVTParavirt.cpp`, `DroidVMVirtioMedia.c` over virtio-media | `UniXNU-droidvm`; Droid-VM/virtio-media `32d7366` | BSD-2-Clause-Patent | **In use** (hevc-encoder, 2026-11-15): the three files are staged into the `codec` archive (`kernel/patches/oneios-hosted/codec`); since 2026-11-25 `DroidVMVirtioMedia.c` with edit 7, its event queue on the device's interrupt, after UniXNU-droidvm `96e8c1f` (lateautumn233, completion interrupts instead of polling) and `2cd4c8e` (HuJK, either ADT name for the interrupt, polling where there is none), both read at origin, newer than the f9121cd pin (fix/codec-irq); the host side is OneiOS's own virtio-media device + MediaCodec helper (`runtime/bridges/encoder`), so iOS's paravirtualized VideoToolbox encodes HEVC and CMPhoto writes HEIC. Host done and PC-tested; the guest archive's generator and a kernel build are the next step (`docs/hardware.md` 7g) |
 | iPhone identity on iOS 27: `profiles/os/ios-27.0.1-24A446-iphone17,1/profile.toml` | `UniXNU-shennong` 363cc77 (extra table) | none stated: read only | The only other public iPhone iOS 27.0.1 profile; compare its prelink pins and root list with `kernel/unixnu/profiles/os/ios-27.0.1-24A446`. Its board stops in `_arm_init` |
 | Debug shell and tools in the guest | `ownervisor` 65fc2c7, `applebox` 6e3b471 | MIT / Apple open-source licences | Direct (userland overlay, owner trust bundle) |
 
@@ -166,8 +167,25 @@ Rank is usefulness for the S24 Ultra under xnuhost. "State" is the repo's own cl
 | 15 | [tycykp/UniXNU-OnePlus-Ace5](https://github.com/tycykp/UniXNU-OnePlus-Ace5) aaa100d, [kerrinz/UniXNU-zorn](https://github.com/kerrinz/UniXNU-zorn) ef13dcc, [Asultop/UniXNU-NX769J](https://github.com/Asultop/UniXNU-NX769J) 2a265af, [loolooc/UniXNU-meizu21](https://github.com/loolooc/UniXNU-meizu21) f6b6aab, [Axiang-dev/UniXNU-caihong](https://github.com/Axiang-dev/UniXNU-caihong) 1e3d718, [SangLuoCN/UniXNU-Nubia-Z60U](https://github.com/SangLuoCN/UniXNU-Nubia-Z60U) df60483, [peiyuesheng666/UniXNU-PHY120](https://github.com/peiyuesheng666/UniXNU-PHY120) 0dfaf5f, [Fearless109/hakios-sm8650](https://github.com/Fearless109/hakios-sm8650) ea80367 | BSD-2-Clause-Patent or none | Bare-metal SM8650 boards (UEFI, UFS, touch, Wi-Fi on giulia) | SM8650 | iOS 16 / iPadOS 17 desktop at best, CPU-rendered; no Metal | Not useful under xnuhost |
 | 16 | [ediwiuwj/tahoe-on-linux](https://github.com/ediwiuwj/tahoe-on-linux) 2595c97 | MIT | macOS 26 x86_64 userland on Linux, BSD and Mach traps translated in user space | PC | launchd as pid 1, about 400 services, WindowServer starts | Design reference for the trap layer (approach 1a of docs/plan.md) |
 | 17 | [YahiaAngelo/vphone-linux](https://github.com/YahiaAngelo/vphone-linux) 9c75e88 | see repo | reims-vgpu + metal2vulkan for Apple's own ParavirtualizedGraphics | QEMU | Works on PCs | Fallback GPU path only |
-| 18 | [oosexgang/hakios-xnu-kernel](https://github.com/oosexgang/hakios-xnu-kernel) 63fc2b4 | see repo | HakiOS: own loader, drivers and "hakios-metal" (a Metal driver without Vulkan: 110 fps page swipes on A642L) | SM7325 | iOS 16.5 | Watch: a second Metal design, bare-metal and xnu-8796 today |
+| 18 | [oosexgang/hakios-xnu-kernel](https://github.com/oosexgang/hakios-xnu-kernel) 63fc2b4 (read at 62e09f8, 2026-11-25) | MIT for its own work, APSL-2.0 for what extends XNU or came from HakiOS (its README "Licence"; GitHub detects none) | HakiOS: own loader, drivers and "hakios-metal" (a Metal driver without Vulkan: 110 fps page swipes on A642L) | SM7325 | iOS 16.5 | Watch: a second Metal design, bare-metal and xnu-8796 today |
 | 19 | [dipa-studio/ios-sweet](https://github.com/dipa-studio/ios-sweet) 45263be and its forks | MIT | xnu-8796 bare-metal, iOS 16, CPU-rendered | SM7150 and many others | Home screen | Not useful: no PAC userland, no GPU through Linux |
+| 20 | [DenialOfGravity/ios-redfin](https://github.com/DenialOfGravity/ios-redfin) 23019ab4 `main` (cefcd91 `redfin-int`) | MIT | `phone/sensors/`: a Qualcomm SEE client (QMI service 400 over QRTR, protobuf), sensors as SPU HID services (0971, 0972), auto-brightness's cached re-post and True Tone (1298) | SM7250 Pixel 5 | iOS 16.7.16: every sensor, auto-brightness, cameras, 2-way audio | **Ported** (fix/sensors-als, 2026-11-25; not booted): `sns.c`, `pb.c`, `phone/wifi/qmi.c` and `sensor.c`'s sequence onto Linux's `AF_QIPCRTR` (`runtime/bridges/sensors`), `test_sensd.c`'s byte vectors (`sensors/tests.rs`), 1298's cached re-post (`drivers/brightness/OneiOSALSDevice.cpp`); [ports-2026-11-25-hw.md](ports-2026-11-25-hw.md) sections 1-2 |
+| 21 | [coreycusick/ios-guacamole](https://github.com/coreycusick/ios-guacamole) 53e6c5e `ios27` | MIT (camera files HakiOS MIT) | `userland/camera/`: an iOS 27.2 FigCaptureDevice plug-in and `capture_hooks.c` (the capture graph's start fixes) | SM8150 OnePlus 7 Pro | iOS 27.2: live preview and photos (2026-11-18), speakers | **Port** (2026-11-25): camera input for `fix/s24-fps-heat-camera`, [ports-2026-11-25-hw.md](ports-2026-11-25-hw.md) section 3 |
+
+The per-area plan for sensors, auto-brightness, camera, audio and Bluetooth taken from these and from UniXNU-sheng
+(`hal/ShengAudioPlugIn.c`'s volume curve, iPadOS 27.0.1) and UniXNU-droidvm (its motion HID classes) is
+[ports-2026-11-25-hw.md](ports-2026-11-25-hw.md) (2026-11-25, research only: nothing ported then; the volume curve was taken
+the same day on fix/audio-volume-rt, section 2 "Audio" above).
+
+**Ported for the sensors (fix/sensors-als, 2026-11-25; host-tested and built, not booted):**
+
+| Source @ commit, file | Licence | Here |
+| --- | --- | --- |
+| DenialOfGravity/ios-redfin 23019ab4 `phone/sensors/sns.c`, `pb.c`, `sensor.c`, `test_sensd.c`, `phone/wifi/qmi.c` (Copyright (c) 2026 dipa-studio) | MIT | `runtime/bridges/sensors/sns.rs`, `pb.rs`, `mod.rs`, `tests.rs` (MIT): the SEE client on Linux's QRTR |
+| ios-redfin 23019ab4 `xnu/patches/1298-redfin-auto-brightness-true-tone.patch` (the cached sample re-posted within 15 ms of a wake), `0971` (the SPU usage pairs, `setIntegerValue` of the illuminance) | MIT | `drivers/brightness/OneiOSALSDevice.cpp` (MIT), `kernel/patches/oneios-hosted/hid/OneiOSALSEvents.cpp` |
+| Droid-VM/UniXNU-droidvm f9121cd `package/DroidVMMotionHid.inc`, `DroidVMSensorProcessor.cpp`, `DroidVMMotion.c` (row 1, the pinned checkout) | BSD-2-Clause-Patent | staged into the HID archive by `oneios-tool kernel gen hid` (`staged/hid_motion.rs`: the compass kind, frame-driven ticks, the transport's magnetometer axes) |
+| UniXNU/ShengHidInput 24f1f3f `NativeHidInput.cpp` (row 7): the event driver's vtable copy with its 220 checked discriminators | BSD-2-Clause-Patent | `kernel/patches/oneios-hosted/hid/OneiOSALSEvents.cpp` wraps the light sensor's event driver the same way (the table exported from the staged copy) |
+| jesvi-eulah/Jesvi-iOS a13e406 `userland/src/inject_sensors.c` (pinned in `scripts/setup/get-references.sh`) | MIT (`userland/`) | what CoreBrightness checks on an ALS service (Built-In, VendorID 0x5ac, `ALSCurveInfo`, field 0xC000B): `drivers/brightness/OneiOSALSDevice.cpp` |
 
 ### The ios-sweet fork network
 
@@ -190,6 +208,29 @@ Rank is usefulness for the S24 Ultra under xnuhost. "State" is the repo's own cl
 
 The UniXNU catalogue (`Portsmith-iOS` 8794f29, `ports/catalog/unixnu-devices.toml`, 265 records) lists eight
 SM8650 boards (row 15 and `houji` forks); none has Metal.
+
+### Ports read for the GPU, heat and stability (2026-11-25)
+
+Read for [ports-2026-11-25-gpu.md](ports-2026-11-25-gpu.md) (what to port, ranked, with switches and proof lines). No
+pin changed; the commits are those read. Taken since (fix/s24-fps-heat-camera, 2026-11-25, not booted): Turnip's submit split
+(`fb9fb47`, `userland/metal/turnip-submit-split.patch`), the reflection crash fix (`3c46b5e`, a frontend edit of
+`ios metal-stage-edit`) and the write-only present buffers (`cdb297bbf`, rewritten in Rust in
+`runtime/display/src/xhd/present.rs`; CREDITS.md).
+
+| Repo, commit read | Licence | What is in it for us |
+| --- | --- | --- |
+| [Droid-VM/NativeMetal](https://github.com/Droid-VM/NativeMetal) `935c468` (`wip/hackintosh`, 153 commits past our b0d6a07) | MIT | purgeable discard, single-sample default, system shader cache, YCbCr planes, wallpaper freeze, the cameracaptured reflection crash fix `3c46b5e` |
+| [Droid-VM/UniXNU](https://github.com/Droid-VM/UniXNU) `8789b8d` (`wip/hackintosh`, 32 past our 62d0b11) | BSD-2-Clause-Patent | the stack on metal2vulkan `555b13d5` (`421e982`); Turnip's submit split at command buffers (`fb9fb47`, the render-server start hang) |
+| [Droid-VM/UniXNU-droidvm](https://github.com/Droid-VM/UniXNU-droidvm) `283f251` (70 past our f9121cd) | BSD-2-Clause-Patent | virtio-media and virtio-snd on completion interrupts (`96e8c1f`, `793bb45`, `2cd4c8e`) |
+| [Droid-VM/virglrenderer](https://github.com/Droid-VM/virglrenderer) `2529a9f` (`wip/hackintosh`) | MIT | no guest queue in Android UI's KGSL ringbuffer (`5faa56f`) |
+| [Droid-VM/NativeAdreno](https://github.com/Droid-VM/NativeAdreno) `cdaa0bb` | MIT | native sheng driver work only |
+| [Droid-VM/droidvm-meta-repo](https://github.com/Droid-VM/droidvm-meta-repo) `1b5dda8` | GPL-2.0-or-later (docs) | PROGRESS.md: the measurements behind the rows above |
+| [YumikoHayamato/OneiOS](https://github.com/YumikoHayamato/OneiOS) `273ed5e` (`s25-ultra-sm8750`) | none stated (a fork of this repo) | the display helper's write-only buffers (`cdb297bbf`); XNU in a crosvm VM under Gunyah on the S25 Ultra (`docs/native.md` there) |
+| [qiumochen/UniXNU-zizhan](https://github.com/qiumochen/UniXNU-zizhan) `88f4eeb` | BSD-2-Clause-Patent | the GPU's lowest level with the display off (`17ccd80`) |
+| [Allenwdk/UniXNU-uke](https://github.com/Allenwdk/UniXNU-uke) `55909f4` (`docs/GPU-IOS27.md`), [Allenwdk/AdrenoMetal](https://github.com/Allenwdk/AdrenoMetal), [UniXNU/AdrenoMetal](https://github.com/UniXNU/AdrenoMetal) | BSD-2-Clause-Patent; MIT; MIT | a 293-entry 24A446 priming list; the "R2507" runtime line |
+| [DenialOfGravity/ios-redfin](https://github.com/DenialOfGravity/ios-redfin) `23019ab` (NOTES.md), [oosexgang/hakios-metal](https://github.com/oosexgang/hakios-metal) | MIT | native-driver ideas only; the ALS repost on wake (1298) |
+| [superboyyy/hakios-arm64e-dada](https://github.com/superboyyy/hakios-arm64e-dada) `f1ae906` (`gpu2/`) | none stated | nothing new beyond 0101/0102 |
+| [kerrinz/UniXNU-zorn](https://github.com/kerrinz/UniXNU-zorn), [tenku-png/UniXNU-caihong](https://github.com/tenku-png/UniXNU-caihong), [alpersamur3/asoft-ios-android](https://github.com/alpersamur3/asoft-ios-android), [UniXNU/UniXNU-sheng](https://github.com/UniXNU/UniXNU-sheng) | BSD-2-Clause-Patent; none; MIT; BSD-2-Clause-Patent | nothing to take for these areas |
 
 ## 4. What the S24 Ultra still lacks that nobody has published
 

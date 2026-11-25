@@ -39,7 +39,9 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use xh_core::bytes::le;
 
 use oneios_display::sys::{self as dsys, Errno, Map};
-use oneios_display::xhd::{Kind, Message, Seg, Slot, DONE_FAILED, OPTION_SERIAL_POST, PANEL_DIRECT};
+use oneios_display::xhd::{
+    Kind, Message, Seg, Slot, DONE_FAILED, OPTION_PRESENT_AHB, OPTION_SERIAL_POST, PANEL_DIRECT,
+};
 use xh_core::{loge, logi, pixels};
 
 use crate::config::{self, Config, DisplayBackend, Mode, PanelMode};
@@ -192,6 +194,8 @@ struct Display {
     direct_enabled: bool,
     /// display-post=serial: the helper is told to post each frame before it reads the next (docs/switches.md)
     serial_post: bool,
+    /// display-present=ahb: the helper posts into write-only buffers on a child of its layer (docs/switches.md)
+    present_ahb: bool,
     drm: Option<Mutex<Drm>>,
     client: Mutex<Client>,
 }
@@ -497,10 +501,14 @@ fn helper_attach(d: &Display, fd: OwnedFd, flags: u32) {
     if hello.send(fd.as_fd(), &[shm.as_fd()], 0).is_err() {
         return;
     }
-    // display-post=serial: the old timing, asked of the helper (one older than 2026-11-24 ignores the message and has it
-    // anyway). The default sends nothing.
-    if d.serial_post {
-        let _ = Message::new(Kind::Options, OPTION_SERIAL_POST, 0, 0, 0).send(fd.as_fd(), &[], 0);
+    // The helper's options, right after the hello (before any frame: its poster chooses its path at the first post).
+    // display-post=serial: the old timing (a helper older than 2026-11-24 ignores the message and has it anyway);
+    // display-present=ahb (the default): write-only buffers on a child of the layer (a helper older than 2026-11-25
+    // ignores the bit and keeps the window). Nothing is sent when neither is asked.
+    let options =
+        (if d.serial_post { OPTION_SERIAL_POST } else { 0 }) | (if d.present_ahb { OPTION_PRESENT_AHB } else { 0 });
+    if options != 0 {
+        let _ = Message::new(Kind::Options, options, 0, 0, 0).send(fd.as_fd(), &[], 0);
     }
     let mut done = Taken::new();
     let direct = {
@@ -1023,6 +1031,7 @@ pub fn init(c: &Config) -> Result<(u32, u32, u32), Failed> {
         socket_path,
         direct_enabled: c.display_direct,
         serial_post: c.display_post_serial,
+        present_ahb: c.display_present_ahb,
         drm: drm.map(Mutex::new),
         client: Mutex::new(Client {
             fd: None,

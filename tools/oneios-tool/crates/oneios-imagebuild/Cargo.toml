@@ -13,3 +13,9 @@ oneios-common.workspace = true
 oneios-image.workspace = true
 oneios-prelink.workspace = true
 oneios-tweaks.workspace = true
+# the Galaxy A56's boot addon (a56gpu.rs: `ios gpuaddon`'s packing, the bundles' CDHashes)
+oneios-ios.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+oneios-testkit.workspace = true

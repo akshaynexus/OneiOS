@@ -311,7 +311,7 @@ pub fn main() -> Result<()> {
     let xnu = ctx.tree.join(".cache/xnu-work");
     let package = ctx.repo.join("external/UniXNU-droidvm/package");
     let (transport_source, start, subtype_source) = (package.join("DroidVMVirtioNet.c"), here.join("OneiOSWifi.cpp"), here.join("OneiOSWifiLayout.cpp"));
-    let (layout_path, proto) = (here.join("IONetworking-24A446-v54.json"), ctx.repo.join("drivers/net/oneios_wifi_proto.h"));
+    let (layout_path, proto) = (ctx.layout(&here, "IONetworking")?, ctx.repo.join("drivers/net/oneios_wifi_proto.h"));
     // (the script also asked for build-oneios-hid.py here: it imported that script's Mach-O readers, macho_object.rs now)
     for path in [ctx.repo.join("drivers/sources.txt"), transport_source.clone(), start.clone(), subtype_source.clone(), proto.clone(), layout_path.clone(),
                  package.join("DroidVMDmaRegion.h"), ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json"), xnu.join("bsd")] {
@@ -400,7 +400,7 @@ pub fn main() -> Result<()> {
     let bound: Vec<(String, u64)> = functions.iter().map(|(name, address)| (name.clone(), *address)).collect();
     write_report(&out, &layout, &bound, &owned)?;
     let owns: Vec<String> = owned.iter().map(|(name, slots)| format!("{} owns {} of the family's slots", &name[5..], slots.len())).collect();
-    println!("build-oneios-net: {} ({} objects, {} original functions bound at their 24A446 iPhone18,2 addresses; {})", archive.display(),
-             objects.len(), functions.len(), owns.join(", "));
+    println!("build-oneios-net: {} ({} objects, {} original functions bound at their {} iPhone18,2 addresses; {})", archive.display(),
+             objects.len(), functions.len(), ctx.build, owns.join(", "));
     Ok(())
 }

@@ -40,7 +40,6 @@
     "__ZN19IOEthernetInterface18feedPacketInputTapEP6__mbuf": "0xfffffff00a1fd1e4",
     "__ZN19IOEthernetInterface19controllerWillCloseEP19IONetworkController": "0xfffffff00a1fb34c",
     "__ZN19IOEthernetInterface19feedPacketOutputTapEP6__mbuf": "0xfffffff00a1fd268",
-    "__ZN19IOEthernetInterface21attachToDataLinkLayerEjPv": "0xfffffff00a1fce14",
     "__ZN19IOEthernetInterface29controllerDidChangePowerStateEP19IONetworkControllermjP9IOService": "0xfffffff00a1fccb4",
     "__ZN19IOEthernetInterface30controllerWillChangePowerStateEP19IONetworkControllermjP9IOService": "0xfffffff00a1fcb14",
     "__ZN19IOEthernetInterface4freeEv": "0xfffffff00a1fb070",
@@ -159,6 +158,7 @@
     "__ZN20IOEthernetController15createInterfaceEv": "0xfffffff00a1f7b3c",
     "__ZN18IONetworkInterface13newUserClientEP4taskPvjPP12IOUserClient": "0xfffffff00a2092a8",
     "__ZN19IOEthernetInterface14performCommandEP19IONetworkControllermPvS2_": "0xfffffff00a1fb3cc",
+    "__ZN19IOEthernetInterface21attachToDataLinkLayerEjPv": "0xfffffff00a1fce14",
     "__ZN19IOEthernetInterface15initIfnetParamsEP17ifnet_init_params": "0xfffffff00a1faeb4"
   },
   "owned_slots": {
@@ -168,6 +168,7 @@
       7,
       141,
       202,
+      210,
       214
     ],
     "__ZTV17IO80211Controller": [

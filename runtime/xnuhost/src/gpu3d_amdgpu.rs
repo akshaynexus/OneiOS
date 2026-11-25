@@ -43,7 +43,7 @@ mod fences;
 pub mod selftest;
 pub mod uapi;
 
-pub use addon::{plugin_in_addon, Plugin, PLUGIN};
+pub use addon::{gl_in_addon, kernel_knows_gl, plugin_in_addon, Plugin, GL_PLUGIN, PLUGIN};
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;

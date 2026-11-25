@@ -1781,9 +1781,23 @@ fn make_image_takes_the_apps_request_with_the_released_runtimes_profiles() {
     let last = s.ask(named);
     assert_eq!((last["ev"].as_str(), last["code"].as_str()), (Some("refused"), Some("not-found")), "{last}");
     assert!(last["text"].as_str().unwrap().contains("the kernel's inputs are missing"), "{last}");
+    // iOS 27.2.1 (2026-11-25): a runtime with its kernel in "kernels"; a request naming its profile and no xnu or kb
+    // takes that kernel and kb-24B156/ (the app names both itself)
+    b.put("stage/runtime/runtime.json", br#"{"format": 1, "kernel": {"path": "kernel/xnu.macho", "profile": "ios-27.0.1-24A446"}, "kernels": [{"path": "kernel/xnu.macho", "profile": "ios-27.0.1-24A446", "build": "24A446"}, {"path": "kernel/24B156/xnu.macho", "profile": "ios-27.2.1-24B156", "build": "24B156"}]}"#);
+    b.put("stage/runtime/kernel/24B156/xnu.macho", &noise(4096, 44));
+    let mut b272 = app.clone();
+    b272["profile"] = json!(b.stage("runtime/lib/profiles/ios-27.2.1-iPhone18-2.toml"));
+    let last = s.ask(b272);
+    assert_eq!(last["code"].as_str(), Some("not-found"), "{last}");
+    assert!(last["text"].as_str().unwrap().contains(&b.stage("kb-24B156/profile.toml")), "27.2.1's pairing files: {last}");
+    nothing_left(&b, "the 27.2.1 request");
+    // and without "profile", 27.0.1 (the staged kernel's)
+    let last = s.ask(app.clone());
+    assert!(last["text"].as_str().unwrap().contains(&b.stage("kb/profile.toml")), "{last}");
     // a runtime whose kernel is of no profile there: two 27.0.1 24A446 profiles are left, and iPhone18,2's is taken
     b.put("stage/runtime/runtime.json", br#"{"format": 1, "kernel": {"path": "kernel/xnu.macho", "profile": "ios-99.0-99Z999"}}"#);
     assert_eq!(s.ask(app.clone())["code"], "not-found");
+    // (27.0.1 and 27.2.1 for iPhone18,2 since 2026-11-25: of those, 27.0.1's)
     // with no iPhone18,2 profile among several iOS profiles, the request must name one, and the refusal names them.
     // Two of another device are made from iPhone18,2's; the repository's ios-16.5-a56.toml is an IPSW profile since
     // 2026-11-23 (Apple's 20F66 pins, the A56's image), so it is named too; ios-27.0.1-a56.toml is still reference only
@@ -1793,7 +1807,9 @@ fn make_image_takes_the_apps_request_with_the_released_runtimes_profiles() {
     for other in ["iPhone99-1", "iPhone99-2"] {
         b.put(&format!("stage/runtime/lib/profiles/ios-27.0.1-{other}.toml"), iphone.replace("device = \"iPhone18,2\"", &format!("device = \"{}\"", other.replace('-', ","))).as_bytes());
     }
-    std::fs::remove_file(b.stage("runtime/lib/profiles/ios-27.0.1-iPhone18-2.toml")).unwrap();
+    for name in ["ios-27.0.1-iPhone18-2.toml", "ios-27.2.1-iPhone18-2.toml"] {
+        std::fs::remove_file(b.stage(&format!("runtime/lib/profiles/{name}"))).unwrap();
+    }
     let last = s.ask(app.clone());
     assert_eq!((last["ev"].as_str(), last["code"].as_str()), (Some("refused"), Some("usage")), "{last}");
     let text = last["text"].as_str().unwrap();

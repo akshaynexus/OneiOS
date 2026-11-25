@@ -668,6 +668,12 @@ impl Session for StubSession {
         Ok(())
     }
 
+    /// Its units are coded in the poll, from what `feed` and `drain` (a guest's command, which wakes the worker)
+    /// left: nothing comes between two commands, so the worker needs no wake-up of its own and no 1 ms look.
+    fn wakes(&mut self, _wake: crate::backend::Wakeup) -> bool {
+        true
+    }
+
     fn poll(&mut self, buf: &mut [u8]) -> Result<Polled, i32> {
         if let Some(f) = self.ring.pop_front() {
             // every frame is an IDR

@@ -99,11 +99,40 @@ XnuPrelink). With one field it does exactly what it did before. Such a kernel's 
 Every kext of the collection is a root, except one all of whose IOKit personalities attach to hardware xnuhost
 does not present (an Apple SoC block, I2C/SPI/SPMI part, RTBuddy/AFK/AOP endpoint, SEP endpoint, PCIe, USB,
 Thunderbolt, accessory port), and seven decided by hand (`FORCE_OUT`: `kec.pthread`, the SEP keystore and its two
-clients, the ANE HAL, FairPlayIOKit, and IOAudioCodecs, whose start waits for FairPlayIOKit). The profile's 31 roots are kept whatever their personalities. A left-out kext that a kept one
+clients, the ANE HAL, FairPlayIOKit, and IOAudioCodecs, whose start waits for FairPlayIOKit; since 2026-11-25 also
+the sensor processor AppleSPU and the four kexts that link it, below). The profile's 31 roots are kept whatever their personalities. A left-out kext that a kept one
 links against returns for its code only, without personalities. FairPlayIOKit is out although it is not hardware
 (obfuscated calls through computed tables; reason in `prelink roots`). Today (2026-11-12): 319 in the kernelcache, 130
 roots, 150 in the closure (20 returned dependencies), 169 absent, 135 fileset entries (15 of the closure are codeless
 KPIs). The counts of 2026-11-10 (133, 154, 139) were from before the last three `FORCE_OUT` entries.
+
+**The sensor processor is out (2026-11-25, fix/motion-spu-clash).** Five more `FORCE_OUT` entries:
+`com.apple.driver.AppleSPU` and every kept kext that links it, AppleALSColorSensor, AppleEmbeddedLightSensor,
+AOPTouchKext and AppleHIDTransportSCMCommon (a library; it links AppleHIDTransport, which links AppleSPU). v0.1.29
+panicked at kernel start on the S24 Ultra with AppleSPU in the collection: "Kext com.apple.driver.AppleSPU class
+AppleSPUHIDDevice is a duplicate; kext __kernel__ already has a class by that name". The HID archive registers classes
+of AppleSPU's names for the motion devices (`kernel/patches/oneios-hosted/hid`, "Motion sensors"), and IOKit loads the
+kext of **every** personality that passes `matchPassive`, whatever its probe score (`IOService::probeCandidates` calls
+`IOCatalogue::isModuleLoaded`, which loads it at once), so a personality of a higher score cannot keep it out:
+AppleSPU's `AppleSPUGestureDriver` (`{0xff0c, 3}`, Transport SPU) matched the motion devices. A left-out kext that
+returns as a dependency loads with its user, so the four that link it go too: AppleALSColorSensor's `AppleSPUCT7xx`
+personalities match the SPU light sensor (`{0xff00, 4}`, any transport; its exclave paths are on the stub as well).
+None of the five has a device here; the light sensor's event driver is the kernel's IOHIDEventDriver. UniXNU-droidvm's
+iPad kernelcache has no AppleSPU at all. Counts on both kernelcaches (24A446 and 24B156) after: 125 roots (130
+before), 194 left out (19 returned as dependencies), 144 in the closure (150: AppleHIDTransport is gone as well), 129
+fileset entries (135). With the release kernels of main 0f4ad03 (`current-hosted-rel24a` `f7ed2b9a`,
+`current-hosted-rel272` `e5129d1e`): `audit: 2707 paired, 82 functions on the stub, 9 data unpaired; 0 failures`
+(24A446) and `2706 paired, 82 on the stub, 10 data unpaired; 0 failures` (24B156): 10 fewer functions on the stub
+than before (the left-out kexts' Tightbeam imports), `prelink stubs-check` 666 good, 0 bad on both. The pairing files
+(`pairs-*`, `stubs-*`, the reviewed records) are unchanged, so is the app's kb (`oneios-tool app kb 24A446 --check`,
+`24B156 --check`: none changed); the phone's prelink takes the rule from the runtime's own `bin/oneios-tool`, so a
+runtime built from this source leaves AppleSPU out on the phone too. A collection prelinked before still has it: xnuhost
+then gives no motion device, and the kernel registers no motion class. The kernels of this fix (`HOSTED_OUT=motion24a
+ONEIOS_CRYPTO=original`, `xnu.macho` `37792182...`; `HOSTED_OUT=motion272 ... ONEIOS_OS_PROFILE=ios-27.2.1-24B156`,
+`a10fe0a4...`; 193 patches, releasable, on the build laptop): `kernel.kc` `ca2d9187...` (`.hashes` `dd1c8eb1...`,
+2707 paired, 82 on the stub, 9 data unpaired, 0 failures) and `08f46a72...` (`.hashes` `842711cd...`, 2706 paired, 82
+on the stub, 10 data unpaired, 0 failures), `stubs-check` 666 good, 0 bad on both, no AppleSPU fileset entry in
+either. Not booted.
 IOGPUFamily and what it links are roots; AGXG18P (the GPU's own driver) is left out. NativeAdreno's `AGXAccelerator`
 is linked into the kernel under IOGPUFamily's `IOAcceleratorES` (`kernel/patches/oneios-hosted/gpu`, `docs/gpu.md`
 5.1): two more `native_original_branches`, the class's constructor and base destructor.
@@ -507,6 +536,65 @@ oneios-tool prelink build --kernel out/kernel/current-hosted-release/xnu.macho \
   the cause was hosted 0068 (the A56 port), not the crypto mode; fixed in 0068 (series comment).
 - Not proven: the prelink's time and memory on the phone (the phone runs the same code on its own kernelcache:
   expect seconds, not minutes, and under 1 GB, as here, but not measured), and any boot of this kernel on the phone.
+
+## Another build: iOS 27.2.1 (24B156), 2026-11-25 (ios272)
+
+24B156's kernelcache (`out/kernel-inputs/24B156/kernelcache.macho`, SHA-256 `f6f31ac4...e9a5939`,
+xnu-13432.42.3) has the same 301 fileset entries as 24A446's, at other addresses. Every record of this folder and of
+the board archives that names an original address is per build (`*-24A446*`, `*-24B156*`); `build.sh` takes
+`BUILD=24B156` (its kernelcache, profile `ios-27.2.1-24B156`, pairs, stubs and reviewed files) and `KERNEL=` a hosted
+kernel built with `ONEIOS_OS_PROFILE=ios-27.2.1-24B156` (docs/building.md 2). One `xnu.macho` cannot serve both: the
+board archives compile the original classes' addresses into it.
+
+How the 24B156 files were made, and how to make them for a next build:
+
+- **The class records, read again from the new kernelcache** (the same commands that wrote 24A446's, which reproduce
+  the committed 24A446 files byte for byte): `oneios-tool prelink classes --xnuprelink external/Droid-VM-UniXNU/kits/XnuPrelink
+  --kernelcache out/kernel-inputs/24B156/kernelcache.macho --prelink-report out/kernel/24A446/kernel.kc.prelink.json
+  --out kernel/prelink/classes-24B156-v54.json` with the eleven classes, each its own argument; the same with
+  `IOAESAccelerator` and `IOAcceleratorES` alone for `aes/IOAESAccelerator-24B156-v54.json` and
+  `gpu/IOAcceleratorES-24B156-v54.json`; `oneios-tool kernel layout hid|net --kernelcache ... --out
+  kernel/patches/oneios-hosted/{hid/IOHIDDevice,net/IONetworking}-24B156-v54.json`. (The prelink report only gives
+  the collection slide, 0x1f000000000, for the `linked` addresses; check it again in 24B156's own report.) The
+  records differ from 24A446's in addresses only (sizes, slot counts, every slot's diversity the same), but for
+  IOMobileFramebufferLegacy 0x1dd8 -> 0x1de0 bytes, IOGPU 0x2e8/216 slots -> 0x2f0/217 and AGXAccelerator
+  0xcdf8/474 -> 0xce00/475 (nothing of ours subclasses those two).
+- **The address-keyed records, carried over** by `oneios-tool prelink port` (`oneios-prelink/src/port.rs`; the rules
+  in its header): `--from` 24A446's kernelcache, `--to` 24B156's, `--record IN=OUT` for `pairs`, `stubs`,
+  `reviewed`, `lead/reviewed-lead`, `user/reviewed-user` and the display record, with `--fields display --fields
+  request` for the display record's field offsets. It pairs 211,361 of 219,799 functions (196,667 of the same
+  shape) and 183,615 data addresses in 4 s; every check (address, size, SHA-256) is read again from 24B156's bytes.
+  `early_security_init` lands on `0xfffffe000927b430`, the wrapper derived by hand on 2026-11-20.
+  Its two methods agree: the port of the four class records above gives the same addresses as reading them again
+  (only the family ranges' end bounds differ by a few bytes, which bind nothing).
+- **The display record** (`display/legacy-display-24B156-v54.json`): ported; the 379 vtable slots read again from
+  both vtables (all where the map put them), the 17 field offsets voted from 24B156's code (all the same; `options`
+  has no instruction in the family and is kept), the 10 checks the same bytes. `instance_size` set to 0x1de0 from
+  the class record: `oneios-tool kernel gen display` now refuses a record whose kernelcache, size, vtable or slot
+  count differs from `classes-<build>-v54.json`'s (a unit test holds both builds' committed records to that).
+- **Left out by the port, to review against the audit**: pairs `IODMACommand::Dispatch`, `IOInterruptDispatchSource::metaClass`,
+  six `vnop_*_desc` objects and `gIOKitDebugKey`; the stub of IOSerialFamily's data import `0xfffffe000b727e14`;
+  reviewed `csproc_get_platform_path` and `vnop_searchfs_desc`. The audit of the 24B156 collection says which of them
+  a kext of 24B156 still imports.
+- **The audit of the first 24B156 collection** (`BUILD=24B156 KERNEL=out/kernel/current-hosted-ios272/xnu.macho
+  kernel/prelink/build.sh`, collection `27e24d90`) had 10 failures, exactly the 10 records the port had left out, at
+  their 24B156 addresses. Settled (2026-11-25):
+  - the five `vnop_*_desc` objects (`searchfs`, `compound_open`, `renamex`, `compound_rename`, `verify`): `prelink
+    port`'s new rule "named by its content" (a data object whose pointer at +0..+24 points to a C string, carried to
+    the one TO object pointing to the same string at the same offset: the `vdesc_name` at +8) puts them at
+    `0xfffffe000b770900`, `...c30`, `...d30`, `...d70`, `...fb0`: the addresses the audit named. The port now leaves
+    out 4 pairs, 1 stub and 1 reviewed record (`csproc_get_platform_path`, which no collection of either build binds);
+  - `IODMACommand::Dispatch` (`0xfffffe000b328984`), `IOInterruptDispatchSource::metaClass` (`0xfffffe0007ed7e58`)
+    and `vnop_default_desc` (`0xfffffe000b778b20`): 24B156's own matcher pairs each to the name 24A446's known-good list
+    has; added to `pairs-24B156.json` with that in their `why`;
+  - IOSerialFamily's two data imports (`0xfffffe000b77fe14`, 24A446's stub `0xfffffe000b727e14`; and
+    `0xfffffe000b809168`, in 24A446 paired with `gIOKitDebugKey` by import order alone): on the stub, with 24A446's
+    reason (IOSerialFamily's personalities are dropped, it never starts).
+- **The collection** (`09df28336b6f8342`, 96,698,368 bytes): audit **0 failures** (2,710 paired, 93 functions on
+  the stub, 10 data unpaired), `prelink stubs-check` **666 good, 0 bad**. The class layouts read again with this
+  collection's own prelink report are the same bytes (the slide 0x1f000000000 holds). The phone's way, `oneios-tool
+  prelink build` from the fork's `assets/kb-24B156/` alone (`oneios-tool app kb 24B156`), gives the same `kernel.kc`
+  byte for byte. Not booted.
 
 ## What is not done
 

@@ -56,6 +56,9 @@ pub struct Options {
     /// 0: 1000, uncalibrated (ONEIOS_ALS_SCALE)
     pub als_millilux_per_count: u32,
     pub no_als: bool,
+    /// The light comes from elsewhere ([`Bright::als_feed`]: the sensor hub's front sensor, runtime/bridges/sensors), not
+    /// from the evdev sensor: its description for the log. The evdev sensor is then not opened.
+    pub als_external: Option<String>,
     /// Samsung, Treble; Unset: the process's hw-backend
     pub backend: Backend,
     pub trace: Option<TraceFn>,
@@ -256,6 +259,12 @@ impl Panel {
     }
 }
 
+/// The external light source ([`Bright::als_feed`]).
+struct ExtAls {
+    listener: Mutex<Option<AlsFn>>,
+    sent: Mutex<Option<(u32, Instant)>>,
+}
+
 /// The light sensor, shared with its worker.
 struct Als {
     file: File,
@@ -327,6 +336,8 @@ pub struct Bright {
     panel_thread: Mutex<Option<JoinHandle<()>>>,
     als: Option<Arc<Als>>,
     als_thread: Mutex<Option<JoinHandle<()>>>,
+    /// The external light source's listener and what was sent last (millilux, when)
+    ext: Option<ExtAls>,
     /// [`Bright::shutdown`] ran (it runs once)
     shut: AtomicBool,
 }
@@ -408,6 +419,7 @@ impl Bright {
             panel_thread: Mutex::new(None),
             als: None,
             als_thread: Mutex::new(None),
+            ext: None,
             shut: AtomicBool::new(false),
         };
         let b = &mut bright;
@@ -513,7 +525,12 @@ impl Bright {
 
         const TREBLE_ALS: &str =
             "brightness: light sensor: treble: missing: the sensors HAL's light sensor (not read by this bridge yet);";
-        if !o.no_als && !treble {
+        if let (false, Some(what)) = (o.no_als, &o.als_external) {
+            b.info.als = true;
+            b.info.als_node = what.clone();
+            b.ext = Some(ExtAls { listener: Mutex::new(None), sent: Mutex::new(None) });
+            br_info!("brightness: light sensor on: {what} (the evdev sensor is not opened)");
+        } else if !o.no_als && !treble {
             b.als_open(o, als_scale);
         } else if !o.no_als && hw::fallback_allowed() {
             br_info!("{TREBLE_ALS} the samsung lookup instead (hw-backend-fallback=1)");
@@ -666,8 +683,32 @@ impl Bright {
 
     /// The listener runs on the sensor's thread. One listener; None removes it.
     pub fn listen(&self, listener: Option<AlsFn>) {
+        if let Some(ext) = &self.ext {
+            *lock(&ext.listener) = listener.clone();
+        }
         if let Some(als) = &self.als {
             *lock(&als.listener) = listener;
+        }
+    }
+
+    /// A reading of the external light source (Options::als_external), on the caller's thread: to the listener when it
+    /// is the first, changed by a tenth (or 1 lux), or 2 s after the last one sent. No time gate as the evdev sensor's:
+    /// the hub reports on change, and a reading held back would stay the guest's last one.
+    pub fn als_feed(&self, millilux: u32) {
+        let Some(ext) = &self.ext else { return };
+        let Some(f) = lock(&ext.listener).clone() else { return };
+        let mut sent = lock(&ext.sent);
+        let now = Instant::now();
+        let send = match *sent {
+            None => true,
+            Some((last, at)) => {
+                now.duration_since(at) >= Duration::from_secs(2) || last.abs_diff(millilux) >= (last / 10).max(1000)
+            }
+        };
+        if send {
+            *sent = Some((millilux, now));
+            drop(sent);
+            f(&AlsSample { millilux, clear: 0, ir: 0, uv: 0 });
         }
     }
 

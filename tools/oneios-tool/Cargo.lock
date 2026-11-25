@@ -1237,6 +1237,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "oneios-conf"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "libc",
+ "oneios-common",
+ "oneios-switches",
+]
+
+[[package]]
 name = "oneios-image"
 version = "0.1.0"
 dependencies = [
@@ -1275,9 +1285,12 @@ dependencies = [
  "libc",
  "oneios-common",
  "oneios-image",
+ "oneios-ios",
  "oneios-prelink",
+ "oneios-testkit",
  "oneios-tweaks",
  "rayon",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -1452,6 +1465,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "oneios-switches"
+version = "0.1.0"
+
+[[package]]
 name = "oneios-sym"
 version = "0.1.0"
 dependencies = [
@@ -1487,6 +1504,7 @@ dependencies = [
  "clap",
  "libc",
  "oneios-common",
+ "oneios-conf",
  "oneios-image",
  "oneios-imagebuild",
  "oneios-ios",

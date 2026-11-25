@@ -7,6 +7,7 @@ extern "C" void oneios_adreno_parent_slide(void);
 extern "C" void oneios_gpu_client_list(char *, size_t);
 extern "C" const char *oneios_gpu_metal_plugin(void);
 extern "C" const char *oneios_gpu_metal_class(void);
+extern "C" const char *oneios_gpu_gles_bundle(void);
 extern "C" void oneios_gpu_accelerator_properties(IOService *);
 // (before anchor 1)
     if (!oneios_adreno_wanted()) return;
@@ -27,4 +28,6 @@ extern "C" void oneios_gpu_accelerator_properties(IOService *);
 // (before anchor 7)
     accelerator->setProperty("MetalPluginClassName", oneios_gpu_metal_class());
     oneios_gpu_accelerator_properties(accelerator);
+// (before anchor 8)
+    accelerator->setProperty("IOGLESBundleName", oneios_gpu_gles_bundle());
 // (the end)

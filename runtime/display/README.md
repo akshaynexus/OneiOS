@@ -85,15 +85,26 @@ NDK's `ANativeWindow` on that `Surface`, from the mapped memfd straight into the
   1440x3120: 1436x3120 at x = 2). Both layers are at the top of the built-in display's stack.
 - **The panel.** The modes come from surfaceflinger (`DisplayControl`, the way scrcpy reads them): the active
   one, and the native one, which is the largest the panel has at its highest refresh rate. With `--takeover` (a
-  session: system_server is gone) the helper requests the native mode and opens its refresh ranges on every takeover,
-  including when One UI left the phone at native resolution but capped app refresh at 60 Hz. The display's desired
-  mode specs are read, their default mode replaced and their refresh ranges opened to that mode's rate, and written back
-  (`SurfaceControl.setDesiredDisplayModeSpecs`); the helper waits up to a second for the mode to become active.
-  Then the display's projection is set to the active mode, unrotated, so the layer space is the panel's own
-  pixels whatever rotation One UI left. The helper checks the active mode id as well as its size, so it waits for the
-  requested mode when either differs. If the mode is refused the panel stays as it was and the frame is
-  scaled only when its size differs. The return restarts surfaceflinger, which forgets both. Without `--takeover` nothing
-  of the display is changed and the logical size comes from the display manager. The layer votes for the mode's highest refresh
+  session: system_server is gone) the panel is asked for the native mode in **every** takeover: the display's
+  desired mode specs are read, their default mode replaced and their refresh ranges opened to that mode's rate,
+  and written back (`SurfaceControl.setDesiredDisplayModeSpecs`). Asked even when the panel is already in that
+  mode, because One UI can leave it at its native resolution with the refresh ranges capped at 60 Hz (Motion
+  smoothness: Standard), which neither the size nor the mode id shows (ported 2026-11-25 from
+  orumanayurpanjayat-ux/OneiOS `84cb2ef`, CREDITS.md). The native mode is told by its id, not only its size
+  (1440x3120 at 60 Hz is another mode than 1440x3120 at 120 Hz): when the active id or size differs (FHD+
+  1080x2340 is One UI's default resolution setting) the helper waits up to a second (20 x 50 ms) for the mode to
+  become active; when it is already active it does not wait. Then the display's projection is set to the active
+  mode, unrotated, so the layer space is the panel's own pixels whatever rotation One UI left. If the mode is
+  refused the panel stays as it was, and the frame is scaled only when its size differs. The return restarts
+  surfaceflinger, which forgets both. The lines (`control/display.log`; `oneios-tool phone log --file display
+  --grep 'panel modes|native mode'`): `panel modes: active WxH (mode id A, up to R Hz), native WxH at R Hz (mode
+  id N)`, then one of `the panel is in its native mode WxH (mode id N), refresh ranges open to R Hz` (with `(it
+  was already in that mode: only the ranges were asked for)` when it was), `the native mode (id N) is not active
+  after 1 s: the panel stays at ...` or `the native mode was not asked for: ...`, each saying whether the frame is
+  shown 1:1 or scaled. Not booted with this change yet: the proof on the phone is the first line's `mode id` and
+  the second line, with the panel at 120 Hz under Motion smoothness Standard (`dumpsys SurfaceFlinger` beside the
+  session, or the guest's frame rate). Without `--takeover` nothing of the display is
+  changed and the logical size comes from the display manager. The layer votes for the mode's highest refresh
   rate (`setFrameRate`, 120 Hz on this panel), which is the rate the guest's vsync tick runs at.
   Whether One UI's resolution setting is a panel mode or only a logical size on this phone is not known; the
   helper's `panel modes: active ..., native ...` line of the first run says.
@@ -164,8 +175,14 @@ NDK's `ANativeWindow` on that `Surface`, from the mapped memfd straight into the
   It logs what it found and what it set: `panel colour mode N (of ...); HDR types [...], luminance max ... nits, max
   average ..., min ...` (read only), `buffers tagged srgb (dataspace 0x8810000)`, and in `first frame posted` the
   buffer's format and dataspace and the guest frame's pixels.
-- **Leaving.** On SIGTERM, SIGINT or SIGHUP, and when the socket closes (xnuhost ended, or a newer helper
-  connected), it removes its layers and exits 0. Killed with SIGKILL, surfaceflinger drops a dead client's layers.
+- **Leaving.** On SIGTERM, SIGINT or SIGHUP it removes its layers and exits 0. When xnuhost closes the socket without
+  that (since 2026-11-25), it removes its layers and **connects again**, up to 8 times (`connecting again (N of 8; a guest
+  restart in place)`): a guest restart in place (iOS restarting itself, or its kernel starting the Data store over for a
+  new seed, the first boot of every new image) re-execs xnuhost, which makes the socket again and waits 10 s for a
+  helper. Before, the helper left there, xnuhost logged `display: no helper connected within 10 s`, and iOS ran on with
+  nothing on the panel (phone, v0.1.30, the first boot of a 27.2.1 image). When xnuhost ended for good the return kills
+  the helper (`oneios_return.sh`); else its `--wait` ends the next connect. Killed with SIGKILL, surfaceflinger drops a
+  dead client's layers.
 
 ```
 oneios-display (--session DIR | --socket PATH) [--takeover] [--wait SECONDS] [--logical WxH]
@@ -179,6 +196,51 @@ hello, 4 the layer's buffers failed, 5 an exception (the framework's classes cha
 
 It grabs no input device, uses no realtime thread, writes nothing under `/sys/power`, and changes nothing that
 outlives surfaceflinger.
+
+## Write-only buffers: `display-present=ahb` (2026-11-25, not booted)
+
+Ported from YumikoHayamato/OneiOS `cdb297bbf` (the S25 Ultra fork of this repository, CREDITS.md; their C in
+`jni.c`, rewritten here in Rust: `src/xhd/present.rs`, the NDK half in `src/jni.rs`). The window path's buffers are the
+CPU's cached ones (`ANativeWindow_lock` is Surface::lock, which asks for SW_READ_OFTEN and SW_WRITE_OFTEN), and each
+lock and each post cleans and invalidates the CPU caches over the whole buffer, whatever was written. Their simpleperf
+on the S25 (1080x2340, 60 frames a second): `dcache_inval_poc` 36%, `dcache_clean_poc` 31%, `arch_sync_dma_for_cpu` and
+`arch_sync_dma_for_device` 9% each, the copy 10%; with the buffers below 114 frames a second at 17.1% of a core against
+60 at 49.5%. Our frame is 1440x3120, 1.8 times theirs; on our phone it is not measured yet.
+
+How: three AHardwareBuffers of the frame's size that the CPU only writes (`CPU_WRITE_RARELY | CPU_READ_NEVER |
+GPU_SAMPLED_IMAGE | COMPOSER_OVERLAY`, B,G,R,A, else R,G,B,X) on a child of the layer (`ASurfaceControl_createFromWindow`
+on the layer's BLAST surface, so the layer's matrix and position place it), posted with ASurfaceTransaction
+(`setBuffer` with the unlock's fence, `setDamageRegion` with the post's change; the first post shows the child, opaque,
+with the frame's dataspace and the panel's rate as its frame-rate vote). The run loop's `Buffers` fills each buffer with
+what it lacks, told apart by slot (`Locked::key`) instead of by address. At most two transactions are in flight (the
+next lock waits for a completion, up to 1 s), and a buffer is written again only after the release fence the compositor
+gave when it was replaced (up to 200 ms). The helper never reads the layer's buffers (it fills them from the snapshot),
+so buffers the CPU cannot read lose nothing. Half-float frames keep the window path.
+
+The choice: xnuhost's `display-present=ahb` (the default; docs/switches.md) sets bit 1 of the `options` message
+(`OPTION_PRESENT_AHB`), which comes right after the hello; the poster reads it before its first lock. In the helper's
+own environment `ONEIOS_DISPLAY_PRESENT=ahb|window` wins (a test by hand). Their child came from the Java half
+(`ASurfaceControl_fromJava`, Android 14); ours is made by the native half from the layer's window (API 29, their
+fallback) because the choice is known only after the hello, at the first post: so OneiOSDisplay.java is unchanged (its
+`finally` removes the layer, which takes the child with it).
+
+The fallback: whatever is missing (the option, an 8-bit frame, `AHardwareBuffer_isSupported`, the child, one of the
+three allocations; later a lock or a post refused), the helper says why once and posts through the window as before
+(`test_present_fallbacks`, `test_present_gives_up`). The way back to One UI: at the run's end the child is hidden and
+taken off the layer in one transaction and the buffers are let go (`Present`'s drop, after up to 1 s for what is in
+flight); every buffer goes with the process anyway, and the return restarts surfaceflinger.
+
+Lines (stderr, the helper's log): one of `oneios-display: display-present=ahb: 3 write-only buffers (1440x3120
+BGRA_8888, CPU_WRITE_RARELY: no CPU cache to maintain) on a child surface of the layer; at most 2 posts in flight`,
+`oneios-display: display-present=ahb: WHY: the window path`, or `oneios-display: display-present=window: ...`; a later
+`... : WHY: the window path from now on`; at the end `oneios-display: display-present=ahb: N posts, C completed; locks
+that waited for a post in flight W (L past 1000 ms), for a release fence F`. The 10 s line is the same as before: its
+`buffer wait` is then the wait for a completion or a release fence and the lock, its `copy` the fill. Proof on the
+phone: `this process P% of a core` and `copy mean` down against a `display-present=window` boot, frames per 10 s up.
+Host tests: `test_present_choice`, `test_present_fallbacks`, `test_present_ring` (the three slots in turn, the first
+post whole with its dataspace, the damage), `test_present_in_flight_and_release` (the third lock waits for a
+completion, the fourth for its release fence), `test_present_gives_up`, `test_present_run` (xnuhost's option through
+the whole run loop onto a fake compositor). This is step 1 of the zero-copy panel pool (`docs/s24-fps-heat-camera.md`).
 
 ## In a session
 
@@ -268,7 +330,8 @@ extended sRGB: components below 0 and above 1), white at 1.0, white at 2.0. What
   show `SRGB` and `SCRGB_LINEAR` layers, is the wide-colour test above. No HDR headroom is asked for.
 - Not every framework call has been seen working on Android 17 (the native-mode request and the projection, `--takeover`, have no log of a run here): the hidden methods used are all
   in `java/OneiOSDisplay.java`, and each has a fallback or a logged failure.
-- The copy is not zero-copy: one CPU copy a frame remains (`docs/booter.md` 2.8 says why). The helper maps all of
+- The copy is not zero-copy: one CPU copy a frame remains (`docs/booter.md` 2.8 says why; `display-present=ahb` takes
+  away the cache maintenance of the whole buffer around it, not the copy). The helper maps all of
   guest RAM read-only for it; the pages it touches count in its resident size as well as xnuhost's.
 - Direct frames ran on the phone on 2026-11-22 (S24 Ultra, runtime 0.1.15 with the offset fix, `docs/booter.md`
   2.8). Before that fix, xnuhost gave the helper the window's address instead of the address of the RAM memfd's

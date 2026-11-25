@@ -44,8 +44,8 @@ fn host_device() {
     std::fs::create_dir_all(&empty).unwrap();
 
     // The table: the home device first; names unique; every entry matches by a model; its xnuhost settings are only the
-    // keys the config merges as device defaults (gpu, panel-fallback, hz, width, height, scale, return-graceful-ms,
-    // astc, hw-backend*), its environment ones only
+    // keys the config merges as device defaults (gpu, panel-fallback, hz, width, height, scale, return-graceful-ms, astc,
+    // hw-backend*), its environment ones only
     // variables a bridge reads. The S24 Ultra's entry holds nothing: its behaviour is today's.
     let t = host_table();
     assert!(t.len() == 5 && t[0].name == "galaxy-s24-ultra");

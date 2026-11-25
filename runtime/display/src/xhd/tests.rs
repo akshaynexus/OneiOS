@@ -813,9 +813,10 @@ impl run::Layer for FakeLayer {
             stride: self.width as i32,
             format: BUFFER_BGRA_8888,
             bits,
+            key: bits as usize,
         })
     }
-    fn unlock_and_post(&self) {
+    fn unlock_and_post(&self, _: &Rect) {
         let mut s = self.state.lock().unwrap();
         let i = s.locked.take().unwrap();
         let copy = s.buffers[i].to_vec();
@@ -1020,4 +1021,357 @@ fn test_run_serial() {
         poster.join().unwrap()
     });
     assert_eq!(end, run::End::Closed);
+}
+
+// ---- display-present=ahb (xhd::present) ---------------------------------------------------------------------------
+
+impl<L: run::Layer + ?Sized> run::Layer for &L {
+    fn set_geometry(&self, w: u32, h: u32, f: i32) {
+        (**self).set_geometry(w, h, f)
+    }
+    fn set_dataspace(&self, d: i32) -> i32 {
+        (**self).set_dataspace(d)
+    }
+    fn dataspace(&self) -> i32 {
+        (**self).dataspace()
+    }
+    fn lock(&self, w: u32, h: u32) -> std::result::Result<run::Locked, i32> {
+        (**self).lock(w, h)
+    }
+    fn unlock_and_post(&self, changed: &Rect) {
+        (**self).unlock_and_post(changed)
+    }
+    fn choose(&self, options: u32) {
+        (**self).choose(options)
+    }
+}
+
+/// A post the fake compositor took: its slot, damage, first-post dataspace, the buffer's bytes, its completion.
+struct FakePost {
+    slot: usize,
+    damage: Rect,
+    first: Option<i32>,
+    bytes: Vec<u8>,
+}
+
+#[derive(Default)]
+struct FakeAhbState {
+    /// formats isSupported says yes to
+    supported: Vec<i32>,
+    no_child: bool,
+    alloc_fails_at: Option<usize>,
+    /// the lock (counted from 0) that fails, and the post
+    lock_fails_at: Option<usize>,
+    post_fails_at: Option<usize>,
+    /// completions are given back by the test (else at once, with a signalled release fence)
+    hold: bool,
+    buffers: Vec<Vec<u8>>,
+    locks: usize,
+    posts: Vec<FakePost>,
+    held: Vec<present::Done>,
+    opened: bool,
+    closed: bool,
+}
+
+#[derive(Clone, Default)]
+struct FakeAhb(std::sync::Arc<std::sync::Mutex<FakeAhbState>>);
+
+impl FakeAhb {
+    fn working() -> FakeAhb {
+        let f = FakeAhb::default();
+        f.st().supported = vec![BUFFER_BGRA_8888, BUFFER_RGBX_8888];
+        f
+    }
+    fn st(&self) -> std::sync::MutexGuard<'_, FakeAhbState> {
+        self.0.lock().unwrap()
+    }
+    /// A fence that has signalled (a pipe with a byte in it), or one that signals when its writer is written.
+    fn fence(signalled: bool) -> (std::os::fd::OwnedFd, std::os::fd::OwnedFd) {
+        let (r, w) = sys::pipe().unwrap();
+        if signalled {
+            let byte = 1u8;
+            // SAFETY: one byte from a live buffer into the pipe's write end.
+            unsafe { libc::write(std::os::fd::AsRawFd::as_raw_fd(&w), &byte as *const u8 as *const libc::c_void, 1) };
+        }
+        (r, w)
+    }
+}
+
+impl present::Backend for FakeAhb {
+    fn supported(&mut self, _: u32, _: u32, format: i32) -> bool {
+        self.st().supported.contains(&format)
+    }
+    fn open_child(&mut self) -> std::result::Result<(), String> {
+        let mut s = self.st();
+        if s.no_child {
+            return Err("none".into());
+        }
+        s.opened = true;
+        Ok(())
+    }
+    fn allocate(&mut self, slot: usize, w: u32, h: u32, _: i32) -> std::result::Result<u32, i32> {
+        let mut s = self.st();
+        if s.alloc_fails_at == Some(slot) {
+            return Err(-12);
+        }
+        s.buffers.push(vec![0x55; (w * h * 4) as usize]);
+        Ok(w)
+    }
+    fn lock(&mut self, slot: usize) -> std::result::Result<*mut u8, i32> {
+        let mut s = self.st();
+        let n = s.locks;
+        s.locks += 1;
+        if s.lock_fails_at == Some(n) {
+            return Err(-22);
+        }
+        Ok(s.buffers[slot].as_mut_ptr())
+    }
+    fn unlock(&mut self, _: usize) -> std::result::Result<Option<std::os::fd::OwnedFd>, i32> {
+        Ok(None)
+    }
+    fn post(
+        &mut self,
+        slot: usize,
+        _: Option<std::os::fd::OwnedFd>,
+        damage: Rect,
+        first: Option<i32>,
+        done: present::Done,
+    ) -> std::result::Result<(), i32> {
+        let mut s = self.st();
+        if s.post_fails_at == Some(s.posts.len()) {
+            return Err(-32);
+        }
+        let bytes = s.buffers[slot].clone();
+        s.posts.push(FakePost { slot, damage, first, bytes });
+        if s.hold {
+            s.held.push(done);
+        } else {
+            drop(s);
+            done(Some(FakeAhb::fence(true).0));
+        }
+        Ok(())
+    }
+    fn close(&mut self) {
+        self.st().closed = true;
+    }
+}
+
+const PW: u32 = 16;
+const PH: u32 = 8;
+
+/// One frame through the layer as post_loop does it: choose (first), lock, a byte written, post.
+fn present_frame(layer: &dyn run::Layer, options: u32, changed: Rect, byte: u8) -> run::Locked {
+    layer.choose(options);
+    let b = layer.lock(PW, PH).unwrap();
+    // SAFETY: the locked buffer is stride x height pixels of 4 bytes.
+    unsafe { *b.bits = byte };
+    layer.unlock_and_post(&changed);
+    b
+}
+
+#[test]
+fn test_present_choice() {
+    use present::wanted;
+    assert!(wanted(OPTION_PRESENT_AHB, None));
+    assert!(wanted(OPTION_PRESENT_AHB | OPTION_SERIAL_POST, None));
+    assert!(!wanted(0, None) && !wanted(OPTION_SERIAL_POST, None));
+    // the helper's own environment wins either way; another word is no word
+    assert!(wanted(0, Some("ahb")) && !wanted(OPTION_PRESENT_AHB, Some("window")));
+    assert!(wanted(OPTION_PRESENT_AHB, Some("other")) && !wanted(0, Some("")));
+}
+
+/// Every reason not to take the write-only path ends on the window, which then gets every frame; whatever was opened
+/// is closed.
+#[test]
+fn test_present_fallbacks() {
+    type Setup = fn(&mut FakeAhbState);
+    let cases: [(&str, u32, u32, Setup, bool); 6] = [
+        ("not asked", 0, FORMAT_BGRX, |_| {}, false),
+        ("half floats", OPTION_PRESENT_AHB, FORMAT_RGBA16F, |_| {}, false),
+        ("no such buffers", OPTION_PRESENT_AHB, FORMAT_BGRX, |s| s.supported.clear(), false),
+        ("no child", OPTION_PRESENT_AHB, FORMAT_BGRX, |s| s.no_child = true, false),
+        ("the second buffer refused", OPTION_PRESENT_AHB, FORMAT_BGRX, |s| s.alloc_fails_at = Some(1), true),
+        ("the environment says window", OPTION_PRESENT_AHB, FORMAT_BGRX, |_| {}, false),
+    ];
+    for (what, options, frame_format, setup, opened) in cases {
+        let window = FakeLayer::new(3, 0, usize::MAX, PW, PH);
+        let ahb = FakeAhb::working();
+        setup(&mut ahb.st());
+        let env = (what == "the environment says window").then(|| "window".to_string());
+        let p = present::Present::new(&window, ahb.clone(), frame_format, env);
+        let format = if frame_format == FORMAT_BGRX { BUFFER_BGRA_8888 } else { BUFFER_RGBA_FP16 };
+        run::Layer::set_geometry(&p, PW, PH, format);
+        for k in 0..4 {
+            present_frame(&p, options, Rect::new(0, 0, PW, 1), k);
+        }
+        assert!(!p.is_ahb(), "{what}: the window path");
+        assert_eq!(window.posted().len(), 4, "{what}: every frame through the window");
+        assert!(ahb.st().posts.is_empty(), "{what}: nothing on the child");
+        assert_eq!(ahb.st().opened, opened, "{what}");
+        drop(p);
+        // a child that was made is hidden and let go (the refusal closes; a refusal before it closes nothing open)
+        assert!(!ahb.st().opened || ahb.st().closed, "{what}: closed");
+    }
+    // R,G,B,X when B,G,R,A buffers are not to be had
+    let window = FakeLayer::new(3, 0, usize::MAX, PW, PH);
+    let ahb = FakeAhb::working();
+    ahb.st().supported = vec![BUFFER_RGBX_8888];
+    let p = present::Present::new(&window, ahb.clone(), FORMAT_BGRX, None);
+    run::Layer::set_geometry(&p, PW, PH, BUFFER_BGRA_8888);
+    let b = present_frame(&p, OPTION_PRESENT_AHB, Rect::new(0, 0, PW, 1), 1);
+    assert!(p.is_ahb() && b.format == BUFFER_RGBX_8888 && window.posted().is_empty());
+}
+
+/// The ring: three buffers in turn, told apart by their slot; the first post is whole and says the dataspace, the
+/// others carry their change as damage; the window is never locked; the end hides the child.
+#[test]
+fn test_present_ring() {
+    let window = FakeLayer::new(3, 0, usize::MAX, PW, PH);
+    let ahb = FakeAhb::working();
+    let p = present::Present::new(&window, ahb.clone(), FORMAT_BGRX, None);
+    run::Layer::set_geometry(&p, PW, PH, BUFFER_BGRA_8888);
+    assert_eq!(run::Layer::set_dataspace(&p, DATASPACE_SRGB), 0);
+    let mut keys = Vec::new();
+    for k in 0..5u8 {
+        let b = present_frame(&p, OPTION_PRESENT_AHB, Rect::new(0, k as u32, PW, 1), k);
+        assert_eq!((b.width, b.height, b.stride, b.format), (PW as i32, PH as i32, PW as i32, BUFFER_BGRA_8888));
+        keys.push(b.key);
+    }
+    assert!(p.is_ahb());
+    assert_eq!(keys, [1, 2, 3, 1, 2]);
+    assert_eq!(run::Layer::dataspace(&p), DATASPACE_SRGB);
+    {
+        let s = ahb.st();
+        assert_eq!(s.posts.iter().map(|q| q.slot).collect::<Vec<_>>(), [0, 1, 2, 0, 1]);
+        assert_eq!(s.posts[0].first, Some(DATASPACE_SRGB));
+        assert_eq!(s.posts[0].damage, Rect::whole(PW, PH));
+        assert!(s.posts[1..].iter().all(|q| q.first.is_none()));
+        assert_eq!(s.posts[3].damage, Rect::new(0, 3, PW, 1));
+        assert_eq!(s.posts[4].bytes[0], 4, "what was written is what was posted");
+    }
+    assert!(window.posted().is_empty());
+    drop(p);
+    assert!(ahb.st().closed);
+}
+
+/// At most two posts in flight: the third lock waits for a completion; a buffer is written again only after the
+/// release fence of its replacement's post signalled.
+#[test]
+fn test_present_in_flight_and_release() {
+    let window = FakeLayer::new(3, 0, usize::MAX, PW, PH);
+    let ahb = FakeAhb::working();
+    ahb.st().hold = true;
+    let p = present::Present::new(&window, ahb.clone(), FORMAT_BGRX, None);
+    run::Layer::set_geometry(&p, PW, PH, BUFFER_BGRA_8888);
+    present_frame(&p, OPTION_PRESENT_AHB, Rect::whole(PW, PH), 0); // slot 0, in flight
+    present_frame(&p, OPTION_PRESENT_AHB, Rect::whole(PW, PH), 1); // slot 1, in flight
+    let (fence_r, fence_w) = FakeAhb::fence(false);
+    let a = ahb.clone();
+    let t0 = sys::now_us();
+    let (lock_us, release_us) = std::thread::scope(|s| {
+        s.spawn(move || {
+            sys::nap_ms(150);
+            // the first post completes (it replaced nothing), then the second, which gives slot 0's release fence
+            let mut held = std::mem::take(&mut a.st().held);
+            let second = held.pop().unwrap();
+            let first = held.pop().unwrap();
+            first(None);
+            second(Some(fence_r));
+        });
+        let b = run::Layer::lock(&p, PW, PH).unwrap(); // the third: slot 2, after a completion
+        let lock_us = sys::now_us() - t0;
+        assert_eq!(b.key, 3);
+        run::Layer::unlock_and_post(&p, &Rect::whole(PW, PH));
+        // the fourth is slot 0 again: its release fence has not signalled, so the lock waits for it (or 200 ms)
+        let writer = std::thread::spawn(move || {
+            sys::nap_ms(100);
+            let byte = 1u8;
+            // SAFETY: one byte from a live buffer into the pipe's write end.
+            unsafe {
+                libc::write(std::os::fd::AsRawFd::as_raw_fd(&fence_w), &byte as *const u8 as *const libc::c_void, 1)
+            };
+            fence_w
+        });
+        // a completion for the third, so the fourth does not wait for one in flight
+        sys::nap_ms(20);
+        let third = ahb.st().held.pop().unwrap();
+        third(None);
+        let t1 = sys::now_us();
+        let b = run::Layer::lock(&p, PW, PH).unwrap();
+        let release_us = sys::now_us() - t1;
+        assert_eq!(b.key, 1);
+        run::Layer::unlock_and_post(&p, &Rect::whole(PW, PH));
+        drop(writer.join().unwrap());
+        (lock_us, release_us)
+    });
+    assert!(lock_us >= 120_000, "the third lock waited for a completion: {lock_us} us");
+    assert!((50_000..190_000).contains(&release_us), "the fourth waited for slot 0's release fence: {release_us} us");
+    // the rest complete: the end does not wait for them
+    for done in std::mem::take(&mut ahb.st().held) {
+        done(None);
+    }
+    drop(p);
+    assert!(ahb.st().closed && window.posted().is_empty());
+}
+
+/// A lock or a post refused later on: the window from then on, with the dataspace the child had.
+#[test]
+fn test_present_gives_up() {
+    for lock in [true, false] {
+        let window = FakeLayer::new(3, 0, usize::MAX, PW, PH);
+        let ahb = FakeAhb::working();
+        if lock {
+            ahb.st().lock_fails_at = Some(2);
+        } else {
+            ahb.st().post_fails_at = Some(2);
+        }
+        let p = present::Present::new(&window, ahb.clone(), FORMAT_BGRX, None);
+        run::Layer::set_geometry(&p, PW, PH, BUFFER_BGRA_8888);
+        run::Layer::set_dataspace(&p, DATASPACE_SRGB);
+        for k in 0..5 {
+            present_frame(&p, OPTION_PRESENT_AHB, Rect::whole(PW, PH), k);
+        }
+        assert!(!p.is_ahb());
+        assert!(ahb.st().closed);
+        assert_eq!(ahb.st().posts.len(), 2);
+        // the refused lock's frame went through the window; a refused post's frame is lost, the next ones go there
+        assert_eq!(window.posted().len(), if lock { 3 } else { 2 }, "lock fails: {lock}");
+    }
+}
+
+/// The whole helper: xnuhost's options say ahb, and every frame reaches the child's buffers (the last one shown is
+/// the last frame), none the window's.
+#[test]
+fn test_present_run() {
+    let (mut g, helper, frame) = run_guest();
+    Message::new(Kind::Options, OPTION_PRESENT_AHB, 0, 0, 0).send(g.x.as_fd(), &[], 0).unwrap();
+    let window = FakeLayer::new(3, 0, usize::MAX, RW, RH);
+    let ahb = FakeAhb::working();
+    let p = present::Present::new(&window, ahb.clone(), FORMAT_BGRX, None);
+    let end = std::thread::scope(|s| {
+        let poster = s.spawn(|| {
+            let mut d = Direct::new();
+            run::run(helper.as_fd(), &frame, &mut d, &p, BUFFER_BGRA_8888, DATASPACE_SRGB, None, None, &|| false)
+        });
+        for k in 1..=6 {
+            let sent = g.send(k);
+            g.done(k, sent);
+        }
+        let last = run_pattern(6, g.bytes);
+        let mut shown = false;
+        for _ in 0..100 {
+            if ahb.st().posts.last().is_some_and(|q| q.bytes == last) {
+                shown = true;
+                break;
+            }
+            sys::nap_ms(10);
+        }
+        assert!(shown, "the last frame is on the child");
+        drop(g);
+        poster.join().unwrap()
+    });
+    assert_eq!(end, run::End::Closed);
+    assert!(p.is_ahb() && window.posted().is_empty());
+    drop(p);
+    assert!(ahb.st().closed);
 }

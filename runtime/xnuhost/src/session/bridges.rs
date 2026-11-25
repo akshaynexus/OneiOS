@@ -16,6 +16,7 @@ use onebridges::devices::{self, bridge_dev, virtio_net, virtio_snd, BridgeConfig
 use onebridges::haptics::{self, Haptic};
 use onebridges::hw::{Backend, Bridge};
 use onebridges::net::{Net, NetConfig};
+use onebridges::sensors::{Hub, Kind as SensorKind, LightFn, Motion, MotionFn};
 use onebridges::thermal::{self, Thermal};
 use onecamera::link::Camera;
 use onecamera::proto::{OC_ROLE_FRONT, OC_ROLE_TELE5, OC_ROLE_WIDE};
@@ -303,6 +304,8 @@ pub struct Bridges {
     pub brightness: Option<Arc<Bright>>,
     pub battery: Option<Arc<Battery>>,
     pub thermal: Option<Arc<Thermal>>,
+    /// the sensor hub's streams (closed first at the stop)
+    pub sensors: Option<Arc<Hub>>,
     /// a tap and oneios-net.sh's NAT are up (undone at the stop)
     pub net_up: bool,
     /// wlan0 is the guest's en0 (runtime/bridges/wifi)
@@ -486,6 +489,7 @@ impl Bridges {
         slots: &mut Slots,
         pool: MediaPool,
         pen_ic: bool,
+        sensors: Option<(Arc<Hub>, Option<crate::virtio_input::InputDev>)>,
     ) -> Bridges {
         let mut b = Bridges { runtime: config.runtime.clone(), ..Bridges::default() };
         let planned = config.bridges && plan_cpus(config, machine);
@@ -494,7 +498,7 @@ impl Bridges {
         }
         let encoder_sim = config.encoder == Encoder::Sim;
         if config.bridges {
-            b.start_session_bridges(config, machine, slots, pool, pen_ic, encoder_sim);
+            b.start_session_bridges(config, machine, slots, pool, pen_ic, encoder_sim, sensors);
         }
         // The video encoder with no phone: encoder=sim, or encoder=auto with the bridges off (a PC boot: no MediaCodec
         // there, and the Android helper cannot run). The stand-in encoder runs inside xnuhost behind the same device
@@ -546,6 +550,8 @@ impl Bridges {
         b
     }
 
+    // (one call, from start_bridges above: the parts it starts are its arguments)
+    #[allow(clippy::too_many_arguments)]
     fn start_session_bridges(
         &mut self,
         config: &mut Config,
@@ -554,6 +560,7 @@ impl Bridges {
         pool: MediaPool,
         pen_ic: bool,
         encoder_sim: bool,
+        sensors: Option<(Arc<Hub>, Option<crate::virtio_input::InputDev>)>,
     ) {
         // Bluetooth: the phone's controller through its HAL (hidl), or none (virtual). auto: hidl when the HAL is
         // registered; the HAL itself is opened only when bluetoothd connects.
@@ -588,7 +595,35 @@ impl Bridges {
         if pen_ic {
             bright.pen_ic = true; // the host's pen given to the guest (ONEIOS_PEN_IC=1)
         }
+        // The light: the sensor hub's front sensor when it has one (sensors=auto|ssc); with sensors=ssc and none, no light
+        // at all (the rear one gives 0 lux on the S24); else the rear evdev sensor as before.
+        let hub_light = sensors.as_ref().is_some_and(|(h, _)| h.has(SensorKind::Light));
+        if hub_light {
+            let n = sensors.as_ref().map_or(0, |(h, _)| h.found().lights);
+            bright.als_external =
+                Some(format!("the sensor hub's ambient_light (SSC, on change; {n} light sensor(s) there)"));
+        } else if config.sensors == cfg::Sensors::Ssc {
+            bright.no_als = true;
+            logi!("brightness: no light sensor: sensors=ssc and the sensor hub has no ambient_light (the rear sensor is not used)");
+        }
         self.brightness = Bright::open(&bright).map(Arc::new);
+        // The hub's streams: motion frames to the guest's motion device, light readings to the brightness bridge.
+        if let Some((hub, motion_dev)) = sensors {
+            let motion: Option<MotionFn> =
+                motion_dev.map(|dev| Arc::new(move |m: &Motion| crate::motion::send(&dev, m)) as MotionFn);
+            let light: Option<LightFn> = self
+                .brightness
+                .clone()
+                .filter(|_| hub_light)
+                .map(|b| Arc::new(move |mlx: u32| b.als_feed(mlx)) as LightFn);
+            if hub.start(motion, light) {
+                logi!(
+                    "sensors: streaming: {} (paused while iOS's display is off)",
+                    hub.found().sensors.iter().map(|(k, ..)| k.name()).collect::<Vec<_>>().join(", ")
+                );
+                self.sensors = Some(hub);
+            }
+        }
         if let Some(br) = &self.brightness {
             let _ = BRIGHT.set(br.clone());
             crate::input::set_power_key(Some(power_key_pressed)); // the touch IC is woken at each press
@@ -844,6 +879,9 @@ impl Bridges {
     pub fn close(&mut self) {
         // The bridge device holds Arcs of the bridges for the process's life and the exit runs no destructor: what
         // main.c's br_*_close did is done here, explicitly.
+        if let Some(s) = self.sensors.take() {
+            s.close(); // every stream stopped on the hub, its sockets closed
+        }
         if let Some(h) = self.haptic.take() {
             h.shutdown(); // the counters' line, then the motor stopped
         }

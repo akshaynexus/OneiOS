@@ -20,6 +20,25 @@ public final class TestModes {
         check(OneiOSDisplay.pick(ids, w, h, hz, 9) == null, "no active mode");
         p = OneiOSDisplay.pick(new int[]{4}, new int[]{1080}, new int[]{2340}, new int[]{60}, 4);
         check(p != null && p[3] == 1080 && p[4] == 2340 && p[5] == 60 && p[6] == 4, "one mode is its own native");
+        check(p != null && p[7] == 4 && OneiOSDisplay.isNative(p), "one mode: active id, native");
+        // the active mode's id: FHD+ is not native; 1440x3120 at 60 Hz (id 1) is the native size but not the native mode
+        p = OneiOSDisplay.pick(ids, w, h, hz, 5);
+        check(p != null && p[7] == 5 && !OneiOSDisplay.isNative(p), "FHD+ active: id 5, not native");
+        p = OneiOSDisplay.pick(ids, w, h, hz, 1);
+        check(p != null && p[7] == 1 && p[0] == 1440 && p[1] == 3120 && !OneiOSDisplay.isNative(p), "native size at 60 Hz: another mode");
+        p = OneiOSDisplay.pick(ids, w, h, hz, 2);
+        check(p != null && p[7] == 2 && OneiOSDisplay.isNative(p), "the native mode active");
+        // the takeover's line (the request is made in every takeover; Motion smoothness Standard leaves id 2 with 60 Hz ranges)
+        check(OneiOSDisplay.takeoverLine(p, true, true).equals("the panel is in its native mode 1440x3120 (mode id 2), refresh ranges open to 120 Hz"
+              + " (it was already in that mode: only the ranges were asked for)"), "already native: only the ranges");
+        check(OneiOSDisplay.takeoverLine(p, true, false).equals("the panel is in its native mode 1440x3120 (mode id 2), refresh ranges open to 120 Hz"),
+              "switched to native");
+        p = OneiOSDisplay.pick(ids, w, h, hz, 1);
+        check(OneiOSDisplay.takeoverLine(p, true, false).equals("the native mode (id 2) is not active after 1 s: the panel stays at 1440x3120 (mode id 1);"
+              + " the frame is shown 1:1"), "same size, another mode: not scaled");
+        p = OneiOSDisplay.pick(ids, w, h, hz, 5);
+        check(OneiOSDisplay.takeoverLine(p, false, false).equals("the native mode was not asked for: the panel stays at 1080x2340 (mode id 5);"
+              + " the guest's frame is scaled to it"), "refused at FHD+: scaled");
         // the layer's buffers for the hello's formats, and --dataspace's names (src/xhd/mod.rs has the same values)
         check(OneiOSDisplay.bufferFormat(1, 5) == 5 && OneiOSDisplay.bufferFormat(1, 2) == 2, "8-bit frames: B,G,R,A, or R,G,B,X when asked");
         check(OneiOSDisplay.bufferFormat(2, 2) == 22 && OneiOSDisplay.bufferFormat(2, 5) == 22, "half-float frames: RGBA_FP16 whatever --format says");

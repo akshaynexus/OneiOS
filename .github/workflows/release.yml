@@ -144,13 +144,21 @@ jobs:
           for t in $(git ls-files '*/tests/host.sh' | grep -v '^kernel/'); do echo "== $t"; "$t"; done
       - name: Kernel from the kernel release, when one is pinned
         # kernel/release-kernel.txt (optional): "KERNEL_TAG SHA256" of an xnu-<build id>.tar.zst that
-        # kernel/publish.sh uploaded from a build machine to akshaynexus/OneiOS. The package step checks its build record again.
+        # kernel/publish.sh uploaded from a build machine. The package step checks its build record again.
+        # From this repository's release of that tag; a fork that has no such release (a fork's CI keeps our
+        # kernel/release-kernel.txt) takes it from akshaynexus/OneiOS, where kernel/publish.sh uploads it (ported from
+        # orumanayurpanjayat-ux/OneiOS 79cf4fb and d5018d0, which always took it from there). The SHA-256 is checked either way.
         run: |
           set -euo pipefail
           [ -s kernel/release-kernel.txt ] || { echo "no kernel pinned: runtime only"; exit 0; }
           read -r ktag ksha < kernel/release-kernel.txt
           mkdir -p out/kernel/current out/kernel/dl
-          gh release download "$ktag" --repo akshaynexus/OneiOS --pattern 'xnu-*.tar.zst' --dir out/kernel/dl
+          krepo=$GITHUB_REPOSITORY
+          if [ "$krepo" != akshaynexus/OneiOS ] && ! gh release view "$ktag" --repo "$krepo" >/dev/null 2>&1; then
+            echo "no release $ktag in $krepo: the kernel from akshaynexus/OneiOS"
+            krepo=akshaynexus/OneiOS
+          fi
+          gh release download "$ktag" --repo "$krepo" --pattern 'xnu-*.tar.zst' --dir out/kernel/dl
           echo "$ksha  $(ls out/kernel/dl/xnu-*.tar.zst)" | sha256sum -c -
           zstd -dc out/kernel/dl/xnu-*.tar.zst | tar -x -C out/kernel/current
       - name: Package (refuses Apple files and what Android cannot load)
@@ -177,7 +185,7 @@ jobs:
           set -euo pipefail
           a=out/release/oneios-runtime-$VERSION-arm64.tar.zst
           ( cd out/release && sha256sum -c "$(basename "$a").sha256" )
-          zstd -dc "$a" | tar -t | tee members.txt | grep -Ev '^(runtime\.json|NOTICE|LICENSE|(bin|lib|scripts)/[^/].*|kernel/xnu\.macho(\.build\.json)?|kernel/gpuaddon(\.cdhashes)?)$' && { echo "::error::the package has members outside the runtime's folders (above)"; exit 1; }
+          zstd -dc "$a" | tar -t | tee members.txt | grep -Ev '^(runtime\.json|NOTICE|LICENSE|(bin|lib|scripts)/[^/].*|kernel/([0-9A-Z]+/)?xnu\.macho(\.build\.json)?)$' && { echo "::error::the package has members outside the runtime's folders (above)"; exit 1; }
           [ "$(head -n 1 members.txt)" = runtime.json ] || { echo "::error::runtime.json is not the first member"; exit 1; }
           echo "$(wc -l < members.txt) members, runtime.json first"
       - name: The phone's oneios-tool is the package's bin/oneios-tool, stripped, with its .sha256

@@ -25,7 +25,7 @@
 //! helper writes the decoded pictures straight into the guest's CAPTURE buffers there, and says each one
 //! (DEC_MSG_FRAME), which the receive thread hands to the session's [`DecodeSink`]; the frames go over the socket
 //! (they are small).
-use crate::backend::{Backend, Coding, Polled, Session};
+use crate::backend::{Backend, Coding, Polled, Session, Wakeup};
 use crate::decoder::{CapLayout, DecEvent, DecodeBackend, DecodeSink, Decoder};
 use crate::link::*;
 use crate::pod::Pod;
@@ -71,6 +71,9 @@ struct Slot {
     got_eos: bool,
     /// a decoder session's results go here (the receive thread calls it, the state's lock not held)
     sink: Option<DecodeSink>,
+    /// an encoder session's: the device's worker, woken (the state's lock not held) at each coded unit and EOS and
+    /// when the helper ends, so it waits for them instead of asking every millisecond (2026-11-25)
+    wake: Option<Wakeup>,
 }
 
 /// The media pool as the helper maps it: the RAM's memfd (xnuhost's, open for the process's life), the pool's offset
@@ -234,17 +237,27 @@ impl Shared {
             }
             let mut st = self.lock();
             let mut result = None;
+            let mut woken = None;
             if let Some(s) = st.slot_of(m.session) {
                 match m.type_ {
                     ENC_MSG_OPEN_REPLY => {
                         (s.open_ok, s.open_done, s.coding) = (m.session != 0 && m.a != 0, true, Coding::from_u32(m.b));
                     }
-                    ENC_MSG_CODED if !payload.is_empty() && s.ring.len() < HELPER_CODED_RING => s
-                        .ring
-                        .push_back(Coded { bytes: payload, pts: m.pts, key: m.a & 1 != 0, eos: (m.a >> 1) & 1 != 0 }),
+                    ENC_MSG_CODED if !payload.is_empty() && s.ring.len() < HELPER_CODED_RING => {
+                        s.ring.push_back(Coded {
+                            bytes: payload,
+                            pts: m.pts,
+                            key: m.a & 1 != 0,
+                            eos: (m.a >> 1) & 1 != 0,
+                        });
+                        woken = s.wake.clone(); // the unit is in the ring before the worker looks
+                    }
                     // a decoder's results (2026-11-24): to its sink, below, the lock let go
                     ENC_MSG_EOS if s.sink.is_some() => result = s.sink.clone().map(|k| (k, DecEvent::Eos)),
-                    ENC_MSG_EOS => s.got_eos = true,
+                    ENC_MSG_EOS => {
+                        s.got_eos = true;
+                        woken = s.wake.clone();
+                    }
                     DEC_MSG_FORMAT => {
                         let layout = CapLayout { width: m.a, height: m.b, stride: m.c };
                         result = s.sink.clone().map(|k| (k, DecEvent::Format(layout)));
@@ -263,10 +276,21 @@ impl Shared {
             if let Some((sink, event)) = result {
                 sink(event);
             }
+            if let Some(wake) = woken {
+                wake();
+            }
         }
-        // The last thing this thread does with the state: a start that finds `gone` may join it at once.
-        self.lock().gone = true;
+        // The last thing this thread does with the state: a start that finds `gone` may join it at once. The encoder
+        // sessions' workers look once more (nothing comes from this helper any more: their polls say none).
+        let wakes: Vec<Wakeup> = {
+            let mut st = self.lock();
+            st.gone = true;
+            st.slots.iter().filter(|s| s.used).filter_map(|s| s.wake.clone()).collect()
+        };
         self.cond.notify_all();
+        for wake in wakes {
+            wake();
+        }
     }
 
     /// Spawns the helper and waits for its HELLO, or starts a new one after the last one ended (the state locked by
@@ -589,6 +613,15 @@ impl Session for HelperSession {
 
     fn drain(&mut self) -> Result<(), i32> {
         self.send(EncMsg::new(ENC_MSG_DRAIN, self.id), &[], "did not take a drain").map_err(|_| libc::EIO)
+    }
+
+    /// The receive thread wakes the worker with each coded unit and EOS of this session, and when the helper ends
+    /// (2026-11-25). A session whose helper already ended gets nothing more: no wake-up is needed for it either.
+    fn wakes(&mut self, wake: Wakeup) -> bool {
+        if let Some(s) = self.shared.lock().slot_of(self.id) {
+            s.wake = Some(wake);
+        }
+        true
     }
 
     fn poll(&mut self, buf: &mut [u8]) -> Result<Polled, i32> {

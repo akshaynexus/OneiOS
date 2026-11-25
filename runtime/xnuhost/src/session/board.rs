@@ -18,11 +18,24 @@ use crate::ramfix::{self, Huge};
 use crate::{
     cpu, display, gic, gpu3d, gpu3d_amdgpu, hostcalls, input, input_script, mem, pen, sysreg, task, uart, virtio_blk,
 };
-use crate::{virtio_gpu, virtio_input};
+use crate::{motion, virtio_gpu, virtio_input};
+use onebridges::sensors;
 
 /// The pool behind /arm-io/virtio-gpu drm-host-pool, as Droid-VM's boards size it (--pre-alloc drm-host-mb=8):
 /// drm2kgsl keeps its first 2 MiB unused, the rest holds 16 KiB of response buffer per 3D context.
 const GPU_POOL_BYTES: u64 = 8 << 20;
+/// The kext whose classes have the names of the kernel's motion classes (AppleSPUHIDDevice, AppleSPUHIDDeviceUserClient).
+/// v0.1.29 panicked at kernel start with it in the collection (2026-11-25: "Kext com.apple.driver.AppleSPU class
+/// AppleSPUHIDDevice is a duplicate"): its AppleSPUGestureDriver matched the motion devices and IOKit loaded it. `prelink
+/// roots` leaves it out since (FORCE_OUT, with the kexts that link it); a collection prelinked before still has it.
+const SPU_KEXT: &str = "com.apple.driver.AppleSPU";
+
+/// Whether the sensor hub's accelerometer may become the guest's motion device (and `oneios-motion=7|15` a boot argument):
+/// only when the collection has no com.apple.driver.AppleSPU member. An MH_EXECUTE kernel has no kexts at all.
+fn motion_allowed(kernel: &Kernel) -> bool {
+    !kernel.entries.iter().any(|e| e.name == SPU_KEXT)
+}
+
 /// The video encoder's media pool (runtime/bridges/encoder): the V4L2 OUTPUT (NV12) and CAPTURE (bitstream) buffers
 /// the guest maps. 48 MiB fits 1080p-class widget/screenshot snapshots across the device's session slots; with the 8
 /// MiB GPU pool it stays under the hosted kernel's 64 MiB mappable-pool bound (the RAM layout below).
@@ -460,11 +473,111 @@ impl Session {
         } else if script_pen {
             logi!("pen: pen=off: the input script's pen lines are left out");
         }
+        // The motion sensors and the front light sensor (sensors=auto|ssc; auto by default since 2026-11-25, sensors=off turns it
+        // off): the phone's sensor hub (SSC) over QRTR, no Android framework (onebridges::sensors). The hub is asked here,
+        // before the devices are counted: its accelerometer decides the guest's motion device (/arm-io/input-N, after
+        // the touch screen and the pen) and its light sensor the guest's SPU light sensor (oneios-als-spu=1). The
+        // streams start with the bridges; auto with no hub (no QRTR, no service 400, no answer) is the old path.
+        let mut motion_dev = None;
+        if config.sensors != config::Sensors::Off {
+            if !config.bridges {
+                logi!(
+                    "sensors: off: sensors={} reads the phone's sensor hub, and the bridges are off (no phone)",
+                    config.sensors.as_str()
+                );
+            } else {
+                let o = sensors::Options {
+                    hz: config.sensors_hz,
+                    light_index: config.sensors_light.map(|v| v as usize),
+                    ..sensors::Options::default()
+                };
+                match sensors::Hub::open(&o) {
+                    Ok(hub) => {
+                        let hub = std::sync::Arc::new(hub);
+                        let mut what: Vec<String> = Vec::new();
+                        for (kind, suid, desc) in &hub.found().sensors {
+                            what.push(format!("{} {suid} {desc}", kind.name()));
+                        }
+                        let mut guest = Vec::new();
+                        // The motion device only with a collection that has no com.apple.driver.AppleSPU (v0.1.29's
+                        // panic, phone 2026-11-25 05:05: with oneios-motion the kernel registers AppleSPUHIDDevice, and
+                        // AppleSPU, in the collection then, loaded after it with its own class of that name). The light
+                        // sensor below is not affected either way.
+                        let motion_ok = motion_allowed(&kernel);
+                        if hub.has(sensors::Kind::Accel) {
+                            if motion_ok {
+                                logi!(
+                                    "sensors: motion: the kernel's AppleSPUHIDDevice ({SPU_KEXT} is not in {}): the \
+                                     accelerometer is the guest's motion device",
+                                    config.kernel
+                                );
+                            } else {
+                                logi!(
+                                    "sensors: motion: not given to the guest: {} has {SPU_KEXT}, whose AppleSPUHIDDevice \
+                                     would clash with the kernel's (v0.1.29's panic); prelink it again. The light sensor only",
+                                    config.kernel
+                                );
+                            }
+                        }
+                        if motion_ok && hub.has(sensors::Kind::Accel) && !slots.full() {
+                            let input_n = slots.kinds.iter().filter(|k| **k == DeviceKind::Input).count();
+                            let (base, spi) = slots.next();
+                            let dev = virtio_input::create(base, spi).ok_or(BootFailed)?;
+                            let mag = hub.has(sensors::Kind::Mag);
+                            motion::guest_device(&dev, mag);
+                            slots.add(DeviceKind::Input);
+                            let mask = if mag { 0xf } else { 0x7 };
+                            if !config.boot_args.contains("oneios-motion=")
+                                && add_boot_arg(&mut config.boot_args, &format!("oneios-motion={mask}")).is_err()
+                            {
+                                loge!("sensors: no room in the boot arguments for oneios-motion={mask}");
+                                return Err(BootFailed);
+                            }
+                            guest.push(format!("motion device /arm-io/input-{input_n} at {} Hz", hub.hz()));
+                            motion_dev = Some(dev);
+                        }
+                        if hub.has(sensors::Kind::Light) {
+                            if !config.boot_args.contains("oneios-als-spu=")
+                                && add_boot_arg(&mut config.boot_args, "oneios-als-spu=1").is_err()
+                            {
+                                loge!("sensors: no room in the boot arguments for oneios-als-spu=1");
+                                return Err(BootFailed);
+                            }
+                            guest.push("the light for the brightness bridge, on change".into());
+                        }
+                        let args: Vec<&str> = config
+                            .boot_args
+                            .split_whitespace()
+                            .filter(|w| w.starts_with("oneios-motion=") || w.starts_with("oneios-als-spu="))
+                            .collect();
+                        let s = hub.found().service;
+                        logi!(
+                            "sensors: on: ssc (sensors={}): service 400 version {} at node {} port {:#x}; {}; {}; {}",
+                            config.sensors.as_str(),
+                            s.version(),
+                            s.node,
+                            s.port,
+                            what.join(", "),
+                            if guest.is_empty() { "nothing for the guest".to_string() } else { guest.join(", ") },
+                            if args.is_empty() { "no guest switch".to_string() } else { args.join(" ") }
+                        );
+                        self.sensors = Some(hub);
+                    }
+                    Err(why) if config.sensors == config::Sensors::Ssc => {
+                        loge!("sensors: off: sensors=ssc: {why}: no motion device, and no light sensor (the rear one is not used with ssc)");
+                    }
+                    Err(why) => {
+                        logi!("sensors: off: source old (sensors=auto): {why}: no motion device, the rear light sensor as before");
+                    }
+                }
+            }
+        }
         // The GPU: the 2D scanout always; with it the 3D half on the phone's Adreno (drm2kgsl on KGSL), when the host
         // has it, or on an amdgpu host without KGSL (the Galaxy A56's Xclipse) the amdgpu renderer when the kernel's
         // gpuaddon carries the A56's Metal plug-in and the renderer's self-test passes (gpu3d_amdgpu::choose,
         // docs/a56-gpu.md 2); then the guest is told with oneios-gpu-amd=1 (K5).
         let mut gpu = None;
+        let mut gl_bundle = false; // the gpuaddon carries OneiOSRadeonGL and the amdgpu renderer was picked
         if pool_bytes != 0 {
             // The GPU's level and priorities (gpu3d_kgsl, drm2kgsl patch 0008; docs/gpu.md 2.2b) read these.
             std::env::set_var("ONEIOS_GPU_LEVEL", config.gpu_level.as_str());
@@ -537,6 +650,33 @@ impl Session {
                                     "the command line's oneios-gpu-amd= is kept"
                                 }
                             );
+                            // OpenGL ES for CoreAnimation (docs/a56-gpu.md 4a): when the same gpuaddon carries the
+                            // A56's GL bundle, the kernel names it for every process (oneios-gpu-amd-gl=1) and the
+                            // render server composites on it; without it, CPU composition as before.
+                            let addon = addon_read.as_ref().and_then(|a| a.as_deref());
+                            match gpu3d_amdgpu::gl_in_addon(addon, build.as_deref()) {
+                                // a kernel that does not read the switch (an A56 kernel before 5966e71ce2aa) would
+                                // name no GL driver for SpringBoard, whose CoreImage then needs the fixup: no GL
+                                Ok(_) if !gpu3d_amdgpu::kernel_knows_gl(&image) => logi!(
+                                    "gpu: OpenGL ES: the kernel does not read oneios-gpu-amd-gl (an A56 kernel before 5966e71ce2aa): Metal alone, CPU composition, the CoreImage fixup kept"
+                                ),
+                                Ok(gl) if add_boot_arg(&mut config.boot_args, "oneios-gpu-amd-gl=1").is_ok() => {
+                                    gl_bundle = true;
+                                    logi!(
+                                        "gpu: OpenGL ES: the gpuaddon's {} ({}, {} files); {}",
+                                        gpu3d_amdgpu::GL_PLUGIN,
+                                        gl.target,
+                                        gl.files,
+                                        if config::amd_gl_on(&config.boot_args) {
+                                            "oneios-gpu-amd-gl=1: CoreAnimation composites on it"
+                                        } else {
+                                            "the command line's oneios-gpu-amd-gl= is kept: no GL, CPU composition"
+                                        }
+                                    )
+                                }
+                                Ok(_) => logi!("gpu: OpenGL ES: no room in the boot arguments for oneios-gpu-amd-gl=1"),
+                                Err(why) => logi!("gpu: OpenGL ES: {}: Metal alone, CPU composition", why),
+                            }
                             gpu = Some(g);
                         }
                     }
@@ -604,6 +744,7 @@ impl Session {
             &mut slots,
             super::bridges::MediaPool { pa: media_pool_pa, bytes: media_bytes },
             self.pen_ic,
+            self.sensors.clone().map(|hub| (hub, motion_dev)),
         );
 
         // clusters=EEPPPPPP: the cluster types by hand (a bench run with no host topology to plan from).
@@ -661,8 +802,18 @@ impl Session {
                 &mut config.text_fixups,
             );
         }
-        // iOS 16.5: CoreImage's OpenGL ES fallback answers no context (no GL driver here; docs/gpu.md).
-        if config.ios16_fixup {
+        // iOS 16.5: CoreImage's OpenGL ES fallback answers no context (no GL driver here; docs/gpu.md). Not with the
+        // A56's OpenGL ES (its bundle in this boot's gpuaddon and oneios-gpu-amd-gl=1 in the guest's boot arguments,
+        // docs/a56-gpu.md 4a): the bundle answers CoreImage's EAGLContext (on radeonsi, or on softpipe without it), and
+        // CoreImage draws instead of a blank.
+        if config.ios16_fixup && config::ios16_gl_driver(gl_bundle, &config.boot_args) {
+            if build == Some("20F66") {
+                logi!(
+                    "ios16: CoreImage's GL fallback fixup left out: oneios-gpu-amd-gl=1, {} answers its EAGLContext",
+                    gpu3d_amdgpu::GL_PLUGIN
+                );
+            }
+        } else if config.ios16_fixup {
             let added = config::ios16_fixups(build, &mut config.text_fixups);
             if added != 0 {
                 logi!(
@@ -904,6 +1055,19 @@ mod tests {
         let chosen = tree.child("chosen").unwrap();
         assert_eq!(chosen.get("ours").unwrap().str(), Some("1"));
         assert_eq!(chosen.get("theirs").unwrap().str(), Some("3"));
+    }
+
+    #[test]
+    fn motion_only_without_the_spu_kext() {
+        let entry = |name: &str| xnuloader::macho::FilesetEntry { name: name.into(), vmaddr: 0, fileoff: 0 };
+        let mut kernel = Kernel { fileset: true, ..Kernel::default() };
+        kernel.entries = vec![entry("com.apple.kernel"), entry("com.apple.iokit.IOHIDFamily")];
+        assert!(motion_allowed(&kernel));
+        kernel.entries.push(entry("com.apple.driver.AppleSPU"));
+        assert!(!motion_allowed(&kernel)); // a collection prelinked before 2026-11-25: v0.1.29's panic
+        kernel.entries = vec![entry("com.apple.driver.AppleSPURose")]; // the exact identifier only
+        assert!(motion_allowed(&kernel));
+        assert!(motion_allowed(&Kernel::default())); // MH_EXECUTE: no kexts
     }
 
     #[test]

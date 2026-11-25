@@ -229,6 +229,14 @@ named!(
     Pen { Off = "off", Auto = "auto" }
 );
 named!(
+    /// sensors=: off (no socket opened, as before) | auto (the default since 2026-11-25): the phone's sensor hub (SSC) over QRTR when
+    /// its service 400 answers (runtime/bridges/sensors): the accelerometer, gyroscope and magnetometer as the guest's
+    /// motion device /arm-io/input-N with oneios-motion=7 (15 with a magnetometer), the front light sensor for the
+    /// brightness bridge with oneios-als-spu=1; else the old path (no motion device, the rear light sensor) | ssc: the same,
+    /// but no rear light sensor when the hub has no light.
+    Sensors { Off = "off", Auto = "auto", Ssc = "ssc" }
+);
+named!(
     /// pen-rotate=: the digitizer's frame turned clockwise onto the panel's; auto from the two aspects.
     PenRotate { Auto = "auto", R0 = "0", R90 = "90", R180 = "180", R270 = "270" }
 );
@@ -460,6 +468,9 @@ const GIVEN_KEYS: &[&str] = &[
     "pen",
     "pen-rotate",
     "pen-mirror",
+    "sensors",
+    "sensors-hz",
+    "sensors-light",
     "encoder",
     "camera-vm",
     "camera-model",
@@ -654,6 +665,11 @@ pub struct Config {
     pub pen_rotate: PenRotate,
     /// pen-mirror=1: then mirrored left to right
     pub pen_mirror: bool,
+    pub sensors: Sensors,
+    /// sensors-hz=N (5..200, default 50): the accelerometer's and gyroscope's rate (the magnetometer's at most 25)
+    pub sensors_hz: u32,
+    /// sensors-light=N: the hub's Nth ambient_light sensor; unset (auto): the first that does not say "rear"
+    pub sensors_light: Option<u32>,
     pub encoder: Encoder,
     pub camera_vm: CameraVm,
     /// camera-model=NAME: /product unique-model with the cameras (MobileGestalt's HWModelDescriptionForCamera;
@@ -698,6 +714,10 @@ pub struct Config {
     /// display-post (apart): the display helper reads and answers each frame while it waits for a buffer and posts
     /// the last (fix/frame-path); serial: it reads no frame until the last is posted (before 2026-11-24)
     pub display_post_serial: bool,
+    /// display-present (ahb, 2026-11-25): the helper posts its frames in write-only AHardwareBuffers on a child of the
+    /// layer (oneios-display xhd::present, ported from YumikoHayamato/OneiOS cdb297bbf: no CPU cache maintenance of the
+    /// whole buffer at each lock and post); window: through the layer's window, as before
+    pub display_present_ahb: bool,
     /// decoder (auto), decoder-codecs (h264,hevc,vp9,av1; bits of oneencoder::proto::DECODER_CODECS): the video decoder
     pub decoder: Decoder,
     pub decoder_codecs: u32,
@@ -758,9 +778,8 @@ fn text(value: &str, size: usize) -> Result<String, BadSetting> {
 /// What the OneOS switch may stop in session-mode=takeover (takeover-stops=): One UI's zygote's restart list, which
 /// every return restarts already, less what a bridge uses (docs/plan-ios-first-session.md 4, stage 2b). The first six
 /// are the switch's default; netd and media only when named (a Wi-Fi join and an encode without them are not yet
-/// checked on the phone).
-pub const TAKEOVER_STOPPABLE: [&str; 8] =
-    ["cameraserver", "mediaextractor", "mediametrics", "media.tuner", "perfmond", "wificond", "netd", "media"];
+/// checked on the phone). The list is the switch catalog's (oneios-switches), which oneios-tool's `conf` checks with.
+pub use oneios_switches::TAKEOVER_STOPPABLE;
 
 /// takeover-stops=: default, none, or names of TAKEOVER_STOPPABLE separated by commas, each once.
 fn takeover_stops_ok(value: &str) -> bool {
@@ -922,6 +941,9 @@ impl Config {
             pen: Pen::Off,
             pen_rotate: PenRotate::Auto,
             pen_mirror: false,
+            sensors: Sensors::Auto, // on by default since 2026-11-25 (the owner: every new fix on); off: no socket opened
+            sensors_hz: 50,
+            sensors_light: None,
             encoder: Encoder::Off,
             camera_vm: CameraVm::Hide,
             camera_model: CAMERA_MODEL.to_owned(),
@@ -944,6 +966,7 @@ impl Config {
             encoder_warmup: true,
             astc: true,
             display_post_serial: false,
+            display_present_ahb: true,
             decoder: Decoder::Auto,
             decoder_codecs: oneencoder::switches::ALL_CODECS,
             gpu_blob_entries: GPU_BLOB_ENTRIES,
@@ -1111,6 +1134,11 @@ impl Config {
             "pen" => self.pen = named(Pen::parse(value))?,
             "pen-rotate" => self.pen_rotate = named(PenRotate::parse(value))?,
             "pen-mirror" => self.pen_mirror = flag(value)?,
+            "sensors" => self.sensors = named(Sensors::parse(value))?,
+            "sensors-hz" => self.sensors_hz = number(value, 5, 200)?,
+            "sensors-light" => {
+                self.sensors_light = if value == "auto" { None } else { Some(number(value, 0, 7)?) };
+            }
             "encoder" => self.encoder = named(Encoder::parse(value))?,
             "camera-vm" => self.camera_vm = named(CameraVm::parse(value))?,
             "camera-model" => {
@@ -1151,6 +1179,13 @@ impl Config {
                 self.display_post_serial = named(match value {
                     "apart" => Some(false),
                     "serial" => Some(true),
+                    _ => None,
+                })?
+            }
+            "display-present" => {
+                self.display_present_ahb = named(match value {
+                    "ahb" => Some(true),
+                    "window" => Some(false),
                     _ => None,
                 })?
             }
@@ -1318,6 +1353,10 @@ impl Config {
         take!(self, image, "pen", pen);
         take!(self, image, "pen-rotate", pen_rotate);
         take!(self, image, "pen-mirror", pen_mirror);
+        // sensors=, sensors-hz=, sensors-light= of the image set: how a phone session turns the sensor hub off (sensors=off) or to ssc.
+        take!(self, image, "sensors", sensors);
+        take!(self, image, "sensors-hz", sensors_hz);
+        take!(self, image, "sensors-light", sensors_light);
         // encoder= of the image set: the way a phone session turns the video encoder on (the OneOS app passes no --set
         // encoder=). Until 2026-11-22 it was read and then dropped, so encoder=auto in xnuhost.conf did nothing.
         take!(self, image, "encoder", encoder);
@@ -1395,6 +1434,7 @@ impl Config {
         take!(self, image, "encoder-10bit", encoder_10bit);
         take!(self, image, "encoder-warmup", encoder_warmup);
         take!(self, image, "display-post", display_post_serial);
+        take!(self, image, "display-present", display_present_ahb);
         take!(self, image, "decoder", decoder);
         take!(self, image, "decoder-codecs", decoder_codecs);
         take!(self, image, "astc", astc);
@@ -2096,24 +2136,62 @@ pub fn view_boot_args(args: &mut String, size: usize, view: u64, window: u64) ->
     Ok(multiplier)
 }
 
-/// xh_scale_fixups: -[CADisplayMode preferredScale] of QuartzCore, read in 24A446's cache (docs/userland.md, "The UI
-/// scale"): a mode with no preferred scale of its own is @2x in a virtual device (or what the mode's own field says,
-/// when more), else @2x when taller than 1080 pixels and @1x otherwise. Nothing there answers 3, so for a scale of 3
-/// both answers are changed: the virtual device's floor, and the height test's result. A scale of 2 is what the code
-/// gives unchanged. The kernel applies a fixup only where the original bytes match. Appends to `list` what fits.
+/// The @3x fixups of -[CADisplayMode preferredScale] per iOS build (scale_fixups): the build, and its entries
+/// (subcache, file offset, original bytes, new bytes). One function, the same 32 instructions in each build, only its
+/// place in dyld_shared_cache_arm64e.01 differs (docs/userland.md, "The UI scale", has how each was found).
+/// - 24A446: the function at 0x40b1758 (0x1844b1758), entry 11 of QuartzCore's -[CADisplayMode] method list.
+/// - 24B156 (27.2.1): at 0x3f9d6f4 (0x18439d6f4), entry 11 of the same list (its 31 selectors are 24A446's), found by
+///   the function's own bytes (one match in .01) and checked by its selector name; the original bytes are the same.
+pub const SCALE_FIXUPS_3X: &[(&str, &[&str])] = &[
+    (
+        "24A446",
+        &[
+            "dyld_shared_cache_arm64e.01,40b17a8,49008052,69008052", // mov w9, #2 -> mov w9, #3
+            "dyld_shared_cache_arm64e.01,40b17bc,280080520895889a,680080521f2003d5", // mov w8, #1; cinc x8, x8, hi -> mov w8, #3; nop
+        ],
+    ),
+    (
+        "24B156",
+        &[
+            "dyld_shared_cache_arm64e.01,3f9d744,49008052,69008052", // mov w9, #2 -> mov w9, #3
+            "dyld_shared_cache_arm64e.01,3f9d758,280080520895889a,680080521f2003d5", // mov w8, #1; cinc x8, x8, hi -> mov w8, #3; nop
+        ],
+    ),
+];
+
+/// xh_scale_fixups: -[CADisplayMode preferredScale] of QuartzCore, read in 24A446's cache and 24B156's
+/// (docs/userland.md, "The UI scale"): a mode with no preferred scale of its own is @2x in a virtual device (or what
+/// the mode's own field says, when more), else @2x when taller than 1080 pixels and @1x otherwise. Nothing there
+/// answers 3, so for a scale of 3 both answers are changed: the virtual device's floor, and the height test's result.
+/// A scale of 2 is what the code gives unchanged. The entries are the image set's build's (SCALE_FIXUPS_3X; none for
+/// a build not there). The kernel applies a fixup only where the original bytes match. Appends to `list` what fits.
 pub fn scale_fixups(build: Option<&str>, scale: u32, list: &mut TextFixups) {
-    const FIXUPS_24A446_3X: &[&str] = &[
-        "dyld_shared_cache_arm64e.01,40b17a8,49008052,69008052", // mov w9, #2 -> mov w9, #3
-        "dyld_shared_cache_arm64e.01,40b17bc,280080520895889a,680080521f2003d5", // mov w8, #1; cinc x8, x8, hi -> mov w8, #3; nop
-    ];
-    if scale != 3 || build != Some("24A446") {
+    if scale != 3 {
         return;
     }
-    for f in FIXUPS_24A446_3X {
+    let Some((_, fixups)) = SCALE_FIXUPS_3X.iter().find(|(b, _)| Some(*b) == build) else {
+        return;
+    };
+    for f in fixups.iter() {
         if !list.push_within(f, TEXT_FIXUPS_SIZE) {
             break;
         }
     }
+}
+
+/// Whether the guest's boot arguments give the Galaxy A56's processes OpenGL ES: oneios-gpu-amd-gl=1, the first
+/// oneios-gpu-amd-gl= word, as the kernel's PE_parse_boot_argn reads it (docs/a56-gpu.md 4a: the accelerator then names
+/// OneiOSRadeonGL as IOGLESBundleName for every process).
+pub fn amd_gl_on(boot_args: &str) -> bool {
+    boot_args.split(' ').find(|w| w.starts_with("oneios-gpu-amd-gl=")) == Some("oneios-gpu-amd-gl=1")
+}
+
+/// Whether this boot has the A56's OpenGL ES driver, so that CoreImage's GL fallback needs no fixup (ios16_fixups):
+/// xnuhost found OneiOSRadeonGL.bundle in the gpuaddon of the amdgpu renderer it picked (`bundle`) and the guest's
+/// boot arguments turn it on. A hand-written oneios-gpu-amd-gl=1 without the bundle keeps the fixup: the kernel would
+/// name a bundle that is not there, CoreImage would get no EAGLContext and die as before.
+pub fn ios16_gl_driver(bundle: bool, boot_args: &str) -> bool {
+    bundle && amd_gl_on(boot_args)
 }
 
 /// The text fixups an iOS 16.5 (20F66) userland needs (docs/gpu.md, "iOS 16.5 without a Metal device"). Read in
@@ -2274,11 +2352,49 @@ impl FitTerms {
 }
 
 impl Config {
+    /// The value of a switch of xnuhost.conf (a catalog row with Place::Conf) as the switches line writes it; None for
+    /// a name that is not one (`config::tests::the_catalog` checks every row has one).
+    pub fn switch_value(&self, name: &str) -> Option<String> {
+        let on = |b: bool| if b { "1" } else { "0" }.to_string();
+        Some(match name {
+            "session-mode" => self.session_mode.as_str().to_string(),
+            "takeover-stops" if self.takeover_stops.is_empty() => "default".to_string(),
+            "takeover-stops" => self.takeover_stops.clone(),
+            "stop-loop" => self.stop_loop.as_str().to_string(),
+            "takeover-reclaim" => on(self.takeover_reclaim),
+            "takeover-swappiness" => self.takeover_swappiness.map_or("keep".to_string(), |n| n.to_string()),
+            "task-trim" => on(self.task_trim),
+            "timer-coalesce" => on(self.timer_coalesce),
+            "ram-fit-terms" => (if self.ram_fit_terms_old { "old" } else { "tasks" }).to_string(),
+            "ram-ondemand" => on(self.ram_ondemand),
+            "uclamp-rule" => self.uclamp_rule.as_str().to_string(),
+            "gpu-down" => self.gpu_down.as_str().to_string(),
+            "gpu-blob-entries" => self.gpu_blob_entries.to_string(),
+            "wifi-ring-wait" => on(self.wifi_ring_wait),
+            "wifi-send-wait" => on(self.wifi_send_wait),
+            "wifi-buffers" => on(self.wifi_buffers),
+            "wifi-joined-scan" => self.wifi_joined_scan.as_str().to_string(),
+            "encoder-10bit" => self.encoder_10bit.as_str().to_string(),
+            "encoder-warmup" => on(self.encoder_warmup),
+            "display-post" => (if self.display_post_serial { "serial" } else { "apart" }).to_string(),
+            "display-present" => (if self.display_present_ahb { "ahb" } else { "window" }).to_string(),
+            "decoder" => self.decoder.as_str().to_string(),
+            "decoder-codecs" => oneencoder::switches::codecs_text(self.decoder_codecs),
+            "astc" => on(self.astc),
+            // sensors-als (2026-11-25): the sensor hub; the guest switches xnuhost adds are boot-args (the catalog's)
+            "sensors" => self.sensors.as_str().to_string(),
+            "sensors-hz" => self.sensors_hz.to_string(),
+            "sensors-light" => self.sensors_light.map_or("auto".to_string(), |n| n.to_string()),
+            _ => return None,
+        })
+    }
+
     /// The switches line (docs/switches.md), once at the start: every switch's value, and which are not at their
-    /// default (main's behaviour). Kernel switches are boot-args: their value as boot-args gives it, else the kernel's.
+    /// default (main's behaviour). The switches, their order and their defaults are the catalog's
+    /// (oneios_switches::SWITCHES, which oneios-tool's `switches` and the OneOS app's Switches screen read too). Kernel
+    /// switches are boot-args: their value as boot-args gives it, else the kernel's (the catalog's default).
     pub fn switches_line(&self) -> String {
-        let on = |b: bool| if b { "1" } else { "0" };
-        let arg = |name: &str, default: &'static str| -> String {
+        let arg = |name: &str, default: &str| -> String {
             let key = format!("{name}=");
             self.boot_args
                 .split_whitespace()
@@ -2286,52 +2402,17 @@ impl Config {
                 .next_back()
                 .map_or(default.to_string(), str::to_string)
         };
-        let all = [
-            ("session-mode", self.session_mode.as_str().to_string(), "hosted"),
-            ("stop-loop", self.stop_loop.as_str().to_string(), "wait"),
-            ("takeover-reclaim", on(self.takeover_reclaim).to_string(), "1"),
-            ("takeover-swappiness", self.takeover_swappiness.map_or("keep".to_string(), |n| n.to_string()), "keep"),
-            ("task-trim", on(self.task_trim).to_string(), "1"),
-            ("timer-coalesce", on(self.timer_coalesce).to_string(), "1"),
-            ("ram-fit-terms", (if self.ram_fit_terms_old { "old" } else { "tasks" }).to_string(), "tasks"),
-            ("ram-ondemand", on(self.ram_ondemand).to_string(), "0"),
-            ("uclamp-rule", self.uclamp_rule.as_str().to_string(), "work"),
-            ("gpu-down", self.gpu_down.as_str().to_string(), "governor"),
-            ("gpu-blob-entries", self.gpu_blob_entries.to_string(), "65532"),
-            ("wifi-ring-wait", on(self.wifi_ring_wait).to_string(), "1"),
-            ("wifi-send-wait", on(self.wifi_send_wait).to_string(), "1"),
-            ("wifi-buffers", on(self.wifi_buffers).to_string(), "1"),
-            ("wifi-joined-scan", self.wifi_joined_scan.as_str().to_string(), "cache"),
-            ("encoder-10bit", self.encoder_10bit.as_str().to_string(), "main10"),
-            ("encoder-warmup", on(self.encoder_warmup).to_string(), "1"),
-            ("display-post", (if self.display_post_serial { "serial" } else { "apart" }).to_string(), "apart"),
-            ("decoder", self.decoder.as_str().to_string(), "auto"),
-            ("decoder-codecs", oneencoder::switches::codecs_text(self.decoder_codecs), "h264,hevc,vp9,av1"),
-            ("astc", on(self.astc).to_string(), "1"),
-            ("oneios-wifi-rssi", arg("oneios-wifi-rssi", "1"), "1"),
-            ("oneios-telemetry-jobs", arg("oneios-telemetry-jobs", "0"), "0"),
-            ("oneios-pool-cut", arg("oneios-pool-cut", "1"), "1"),
-            ("oneios-pressure-big", arg("oneios-pressure-big", "512"), "512"),
-            ("oneios-disable-allowed", arg("oneios-disable-allowed", "1"), "1"),
-            ("oneios-nested-exact", arg("oneios-nested-exact", "1"), "1"),
-            ("oneios-upgrade-flush", arg("oneios-upgrade-flush", "0"), "0"),
-            ("oneios-fill-fast-fault", arg("oneios-fill-fast-fault", "1"), "1"),
-            ("oneios-idle-spares", arg("oneios-idle-spares", "1"), "1"),
-            ("oneios-bo-cache-idle", arg("oneios-bo-cache-idle", "1"), "1"),
-            // fix/s24-fps-heat-camera: the Metal add-on's room kept ahead (KeepRoom.inc), UIKit's animation links
-            // (DisplayLinks.inc), the slowest refresh rate the guest's display reports (staged/display.rs LEGACY).
-            ("oneios-keep-room", arg("oneios-keep-room", "8"), "8"),
-            ("oneios-dl-full", arg("oneios-dl-full", "1"), "1"),
-            ("sheng-vsync-min", arg("sheng-vsync-min", "60"), "60"),
-            // The compile deadline of the Metal clients but backboardd (CompileDeadline.inc), SpringBoard's snapshot format
-            // (SnapshotFormat.inc), the capture plug-in's stream notifications (userland/camera).
-            ("oneios-compile-s", arg("oneios-compile-s", "120"), "120"),
-            ("oneios-snapshot-astc", arg("oneios-snapshot-astc", "0"), "0"),
-            ("oneios-camera-notify", arg("oneios-camera-notify", "1"), "1"),
-            // The rt Metal add-on's (userland/metal/rt/RtSwitches.inc); the 624bab3 add-on reads neither.
-            ("oneios-dont-care", arg("oneios-dont-care", "1"), "1"),
-            ("oneios-queue-priority", arg("oneios-queue-priority", "1"), "1"),
-        ];
+        let all: Vec<(&str, String, &str)> = oneios_switches::SWITCHES
+            .iter()
+            .filter(|s| s.line)
+            .map(|s| {
+                let value = match s.place {
+                    oneios_switches::Place::BootArg => arg(s.name, s.default),
+                    oneios_switches::Place::Conf => self.switch_value(s.name).unwrap_or_else(|| "?".to_string()),
+                };
+                (s.name, value, s.default)
+            })
+            .collect();
         let changed: Vec<&str> = all.iter().filter(|(_, v, d)| v != d).map(|(k, _, _)| *k).collect();
         let words: Vec<String> = all.iter().map(|(k, v, _)| format!("{k}={v}")).collect();
         format!(

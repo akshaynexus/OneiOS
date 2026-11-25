@@ -443,3 +443,36 @@ fn find_names_and_callers() {
     assert_eq!(branch_target(NOP, 0x1000), None);
     assert_eq!(branch_target(BLR, 0x1000), None);
 }
+
+#[test]
+fn strings_pointers_and_page_pairs() {
+    let f = fixture("read");
+    // cstr: a whole C string of the cache (the image table's install name of A, at BASE + 0x500), named where it is;
+    // a text that is only part of a string, or nowhere, is said, status 1
+    let (status, out, _) = f.run(&["cstr", "/usr/lib/libalpha.dylib"]);
+    assert_eq!(status, 0);
+    assert_eq!(out, "0x180000500  (not in a cache image's __TEXT)  \"/usr/lib/libalpha.dylib\"\n");
+    let (status, out, _) = f.run(&["cstr", "libalpha.dylib"]);
+    assert_eq!((status, out.as_str()), (1, "libalpha.dylib: not in the cache as a C string\n"));
+    // ptrs: the image table's first word holds A's address
+    let (status, out, _) = f.run(&["ptrs", &hex(A)]);
+    assert_eq!(status, 0);
+    assert!(out.contains(&format!("{}  ?  -> {}\n", hex(BASE + 0x400), hex(A))), "{out}");
+    // the cache itself is read: without one it says so
+    let no_cache = Locate { dsc: None, index_parent: Some(f.index.clone()) };
+    let (status, _, err) = f.run_in(no_cache, &["cstr", "x"], "");
+    assert!(status == 1 && err.contains("ONEIOS_DSC_DIR"), "{err}");
+    // the decoders refs and dis use: adrp x1 one page on, then add x1, x1, #0x10 and ldr x2, [x1, #8] on that page
+    use oneios_sym::cache::{adrp_page, page_use, pointer_target};
+    assert_eq!(adrp_page(0xb000_0001, 0x1234), Some((1, 0x2000)));
+    assert_eq!(adrp_page(0x9000_0001 | (0x7_ffff << 5) | (3 << 29), 0x5000), Some((1, 0x4000))); // a page back
+    assert_eq!(adrp_page(NOP, 0x1000), None);
+    assert_eq!(page_use(0x9100_4021, 0x2000), Some((1, 0x2010)));
+    assert_eq!(page_use(0xf940_0422, 0x2000), Some((1, 0x2008)));
+    assert_eq!(page_use(NOP, 0x2000), None);
+    assert_eq!(pointer_target(0x8010_0001_8000_1234), 0x1_8000_1234);
+    // iOS 27's form: an offset from the cache's base in the low 34 bits (high bits PAC's and the chain's); one past the cache is none
+    use oneios_sym::cache::pointer_offset_target;
+    assert_eq!(pointer_offset_target(0x8005_0000_75fd_cb7c, 0x1_8000_0000, 0x1_0000_0000), Some(0x1_f5fd_cb7c));
+    assert_eq!(pointer_offset_target(0x0000_0001_0000_0000, 0x1_8000_0000, 0x1_0000_0000), None);
+}

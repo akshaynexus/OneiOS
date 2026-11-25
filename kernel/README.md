@@ -51,6 +51,11 @@ patched tree with one commit per patch, for writing patches), `kernel/tests/host
 1. `external/Droid-VM-UniXNU` (`62d0b11`): UniXNU's build driver, its arm64e series (68 patches) and the Darwin 26
    patches (4). Why this fork and not upstream: `profiles/iphone18-2-ios27.md` section 1.
 2. `kernel/unixnu/profiles/os/ios-27.0.1-24A446/`: the OS profile, copied into that checkout at each build.
+   `ios-27.2.1-24B156/` is iOS 27.2.1's (the same XNU, series and roots; its IPSW and kernelcache pins):
+   `ONEIOS_OS_PROFILE=ios-27.2.1-24B156 kernel/build-hosted.sh` builds the kernel for it. That is a second kernel,
+   not the same one: the board archives bind each build's original classes at their addresses
+   (`<Class>-<build>-v54.json`, picked by the device copy's `board.toml` `os_profile`; kernel/prelink/README.md
+   "Another build").
 3. `kernel/device/`: OneiOS as a UniXNU device repository: `board.toml`, `configs/oneios_defconfig`,
    `socs/linuxhost`, and the board series `patches/xnu-12377/series`: 18 of Droid-VM's iPadOS 27 patches, one of
    xnu-linux-toolchain, three of ours.
@@ -80,7 +85,10 @@ projects' scripts the build runs as they are (UniXNU's `./unixnu` driver and its
   `909990e`) into `out/toolchain`: cctools-port ld64-956.6, mig, lzfse, unifdef, tcsh and the Python `iig`, all at
   pinned commits (its own bootstrap clones branch heads). A few minutes, once.
 - `linux/unixnu-layout.sh` arranges those tools the way UniXNU's Linux kernel step expects its own toolchain
-  (`out/toolchain/unixnu`), with the host's clang in place of the clang UniXNU builds from LLVM.
+  (`out/toolchain/unixnu`), with the host's clang in place of the clang UniXNU builds from LLVM. Its links name the
+  real path of `out/toolchain` (since 2026-11-25: a worktree whose `out/` linked to the main checkout's wrote its own
+  path, and every link broke when that worktree was removed), and `build-hosted.sh` makes the layout again when its
+  `ld` link is broken.
 - `linux/clang-wrapper` is the compiler xnu's makefiles get: the arm64e triple, the ptrauth and destructor flags
   Apple's clang has by default, ARMv8.5 for the assembler, ld64 for links, warnings off. The PAC ABI flags
   (`-fptrauth-intrinsics -fptrauth-calls -fptrauth-returns`, from the A56 fork, 2026-11-21) are explicit: clang 23

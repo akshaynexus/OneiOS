@@ -37,6 +37,8 @@ pub mod input_script;
 pub mod kctx;
 /// Guest RAM and the I/O aperture.
 pub mod mem;
+/// The guest's motion device: the sensor hub's samples as virtio-input.
+pub mod motion;
 /// The pen digitizer.
 pub mod pen;
 /// The perf: report.

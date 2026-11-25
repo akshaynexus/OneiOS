@@ -48,6 +48,21 @@ node cli.mjs media-upload FILE --device SLUG --area AREA --caption "..."   # pro
 node cli.mjs whoami                                 # the check: maintains SLUG and the repo
 ```
 
+The CLI of 2026-11-25 (sha256 `d024013f…`; read each new version before you run it, diff it against the last one)
+also has:
+
+```sh
+node cli.mjs status-set SLUG AREA STATE --detail "..." --source URL --os ios --version "iOS 27.0.1" [--photo FILE ...]
+node cli.mjs history SLUG                           # each status change: before, after, who, when
+node cli.mjs gpu-get SLUG                           # the GPU record: method, stack, fps
+node cli.mjs gpu-set SLUG --method metal-vulkan|virtio-gpu|cpu|... --stack "A -> B" --fps 40-58 --fps-note "..." --source URL
+node cli.mjs features SLUG                          # notable extra features (S Pen, ...)
+node cli.mjs feature-add SLUG "Name" works --detail "..." --source URL --os ios
+node cli.mjs references --gpu "Xclipse" | --area metal   # ports to learn from, by GPU or area
+```
+
+The areas now include `metal` and `gles` (beside `gpu`), `hotspot` and `mobile-data`.
+
 Read the repo for each area: README "What works" and "Known issues", the device's `docs/<device>.md`, the docs of
 the area (docs/hardware.md, docs/gpu.md, ...), the open issues and the recent commits. Compare with the tracker.
 Change only what the evidence supports; list the rest as questions to the maintainer.

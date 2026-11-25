@@ -65,6 +65,18 @@ const FORCE_OUT: &[(&str, &str)] = &[
     ("com.apple.driver.AppleSEPCredentialManager", "a SEP endpoint client (matched on IOResources); no SEP"),
     ("com.apple.security.AKSAnalytics", "analytics of the SEP keystore (AppleSEPKeyStore); no SEP"),
     ("com.apple.driver.AppleT8150ANEHAL", "the T8150 Neural Engine's HAL (matched on IOResources); no ANE"),
+    // The sensor processor and every kept kext that links it (2026-11-25, v0.1.29's panic at kernel start: "Kext
+    // com.apple.driver.AppleSPU class AppleSPUHIDDevice is a duplicate"). IOService::probeCandidates loads the kext of
+    // every personality that passes matchPassive (IOCatalogue::isModuleLoaded), whatever its probe score, before it
+    // starts the best one; a kext whose code returns as a dependency is loaded with the kext that links it. The kernel's
+    // HID archive registers classes of AppleSPU's names (AppleSPUHIDDevice and AppleSPUHIDDeviceUserClient, the motion
+    // devices: the sandbox names them), so AppleSPU must not be in the collection at all, as on UniXNU-droidvm's iPad,
+    // whose kernelcache has no AppleSPU.
+    ("com.apple.driver.AppleSPU", "the sensor processor (AOP/SPU endpoints), which xnuhost does not present; its AppleSPUGestureDriver ({0xff0c, 3}, Transport SPU) matched the motion devices' IOHIDInterface and its load clashed with the kernel's AppleSPUHIDDevice (kernel/patches/oneios-hosted/hid)"),
+    ("com.apple.driver.AppleALSColorSensor", "links com.apple.driver.AppleSPU; its AppleSPUCT7xx personalities ({0xff00, 4} on any IOHIDInterface) match the SPU light sensor (oneios-als-spu=1), whose event driver is the kernel's IOHIDEventDriver, and its exclave paths are on the stub"),
+    ("com.apple.driver.AppleEmbeddedLightSensor", "links com.apple.driver.AppleSPU; its only software personality is an SPU light sensor's ({0xff00, 4}, manufacturer CT836): no such device, and it must not take the light sensor (docs/agents.md, the backlight class)"),
+    ("com.apple.driver.AOPTouchKext", "links com.apple.driver.AppleSPU; the AOP's touch event service (Transport SPU, {0x0d, 1}): the touch screen is NativeHidInput's (Transport SPI)"),
+    ("com.apple.driver.AppleHIDTransportSCMCommon", "a library of the SPU/AOP HID transports (all left out); it links com.apple.driver.AppleHIDTransport, which links com.apple.driver.AppleSPU"),
 ];
 
 /// The `__PRELINK_INFO` plist of a kernelcache: its `_PrelinkInfoDictionary` entries.

@@ -4,9 +4,9 @@ build-oneios-board: TREE/build/oneios-board/liboneiosboard.a
 build-oneios-aes: TREE/build/oneios-aes/liboneiosaes.a (4 objects, IOAESAccelerator bound at its 24A446 iPhone18,2 addresses)
 build-oneios-keystore: TREE/build/oneios-keystore/liboneioskeystore.a (2 objects)
 build-oneios-net: the IONetworkingFamily-188 headers are the kernelcache's classes: IOEthernetController 250 slots, IOEthernetInterface 221 slots, 155 functions of the family placed
-build-oneios-net: TREE/build/oneios-net/liboneiosnet.a (5 objects, 159 original functions bound at their 24A446 iPhone18,2 addresses; 16IO80211Interface owns 6 of the family's slots, 17IO80211Controller owns 4 of the family's slots, 20OneiOSWifiController owns 13 of the family's slots)
+build-oneios-net: TREE/build/oneios-net/liboneiosnet.a (5 objects, 159 original functions bound at their 24A446 iPhone18,2 addresses; 16IO80211Interface owns 7 of the family's slots, 17IO80211Controller owns 4 of the family's slots, 20OneiOSWifiController owns 13 of the family's slots)
 build-oneios-hid: OriginalHidDeviceABI.h is the kernelcache's IOHIDDevice: 207 slots with its discriminators, 54 functions of the family placed, 0xd0 bytes
-build-oneios-hid: TREE/build/oneios-hid/liboneioshid.a (6 objects, 56 original IOHIDDevice functions bound at their 24A446 iPhone18,2 addresses; 14NativeHidInput owns 10 slots, 15OneiOSALSDevice owns 10 slots)
+build-oneios-hid: TREE/build/oneios-hid/liboneioshid.a (10 objects, 56 original IOHIDDevice functions bound at their 24A446 iPhone18,2 addresses; 14NativeHidInput owns 10 slots, 15OneiOSALSDevice owns 12 slots, 17AppleSPUHIDDevice owns 10 slots)
 build-oneios-audio: TREE/build/oneios-audio/liboneiosaudio.a (3 objects: the virtio-snd transport, the Speaker, Mic and Actuator IOAudio2Devices, the start; output latency 720 frames)
 build-oneios-codec: TREE/build/oneios-codec/liboneioscodec.a (4 objects: the virtio-media transport, the VideoToolbox paravirtualization driver and its sessions, the start)
 build-oneios-gpu: TREE/build/oneios-gpu/liboneiosgpu.a (14 objects); NativeAdreno pieces: linked (IOAcceleratorES bound at its 24A446 iPhone18,2 addresses)

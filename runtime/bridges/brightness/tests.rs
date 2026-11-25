@@ -570,3 +570,38 @@ fn sm8850_manual_brightness_cap() {
     b.close();
     assert!(get(&active, "brightness") == 2300 && get(&disabled, "brightness") == 0);
 }
+
+/// The light from the sensor hub (sensors=ssc|auto): no evdev sensor is opened, each change of a tenth (or 1 lux) goes
+/// to the listener at once, small ones are held back until 2 s have passed.
+#[test]
+fn external_light() {
+    let _hw = crate::hw::settings_lock();
+    let tmp = Tmp::new("bright-ext");
+    let panel = tmp.path("panel");
+    mkdir(&panel);
+    put(&panel, "max_brightness", "255\n");
+    put(&panel, "brightness", "100\n");
+    let o = Options {
+        backlight_dir: Some(tmp.0.clone()),
+        // no input folder at all: the evdev lookup would find nothing, and must not be tried
+        input_dir: Some(tmp.path("no-input")),
+        als_external: Some("the sensor hub's ambient_light 0 (front)".into()),
+        ..Options::default()
+    };
+    let b = Bright::open(&o).unwrap();
+    let i = b.info();
+    assert!(i.panel && i.als && i.als_node == "the sensor hub's ambient_light 0 (front)");
+    b.als_feed(5_000); // no listener yet: nothing, and nothing kept
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let h2 = Arc::clone(&heard);
+    b.listen(Some(Arc::new(move |s: &AlsSample| h2.lock().unwrap().push(s.millilux))));
+    for v in [140_000, 145_000, 160_000, 160_500, 900, 1_500, 2_100] {
+        b.als_feed(v);
+    }
+    // 145 lux is within a tenth of 140; 160.5 within a tenth of 160; 1.5 lux within 1 lux of 0.9; 2.1 is 1.2 lux off
+    assert_eq!(*heard.lock().unwrap(), [140_000, 160_000, 900, 2_100]);
+    b.listen(None);
+    b.als_feed(500_000);
+    assert_eq!(heard.lock().unwrap().len(), 4);
+    b.close();
+}

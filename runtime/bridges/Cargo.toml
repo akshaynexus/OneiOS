@@ -62,3 +62,7 @@ harness = false
 [[bin]]
 name = "wifictl"
 path = "tools/wifictl.rs"
+# bridges-sensors: the sensor hub over QRTR (sensors/)
+[[bin]]
+name = "sensorctl"
+path = "tools/sensorctl.rs"

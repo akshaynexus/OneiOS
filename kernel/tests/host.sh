@@ -120,6 +120,20 @@ if command -v "${CC:-cc}" > /dev/null; then
 else
   echo "skipped: codec picture helpers (no ${CC:-cc})"
 fi
+# The codec transport's wait policy (kernel/patches/oneios-hosted/codec/OneiOSCodecWait.h, which the staged
+# DroidVMVirtioMedia.c and OneiOSCodec.c include, 2026-11-25): interrupt or polled and why, the event worker's sleep and
+# guard, the wake counters, the "transport:" line, both paths; built as the picture test is.
+if command -v "${CC:-cc}" > /dev/null; then
+  t=$(mktemp -d)
+  werror=; "${CC:-cc}" --version 2>/dev/null | grep -q clang && werror=-Werror
+  wait_test=(-std=c11 -O1 -g -Wall -Wextra $werror kernel/patches/oneios-hosted/codec/tests/test_wait.c -o "$t/test_wait")
+  "${CC:-cc}" -fsanitize=address,undefined "${wait_test[@]}" 2> /dev/null || "${CC:-cc}" "${wait_test[@]}" || fail "codec wait: build"
+  "$t/test_wait" || fail "codec wait"
+  rm -rf "$t"
+  ok "codec transport's wait policy: interrupt and polled"
+else
+  echo "skipped: codec transport's wait policy (no ${CC:-cc})"
+fi
 # Hosted 0098's rename of launchd's DisableAllowed marks: the function as the patch adds it (its + lines from
 # "static int" to the closing brace), built with a made-up plist test (kernel/patches/oneios-hosted/tests).
 if command -v "${CC:-cc}" > /dev/null; then

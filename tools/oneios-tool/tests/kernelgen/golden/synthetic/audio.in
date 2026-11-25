@@ -73,4 +73,12 @@ uint64_t absolute(uint64_t frames) { uint64_t t; nanoseconds_to_absolutetime(fra
 // (before anchor 35)
     case 2:                                                // SetControlValue: no controls are published
         return kIOReturnBadArgument;
+// (before anchor 36)
+#include <kern/thread.h>
+// (before anchor 37)
+    retain();
+    int16_t *buffer = static_cast<int16_t *>(ring->getBytesNoCopy());
+// (before anchor 38)
+        if (mach_absolute_time() > deadline + absolute(PeriodFrames)) droidvm_audio_late = droidvm_audio_late + 1;
+        else clock_delay_until(deadline);
 // (the end)

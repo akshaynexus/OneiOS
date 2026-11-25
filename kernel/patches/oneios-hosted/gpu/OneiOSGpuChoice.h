@@ -107,6 +107,39 @@ static inline int oneios_gpu_discovery_key(const char *key)
     return 0;
 }
 
+// OpenGL ES on the A56's accelerator (oneios-gpu-amd-gl=1, the A56 GPU port's GL stage, 2026-11-24; docs/a56-gpu.md
+// 4a). Without it the accelerator names AppleMetalGLRenderer (Apple's GL on the process's Metal device, which the A56's
+// Metal layer cannot serve: it does not read GLIR) and the CPU-composition processes see none of the five keys. With it:
+//   - IOGLESBundleName is OneiOSRadeonGL, the A56's OpenGL ES (Mesa's GLES over radeonsi, userland/metal-amd/gl), for
+//     every process: libGFXShared loads /System/Library/Extensions/OneiOSRadeonGL.bundle/OneiOSRadeonGL;
+//   - the CPU-composition processes are kept off the Metal plug-in only: MetalPluginName, MetalPluginClassName,
+//     IOGLESMetalBundleName and IOGLESDefaultUseMetal stay hidden, IOGLESBundleName is seen. backboardd's
+//     CA::WindowServer::EAGLServer::renderer() (20F66 0x1882e2548) then finds no Metal device (CAMetalContextCreate) and
+//     takes its OpenGL ES renderer (EAGLContext API 3, CA::OGL::GLESContext): the UI is composited on the GPU.
+// xnuhost adds oneios-gpu-amd-gl=1 beside oneios-gpu-amd=1 when the gpuaddon also carries OneiOSRadeonGL.bundle.
+#define ONEIOS_GPU_AMD_GLES_BUNDLE "OneiOSRadeonGL"
+#define ONEIOS_GPU_GLES_BUNDLE_STOCK "AppleMetalGLRenderer"
+
+// The accelerator's IOGLESBundleName: kind is oneios_gpu_accelerator_choice's, gl the value of oneios-gpu-amd-gl (-1
+// not given).
+static inline const char *oneios_gpu_gles_bundle_for(unsigned kind, int gl)
+{
+    return kind == ONEIOS_ACCEL_RADEON && gl > 0 ? ONEIOS_GPU_AMD_GLES_BUNDLE : ONEIOS_GPU_GLES_BUNDLE_STOCK;
+}
+
+// Whether a CPU-composition process reads `key` as absent: every discovery key without GL; with GL (gl > 0) all but
+// IOGLESBundleName.
+static inline int oneios_gpu_cpu_hides(const char *key, int gl)
+{
+    if (!oneios_gpu_discovery_key(key)) return 0;
+    if (gl > 0) {
+        const char *a = "IOGLESBundleName", *b = key;
+        while (*a && *a == *b) ++a, ++b;
+        if (!*a && !*b) return 0;
+    }
+    return 1;
+}
+
 // The RADEON accelerator's open types: 0x4149 (DROIDVM_VIRTGPU_OPEN_TYPE: the virtgpu methods, one DRM context a
 // connection) and NativeAdreno's progress markers 0x4147xxxx (xxxx nonzero: no connection is made; the plug-in's text
 // rows, oneios-gpu-text). Every other type is refused: 0x4147 (NativeAdreno's GPU core, KGSL-shaped), 0x4148 (the

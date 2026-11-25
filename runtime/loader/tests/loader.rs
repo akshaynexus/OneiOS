@@ -398,6 +398,21 @@ fn machine_identity_tree() {
     assert_eq!(t.get("compatible").unwrap().value, b"F1AP\0oneios,xnuhost\0");
     assert!(pr.get("has-exclaves").is_none() && pr.get("product-name").is_some());
     assert_eq!(str_of(pr, "graphics-featureset-fallbacks"), Some("MTL1,2:GLES2,0"));
+    // astc (xnuhost's astc=1, 2026-11-25): APPLE2 and MTL2,2 stay, with an identity and without one
+    m.astc = true;
+    let with_astc = m.tree().unwrap();
+    assert_eq!(
+        str_of(with_astc.find("product").unwrap(), "graphics-featureset-fallbacks"),
+        Some("MTL1,2:APPLE2:MTL2,2:GLES2,0")
+    );
+    let mut plain = machine_default();
+    plain.astc = true;
+    let plain_tree = plain.tree().unwrap();
+    assert_eq!(
+        str_of(plain_tree.find("product").unwrap(), "graphics-featureset-fallbacks"),
+        Some("APPLE9:APPLE8:APPLE7:APPLE6:APPLE5:APPLE4:APPLE3:APPLE3v1:APPLE2:APPLE1:GLES2,0")
+    );
+    m.astc = false;
     assert!(t.find("product/audio").unwrap().get("acoustic-id").is_some());
     // with an identity and cameras: the identity's own unique-model stays, unless camera-model= names one
     {

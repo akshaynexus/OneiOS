@@ -36,7 +36,7 @@ native-legacy-display/IOMobileFramebufferLegacy-originals.S
 oneios-hid/OneiOSHidLayoutCheck.cpp oneios-hid/IOHIDDevice-bindings.S oneios-hid/IOHIDDevice-originals.S oneios-hid/report.json
 oneios-net/OneiOSNetCheck.cpp oneios-net/ionetworking-include/oneios-mbuf-crumbs.h oneios-net/IONetworking-bindings.S
 oneios-net/IONetworking-originals.S oneios-net/report.json"
-STAGED="oneios-aes/NativeAES.cpp oneios-keystore/NativeKeyStoreEvents.cpp oneios-audio/DroidVMAudio.cpp oneios-codec/DroidVMVTHost.cpp oneios-hid/NativeHidInput.cpp
+STAGED="oneios-aes/NativeAES.cpp oneios-keystore/NativeKeyStoreEvents.cpp oneios-audio/DroidVMAudio.cpp oneios-codec/DroidVMVTHost.cpp oneios-codec/DroidVMVirtioMedia.c oneios-hid/NativeHidInput.cpp
 oneios-hid/DroidVMVirtioInput.c oneios-net/DroidVMVirtioNet.c native-legacy-display/LegacyDisplayProbe.cpp
 oneios-hosted-storage/IOBlockStorageDevice.cpp oneios-gpu/adreno/root/kits/droidvm/DroidVMGpu.cpp
 oneios-gpu/adreno/root/scripts/build-droidvm-gpu.py"

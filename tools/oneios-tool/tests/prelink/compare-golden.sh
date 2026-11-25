@@ -7,7 +7,10 @@
 # Apple bytes). The golden there is for the released kernel, the one anyone can download:
 #   326e2144...  kernel/xnu.macho of the runtime package v0.1.13 (the release kernel-xnu-...-703a6b34e73f), no
 #                REFERENCE, XNUPRELINK=external/Droid-VM-UniXNU/kits/XnuPrelink (b74ed7c; its commit is in
-#                kernel.kc.build.json, so another folder changes that one line): kernel.kc 276aadac... (2026-11-22)
+#                kernel.kc.build.json, so another folder changes that one line): kernel.kc 276aadac... (2026-11-22);
+#                c961e687... since 2026-11-25 (roots' FORCE_OUT leaves com.apple.driver.AppleSPU and the four kexts
+#                that link it out: select, the binds, the draft, emit, audit, record and kernel.kc changed; the
+#                pairing steps' files are the same)
 # The two goldens of the Python chain (13ed0b70..., 399f50fa..., 2026-11-12) were removed on 2026-11-22: their
 # kernels are no longer kept, and they held Python's matcher signature (tools/oneios-tool/README.md "prelink").
 # Without KERNEL only roots and hosted are run, against golden/kernelcache.txt. Another kernel has no golden:

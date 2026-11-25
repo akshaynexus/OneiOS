@@ -4,7 +4,7 @@
 #   runtime/build.sh STAGE        cargo build --release --target aarch64-linux-android, then stage, stripped:
 #                                   static (crt-static): bin/xnuhost (the task stub is inside it), bin/gpuctl, and the
 #                                     phone checks bin/bridgectl, bin/wifictl, bin/brightctl, bin/batteryctl,
-#                                     bin/thermalctl, bin/displayctl, and the display helper's launcher bin/oneios-display
+#                                     bin/thermalctl, bin/sensorctl, bin/displayctl, and the display helper's launcher bin/oneios-display
 #                                   dynamic (they need Android's libraries): bin/oneios-audio (libaaudio), bin/oneios-camera
 #                                     and bin/camctl (camera2ndk, mediandk, binder_ndk), bin/oneios-encoder and bin/encctl
 #                                     (mediandk), bin/liboneios-display.so (the JNI library, -z defs)
@@ -69,11 +69,12 @@ stage() { # DIR NAME...: strip each built NAME into STAGE/bin
 # Static: xnuhost and gpuctl (runtime/xnuhost; docs/booter.md, docs/gpu.md), and the phone checks, which the OneOS fork's
 # Hardware checks screen runs with One UI up (as root): bridgectl (cpu, haptic, haptic-pattern, bt, audio), wifictl (status
 # and scan are read only; join takes wlan0 as a session does; restore gives wlan0's settings back after a killed xnuhost),
-# brightctl (info, levels, als), batteryctl, thermalctl (`watch` logs the temperatures). Each folder's README has the
+# brightctl (info, levels, als), batteryctl, thermalctl (`watch` logs the temperatures), sensorctl (`qrtr` is read only:
+# whether the sensor hub is reachable over QRTR; `stream` streams it for N s). Each folder's README has the
 # commands and what a good run prints.
 cargo_static -p xnuhost --bins
-cargo_static -p onebridges --bin bridgectl --bin wifictl --bin brightctl --bin batteryctl --bin thermalctl
-stage "$STATIC_DIR" xnuhost gpuctl bridgectl wifictl brightctl batteryctl thermalctl
+cargo_static -p onebridges --bin bridgectl --bin wifictl --bin brightctl --bin batteryctl --bin thermalctl --bin sensorctl
+stage "$STATIC_DIR" xnuhost gpuctl bridgectl wifictl brightctl batteryctl thermalctl sensorctl
 # Dynamic: the helpers that call Android's own libraries (AAudio, Camera2, MediaCodec) and their phone checks
 # (runtime/bridges/camera/README.md, runtime/bridges/encoder/README.md).
 cargo_dynamic -p onebridges --bin oneios-audio

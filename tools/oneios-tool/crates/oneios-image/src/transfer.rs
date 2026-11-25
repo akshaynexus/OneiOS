@@ -669,7 +669,9 @@ impl Source {
         *tries += 1;
         self.health.retries.fetch_add(1, Ordering::Relaxed);
         let (idle, give_up) = (now_ms().saturating_sub(self.health.last_byte_ms.load(Ordering::Relaxed)), GIVE_UP.load(Ordering::SeqCst) * 1000);
-        if idle >= give_up {
+        // `>`: both times are whole milliseconds rounded down, so `idle` can be up to 1 ms more than the real time
+        // (with `>=` the test of a 2 s limit saw it give up after 1.99999 s, 2026-11-25)
+        if idle > give_up {
             *FAILURE.lock().unwrap() = Some("network");
             return Err(format!("no byte arrived for {} s: gave up ({text})", idle / 1000));
         }

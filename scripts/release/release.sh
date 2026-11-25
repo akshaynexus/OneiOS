@@ -1,16 +1,24 @@
 #!/bin/bash
 # Build, check and publish a OneiOS release from this machine, without waiting for GitHub Actions: the runtime
 # package, the phone's oneios-tool and the OneOS APK, the same files and checks as .github/workflows/release.yml.
-#   scripts/release/release.sh VERSION [--build-only] [--runtime-only | --apk-only] [--skip-tests] [--metal-dir DIR | --no-metal]
+#   scripts/release/release.sh VERSION [--build-only] [--runtime-only | --apk-only] [--skip-tests] [--metal-dir DIR [--metal-more-dir DIR]... | --no-metal]
+#            [--metal-amd-dir DIR | --no-metal-amd]
 #   scripts/bg.sh release scripts/release/release.sh 0.1.14     (it takes 10-20 minutes: run it in tmux)
 # VERSION is N.N.N or N.N.N-suffix; the release is the tag vVERSION, made at HEAD (which must be on origin/main).
 # Three lanes run at the same time, each with its log in out/release-local/VERSION/logs/:
 #   runtime  the Metal plug-in and the capture plug-in built from HEAD (userland/metal/build.sh with METAL_OUT
 #            OUT/guest, its work in out/metal, about 7 minutes after the first; userland/camera/build.sh OUT/guest/camera),
-#            then runtime/package.sh VERSION with them as lib/guest/ (METAL_DIR, CAMERA_DIR, REQUIRE_METAL=1) and the
-#            kernel pinned in kernel/release-kernel.txt (downloaded and checked as
-#            CI does), then the package's checks: drm2kgsl in xnuhost and gpuctl, elf-check.sh, the members, the Metal
+#            and again for each other iOS build of METAL_TARGETS (iPhone18,2 24B156: OUT/guest-24B156, the same capture
+#            plug-in; each plug-in build is taken from out/release-cache when its inputs are those of an earlier one:
+#            plugin_key, cached_build), then runtime/package.sh VERSION with them as lib/guest/ and lib/guest/<build>/ (METAL_DIR,
+#            CAMERA_DIR, REQUIRE_METAL=1, METAL_MORE_DIRS) and the kernels pinned in kernel/release-kernel.txt (one line
+#            each, the first the default; each after it another build's, kernel/<build>/: KERNEL_MORE_DIRS; downloaded and
+#            checked as CI does), then the package's checks: drm2kgsl in xnuhost and gpuctl, elf-check.sh, the members, the Metal
 #            bundle in runtime.json, and .github/scripts/check-phone-tool.sh;
+#            With them, the Galaxy A56's GPU plug-ins (docs/a56-gpu.md 6): userland/metal-amd/build.sh all and
+#            air/build.sh plugin with METAL_AMD_OUT OUT/guest-a56 (Mesa radeonsi, the Metal layer, the OpenGL ES layer; about
+#            10 minutes the first time, 1.5 GB), as lib/guest/OneiOSRadeonMetal.bundle and OneiOSRadeonGL.bundle beside the
+#            Adreno plug-in (METAL_AMD_DIR, REQUIRE_METAL_AMD=1), runtime.json "metal_a56";
 #   apk      app/ as it is checked out (its commit must be on the fork's origin/oneios): the guest app, then
 #            ./gradlew test assembleFullDebug signed with secrets/oneios-debug.keystore, .github/scripts/check-apk.sh,
 #            and the APK's signer must be that key;
@@ -21,9 +29,14 @@
 # --build-only builds and checks, and publishes nothing. --runtime-only and --apk-only are CI's "runtime only" and
 # "apk only" (an APK-only release is not marked latest). --skip-tests leaves out the tests lane.
 # --metal-dir DIR takes a Metal plug-in built before (userland/metal/build.sh's output folder, with camera/ holding
-# H9ISP.mediacapture when the capture plug-in goes too) instead of building one; --no-metal makes a runtime without
+# H9ISP.mediacapture when the capture plug-in goes too) instead of building one; --metal-more-dir DIR (with
+# --metal-dir, repeatable) adds another iOS build's (ONEIOS_METAL_TARGET="iPhone18,2 24B156" userland/metal/build.sh); --no-metal makes a runtime without
 # them (the phone's Make iOS image then composites on the CPU; the notes say so). The Metal build needs the iOS cross
 # toolchain and the guest's stubs (scripts/setup/ios-toolchain.sh says "ok"; docs/building.md section 9).
+# --metal-amd-dir DIR takes the A56's GPU plug-ins built before (userland/metal-amd's output folder, out/metal-amd:
+# OneiOSRadeonMetal.bundle, gl/OneiOSRadeonGL.bundle, libdrm-2.4.133/) instead of building them; --no-metal-amd leaves
+# them out (an A56 then stays on the 2D path: docs/a56-gpu.md 6). Their build needs out/ios16-tbd (docs/building.md,
+# "iOS 16.5 stubs"), external/mesa-droidvm and external/Jesvi-iOS.
 # The debug key: secrets/oneios-debug.keystore (git-ignored; store and key password "android", alias
 # androiddebugkey), the same key as the secret ONEIOS_DEBUG_KEYSTORE_B64 of akshaynexus/OneiOS and akshaynexus/OneOS,
 # so an APK from here and one from CI install over each other (docs/releases.md, "The debug key").
@@ -38,13 +51,21 @@ FORK_REPO=akshaynexus/OneOS
 KEYSTORE=$ROOT/secrets/oneios-debug.keystore
 die() { echo "release: $*" >&2; exit 1; }
 
-VERSION= PUBLISH=1 RUNTIME=1 APK=1 TESTS=1 METAL=build METAL_FROM=
-want_dir=0
+VERSION= PUBLISH=1 RUNTIME=1 APK=1 TESTS=1 METAL=build METAL_FROM= METAL_MORE_FROM= METAL_AMD=build METAL_AMD_FROM=
+# The iOS builds the Metal plug-in is built for: the default first (lib/guest/), then each other (lib/guest/<build>/;
+# userland/metal/hooks/<device>-<build>.json).
+METAL_TARGETS=("iPhone18,2 24A446" "iPhone18,2 24B156")
+want_dir=0 want_amd=0
 for a in "$@"; do
   if [ "$want_dir" = 1 ]; then METAL=dir METAL_FROM=$a want_dir=0; continue; fi
+  if [ "$want_dir" = 2 ]; then METAL_MORE_FROM="$METAL_MORE_FROM $a" want_dir=0; continue; fi
+  if [ "$want_amd" = 1 ]; then METAL_AMD=dir METAL_AMD_FROM=$a want_amd=0; continue; fi
   case $a in
   --metal-dir) want_dir=1 ;;
+  --metal-more-dir) want_dir=2 ;;
   --no-metal) METAL=none ;;
+  --metal-amd-dir) want_amd=1 ;;
+  --no-metal-amd) METAL_AMD=none ;;
   --build-only) PUBLISH=0 ;;
   --runtime-only) APK=0 ;;
   --apk-only) RUNTIME=0 ;;
@@ -53,13 +74,27 @@ for a in "$@"; do
   *) [ -z "$VERSION" ] || die "one VERSION only"; VERSION=${a#v} ;;
   esac
 done
-[ "$want_dir" = 0 ] || die "--metal-dir needs a folder"
+[ "$want_dir" = 0 ] || die "--metal-dir and --metal-more-dir need a folder"
+[ "$want_amd" = 0 ] || die "--metal-amd-dir needs a folder"
+[ -z "$METAL_MORE_FROM" ] || [ "$METAL" = dir ] || die "--metal-more-dir goes with --metal-dir"
+more=""
+for a in $METAL_MORE_FROM; do
+  a=$(cd "$a" 2>/dev/null && pwd) || die "--metal-more-dir: no such folder"
+  [ -f "$a/NativeAdrenoMetal.bundle/oneios-target" ] || die "--metal-more-dir $a holds no NativeAdrenoMetal.bundle with its oneios-target"
+  more="$more $a"
+done
+METAL_MORE_FROM=$more
+if [ "$METAL_AMD" = dir ]; then
+  METAL_AMD_FROM=$(cd "$METAL_AMD_FROM" 2>/dev/null && pwd) || die "--metal-amd-dir: no such folder"
+  [ -f "$METAL_AMD_FROM/OneiOSRadeonMetal.bundle/OneiOSRadeonMetal" ] && [ -f "$METAL_AMD_FROM/gl/OneiOSRadeonGL.bundle/OneiOSRadeonGL" ] \
+    || die "--metal-amd-dir $METAL_AMD_FROM holds no OneiOSRadeonMetal.bundle and gl/OneiOSRadeonGL.bundle"
+fi
 if [ "$METAL" = dir ]; then
   METAL_FROM=$(cd "$METAL_FROM" 2>/dev/null && pwd) || die "--metal-dir: no such folder"
   [ -f "$METAL_FROM/NativeAdrenoMetal.bundle/NativeAdrenoMetal" ] || die "--metal-dir $METAL_FROM holds no NativeAdrenoMetal.bundle"
 fi
 [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.]*)?$ ]] \
-  || die "usage: scripts/release/release.sh VERSION [--build-only] [--runtime-only | --apk-only] [--skip-tests] [--metal-dir DIR | --no-metal]"
+  || die "usage: scripts/release/release.sh VERSION [--build-only] [--runtime-only | --apk-only] [--skip-tests] [--metal-dir DIR [--metal-more-dir DIR]... | --no-metal] [--metal-amd-dir DIR | --no-metal-amd]"
 [ "$RUNTIME$APK" != 00 ] || die "--runtime-only and --apk-only together build nothing"
 TAG=v$VERSION
 
@@ -113,39 +148,113 @@ rm -rf "$OUT"; mkdir -p "$OUT/files" "$LOGS"
 echo "release: $TAG at $SHA${FORK_COMMIT:+, app/ $FORK_COMMIT}; logs in $LOGS"
 
 # --- The lanes.
+# The plug-ins' build cache (2026-11-25): a release whose plug-in inputs are those of an earlier build takes that build
+# (a reflink copy on btrfs: no time, no space) instead of building it again; each built one is kept in
+# out/release-cache/NAME/KEY/ (the newest 3 of each NAME). The key (plugin_key WHAT...): the git tree of HEAD at each
+# path, each `ext:NAME` reference checkout's commit and its count of changed files, and the toolchain (rustc 1.98,
+# clang, the iOS SDKs). Before it every release built the Metal plug-in twice (27.0.1, 27.2.1): 10-20 minutes for a
+# runtime change that did not touch them. --metal-dir and --metal-amd-dir still take a folder as they are.
+plugin_key() {
+  local p e
+  {
+    for p in "$@"; do
+      case $p in
+        ext:*) e=${p#ext:}; echo "$e $(git -C "external/$e" rev-parse HEAD 2>/dev/null) $(git -C "external/$e" status --porcelain 2>/dev/null | wc -l)" ;;
+        */*|*.*) echo "$p $(git rev-parse "HEAD:$p" 2>/dev/null)" ;;
+        *) echo "$p" ;; # a target or a name
+      esac
+    done
+    rustc +1.98.0 --version 2>/dev/null || true
+    clang --version 2>/dev/null | head -n 1 || true
+    ls -d "$HOME"/.config/swiftpm/swift-sdks/*/ 2>/dev/null || true
+  } | sha256sum | cut -c1-16
+}
+cached_build() { # NAME KEY OUT COMMAND...
+  local name=$1 key=$2 out=$3; shift 3
+  local c=$ROOT/out/release-cache/$name/$key
+  if [ -d "$c" ]; then
+    rm -rf "$out"; mkdir -p "$(dirname "$out")"
+    cp -a --reflink=auto "$c" "$out"
+    echo "$name: the inputs of an earlier build ($key): taken from out/release-cache, not built"
+    return 0
+  fi
+  "$@"
+  rm -rf "$c.part"; mkdir -p "$(dirname "$c")"
+  cp -a --reflink=auto "$out" "$c.part" && mv "$c.part" "$c"
+  ls -dt "$ROOT/out/release-cache/$name"/*/ 2>/dev/null | tail -n +4 | while read -r old; do rm -rf "$old"; done
+  echo "$name: built; kept as out/release-cache/$name/$key"
+}
+a56_build() { # OUT
+  METAL_AMD_OUT=$1 userland/metal-amd/build.sh all
+  METAL_AMD_OUT=$1 userland/metal-amd/air/build.sh plugin "$1/build-ios"
+}
+
 lane_runtime() {
   local k=$ROOT/out/release-local/kernel
   KERNEL_DIR=$OUT/no-kernel
+  # kernel/release-kernel.txt: one "TAG SHA256" line per kernel; the first is the default (24A446's, kernel/), each
+  # line after it another iOS build's (iOS 27.2.1's 24B156: kernel/24B156/, runtime/package.sh KERNEL_MORE_DIRS)
+  local more_kernels=""
   if [ -s kernel/release-kernel.txt ]; then
-    local ktag ksha f
-    read -r ktag ksha < kernel/release-kernel.txt
-    f=$(ls "$k/dl/$ktag"/xnu-*.tar.zst 2>/dev/null | head -n 1 || true)
-    if [ -z "$f" ] || [ "$(sha256sum "$f" | cut -d' ' -f1)" != "$ksha" ]; then
-      rm -rf "$k/dl/$ktag"; mkdir -p "$k/dl/$ktag"
-      gh release download "$ktag" --repo "$REPO" --pattern 'xnu-*.tar.zst' --dir "$k/dl/$ktag"
-      f=$(ls "$k/dl/$ktag"/xnu-*.tar.zst)
-    fi
-    echo "$ksha  $f" | sha256sum -c -
-    KERNEL_DIR=$OUT/kernel; mkdir -p "$KERNEL_DIR"
-    zstd -dc "$f" | tar -x -C "$KERNEL_DIR"
+    local ktag ksha f n=0 dir
+    while read -r ktag ksha; do
+      [ -n "$ktag" ] || continue
+      f=$(ls "$k/dl/$ktag"/xnu-*.tar.zst 2>/dev/null | head -n 1 || true)
+      if [ -z "$f" ] || [ "$(sha256sum "$f" | cut -d' ' -f1)" != "$ksha" ]; then
+        rm -rf "$k/dl/$ktag"; mkdir -p "$k/dl/$ktag"
+        gh release download "$ktag" --repo "$REPO" --pattern 'xnu-*.tar.zst' --dir "$k/dl/$ktag"
+        f=$(ls "$k/dl/$ktag"/xnu-*.tar.zst)
+      fi
+      echo "$ksha  $f" | sha256sum -c -
+      if [ "$n" = 0 ]; then dir=$OUT/kernel; KERNEL_DIR=$dir; else dir=$OUT/kernel-$n; more_kernels="$more_kernels $dir"; fi
+      mkdir -p "$dir"; zstd -dc "$f" | tar -x -C "$dir"
+      n=$((n + 1))
+    done < kernel/release-kernel.txt
   else
     echo "no kernel pinned in kernel/release-kernel.txt: runtime only"
   fi
   test -f external/virglrenderer/src/drm/drm2kgsl/drm2kgsl_renderer.c \
     || { echo "no external/virglrenderer with drm2kgsl (scripts/setup/get-references.sh virglrenderer)"; return 1; }
   # The guest's plug-ins as lib/guest/ (the phone's Make iOS image seeds them): built from HEAD, or --metal-dir's.
-  local guest=() g=$OUT/guest
+  # Every target of METAL_TARGETS after the first (the default, iPhone18,2 24A446) is another iOS build's plug-in,
+  # lib/guest/<build>/ (runtime/package.sh METAL_MORE_DIRS), with the same capture plug-in (it has no build's addresses).
+  local guest=() g=$OUT/guest more_metal="" target t
+  # The tools the plug-ins' builds run, by tree (oneios-tool ios ... and its crates; not Cargo.lock: a crate added
+  # elsewhere in the workspace changes it and would rebuild every plug-in for nothing, 2026-11-25).
+  local tools=(scripts/ios scripts/lib/oneios-tool.sh tools/oneios-tool/crates/oneios-ios
+    tools/oneios-tool/crates/oneios-common tools/oneios-tool/crates/oneios-json tools/oneios-tool/crates/oneios-sym
+    tools/oneios-tool/crates/oneios-image tools/oneios-tool/crates/oneios-tweaks)
+  local metal_in=(userland/metal drivers/brightness "${tools[@]}" ext:NativeMetal ext:metal2vulkan ext:mesa-droidvm
+    ext:Droid-VM-UniXNU ext:NativeAdreno ext:AdrenoPM4 ext:NativeMobileDisplay)
   case $METAL in
     build)
-      METAL_OUT=$g userland/metal/build.sh
-      userland/camera/build.sh "$g/camera"
+      cached_build metal-24A446 "$(plugin_key "${METAL_TARGETS[0]}" "${metal_in[@]}")" "$g" \
+        env METAL_OUT="$g" userland/metal/build.sh
+      cached_build camera "$(plugin_key camera userland/camera "${tools[@]}")" "$g/camera" userland/camera/build.sh "$g/camera"
+      for target in "${METAL_TARGETS[@]:1}"; do
+        t=$g-${target#* }
+        cached_build "metal-${target#* }" "$(plugin_key "$target" "${metal_in[@]}")" "$t" \
+          env ONEIOS_METAL_TARGET="$target" METAL_OUT="$t" userland/metal/build.sh
+        rm -rf "$t/camera"; cp -R "$g/camera" "$t/camera"
+        more_metal="$more_metal $t"
+      done
       guest=(METAL_DIR="$g" CAMERA_DIR="$g/camera" REQUIRE_METAL=1) ;;
     dir)
       guest=(METAL_DIR="$METAL_FROM" REQUIRE_METAL=1)
-      [ ! -f "$METAL_FROM/camera/H9ISP.mediacapture" ] || guest+=(CAMERA_DIR="$METAL_FROM/camera") ;;
+      [ ! -f "$METAL_FROM/camera/H9ISP.mediacapture" ] || guest+=(CAMERA_DIR="$METAL_FROM/camera")
+      more_metal=${METAL_MORE_FROM:-} ;;
     none) echo "--no-metal: no Metal plug-in in this runtime" ;;
   esac
-  env ${guest[@]+"${guest[@]}"} OUT_DIR="$OUT/files" KERNEL_DIR="$KERNEL_DIR" runtime/package.sh "$VERSION"
+  # the Galaxy A56's GPU plug-ins beside the Adreno one (docs/a56-gpu.md 6): built from HEAD, or --metal-amd-dir's
+  local ga=$OUT/guest-a56
+  case $METAL_AMD in
+    build)
+      cached_build metal-a56 "$(plugin_key a56 userland/metal-amd "${tools[@]}" ext:mesa-droidvm)" "$ga" a56_build "$ga"
+      guest+=(METAL_AMD_DIR="$ga" REQUIRE_METAL_AMD=1) ;;
+    dir) guest+=(METAL_AMD_DIR="$METAL_AMD_FROM" REQUIRE_METAL_AMD=1) ;;
+    none) echo "--no-metal-amd: no A56 GPU plug-ins in this runtime" ;;
+  esac
+  env ${guest[@]+"${guest[@]}"} METAL_MORE_DIRS="$more_metal" KERNEL_MORE_DIRS="$more_kernels" OUT_DIR="$OUT/files" KERNEL_DIR="$KERNEL_DIR" runtime/package.sh "$VERSION"
   local a=$OUT/files/oneios-runtime-$VERSION-arm64.tar.zst d=$OUT/runtime-unpacked b
   rm -rf "$d"; mkdir -p "$d"; zstd -dc "$a" | tar -x -C "$d"
   for b in bin/xnuhost bin/gpuctl; do
@@ -153,7 +262,7 @@ lane_runtime() {
   done
   runtime/package/elf-check.sh "$d"
   zstd -dc "$a" | tar -t > "$OUT/members.txt"
-  if grep -Ev '^(runtime\.json|NOTICE|LICENSE|(bin|lib|scripts)/[^/].*|kernel/xnu\.macho(\.build\.json)?)$' "$OUT/members.txt"; then
+  if grep -Ev '^(runtime\.json|NOTICE|LICENSE|(bin|lib|scripts)/[^/].*|kernel/([0-9A-Z]+/)?xnu\.macho(\.build\.json)?)$' "$OUT/members.txt"; then
     echo "the package has members outside the runtime's folders (above)"; return 1
   fi
   [ "$(head -n 1 "$OUT/members.txt")" = runtime.json ] || { echo "runtime.json is not the first member"; return 1; }
@@ -165,6 +274,13 @@ lane_runtime() {
     "$ONEIOS_TOOL" json get "$d/runtime.json" metal.cdhashes >> "$OUT/metal.txt"
     "$ONEIOS_TOOL" json get --default none "$d/runtime.json" camera.cdhash >> "$OUT/metal.txt"
     echo "runtime: Metal plug-in for $(head -n 1 "$OUT/metal.txt"), capture plug-in $(tail -n 1 "$OUT/metal.txt")"
+  fi
+  if [ "$METAL_AMD" != none ]; then
+    . scripts/lib/oneios-tool.sh && oneios_tool "$ROOT"
+    "$ONEIOS_TOOL" json get "$d/runtime.json" metal_a56.target > "$OUT/metal-a56.txt" \
+      || { echo "runtime.json names no A56 GPU plug-ins (metal_a56)"; return 1; }
+    "$ONEIOS_TOOL" json get "$d/runtime.json" metal_a56.cdhashes >> "$OUT/metal-a56.txt"
+    echo "runtime: the A56's GPU plug-ins for $(head -n 1 "$OUT/metal-a56.txt")"
   fi
   OUT_DIR=$OUT/files .github/scripts/check-phone-tool.sh "$VERSION"
   echo "runtime: $(wc -l < "$OUT/members.txt") members, kernel $( [ -f "$KERNEL_DIR/xnu.macho" ] && echo in || echo none)"
@@ -262,6 +378,9 @@ cd "$ROOT"
       echo "- **Metal plug-in** in the runtime (\`lib/guest/\`, built from source; its licences and sources in \`lib/guest/NOTICE\`): NativeAdrenoMetal for \`$(sed -n 1p "$OUT/metal.txt")\`, CDHashes \`$(sed -n 2p "$OUT/metal.txt")\`; the capture plug-in \`$(sed -n 3p "$OUT/metal.txt")\`. An image made on the phone with this runtime (Make iOS image) has them in its Data seed and their CDHashes in its owner trust list, so iOS composites on the GPU."
     else
       echo "- **No Metal plug-in** in this runtime (built with \`--no-metal\`): an image made on the phone with it composites on the CPU."
+    fi
+    if [ -s "$OUT/metal-a56.txt" ]; then
+      echo "- **The Galaxy A56's GPU plug-ins** in the runtime (\`lib/guest/OneiOSRadeonMetal.bundle\`, \`OneiOSRadeonGL.bundle\`, built from source; licences and sources in \`lib/guest/NOTICE\`) for \`$(sed -n 1p "$OUT/metal-a56.txt")\`, CDHashes \`$(sed -n 2p "$OUT/metal-a56.txt")\`. On an A56 with an iOS 16.5 image, Update the kernel puts them in the image as its boot addon (\`kernel.kc.gpuaddon\`, their CDHashes in its owner trust list); xnuhost turns its GPU path on when its self-test passes ([docs/a56-gpu.md](https://github.com/$REPO/blob/$SHA/docs/a56-gpu.md) section 6). Not booted before this release."
     fi
   else
     echo "- **No runtime** in this release (built as \"apk only\"): it is not marked latest, so the app's runtime download keeps the latest release that has one."

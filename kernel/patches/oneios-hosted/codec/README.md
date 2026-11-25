@@ -32,7 +32,7 @@ paravirtualization service, exactly as the Metal and camera plug-ins are iOS-sid
 
 | File | What |
 |---|---|
-| `DroidVMVirtioMedia.c` | the virtio-media transport (V4L2 stateful codec over virtio-mmio): `/arm-io/virtio-media-0`, `media-host-pool`. The device is xnuhost's (`runtime/bridges/encoder/media_device.rs`), not crosvm's. Unchanged, `-DDROIDVM_DEVICE_DYNAMIC=1`, Mach universe, as its iPadOS 27 board builds it |
+| `DroidVMVirtioMedia.c` | the virtio-media transport (V4L2 stateful codec over virtio-mmio): `/arm-io/virtio-media-0`, `media-host-pool`. The device is xnuhost's (`runtime/bridges/encoder/media_device.rs`), not crosvm's. `-DDROIDVM_DEVICE_DYNAMIC=1`, Mach universe, as its iPadOS 27 board builds it. **Staged with one edit** since 2026-11-25 (7, `staged/codec_transport.rs`: the event queue on the device's interrupt, "The transport on the interrupt" below) |
 | `DroidVMVTHost.cpp` | the session logic: `encs`/`+enc`/`esta`/`efrm`/`Eemt`/`ecfr` (and, staged, iOS 27's tile session `ests`/`epti`/`etil`/`ecti` with `TEsa`/`TEcd`/`TEem`); the IOSurface lookup (IOCoreSurfaceRoot), NV12 copy into the OUTPUT buffer (staged: NV12 or P010), hvcC/avcC assembly, the sample-buffer atoms. Runs in the guest kernel over the virtio-media device. **Staged with six edits** (below; the sixth, the decoder's, is `staged/codec_decode.rs`) |
 | `DroidVMVTParavirt.cpp` | Apple's `AppleVideoToolboxParavirtualizationDriver` user client + the `IODataQueue` transport; publishes the service with `droidvm-vt-paravirt=1`. Unchanged; its static initializer is taken out of `__mod_init_func` and made global (`droidvm_vt_paravirt_attach` runs it in its own module load), as the audio archive's |
 
@@ -51,7 +51,10 @@ paravirtualization service, exactly as the Metal and camera plug-ins are iOS-sid
    send them to the device as P010 (or NV12, their high bytes, to a device that takes no P010); a tile session's
    device opens at its first tile.
 6. **The decoder** (2026-11-24, `staged/codec_decode.rs`, "The decoder" below): VP9 and AV1, `dcap` and `dcan`, the
-   surface's kernel mapping kept for the session, a SOURCE_CHANGE while streaming, the decode counters.
+. **The transport on the interrupt** (2026-11-25, fix/codec-irq, `staged/codec_transport.rs`, the edit of
+   `DroidVMVirtioMedia.c`; "The transport on the interrupt" below): the event queue on the media device's SPI with a
+   guard timeout instead of the 1 ms poll, the command queue `NO_INTERRUPT`, events handed on without the transport's
+   lock, the `transport:` counters; `oneios-codec-irq=0` keeps the poll.
 
 The hvcC's twelve bytes of profile, tier and level. Upstream copies them from the SPS as the stream has them
 (`memcpy(out + at, s->sps + 3, 12)`). Every
@@ -127,15 +130,17 @@ ffmpeg decodes, with `-err_detect explode`, exactly the top-left part of the pic
 `oneios-tool kernel gen codec` (`tools/oneios-tool/crates/oneios-kernel/src/build_oneios_codec.rs`; written in Rust,
 no Python original) is one entry of the hosted build's board archives, after `audio`:
 
-- compiles `DroidVMVirtioMedia.c` and `OneiOSCodec.c` with the first kernel pass's Mach record, the staged
-  `DroidVMVTHost.cpp` and `DroidVMVTParavirt.cpp` with its IOKit record (`-I` the package folder; the staged file also
-  `-I` this folder, for `OneiOSCodecPicture.h`);
+- compiles the staged `DroidVMVirtioMedia.c` (edit 7, written into the archive's folder as `DroidVMVTHost.cpp` is) and
+  `OneiOSCodec.c` with the first kernel pass's Mach record, the staged `DroidVMVTHost.cpp` and `DroidVMVTParavirt.cpp`
+  with its IOKit record (`-I` the package folder; the staged files and `OneiOSCodec.c` also `-I` this folder, for
+  `OneiOSCodecPicture.h` and `OneiOSCodecWait.h`);
 - makes `DroidVMVTParavirt.late.o` (no `__DATA,__mod_init_func`, `__GLOBAL__sub_I_DroidVMVTParavirt.cpp` global);
 - archives `build/oneios-codec/liboneioscodec.a` (4 objects) and requires `_oneios_codec_start`,
   `_droidvm_media_start`, `_droidvm_vt_paravirt_attach`, `__GLOBAL__sub_I_DroidVMVTParavirt.cpp`,
   `_droidvm_vthost_available`, `_droidvm_vthost_message`, `_droidvm_media_ioctl`, `_droidvm_media_mmap`, and that
   neither C++ object still has a `__mod_init_func` section;
-- writes `objects.json` (each source with its SHA-256, `OneiOSCodecPicture.h` among them).
+- writes `objects.json` (each source with its SHA-256, `OneiOSCodecPicture.h`, `OneiOSCodecWait.h` and both staged
+  files among them).
 
 `kernel/build-hosted.sh` adds `-Wl,-force_load,{tree}/build/oneios-codec/liboneioscodec.a` to
 `CONFIG_XNU_EXTRA_LD_ARCHIVES` (after `audio`'s). `ONEIOS_CODEC_RECORDS` and `ONEIOS_CODEC_OUT` name another record
@@ -144,7 +149,10 @@ folder and output folder: the generator against a finished build's tree, without
 Tests: `cargo test -p oneios-kernel --release --test golden` (`the_codec_edit_writes_its_frozen_text_and_fits_the_
 pinned_source`: the edit list on a made-up source against `tests/kernelgen/golden/synthetic/codec.out`, and on the
 real file: each tile message has its case, each helper is defined before its caller);
-`kernel/tests/host.sh` (`OneiOSCodecPicture.h`: `tests/test_picture.c` and `tests/crop.sh`, above);
+`the_transport_edit_fits_the_pinned_source` (edit 7 on the pinned `DroidVMVirtioMedia.c`: each anchor once, the poll
+gone, applied twice it fails);
+`kernel/tests/host.sh` (`OneiOSCodecPicture.h`: `tests/test_picture.c` and `tests/crop.sh`, above; `OneiOSCodecWait.h`:
+`tests/test_wait.c`, both paths of the transport's wait);
 `tools/oneios-tool/tests/kernelgen/compare-golden.sh WORK` after a build (the staged file's hash, the generator's
 line).
 
@@ -156,6 +164,7 @@ line).
 | `droidvm-media=0` | no transport (no device is looked for) |
 | `droidvm-vt-paravirt=1` | publish the service. xnuhost adds it when `encoder=auto` or `encoder=sim` gave the guest a device. Without it the classes are registered (stage 1) and root can publish later: `sysctl kern.droidvm_vt_paravirt=1` |
 | `oneios-codec-report=0` | no report thread |
+| `oneios-codec-irq=0` | (2026-11-25, edit 7) the transport polls its event queue as the pin does (1 ms while a session streams, 50 ms otherwise) instead of waiting on the device's interrupt; default 1. `docs/switches.md` |
 
 - At start, always: `ONEIOS CODEC: N virtio-media device(s), M up; VideoToolbox paravirtualization registered (stage
   2)` with a device and `droidvm-vt-paravirt=1`; `... not published (stage 1)` without the boot argument or without a
@@ -179,12 +188,110 @@ line).
   `,uui`, or larger than the tile size), 101 a tile's surface none of 420v, 420f, x420, xf20 (until 2026-11-23: not
   420v/420f), 102 an SPS whose conformance window
   could not be written (a small HEVC session: no description, so no tile is handed over).
+- With each counters line (2026-11-25, edit 7): `ONEIOS CODEC: transport: interrupt (SPI N), S s: interrupts N; event
+  worker woken by the interrupt N, by the timer N (with events N); commands N (waited N)`, or `transport: polled (WHY),
+  ...` with WHY `oneios-codec-irq=0`, `no interrupt in the device tree` or `ArmCpu did not attach the SPI`. The counts
+  are those since the last such line, S its seconds (30 a report the counters line was due). "By the timer" is the
+  guard on the interrupt (a few per 30 s; "with events" above 0 is an interrupt that came late or not at all) and every
+  poll when polled (about 30,000 per 30 s while a session streams). "Waited" is a command xnuhost did not answer inside
+  its notify (0 expected: it answers every command there).
 
 ## What the transport costs when idle
 
-`DroidVMVirtioMedia.c`'s thread looks at the event queue's used ring every 50 ms (every 1 ms while a session
-streams); that is a read of guest memory, no trap. xnuhost's side sleeps until a command or a kick with no session
-open (`media_device.c`).
+Since 2026-11-25 (edit 7), on the interrupt: `DroidVMVirtioMedia.c`'s event worker sleeps until the device's SPI, at
+most its guard (1 s with no session streaming, 25 ms while one streams): one wake a second when idle. With
+`oneios-codec-irq=0` (or no SPI) it looks at the event queue's used ring every 50 ms (every 1 ms while a session
+streams), as the pin did: each look is a read of guest memory, but each sleep a host timer and a wake of a vCPU.
+xnuhost's side (`media_device.rs`) sleeps until a command, a kick, a decoder's result or (since 2026-11-25) an
+encoder's coded unit, which the helper backend's receive thread wakes it with; with an encoder session open, or an
+event waiting for a guest buffer, 50 ms at most (its guard). Until 2026-11-25 it asked an encoder session's backend
+every 1 ms for 2 s after each command (`runtime/bridges/encoder/README.md`, "The worker waits for the encoder").
+
+## The transport on the interrupt (fix/codec-irq, 2026-11-25)
+
+**Why [F, read in the code].** The pinned transport (UniXNU-droidvm f9121cd) set `VIRTQ_AVAIL_F_NO_INTERRUPT` on both
+queues and polled: its thread slept `IOSleep(fast ? 1 : 50)`, `fast` while a session streams. While a video plays that
+is 1000 timer wakes of a vCPU a second (each a host timer and a wake: `docs/booter.md` 2.4), 20 a second for the
+whole boot, and each event (a decoded picture, an input buffer consumed) handed on up to 1 ms late.
+Droid-VM moved the same file to completion interrupts (UniXNU-droidvm `96e8c1f`, `2cd4c8e`: H.264 decode 268 fps and
+HEVC 367 fps against about 150 before, their PROGRESS.md of 2026-11-13; on crosvm, whose commands complete
+asynchronously).
+
+**Whether the interrupt existed [F].** On the host side, yes: xnuhost's virtio transport raises the device's SPI on
+every used-ring write (`runtime/core/src/virtio.rs` `put`, for every device), the media device is made with its SPI
+(`media_device.rs` `Virtio::create(base, spi, ...)`), and the loader names it in `/arm-io/virtio-media-0` as
+`droidvm,intid` (`runtime/loader/src/machine.rs`, `BOARD_VIRTIO_SPI + index`). Only the guest never attached it. Two
+facts of xnuhost change the port against Droid-VM's: xnuhost answers every command inside the guest's notify (the
+used ring is written before `post` returns, so a command never waits), and it raised the line for every command too,
+ignoring `NO_INTERRUPT`: an interrupt per command would have been an ArmCpu dispatch (about 140-290 us of trapped GIC
+registers, `ArmCpu's trapped registers` in `oneios-perf`) for nothing.
+
+**The fix.**
+- Guest (edit 7, `staged/codec_transport.rs`, after 96e8c1f and 2cd4c8e): the window's INTID from `droidvm,intid`
+  (or `interrupts`, `gic-spi`), attached with `armcpu_spi_attach` as a level SPI (as the bridge, camera and input
+  drivers take theirs). The handler acknowledges the device's interrupt status (0x60, 0x64), counts, and wakes the
+  event worker; no mutex, no callback. Only the event queue clears `NO_INTERRUPT`; the command queue keeps it. The
+  event worker arms its wait, looks at `media_pending` (an interrupt before the sleep is not lost), sleeps until the
+  interrupt or its guard (`OneiOSCodecWait.h`: 25 ms while a session streams, 1000 ms otherwise), then reaps every
+  device. Events are copied and their buffers returned under the device's lock and handed to `DroidVMVTHost.cpp`
+  without it (96e8c1f's order; the sink takes the session table's and the session's locks). A command no longer reaps
+  events while it waits (it holds the device's lock; the event worker does).
+- xnuhost (`runtime/core/src/virtio.rs`, `Device::quiet_queues`, default none): a device may name queues whose
+  driver's `NO_INTERRUPT` the transport honours; the media device names both (`media_device.rs`), so the command
+  queue raises nothing and the event queue raises the SPI. Every other device is unchanged (the flag is ignored there,
+  as before). An older kernel (both queues `NO_INTERRUPT`, nothing attached) gets no line at all now; a new kernel on an
+  older xnuhost gets an interrupt per command as well (it works, at that cost).
+- `oneios-codec-irq=0` keeps the pin's poll; a window with no SPI, or one ArmCpu does not attach (16 slots), is
+  polled the same way. Not exact: events go through the event worker without the lock on both values.
+
+**Tests [F, the build laptop].**
+- `kernel/tests/host.sh`: `tests/test_wait.c` (26 checks: the mode and why on each path, the worker's sleep polled and
+  on the interrupt, the wake counters of a stream of each, the line of both modes).
+- `cargo test -p oneios-kernel --test golden`: `the_transport_edit_fits_the_pinned_source`.
+- `cargo test -p xh-core`: `virtio::tests::no_interrupt_is_honoured_only_on_the_queues_the_device_names` (a quiet
+  queue with the flag raises nothing, without it the line rises and the ack lowers it, another queue and another
+  device raise whatever the flag).
+- `cargo test -p oneencoder --test interrupt` (`runtime/bridges/encoder/tests/interrupt.rs`): the media device driven as
+  edit 7 drives it: OPEN and the session's commands raise nothing, the decoder's SOURCE_CHANGE raises the SPI once, the
+  ack takes it down; with both queues `NO_INTERRUPT` the line stays down and the event still comes.
+- Not tested on the host: the kernel's wait primitives and ArmCpu's dispatch (the phone is the test).
+
+**What a phone session must show (YouTube in Safari, `decoder=auto`).**
+- `ONEIOS CODEC: transport: interrupt (SPI 4x), 30 s: interrupts N; event worker woken by the interrupt N, by the timer
+  N (with events N); commands N (waited 0)`: interrupts and wakes by the interrupt in the hundreds to thousands while
+  the video plays, by the timer a few per 30 s (polled it was about 30,000), with events near 0.
+- `ONEIOS CODEC: decoded: ...` growing as before, dropped near 0, `dfrm to Demt avg` no higher than before (an event
+  is handed on at once now, not after up to 1 ms).
+- `oneios-perf`: `timer_set` per 30 s and the vCPU wakes lower during the video than with `oneios-codec-irq=0`;
+  `ArmCpu's trapped registers` higher by about the interrupts' count (the trade).
+- `oneios-cpu`: kernel_task, videocodecd, mediaplaybackd, com.apple.WebKit.Web at or below their figures with
+  `oneios-codec-irq=0`; `thermal: 30 s` cooler or the same for the same video.
+- Failure signs: `transport: polled (ArmCpu did not attach the SPI)` (no slot left: polled as before); `by the timer`
+  with events climbing (interrupts lost); a video that stalls (then boot with `oneios-codec-irq=0`).
+- xnuhost's worker (the second fix, `runtime/bridges/encoder/README.md` "The worker waits for the encoder"; no
+  switch, the same on both values of `oneios-codec-irq`): `media: 30 s: worker woken N: by data (commands, kicks,
+  results, coded units) N, by the timeout N; 1 ms looks 0` in xnuhost.log while the video plays (and while the camera
+  records or a photo is saved: the encoder), "by the timeout" in the tens at most. `1 ms looks` above 0 only with a
+  backend that cannot wake the worker (`encoder: session N: ...; asked every 1 ms`), never with `mediacodec-helper`.
+
+**Built on the build laptop (2026-11-25, origin/main a1200e5 plus this work). Not booted** (the phone was not
+connected; CLAUDE.md 2026-11-24: no qemu boots).
+- **Kernel [F]:** `HOSTED_OUT=codecirq ONEIOS_CRYPTO=original kernel/build-hosted.sh`: `xnu.macho`
+  `ad9dfc32cc0d98bc85fa437163815d4fe0816bc6c9f7079ecdad401a06a0a37a` (24,736,968 bytes), releasable, 193 patches, in
+  547 s. The archive's four compiler logs are empty (no warning). The staged `DroidVMVirtioMedia.c` is `0996ec0d...`
+  (27,259 bytes), the staged `DroidVMVTHost.cpp` `72bfaad0...` as before (`tests/kernelgen/golden/staged.sha256`);
+  `_media_interrupt`, `_oneios_media_counts`, `_oneios_media_polled` and ArmCpu's `_armcpu_spi_attach` are in the kernel.
+- **Prelinked [F]:** `KERNEL=out/kernel/current-hosted-codecirq/xnu.macho OUT=out/kernel/codecirq-24A446
+  kernel/prelink/build.sh`: `kernel.kc` `782b3c24749782d9f09ad8a4baa96badbda075f087b17b7efa88889b55180383` (96,337,920
+  bytes), `audit: 2711 paired, 93 functions on the stub, 9 data unpaired; 0 failures`; `oneios-tool prelink
+  stubs-check`: 666 good, 0 bad. `kernel.kc.hashes` `bf795f6c...`.
+- `compare-golden.sh`: the codec's two staged files are the frozen ones; `oneios-net/report.json`, `DroidVMVirtioInput.c`,
+  `DroidVMGpu.cpp` and net's line differ as they did before this work.
+- **Host tests [F]:** `kernel/tests/host.sh` 14 of 14 (`test_wait` 26 checks); `cargo test -p oneios-kernel --test
+  golden` 16 of 16; `runtime/host-tests.sh`: workspace, lint-android, port, links and package pass, the boot part
+  skipped; its lint part failed on the formatting of this work's two test files, fixed (`cargo fmt`), then `cargo fmt
+  --check` and `cargo clippy --workspace --all-targets -D warnings` pass, `tests/interrupt.rs` and xh-core's virtio
+  tests (15) pass again.
 
 ## Limits [F from the code]
 

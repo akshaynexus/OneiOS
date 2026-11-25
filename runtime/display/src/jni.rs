@@ -163,6 +163,7 @@ impl Window {
             stride: b.stride,
             format: b.format,
             bits: b.bits as *mut u8,
+            key: b.bits as usize,
         })
     }
 
@@ -232,6 +233,8 @@ struct Context {
     fd: OwnedFd,
     frame: Option<Frame>,
     direct: Direct,
+    /// The refresh rate the Java half asked for (nHello): the write-only child's frame rate vote.
+    hz: i32,
 }
 
 /// The handle's context.
@@ -249,7 +252,7 @@ pub extern "C" fn Java_OneiOSDisplay_nOpen(env: Env, _type: Jobject, socket_path
     let Some(path) = java_string(env, socket_path) else { return 0 };
     let path = PathBuf::from(std::ffi::OsStr::from_bytes(&path));
     match xhd::connect(&path, wait_ms, &stopping) {
-        Ok(fd) => Box::into_raw(Box::new(Context { fd, frame: None, direct: Direct::new() })) as usize as Jlong,
+        Ok(fd) => Box::into_raw(Box::new(Context { fd, frame: None, direct: Direct::new(), hz: 0 })) as usize as Jlong,
         Err(e) => {
             let why = if stopping() { "stopped while waiting".to_string() } else { e.to_string() };
             eprintln!("oneios-display: {}: {why}", path.display());
@@ -272,6 +275,7 @@ pub extern "C" fn Java_OneiOSDisplay_nHello(
     // SAFETY: the Java half passes the handle nOpen gave it.
     let c = unsafe { context(handle) };
     let flags = if direct != 0 { PANEL_DIRECT } else { 0 };
+    c.hz = hz;
     if let Err(e) = xhd::send_panel(c.fd.as_fd(), width as u32, height as u32, hz as u32, flags) {
         eprintln!("oneios-display: the panel's mode could not be sent: {e}");
     }
@@ -326,6 +330,277 @@ pub extern "C" fn Java_OneiOSDisplay_nClose(_env: Env, _type: Jobject, handle: J
     drop(unsafe { Box::from_raw(handle as usize as *mut Context) });
 }
 
+// ---- the write-only buffers: AHardwareBuffer and ASurfaceTransaction (xhd::present, display-present=ahb) ----------
+
+#[repr(C)]
+struct AHardwareBuffer {
+    _opaque: [u8; 0],
+}
+
+#[repr(C)]
+struct ASurfaceControl {
+    _opaque: [u8; 0],
+}
+
+#[repr(C)]
+struct ASurfaceTransaction {
+    _opaque: [u8; 0],
+}
+
+#[repr(C)]
+struct ASurfaceTransactionStats {
+    _opaque: [u8; 0],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct AHardwareBufferDesc {
+    width: u32,
+    height: u32,
+    layers: u32,
+    format: u32,
+    usage: u64,
+    stride: u32,
+    rfu0: u32,
+    rfu1: u64,
+}
+
+/// CPU_WRITE_RARELY | CPU_READ_NEVER | GPU_SAMPLED_IMAGE | COMPOSER_OVERLAY (hardware_buffer.h): the CPU only writes, so
+/// the buffer is not in the CPU's caches and no lock or post maintains them.
+const AHB_USAGE_WRITE_ONLY: u64 = (2 << 4) | (1 << 8) | (1 << 11); // CPU_READ_NEVER is 0
+const AHB_USAGE_CPU_WRITE_RARELY: u64 = 2 << 4;
+const VISIBILITY_HIDE: i8 = 0;
+const VISIBILITY_SHOW: i8 = 1;
+const TRANSPARENCY_OPAQUE: i8 = 2;
+
+type OnComplete = extern "C" fn(context: *mut c_void, stats: *mut ASurfaceTransactionStats);
+
+// All of them in libandroid's API 30 stubs (AHardwareBuffer_* in libnativewindow as well); setFrameRate is API 30.
+#[link(name = "android")]
+extern "C" {
+    fn AHardwareBuffer_isSupported(desc: *const AHardwareBufferDesc) -> i32;
+    fn AHardwareBuffer_allocate(desc: *const AHardwareBufferDesc, out: *mut *mut AHardwareBuffer) -> i32;
+    fn AHardwareBuffer_describe(buffer: *const AHardwareBuffer, desc: *mut AHardwareBufferDesc);
+    fn AHardwareBuffer_lock(
+        buffer: *mut AHardwareBuffer,
+        usage: u64,
+        fence: i32,
+        rect: *const ARect,
+        out: *mut *mut c_void,
+    ) -> i32;
+    fn AHardwareBuffer_unlock(buffer: *mut AHardwareBuffer, fence: *mut i32) -> i32;
+    fn AHardwareBuffer_release(buffer: *mut AHardwareBuffer);
+    fn ASurfaceControl_createFromWindow(parent: *mut ANativeWindow, name: *const c_char) -> *mut ASurfaceControl;
+    fn ASurfaceControl_release(sc: *mut ASurfaceControl);
+    fn ASurfaceTransaction_create() -> *mut ASurfaceTransaction;
+    fn ASurfaceTransaction_delete(t: *mut ASurfaceTransaction);
+    fn ASurfaceTransaction_apply(t: *mut ASurfaceTransaction);
+    fn ASurfaceTransaction_setBuffer(
+        t: *mut ASurfaceTransaction,
+        sc: *mut ASurfaceControl,
+        buffer: *mut AHardwareBuffer,
+        acquire_fence: i32,
+    );
+    fn ASurfaceTransaction_setDamageRegion(
+        t: *mut ASurfaceTransaction,
+        sc: *mut ASurfaceControl,
+        rects: *const ARect,
+        count: u32,
+    );
+    fn ASurfaceTransaction_setVisibility(t: *mut ASurfaceTransaction, sc: *mut ASurfaceControl, visibility: i8);
+    fn ASurfaceTransaction_setBufferTransparency(
+        t: *mut ASurfaceTransaction,
+        sc: *mut ASurfaceControl,
+        transparency: i8,
+    );
+    fn ASurfaceTransaction_setBufferDataSpace(t: *mut ASurfaceTransaction, sc: *mut ASurfaceControl, dataspace: i32);
+    fn ASurfaceTransaction_setFrameRate(
+        t: *mut ASurfaceTransaction,
+        sc: *mut ASurfaceControl,
+        rate: f32,
+        compatibility: i8,
+    );
+    fn ASurfaceTransaction_setOnComplete(t: *mut ASurfaceTransaction, context: *mut c_void, func: OnComplete);
+    fn ASurfaceTransaction_reparent(
+        t: *mut ASurfaceTransaction,
+        sc: *mut ASurfaceControl,
+        parent: *mut ASurfaceControl,
+    );
+    fn ASurfaceTransactionStats_getPreviousReleaseFenceFd(
+        stats: *mut ASurfaceTransactionStats,
+        sc: *mut ASurfaceControl,
+    ) -> i32;
+}
+
+/// What a transaction's completion needs: the child (whose previous buffer's release fence is asked for) and the
+/// present loop's callback. Leaked into the transaction's context, taken back once in `completed`.
+struct Completion {
+    sc: *mut ASurfaceControl,
+    done: xhd::present::Done,
+}
+
+extern "C" fn completed(context: *mut c_void, stats: *mut ASurfaceTransactionStats) {
+    // SAFETY: context is the Box<Completion> post() leaked for this transaction, completed once (setOnComplete's
+    // contract). The child is let go only after the completions came (or a second passed: Present's end), and the
+    // stats look the child up by its address among the transaction's own references (AOSP surface_control.cpp).
+    let c = unsafe { Box::from_raw(context as *mut Completion) };
+    // SAFETY: stats is the NDK's for this call; the fence is ours to close (surface_control.h).
+    let fd = unsafe { ASurfaceTransactionStats_getPreviousReleaseFenceFd(stats, c.sc) };
+    // SAFETY: a file descriptor the NDK handed over, owned here from now on.
+    let fence = (fd >= 0).then(|| unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd) });
+    (c.done)(fence);
+}
+
+/// xhd::present's NDK half on the layer's window: a child surface of it and three write-only buffers.
+struct Ahb {
+    window: *mut ANativeWindow,
+    sc: *mut ASurfaceControl,
+    buffers: [*mut AHardwareBuffer; xhd::present::SLOTS],
+    hz: i32,
+}
+
+// SAFETY: the raw pointers are the NDK's thread-safe objects (AHardwareBuffer, ASurfaceControl are reference counted);
+// only the poster's thread calls the methods.
+unsafe impl Send for Ahb {}
+
+impl Ahb {
+    /// window: the layer's (owned by its Window, which outlives this: both are in nRun's Present, the window last).
+    fn new(window: *mut ANativeWindow, hz: i32) -> Ahb {
+        Ahb { window, sc: std::ptr::null_mut(), buffers: [std::ptr::null_mut(); xhd::present::SLOTS], hz }
+    }
+
+    fn desc(width: u32, height: u32, format: i32) -> AHardwareBufferDesc {
+        AHardwareBufferDesc {
+            width,
+            height,
+            layers: 1,
+            format: format as u32,
+            usage: AHB_USAGE_WRITE_ONLY,
+            ..Default::default()
+        }
+    }
+}
+
+fn rect(r: &xhd::Rect) -> ARect {
+    ARect { left: r.x as i32, top: r.y as i32, right: (r.x + r.w) as i32, bottom: (r.y + r.h) as i32 }
+}
+
+impl xhd::present::Backend for Ahb {
+    fn supported(&mut self, width: u32, height: u32, format: i32) -> bool {
+        let d = Ahb::desc(width, height, format);
+        // SAFETY: a filled descriptor, read only.
+        unsafe { AHardwareBuffer_isSupported(&d) == 1 }
+    }
+
+    fn open_child(&mut self) -> Result<(), String> {
+        // SAFETY: the layer's live window; a NUL-terminated name.
+        self.sc = unsafe { ASurfaceControl_createFromWindow(self.window, c"OneiOS frame".as_ptr()) };
+        if self.sc.is_null() {
+            return Err("ASurfaceControl_createFromWindow gave none".into());
+        }
+        Ok(())
+    }
+
+    fn allocate(&mut self, slot: usize, width: u32, height: u32, format: i32) -> Result<u32, i32> {
+        let d = Ahb::desc(width, height, format);
+        let mut b = std::ptr::null_mut();
+        // SAFETY: a filled descriptor; b is written by the call.
+        let error = unsafe { AHardwareBuffer_allocate(&d, &mut b) };
+        if error != 0 || b.is_null() {
+            return Err(if error != 0 { error } else { -libc::ENOMEM });
+        }
+        self.buffers[slot] = b;
+        let mut got = AHardwareBufferDesc::default();
+        // SAFETY: a live buffer; got is written by the call.
+        unsafe { AHardwareBuffer_describe(b, &mut got) };
+        Ok(got.stride)
+    }
+
+    fn lock(&mut self, slot: usize) -> Result<*mut u8, i32> {
+        let mut bits = std::ptr::null_mut();
+        // SAFETY: a live buffer of ours (allocated, not released); whole (no rectangle), no fence to wait for (the
+        // present loop waited for the compositor's release fence itself).
+        let error = unsafe {
+            AHardwareBuffer_lock(self.buffers[slot], AHB_USAGE_CPU_WRITE_RARELY, -1, std::ptr::null(), &mut bits)
+        };
+        if error != 0 {
+            return Err(error);
+        }
+        Ok(bits as *mut u8)
+    }
+
+    fn unlock(&mut self, slot: usize) -> Result<Option<OwnedFd>, i32> {
+        let mut fence = -1;
+        // SAFETY: the buffer locked above; fence is written by the call.
+        let error = unsafe { AHardwareBuffer_unlock(self.buffers[slot], &mut fence) };
+        // SAFETY: a fence the NDK handed over (or none).
+        let fence = (fence >= 0).then(|| unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fence) });
+        if error != 0 {
+            return Err(error);
+        }
+        Ok(fence)
+    }
+
+    fn post(
+        &mut self,
+        slot: usize,
+        acquire: Option<OwnedFd>,
+        damage: xhd::Rect,
+        first: Option<i32>,
+        done: xhd::present::Done,
+    ) -> Result<(), i32> {
+        // SAFETY: the NDK's constructor; checked below.
+        let t = unsafe { ASurfaceTransaction_create() };
+        if t.is_null() {
+            return Err(-libc::ENOMEM);
+        }
+        let area = rect(&damage);
+        let context = Box::into_raw(Box::new(Completion { sc: self.sc, done })) as *mut c_void;
+        // SAFETY: a live transaction, child and buffer; the transaction takes the acquire fence (setBuffer) and the
+        // completion's context (taken back once in `completed`).
+        unsafe {
+            ASurfaceTransaction_setBuffer(t, self.sc, self.buffers[slot], acquire.map_or(-1, IntoRawFd::into_raw_fd));
+            ASurfaceTransaction_setDamageRegion(t, self.sc, &area, 1);
+            if let Some(dataspace) = first {
+                ASurfaceTransaction_setVisibility(t, self.sc, VISIBILITY_SHOW);
+                ASurfaceTransaction_setBufferTransparency(t, self.sc, TRANSPARENCY_OPAQUE);
+                ASurfaceTransaction_setBufferDataSpace(t, self.sc, dataspace);
+                if self.hz > 0 {
+                    ASurfaceTransaction_setFrameRate(t, self.sc, self.hz as f32, 0);
+                }
+            }
+            ASurfaceTransaction_setOnComplete(t, context, completed);
+            ASurfaceTransaction_apply(t);
+            ASurfaceTransaction_delete(t);
+        }
+        Ok(())
+    }
+
+    fn close(&mut self) {
+        if !self.sc.is_null() {
+            // SAFETY: a live child; hidden and taken off the layer in one transaction, then our reference let go.
+            unsafe {
+                let t = ASurfaceTransaction_create();
+                if !t.is_null() {
+                    ASurfaceTransaction_setVisibility(t, self.sc, VISIBILITY_HIDE);
+                    ASurfaceTransaction_reparent(t, self.sc, std::ptr::null_mut());
+                    ASurfaceTransaction_apply(t);
+                    ASurfaceTransaction_delete(t);
+                }
+                ASurfaceControl_release(self.sc);
+            }
+            self.sc = std::ptr::null_mut();
+        }
+        for b in self.buffers.iter_mut() {
+            if !b.is_null() {
+                // SAFETY: our reference, let go once (a buffer still in the compositor keeps its own).
+                unsafe { AHardwareBuffer_release(*b) };
+                *b = std::ptr::null_mut();
+            }
+        }
+    }
+}
+
 // ---- the run loop -----------------------------------------------------------------------------------------------
 
 impl run::Layer for Window {
@@ -341,7 +616,7 @@ impl run::Layer for Window {
     fn lock(&self, width: u32, height: u32) -> Result<run::Locked, i32> {
         Window::lock(self, width, height)
     }
-    fn unlock_and_post(&self) {
+    fn unlock_and_post(&self, _changed: &xhd::Rect) {
         Window::unlock_and_post(self)
     }
 }
@@ -373,7 +648,12 @@ pub extern "C" fn Java_OneiOSDisplay_nRun(
     // SAFETY: the signal pipe's read end is open for the whole process (install_signals); with no pipe (-1) only the
     // socket is polled.
     let signal_fd = (signal >= 0).then(|| unsafe { BorrowedFd::borrow_raw(signal) });
-    let end = run::run(c.fd.as_fd(), f, &mut c.direct, &window, format, dataspace, ready, signal_fd, &stopping);
-    drop(window);
+    // display-present (xnuhost's options, or ONEIOS_DISPLAY_PRESENT): write-only buffers on a child of the layer, else
+    // the window; xhd::present chooses at the first post and falls back to the window by itself.
+    let raw = window.0;
+    let env = std::env::var(xhd::present::ENV).ok();
+    let present = xhd::present::Present::new(window, Ahb::new(raw, c.hz), f.format, env);
+    let end = run::run(c.fd.as_fd(), f, &mut c.direct, &present, format, dataspace, ready, signal_fd, &stopping);
+    drop(present); // the child hidden and let go, then the window
     end as Jint
 }

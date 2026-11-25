@@ -54,6 +54,14 @@ Anything below that the booter, release-kernel or image-build cannot meet: chang
   The app reads neither: `oneios-tool serve make-image` takes them from the staged runtime (OneiOS's
   `docs/image-format.md`, "The Metal plug-in of an image made on the phone"). They are ordinary `files` entries, so
   the app's unpacker and the switch's `runtime.sha256` check cover them; the switch hashes about 36 MB more.
+- Optional, since 2026-11-25 (iOS 27.2.1 beside 27.0.1): another iOS build's kernel at `kernel/<build>/xnu.macho`
+  (24B156: `kernel/24B156/xnu.macho` with its record), and `runtime.json` `"kernels"`: every kernel, the default's first,
+  each `{"path", "build_id", "sha256", "xnu", "profile", "record", "build"}` (the `kernel` object plus the Apple build it
+  pairs; an empty list without a kernel). `"kernel"` stays the default's (24A446), so an app before it reads the same.
+  Another build's plug-ins at `lib/guest/<build>/` (the same three files), and `"metals"` and `"cameras"` list every
+  target's, the default's first (`"metals"`: the `metal` objects; `"cameras"`: the `camera` objects plus the `target` of
+  the Metal bundle beside them). `make-image` takes the kernel, the pairing files (`<stage>/kb-<build>/`) and the
+  plug-ins of the image's build when the request names none; the app names `xnu` and `kb` for 24B156 itself.
 
 ### Phone checks in the package
 

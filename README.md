@@ -41,6 +41,19 @@ one setting turns one back: [docs/switches.md](docs/switches.md) has the table a
 | Return to One UI | Yes — chord, SIGKILL backstop | n/a | Never touches side keys, realtime, or `/sys/power` |
 | Host test suites | n/a | All green: the Rust runtime's `cargo test --workspace` and clippy, the test kernel's five boots under qemu (`runtime/xnuhost/check-arm64.sh`); the prelink audit 0 failures | `runtime/host-tests.sh`, [runtime/RUST.md](runtime/RUST.md) |
 
+### The owner's report of 2026-11-25 (Galaxy S24 Ultra, OneiOS v0.1.3x)
+
+- **Boot:** iOS boots on the phone, semi-stable.
+- **Audio:** works, but laggy. Volume control, the volume keys and the power key work.
+- **Thermal:** the phone runs hot.
+- **Wi-Fi and Bluetooth:** work.
+- **S Pen:** it worked before, and does not work in the latest iOS build (to be fixed).
+- **Haptics:** work.
+- **Camera:** work in progress: the Camera app shows a black preview.
+- **Video playback:** works, but laggy.
+- **Brightness control:** works (the slider). Auto-brightness from the front light sensor (v0.1.29 and later) is not
+  confirmed yet.
+
 ## Known issues
 
 | Issue | State | Tracking |
@@ -76,7 +89,7 @@ Primary target: the rooted Galaxy S24 Ultra. S25, S25 Ultra, S26 Ultra and Galax
 | ![Galaxy S25 Ultra](docs/images/s25-ultra.jpg) | Galaxy S25 Ultra (SM-S938, SM8750) — [YumikoHayamato/OneiOS](https://github.com/YumikoHayamato/OneiOS) (branch `s25-ultra-sm8750`), denis fork, [s25ver snapshot](https://github.com/xaxaapple/s25ver) | SpringBoard, touch and the key return on device (fork sessions 1-7); ported: Oryon topology, Adreno 830 fences, the thermal trips rule, udmabuf ENOMEM fallback | Big-only-SoC bug fixed for all |
 | | Galaxy S25 (SM-S931B, SM8750) — [NoNameBuilder/OneiOS](https://github.com/NoNameBuilder/OneiOS) | Source-level port, no on-device run; ported: host profile, stand-in tests, firmware facts | `panel-fallback=1080x2340@120` by detection |
 | ![Galaxy S26 Ultra](docs/images/s26-ultra.jpg) | Galaxy S26 Ultra (SM-S988, SM8850) — [YMGPwcca/OneiOS](https://github.com/YMGPwcca/OneiOS) | ~600 s iOS run on device | Haptics + backend tests ported |
-| ![Galaxy A56](docs/images/a56.jpg) | Galaxy A56 (SM-A566E, Exynos 1580) — [Musicalista/OneiOS-A56](https://github.com/Musicalista/OneiOS-A56) | iOS 16.5 to lock screen on device; touch works in the fork since 2026-11-21 (its kernel patch 0079: here hosted 0103 since 2026-11-24, in the release kernel `...-16bd44f9d737`, not booted here) | GPU template, bootstrap, triage tools; since 2026-11-23 our own iOS 16.5 image and the OneOS app's A56 path; since 2026-11-24 the fork's touch, Wi-Fi interface, LaunchServices, log flush, frame and idle-jobs fixes and its AIDL Bluetooth client ([docs/a56.md](docs/a56.md) "The second port"; on an A56 our runtime reached the lock screen on 2026-11-24, touch did not work then) |
+| ![Galaxy A56](docs/images/a56.jpg) | Galaxy A56 (SM-A566E, Exynos 1580) — [Musicalista/OneiOS-A56](https://github.com/Musicalista/OneiOS-A56) | iOS 16.5 to lock screen on device; touch works in the fork since 2026-11-21 (its kernel patch 0079: here hosted 0103 since 2026-11-24, in the release kernel `...-16bd44f9d737`, not booted here) | GPU template, bootstrap, triage tools; since 2026-11-23 our own iOS 16.5 image and the OneOS app's A56 path; since 2026-11-24 the fork's touch, Wi-Fi interface, LaunchServices, log flush, frame and idle-jobs fixes and its AIDL Bluetooth client ([docs/a56.md](docs/a56.md) "The second port"; on an A56 our runtime reached the lock screen on 2026-11-24, touch did not work then); since 2026-11-24 a GPU path for its Xclipse 540 (a Rust amdgpu renderer in xnuhost, Mesa radeonsi on Darwin, Jesvi-iOS's Metal layer and iOSPlus10's OpenGL ES layer so backboardd can composite on it, the accelerator in the kernel): built and host-tested, **not booted** ([docs/a56-gpu.md](docs/a56-gpu.md)) |
 
 Device photos: official Samsung product images ([samsung.com](https://www.samsung.com/us/smartphones/galaxy-s25-ultra/), Samsung Newsroom press kits), © Samsung Electronics — used for device identification. A56 photo: [Captainmorlypogi1959 via Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Samsung_Galaxy_A56_5G_2025_(cropped).jpg) (CC BY-SA 4.0).
 
@@ -116,4 +129,7 @@ No license file yet — all rights reserved until the owner adds one.
 [MysticGSI](https://github.com/MysticGSI/mysticgsi): the image build model.
 [UniXNU](https://github.com/UniXNU/UniXNU) and [Droid-VM](https://github.com/Droid-VM): XNU on non-Apple
 ARM64, drm2kgsl, the guest drivers. [iOSPlus10](https://github.com/akshaynexus/iOSPlus10): XNU and iOS userland on
-Qualcomm phones, haptics and brightness. [Darling](https://github.com/darlinghq/darling): Mach and XNU on Linux.
+Qualcomm phones, haptics and brightness, and NegroniGL (the A56's OpenGL ES layer). [Jesvi-iOS](https://github.com/jesvi-eulah/Jesvi-iOS) (jesvi-eulah): Metal on Mesa Gallium for iOS 16.5 (the AIR frontend and Metal
+device of the A56's plug-in). [OneiOS-A56](https://github.com/Musicalista/OneiOS-A56) (Musicalista): the A56 port and its
+amdgpu native-context renderer the Rust one is written from. [Darling](https://github.com/darlinghq/darling): Mach and XNU on Linux.
+Changes ported from forks of this repository, by their authors: [CREDITS.md](CREDITS.md).

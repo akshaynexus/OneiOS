@@ -17,16 +17,19 @@
 //! - eventq (1, manual): the guest posts writable event buffers; a worker thread fills one per event (DQBUF of a
 //!   returned OUTPUT buffer, a coded or decoded CAPTURE buffer; EOS and SOURCE_CHANGE EVENTs).
 //!
-//! The worker asks an encoder backend for coded frames (it has no callback). It does so every millisecond only for
-//! [`MEDIA_BUSY_MS`] after the guest's last command or the backend's last frame, every [`MEDIA_IDLE_MS`] while an
-//! encoder session is open and quiet, and not at all with no encoder session and no event waiting: then it sleeps until
-//! a command, a kick, or a decoder's result wakes it (a decoder says each result: a decoder session costs no wake-up of
-//! its own; a device nobody uses costs none either).
+//! The worker sleeps until something is for it (2026-11-25): a command, a kick of the event queue (the guest gave event
+//! buffers back), a decoder's result, or an encoder's coded unit or drain's end (the helper's receive thread wakes it
+//! with each: [`Session::wakes`]). While an encoder session is open or an event waits for a guest buffer it wakes
+//! [`MEDIA_IDLE_MS`] after its last look at most (the guard: a lost wake-up costs that much, never a stalled stream);
+//! with neither, not at all (a decoder session and a device nobody uses cost no wake-up of their own). Only a backend
+//! whose session cannot wake it (the NDK's MediaCodec in-process: encctl) is still asked every millisecond for
+//! [`MEDIA_BUSY_MS`] after the guest's last command or its last unit, as every backend was until 2026-11-25. The
+//! worker counts its wake-ups by why and says them every [`WAKES_REPORT_MS`] while it wakes ([`wakes_text`]).
 //!
 //! The sessions' MMAP'd buffers come from the shared media pool, first fit ([`Alloc`]; until 2026-11-24 each of two
 //! sessions had a fixed half). A buffer that will not fit is refused at REQBUFS and VideoToolbox keeps its software
 //! codec.
-use crate::backend::{input_format, Backend, Coding, Session};
+use crate::backend::{input_format, Backend, Coding, Session, Wakeup};
 use crate::decoder::{CapLayout, DecEvent, DecodeBackend, DecodeSink, Decoder};
 use crate::pod::Pod;
 use crate::proto::*;
@@ -34,7 +37,7 @@ use crate::switches::TenBit;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::time::Duration;
 use xh_core::bytes::le;
@@ -48,10 +51,14 @@ const MEDIA_OUTPUT_BUFS: u32 = 4;
 const MEDIA_CAPTURE_BUFS: u32 = 8;
 const MEDIA_CODED_HEADROOM: u64 = 65536;
 const MEDIA_EVENT_FIFO: usize = 64;
-/// the backend is asked every millisecond this long after the last activity
+/// a backend that cannot wake the worker ([`Session::wakes`] false) is asked every millisecond this long after the
+/// last command or unit
 pub const MEDIA_BUSY_MS: u64 = 2000;
-/// then this often, while an encoder session is open
+/// the worker's guard: while an encoder session is open or an event waits for a guest buffer it looks at least this
+/// often (a lost wake-up costs this much at most)
 pub const MEDIA_IDLE_MS: u64 = 50;
+/// the worker's wake-ups line (`media: 30 s: ...`): at most this often, and only while it wakes
+pub const WAKES_REPORT_MS: u64 = 30_000;
 const EVENT_BODY: usize = MEDIA_EVENT_BYTES as usize - 8;
 /// The coded pictures' line (`encoder: 60 s: ...`) and the decoded ones' (`decoder: 60 s: ...`): at most this often,
 /// and only while pictures are coded (decoded) or opens refused.
@@ -129,6 +136,8 @@ struct MediaSession {
     output: Vec<Buf>,
     capture: Vec<Buf>,
     enc: Option<Box<dyn Session>>,
+    /// the encoder's backend wakes the worker with its units ([`Session::wakes`]): no 1 ms looks for it
+    wakes: bool,
     /// a decoder: its OUTPUT buffers' size, the decoder, its results, the pictures' layout (from its first result),
     /// the frames fed and out (pictures or errors) since the last drain's end
     out_size: u32,
@@ -235,32 +244,112 @@ struct State {
     dec_report: Window,
 }
 
-/// The worker's sleep: `wake` under its own lock (not the device's).
+/// The worker's wake-ups since the device was made (2026-11-25), by why: `woken` by something for it (a command, a
+/// kick, a decoder's result, an encoder's unit: data), `timed_out` at its guard or a line's time with nothing for it,
+/// `ticks` its 1 ms looks for a backend that cannot wake it ([`MEDIA_BUSY_MS`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Wakes {
+    pub woken: u64,
+    pub timed_out: u64,
+    pub ticks: u64,
+}
+
+impl Wakes {
+    pub fn total(&self) -> u64 {
+        self.woken + self.timed_out + self.ticks
+    }
+}
+
+/// The worker's sleep: `wake` under its own lock (not the device's), and its wake-ups counted.
 #[derive(Default)]
 struct Wake {
     wake: Mutex<bool>,
     cond: Condvar,
     stop: AtomicBool,
+    woken: AtomicU64,
+    timed_out: AtomicU64,
+    ticks: AtomicU64,
 }
 
 impl Wake {
-    /// Something for the worker: a command, a kick of the guest's, a decoder's result (the device lock held or not).
+    /// Something for the worker: a command, a kick of the guest's, a decoder's result, an encoder's coded unit (the
+    /// device lock held or not). One that comes while the worker works is kept for its next sleep, which returns at
+    /// once: none is lost.
     fn wake(&self) {
         *self.wake.lock().unwrap_or_else(PoisonError::into_inner) = true;
         self.cond.notify_one();
     }
 
-    /// The worker's sleep with nothing in flight: until it is woken, or `ms` at most (0: no limit).
-    fn sleep(&self, ms: u64) {
-        let mut woken = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
-        if !*woken {
-            woken = if ms != 0 {
-                self.cond.wait_timeout(woken, Duration::from_millis(ms)).unwrap_or_else(PoisonError::into_inner).0
-            } else {
-                self.cond.wait(woken).unwrap_or_else(PoisonError::into_inner)
-            };
+    /// The worker's sleep: until it is woken, or `ms` at most (0: no limit); counted by which. Whether it was woken.
+    fn sleep(&self, ms: u64) -> bool {
+        let woken = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut woken = if ms != 0 {
+            let limit = Duration::from_millis(ms);
+            self.cond.wait_timeout_while(woken, limit, |w| !*w).unwrap_or_else(PoisonError::into_inner).0
+        } else {
+            self.cond.wait_while(woken, |w| !*w).unwrap_or_else(PoisonError::into_inner)
+        };
+        let was = std::mem::replace(&mut *woken, false);
+        drop(woken);
+        let counter = if was { &self.woken } else { &self.timed_out };
+        counter.fetch_add(1, Ordering::Relaxed);
+        was
+    }
+
+    /// A 1 ms look for a backend that cannot wake the worker (a wake-up meanwhile is kept for the next sleep).
+    fn tick(&self) {
+        std::thread::sleep(Duration::from_millis(1));
+        self.ticks.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn counts(&self) -> Wakes {
+        Wakes {
+            woken: self.woken.load(Ordering::Relaxed),
+            timed_out: self.timed_out.load(Ordering::Relaxed),
+            ticks: self.ticks.load(Ordering::Relaxed),
         }
-        *woken = false;
+    }
+}
+
+/// The wake-ups line (2026-11-25): the worker's wake-ups since `from` by why. With every backend waking it, "1 ms
+/// looks" stays 0 and "by the timeout" is its guard's few (and this line's own); until 2026-11-25 an encoder session
+/// cost about 2,000 1 ms looks after each command.
+pub fn wakes_text(from: &Wakes, now: &Wakes) -> String {
+    format!(
+        "media: {} s: worker woken {}: by data (commands, kicks, results, coded units) {}, by the timeout {}; \
+         1 ms looks {}",
+        WAKES_REPORT_MS / 1000,
+        now.total() - from.total(),
+        now.woken - from.woken,
+        now.timed_out - from.timed_out,
+        now.ticks - from.ticks
+    )
+}
+
+/// The wake-ups line's window: it opens at the first wake-up after the last line, and the line is said
+/// [`WAKES_REPORT_MS`] later (a worker that sleeps says nothing).
+#[derive(Default)]
+struct WakesWindow {
+    from: Wakes,
+    since_ms: u64,
+}
+
+impl WakesWindow {
+    /// The ms until the line is due (0: no window open), and the line when it is due.
+    fn step(&mut self, now: Wakes, now_ms: u64) -> (u64, Option<String>) {
+        if self.since_ms == 0 {
+            if now == self.from {
+                return (0, None);
+            }
+            self.since_ms = now_ms.max(1);
+        }
+        let gone = now_ms.saturating_sub(self.since_ms);
+        if gone < WAKES_REPORT_MS {
+            return (WAKES_REPORT_MS - gone, None);
+        }
+        let line = wakes_text(&self.from, &now);
+        (self.from, self.since_ms) = (now, 0);
+        (0, Some(line))
     }
 }
 
@@ -463,7 +552,12 @@ impl MediaDevice {
         }
         let input = if s.input == 0 { MEDIA_PIXFMT_NV12 } else { s.input };
         s.enc = self.backend.open(s.codec, input, s.width, s.height);
-        let (id, codec, w, h) = (s.id, s.codec, s.width, s.height);
+        if let Some(enc) = s.enc.as_mut() {
+            let wake = Arc::clone(&self.wake);
+            let wakeup: Wakeup = Arc::new(move || wake.wake());
+            s.wakes = enc.wakes(wakeup);
+        }
+        let (id, codec, w, h, wakes) = (s.id, s.codec, s.width, s.height, s.wakes);
         let name = if codec == MEDIA_PIXFMT_HEVC { "HEVC" } else { "H.264" };
         let p010 = if input == MEDIA_PIXFMT_P010 { " (P010 input)" } else { "" };
         match s.enc.as_ref().map(|e| e.coding()) {
@@ -475,7 +569,9 @@ impl MediaDevice {
             Some(coding) => {
                 st.stats.sessions += 1;
                 // which path codes it, once a session (2026-11-23)
-                logi!("encoder: session {id}: {name} {w}x{h} on {}: {}", self.backend.name(), coding.text());
+                // and whether the worker waits for its units or asks every 1 ms (2026-11-25)
+                let looks = if wakes { "" } else { "; asked every 1 ms (the backend cannot wake the worker)" };
+                logi!("encoder: session {id}: {name} {w}x{h} on {}: {}{looks}", self.backend.name(), coding.text());
             }
         }
     }
@@ -1010,8 +1106,9 @@ impl MediaDevice {
     }
 
     /// One turn of the worker: pump, flush, and the 60 s lines when due. Whether an encoder session is open or an
-    /// event waits (the worker then looks again every [`MEDIA_IDLE_MS`]), whether the busy time runs, and the ms until
-    /// a 60 s line is due (0: no window open).
+    /// event waits (the worker then looks again [`MEDIA_IDLE_MS`] later at most: its guard), whether the busy time of
+    /// a backend that cannot wake the worker runs (it is asked every 1 ms then), and the ms until a 60 s line is due
+    /// (0: no window open).
     fn work(&self, dev: &MediaVirtio) -> (bool, bool, u64) {
         let mut st = self.state.borrow_mut();
         self.pump(&mut st);
@@ -1022,9 +1119,11 @@ impl MediaDevice {
         let due = [report(&mut st, now), dec_report(&mut st, now, backend)];
         let report_in = due.iter().copied().filter(|d| *d != 0).min().unwrap_or(0);
         // Something may still come without a command: an encoder's backend may hold a frame, an event may wait for a
-        // buffer. A decoder wakes the worker with each result.
+        // buffer (the guest's kick wakes the worker when it gives one). A decoder wakes the worker with each result,
+        // an encoder's backend with each unit ([`Session::wakes`]); one that cannot is asked every 1 ms while busy.
         let open = !st.fifo.is_empty() || st.sessions.iter().any(|s| s.used && s.role != Role::Decoder);
-        (open, open && now < st.busy_until_ms, report_in)
+        let polled = st.sessions.iter().any(|s| s.used && s.enc.is_some() && !s.wakes);
+        (open, polled && now < st.busy_until_ms, report_in)
     }
 
     fn command(&self, reads: &[&Viov], writes: &[&Viov]) -> Option<u32> {
@@ -1164,6 +1263,14 @@ impl Device for MediaDevice {
         self.wake.wake();
     }
 
+    /// Both queues honour the guest's VIRTQ_AVAIL_F_NO_INTERRUPT (2026-11-25): the staged DroidVMVirtioMedia.c (edit 7)
+    /// sets it on the command queue, whose answers it reads as soon as its notify returns (commands are answered inside
+    /// it, [`Self::command`]), and clears it on the event queue, whose interrupt wakes its event worker. With
+    /// oneios-codec-irq=0 it sets it on both and polls: the line then stays down, as nothing waits for it.
+    fn quiet_queues(&self) -> u32 {
+        1 << MEDIA_QUEUE_COMMAND | 1 << MEDIA_QUEUE_EVENT
+    }
+
     fn reset(&self, _dev: &MediaVirtio) {
         let mut st = self.state.borrow_mut();
         for slot in 0..MEDIA_SESSIONS {
@@ -1184,6 +1291,7 @@ impl Drop for MediaDevice {
 }
 
 fn worker(dev: Weak<MediaVirtio>, wake: Arc<Wake>) {
+    let mut line = WakesWindow::default();
     while !wake.stop.load(Ordering::Acquire) {
         let Some(dev) = dev.upgrade() else { break };
         let (open, busy, report_in) = {
@@ -1191,19 +1299,19 @@ fn worker(dev: Weak<MediaVirtio>, wake: Arc<Wake>) {
             guard.work(&dev)
         };
         drop(dev);
+        // the wake-ups line (2026-11-25): once every 30 s while the worker wakes, with no lock held
+        let (line_in, said) = line.step(wake.counts(), monotonic_ms());
+        if let Some(said) = said {
+            logi!("{said}");
+        }
         if busy {
-            std::thread::sleep(Duration::from_millis(1));
+            wake.tick(); // a backend that cannot wake the worker: asked again in 1 ms
         } else {
-            // with no encoder session, until a command, a kick or a decoder's result; but no longer than a 60 s
-            // line's window (one wake-up for it)
-            let idle = if open { MEDIA_IDLE_MS } else { 0 };
-            wake.sleep(if idle == 0 {
-                report_in
-            } else if report_in == 0 {
-                idle
-            } else {
-                idle.min(report_in)
-            });
+            // until a command, a kick, a decoder's result or an encoder's unit; with an encoder session open or an
+            // event waiting, its guard at most; and no longer than a line's window (one wake-up for each)
+            let guard = if open { MEDIA_IDLE_MS } else { 0 };
+            let limit = [guard, report_in, line_in].into_iter().filter(|ms| *ms != 0).min().unwrap_or(0);
+            wake.sleep(limit);
         }
     }
 }
@@ -1271,9 +1379,53 @@ pub fn stats(dev: &MediaVirtio) -> Stats {
     dev.lock().stats()
 }
 
+/// The worker's wake-ups of a device since it was made, by why (the tests; the `media: 30 s` line says them).
+pub fn wakes(dev: &MediaVirtio) -> Wakes {
+    dev.lock().wake.counts()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_wakes_line_comes_once_a_window_and_only_while_the_worker_wakes() {
+        let mut w = WakesWindow::default();
+        // a worker that never woke: no window, no line
+        assert_eq!(w.step(Wakes::default(), 1000), (0, None));
+        // the first wake-up opens it; the line 30 s later, with the counts since
+        let a = Wakes { woken: 3, timed_out: 1, ticks: 0 };
+        assert_eq!(w.step(a, 1000), (WAKES_REPORT_MS, None));
+        let b = Wakes { woken: 903, timed_out: 21, ticks: 0 };
+        assert_eq!(w.step(b, 1000 + WAKES_REPORT_MS - 1), (1, None));
+        let (due, line) = w.step(b, 1000 + WAKES_REPORT_MS);
+        assert_eq!(due, 0);
+        assert_eq!(
+            line.as_deref(),
+            Some(
+                "media: 30 s: worker woken 924: by data (commands, kicks, results, coded units) 903, by the timeout \
+                 21; 1 ms looks 0"
+            )
+        );
+        // nothing since: no window again; a 1 ms poller's looks show
+        assert_eq!(w.step(b, 99_000), (0, None));
+        let c = Wakes { ticks: 2000, ..b };
+        assert_eq!(w.step(c, 100_000), (WAKES_REPORT_MS, None));
+        let line = w.step(c, 130_000).1.expect("the line");
+        assert!(line.contains("worker woken 2000: ") && line.ends_with("1 ms looks 2000"), "{line}");
+    }
+
+    #[test]
+    fn a_wake_up_while_the_worker_works_is_kept_for_its_next_sleep() {
+        let wake = Wake::default();
+        assert!(!wake.sleep(1), "nothing for it: the timeout");
+        wake.wake();
+        assert!(wake.sleep(10_000), "woken before it slept: at once");
+        wake.wake();
+        wake.tick(); // a 1 ms look keeps it too
+        assert!(wake.sleep(0), "no limit, but woken");
+        assert_eq!(wake.counts(), Wakes { woken: 2, timed_out: 1, ticks: 1 });
+    }
 
     #[test]
     fn the_60_s_line_comes_only_while_pictures_are_coded() {

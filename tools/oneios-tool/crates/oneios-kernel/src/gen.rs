@@ -31,6 +31,18 @@ pub struct Ctx {
     pub repo: PathBuf,
     pub repo_from_env: bool,
     pub records: PathBuf,
+    /// The iOS build the kernel is for (24A446, 24B156): the last part of the device repository's board.toml
+    /// `os_profile`, the profile UniXNU's driver builds with (kernel/build-hosted.sh writes ONEIOS_OS_PROFILE there).
+    /// It picks the original classes' records, `<Class>-<build>-v54.json` (`Ctx::layout`).
+    pub build: String,
+}
+
+/// The build of `os_profile = "ios-27.2.1-24B156"` in a board.toml's text.
+pub fn os_build(board: &str) -> Option<String> {
+    let line = board.lines().find(|l| l.trim_start().starts_with("os_profile"))?;
+    let profile = line.split_once('=')?.1.trim().trim_matches('"');
+    let build = profile.rsplit('-').next()?;
+    (build.len() >= 5 && build.chars().all(|c| c.is_ascii_alphanumeric())).then(|| build.to_string())
 }
 
 impl Ctx {
@@ -49,7 +61,21 @@ impl Ctx {
                 .ok_or_else(|| anyhow!("{name}: {} has no directory two levels up", device.display()))?,
         };
         let records = tree.join("build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837");
-        Ok(Ctx { name, tree, repo, repo_from_env: from_env.is_some(), records })
+        let board_path = device.join("board.toml");
+        let board = std::fs::read_to_string(&board_path).with_context(|| format!("{name}: {}", board_path.display()))?;
+        let build = os_build(&board).ok_or_else(|| anyhow!("{name}: {} has no os_profile = \"ios-<version>-<build>\"", board_path.display()))?;
+        Ok(Ctx { name, tree, repo, repo_from_env: from_env.is_some(), records, build })
+    }
+
+    /// The record of the original class(es) `stem` in `dir` for this build: `<stem>-<build>-v54.json`. A build with
+    /// none (no kernelcache read for it) fails here, by name, instead of binding another build's addresses.
+    pub fn layout(&self, dir: &Path, stem: &str) -> Result<PathBuf> {
+        let path = dir.join(format!("{stem}-{}-v54.json", self.build));
+        if !path.is_file() {
+            bail!("{}: {} is missing: the records of the original classes for iOS build {} (kernel/prelink/README.md, \
+                   \"Another build\")", self.name, path.display(), self.build);
+        }
+        Ok(path)
     }
 
     /// `drivers.record(RECORDS, drivers.RECORDS[universe])`.

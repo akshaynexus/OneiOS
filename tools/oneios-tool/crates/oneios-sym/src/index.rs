@@ -70,6 +70,9 @@ pub struct BuildReport {
     /// Seconds of the stages: the images' load commands; the call bitmap and the symbols (at the same time, on
     /// one thread pool); writing the files.
     pub stages: [f64; 3],
+    /// Subcache files missing (a partial copy) and the images whose __TEXT was read (all of them for a whole cache).
+    pub missing: usize,
+    pub with_text: usize,
 }
 
 pub struct Index {
@@ -373,12 +376,16 @@ fn build_calls(cache: &Cache) -> Result<(u64, u64, usize, Vec<AtomicU64>)> {
             at = stop;
         }
     }
-    let files: Vec<std::fs::File> = cache
+    // A subcache missing from a partial copy has no mappings, so no piece reads it.
+    let files: Vec<Option<std::fs::File>> = cache
         .file_names
         .iter()
         .map(|name| {
             let path = cache.dir.join(name);
-            std::fs::File::open(&path).with_context(|| format!("{}", path.display()))
+            if cache.missing.contains(name) {
+                return Ok(None);
+            }
+            std::fs::File::open(&path).map(Some).with_context(|| format!("{}", path.display()))
         })
         .collect::<Result<_>>()?;
     let scan = |(buf, local): &mut (Vec<u8>, Vec<u64>), &(m, from, to, column): &(crate::cache::Mapping, u64, u64, usize)| -> Result<()> {
@@ -387,7 +394,8 @@ fn build_calls(cache: &Cache) -> Result<(u64, u64, usize, Vec<AtomicU64>)> {
         buf.resize(want, 0);
         let mut got = 0;
         while got < want {
-            match files[m.file].read_at(&mut buf[got..], m.foff + (from - m.addr) + got as u64) {
+            let Some(file) = &files[m.file] else { break };
+            match file.read_at(&mut buf[got..], m.foff + (from - m.addr) + got as u64) {
                 Ok(0) => break,
                 Ok(n) => got += n,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
@@ -473,7 +481,7 @@ fn write_file(path: &Path, parts: &[&[u8]]) -> Result<u64> {
 /// the latest one in `parent/latest`.
 pub fn build(cache: &Cache, parent: &Path) -> Result<BuildReport> {
     let started = std::time::Instant::now();
-    let name = uuid_hex(&cache.uuid);
+    let name = cache.index_name();
     let dir = parent.join(&name);
     let tmp = parent.join(format!("{name}.tmp{}", std::process::id()));
     std::fs::create_dir_all(&tmp).with_context(|| format!("{}", tmp.display()))?;
@@ -596,6 +604,8 @@ fn build_into(cache: &Cache, dir: &Path) -> Result<BuildReport> {
     Ok(BuildReport {
         dir: dir.to_path_buf(),
         images: cache.images.len(),
+        missing: cache.missing.len(),
+        with_text: text.iter().filter(|t| t.is_some()).count(),
         symbols_read: syms.iter().map(|s| s.read).sum(),
         symbols_kept: n_syms as usize,
         files,

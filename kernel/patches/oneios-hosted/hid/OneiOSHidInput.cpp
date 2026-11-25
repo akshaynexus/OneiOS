@@ -11,7 +11,13 @@
 //                                         Ring Enable, and a boot keyboard
 //   NativeHidInput "OneiOS pen"           (oneios-pen=1 and a pen device from xnuhost only) Digitizer / Stylus, report 4:
 //                                         backboardd's pencil digitizer, the S Pen as an Apple Pencil (staged/hid_pen.rs)
-//   OneiOSALSDevice                       drivers/brightness: Sensor / Ambient Light, under IOResources
+//   OneiOSALSDevice                       drivers/brightness: Sensor / Ambient Light, under IOResources; with oneios-als-spu=1
+//                                         an iPhone's SPU light sensor {0xff00, 4} (OneiOSALSEvents.cpp wraps its event driver)
+//   AppleSPUHIDDevice x 1..4              (oneios-motion=MASK and a motion device from xnuhost only) the accelerometer {0xff00, 3},
+//                                         gyroscope {0xff00, 9}, device orientation {0x20, 0x8a} and compass {0xff00, 0x0a}:
+//                                         UniXNU-droidvm f9121cd's DroidVMMotionHid.inc (BSD-2-Clause-Patent) as staged by
+//                                         staged/hid_motion.rs, with its SPU command channel (DroidVMSensorProcessor.cpp) and
+//                                         kern.droidvm_motion (DroidVMMotion.c), as HidInputProbe.cpp publishes them on the iPad
 // The first three are fed by the staged DroidVMVirtioInput.c from xnuhost's virtio-input devices (/arm-io/input-N: the
 // touch screen and side keys on one, the pen on its own).
 //
@@ -25,11 +31,16 @@
 // (default 1: it is how a boot shows that backboardd opened the digitizer and that events arrive);
 // oneios-hid-queue-kib=N the event queue of the services' user clients (default 0: off, Apple's 16 KiB; 256 to try; setQueueSize);
 // oneios-pen=1 publishes the pen digitizer when xnuhost has a pen device (default 0: off until proven on the phone; xnuhost's
-// pen=auto adds oneios-pen=1 when it gives the guest one)
+// pen=auto adds oneios-pen=1 when it gives the guest one);
+// oneios-motion=MASK (sensors-als, 2026-11-25; default 0: nothing) the motion devices when xnuhost gives a motion device: bit 0
+// the accelerometer, 1 the gyroscope, 2 the device orientation, 3 the compass (xnuhost's sensors= adds 7, or 15 with a magnetometer);
+// oneios-als-spu=1 (default 0) the light sensor as an iPhone's SPU light sensor (OneiOSALSDevice.cpp; xnuhost adds it when the
+// light comes from the sensor hub)
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
+#include <kern/clock.h>
 #include <kern/thread.h>
 #include <libkern/OSKextLib.h>
 #include <libkern/c++/OSIterator.h>
@@ -64,6 +75,19 @@ extern volatile int32_t oneios_pen_last[7];
 void droidvm_input_start(void);
 void oneios_als_device_start(void);
 void oneios_hid_input_start(void);
+// The motion sensors (staged DroidVMMotionHid.inc, DroidVMSensorProcessor.cpp, the transport): the class's late initializer and
+// metaclass, the devices, the SPU channel's registration and counts, the transport's frames and the reports sent per kind.
+void oneios_motion_static_init(void) __asm__("__GLOBAL__sub_I_DroidVMMotionHid.cpp");
+extern char oneios_motion_meta[] __asm__("__ZN17AppleSPUHIDDevice10gMetaClassE");
+IOService *droidvm_motion_hid_allocate(unsigned kind);
+bool droidvm_motion_present(void);
+int droidvm_sensor_processor_register(void);
+extern volatile uint32_t droidvm_spu_opens, droidvm_spu_commands;
+extern volatile uint64_t oneios_motion_frames, oneios_motion_reports[4];
+// The light sensor's dispatch wrapper (OneiOSALSEvents.cpp) and the device's part after it (OneiOSALSDevice.cpp).
+int oneios_als_spu_wrap(IORegistryEntry *driver);
+void oneios_als_spu_wrapped(IORegistryEntry *driver);
+extern volatile uint32_t oneios_als_spu_install[3];
 
 // DroidVMVirtioInput.c's counters: devices found and started, events, frames, finger sets published.
 extern volatile uint32_t droidvm_input_found, droidvm_input_started;
@@ -100,7 +124,6 @@ volatile int native_hid_input_results[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
 void native_hid_input_observed(unsigned event, int result);
 void native_hid_live_checkpoint(IOService *device);
 bool native_hid_input_requested(void);
-void droidvm_motion_register(void);
 }
 
 static uint32_t oneios_hid_log = 1;
@@ -110,6 +133,13 @@ static uint32_t oneios_hid_buttons_builtin = 0;
 // oneios-pen=1 (spen, 2026-11-15; off by default until a phone session shows it): the pen digitizer is published when the
 // transport found xnuhost's pen device.
 static uint32_t oneios_pen = 0;
+// oneios-motion=MASK (sensors-als, 2026-11-25; default 0): the kinds of motion device published when xnuhost gives a motion device.
+static uint32_t oneios_motion = 0;
+// oneios-als-spu=1 (default 0): the light sensor's event driver is wrapped (OneiOSALSDevice.cpp reads the same switch).
+static uint32_t oneios_als_spu = 0;
+// The motion class registered (1), or why not: 2 the class name is taken, 3 the registration failed, 4 com.apple.driver.AppleSPU
+// is in the collection (its load would register a second AppleSPUHIDDevice); 0 not asked for.
+static uint32_t oneios_motion_registered = 0;
 
 void
 native_hid_input_observed(unsigned event, int result)
@@ -126,12 +156,6 @@ bool
 native_hid_input_requested(void)
 {
 	return false;
-}
-
-// The transport registers a sysctl for motion sensors when it finds some: xnuhost has none.
-void
-droidvm_motion_register(void)
-{
 }
 
 // The IOHIDEventDriver below a device, if one has attached.
@@ -285,6 +309,38 @@ setQueueSize(IORegistryEntry *driver, const char *what)
 	    open ? "; already open: theirs stays 16 KiB until they open again" : "");
 }
 
+// The motion devices' line, every 60 s while the host sends frames: frames and reports since the last line, the SPU channel's
+// opens and commands since the boot. From the touch screen's 1 s tick (no timer of its own).
+static void
+motionMinute(void)
+{
+	static uint64_t lastAt, lastFrames, lastReports[4];
+	if (oneios_motion_registered != 1) {
+		return;
+	}
+	uint64_t now = mach_absolute_time(), minute = 0;
+	nanoseconds_to_absolutetime(60ULL * NSEC_PER_SEC, &minute);
+	if (lastAt && now - lastAt < minute) {
+		return;
+	}
+	const bool first = lastAt == 0;
+	lastAt = now;
+	const uint64_t frames = oneios_motion_frames;
+	uint64_t reports[4];
+	for (unsigned i = 0; i < 4; i++) {
+		reports[i] = oneios_motion_reports[i];
+	}
+	if (!first && frames != lastFrames) {
+		IOLog("oneios-hid: motion: 60 s: %llu frames from the host, reports: accelerometer %llu, gyroscope %llu, orientation %llu, "
+		    "compass %llu; SPU channel opens %u, commands %u (since the boot)\n", frames - lastFrames, reports[0] - lastReports[0],
+		    reports[1] - lastReports[1], reports[2] - lastReports[2], reports[3] - lastReports[3], droidvm_spu_opens, droidvm_spu_commands);
+	}
+	lastFrames = frames;
+	for (unsigned i = 0; i < 4; i++) {
+		lastReports[i] = reports[i];
+	}
+}
+
 // Called by each NativeHidInput once a second, on its work loop (its tick).
 //
 // backboardd classifies a digitizer by the event service it opened, not by the HID device below it: it drops a
@@ -304,6 +360,9 @@ native_hid_live_checkpoint(IOService *device)
 	const bool pen = device->getProperty("MaxHoverHeight") != nullptr;
 	const bool touch = !pen && device->getProperty("Built-In") != nullptr;
 	const char *what = pen ? "pen" : touch ? "touch screen" : "buttons";
+	if (touch) {
+		motionMinute();
+	}
 	IORegistryEntry *driver = eventDriver(device, 4);
 	if (driver && driver != state->driver) {
 		state->driver = driver;
@@ -490,13 +549,34 @@ watchLightSensor(void)
 		return;
 	}
 	char last[512] = "", now[512];
-	for (unsigned waited = 0; waited < 1800 && oneios_hid_log; waited += 5) {
-		size_t used = 0;
-		now[0] = 0;
-		describeBelow(device, 4, now, sizeof(now), used);
-		if (strcmp(now, last)) {
-			strlcpy(last, now, sizeof(last));
-			IOLog("oneios-hid: light sensor: OneiOSALSDevice%s\n", now[0] ? now : " (nothing attached)");
+	// oneios-als-spu=1: the event driver below the device gets the dispatch wrapper (OneiOSALSEvents.cpp) once it is there,
+	// whatever oneios-hid-log says; a driver that cannot be wrapped is said once, and a later one is tried again.
+	IORegistryEntry *tried = nullptr;
+	bool wrapped = false;
+	for (unsigned waited = 0; waited < 1800 && (oneios_hid_log || (oneios_als_spu && !wrapped)); waited += 5) {
+		if (oneios_hid_log) {
+			size_t used = 0;
+			now[0] = 0;
+			describeBelow(device, 4, now, sizeof(now), used);
+			if (strcmp(now, last)) {
+				strlcpy(last, now, sizeof(last));
+				IOLog("oneios-hid: light sensor: OneiOSALSDevice%s\n", now[0] ? now : " (nothing attached)");
+			}
+		}
+		IORegistryEntry *driver = oneios_als_spu && !wrapped ? eventDriver(device, 3) : nullptr;
+		if (driver && driver != tried) {
+			tried = driver;
+			const int slots = oneios_als_spu_wrap(driver);
+			if (slots > 0) {
+				wrapped = true;
+				oneios_als_spu_wrapped(driver);
+				IOLog("ONEIOS ALS: IOHIDEventDriver's dispatch wrapped (%d slots): its lux events go on as ambient light events\n", slots);
+			} else {
+				const uint32_t why = oneios_als_spu_install[0];
+				IOLog("ONEIOS ALS: the event driver's dispatch is not wrapped (%s%s): no ambient light events\n",
+				    why == 1 ? "not IOHIDEventDriver: " : why == 2 ? "a slot of its table did not check out" : why == 4 ?
+				    "NativeHidInput has no slot table" : "no memory", why == 1 ? driver->getMetaClass()->getClassName() : "");
+			}
 		}
 		IOSleep(5000);
 	}
@@ -548,13 +628,23 @@ oneios_hid_personalities(void)
 	// device's one pair is Generic Desktop / Keyboard (1, 6), never page 12. A page-12 personality did not match it; the
 	// candidates were Apple's deferred "HID Keyboard Driver", then the DriverKit driver, and the side keys reached
 	// backboardd only after the DriverKit driver's 120 s (phone, 2026-11-12: +256 s into the boot).
+	// sensors-als, 2026-11-25: the motion devices (DroidVMMotionHid.inc: every descriptor ends with an empty {0xff0c, 3}
+	// application collection, the pair of IOHIDFamily's "HID Sensor" personality) and the SPU light sensor {0xff00, 4}, both on
+	// the SPU transport. A higher score does not keep Apple's personalities of the same pairs from being tried: probeCandidates
+	// loads the kext of every candidate that passes matchPassive (IOCatalogue::isModuleLoaded) before it starts the best one.
+	// v0.1.29 (2026-11-25) panicked so: com.apple.driver.AppleSPU's AppleSPUGestureDriver ({0xff0c, 3}, Transport SPU) matched
+	// the motion devices, the kext loaded, and its AppleSPUHIDDevice was a duplicate of the one registered here. AppleSPU and the
+	// kexts that link it are left out of the collection since (prelink roots, FORCE_OUT), and oneios_motion_register refuses
+	// a collection that still has it.
 	static const struct { const char *transport; uint32_t page, usage; } devices[] = {
 		{"SPI", 0x0d, 0},       // the touch screen (NativeHidInput::newTransportString): Digitizer, any usage
 		{"Virtual", 0x01, 0x06}, // the buttons: Generic Desktop / Keyboard
+		{"SPU", 0xff0c, 0x03},   // the motion devices
+		{"SPU", 0xff00, 0x04},   // the SPU light sensor (oneios-als-spu=1)
 	};
 	uint32_t driverkit = 0;
 	PE_parse_boot_argn("oneios-hid-driverkit", &driverkit, sizeof(driverkit));
-	OSArray *drivers = driverkit ? nullptr : OSArray::withCapacity(2);
+	OSArray *drivers = driverkit ? nullptr : OSArray::withCapacity(4);
 	if (!drivers) {
 		IOLog("oneios-hid: no personalities added: the collection's own order (DriverKit first) decides the event driver\n");
 		return;
@@ -597,10 +687,107 @@ oneios_hid_personalities(void)
 	// No nub matching: no HID device of ours exists yet.
 	const bool added = made && gIOCatalogue && gIOCatalogue->addDrivers(drivers, false);
 	drivers->release();
-	IOLog(added ? "oneios-hid: IOHIDEventDriver personalities added for the touch screen and the buttons: the kernel's "
-	    "event driver takes them when they start, the DriverKit one is not waited for\n"
+	IOLog(added ? "oneios-hid: IOHIDEventDriver personalities added for the touch screen, the buttons, the motion devices and the "
+	    "SPU light sensor: the kernel's event driver takes them when they start, the DriverKit one is not waited for\n"
 	    : "oneios-hid: the IOHIDEventDriver personalities were not added: the DriverKit event driver is tried first "
 	    "(the kernel's takes over after its 120 s)\n");
+}
+
+// The motion class (sensors-als, 2026-11-25): in a module load of its own, after the touch screen's, on this same thread (see
+// below), so that a clash of its name can never take NativeHidInput's classes with it. AppleSPUHIDDevice and its channel's
+// AppleSPUHIDDeviceUserClient are the names of the iPhone's own classes in com.apple.driver.AppleSPU: the platform sandbox lets
+// SpringBoard and backboardd open only the services and user clients it names (DroidVM's reading). Then the SPU channel's class
+// (DroidVMSensorProcessor.cpp's own module load); without it the orientation device is left out, as backboardd and SpringBoard
+// crashed with locationd on the iPad without the channel.
+// The name check below sees only kexts already loaded. A collection that has com.apple.driver.AppleSPU at all can load it later
+// (a candidate's kext is loaded whatever its score, a dependency with its user) and panics then: v0.1.29, "class
+// AppleSPUHIDDevice is a duplicate". So the classes register only when the collection has no such kext (prelink roots leaves it
+// out since 2026-11-25, as UniXNU-droidvm's iPad kernelcache has none); one prelinked before is refused with its own line.
+static void
+oneios_motion_register(const OSMetaClass *bound)
+{
+	if (!oneios_motion) {
+		return;
+	}
+	OSKext *spu = OSKext::lookupKextWithIdentifier("com.apple.driver.AppleSPU");
+	const bool spuInCollection = spu != nullptr;
+	OSSafeReleaseNULL(spu);
+	if (spuInCollection) {
+		oneios_motion_registered = 4;
+		IOLog("oneios-hid: motion: com.apple.driver.AppleSPU is in this kernel collection (prelinked before 2026-11-25's roots): its "
+		    "load would register a second AppleSPUHIDDevice and panic; no motion devices (prelink the collection again)\n");
+		return;
+	}
+	static const char *const names[] = {"AppleSPUHIDDevice", "AppleSPUHIDDeviceUserClient"};
+	for (const char *name : names) {
+		const OSSymbol *symbol = OSSymbol::withCString(name);
+		const bool taken = !symbol || OSMetaClass::getMetaClassWithName(symbol) != nullptr;
+		OSSafeReleaseNULL(symbol);
+		if (taken) {
+			oneios_motion_registered = 2;
+			IOLog("oneios-hid: motion: the class name %s is taken (com.apple.driver.AppleSPU loaded?): no motion devices\n", name);
+			return;
+		}
+	}
+	void *module = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
+	if (!module) {
+		oneios_motion_registered = 3;
+		IOLog("oneios-hid: motion: the kernel's module could not be opened for the motion class: no motion devices\n");
+		return;
+	}
+	oneios_motion_static_init();
+	MetaClassHead *head = reinterpret_cast<MetaClassHead *>(oneios_motion_meta);
+	if (reinterpret_cast<uint64_t>(head->superClassLink) == oneios_hid_parent_meta_link) {
+		head->superClassLink = bound;
+	}
+	const bool linked = head->superClassLink == bound;
+	const OSReturn status = OSMetaClass::postModLoad(module); // always: it ends the class-loading lock preModLoad took
+	if (!linked || status != kOSReturnSuccess) {
+		oneios_motion_registered = 3;
+		IOLog("oneios-hid: motion: AppleSPUHIDDevice did not register below IOHIDDevice (0x%x%s): no motion devices\n", status,
+		    linked ? "" : ", its superclass not bound");
+		return;
+	}
+	oneios_motion_registered = 1;
+	const int channel = droidvm_sensor_processor_register();
+	if (channel != 0 && (oneios_motion & 4)) {
+		oneios_motion &= ~4u;
+		IOLog("oneios-hid: motion: the SPU channel's class did not register (%d): the device orientation is left out\n", channel);
+	}
+	IOLog("oneios-hid: motion: AppleSPUHIDDevice registered below IOHIDDevice%s (oneios-motion=0x%x); the kernel's classes: "
+	    "com.apple.driver.AppleSPU is not in the collection\n",
+	    channel == 0 ? ", its SPU channel AppleSPUHIDDeviceUserClient too" : "", oneios_motion);
+}
+
+// The motion devices of the mask, after the transport found xnuhost's motion device (HidInputProbe.cpp's order).
+static void
+oneios_motion_publish(IOService *resource)
+{
+	if (!oneios_motion) {
+		if (droidvm_motion_present()) {
+			IOLog("oneios-hid: motion: xnuhost has a motion device; nothing published (oneios-motion=0)\n");
+		}
+		return;
+	}
+	if (!droidvm_motion_present()) {
+		IOLog("oneios-hid: motion: oneios-motion=0x%x, but xnuhost gave no motion device (sensors=off, or no sensor hub): nothing "
+		    "published\n", oneios_motion);
+		return;
+	}
+	if (oneios_motion_registered != 1) {
+		IOLog("oneios-hid: motion: nothing published: %s\n", oneios_motion_registered == 2 ? "the class name AppleSPUHIDDevice is taken"
+		    : oneios_motion_registered == 4 ? "com.apple.driver.AppleSPU is in the collection" : "the class did not register");
+		return;
+	}
+	static const char *const names[] = {"accelerometer", "gyroscope", "orientation", "compass"};
+	char text[96] = "";
+	size_t used = 0;
+	for (unsigned kind = 0; kind < 4; ++kind) {
+		if ((oneios_motion & (1u << kind)) && publish(droidvm_motion_hid_allocate(kind), resource, names[kind]) && used < sizeof(text)) {
+			used += snprintf(text + used, sizeof(text) - used, "%s%s", used ? ", " : "", names[kind]);
+		}
+	}
+	IOLog("oneios-hid: motion: AppleSPUHIDDevice %s published (oneios-motion=0x%x)\n", used ? text : "nothing", oneios_motion);
 }
 
 // The kexts and the classes. On the caller's thread (the board's late start, bsd_init's), not on a thread of its
@@ -662,6 +849,7 @@ oneios_hid_register(void)
 	}
 	oneios_hid_stage = 3;
 	oneios_hid_personalities();
+	oneios_motion_register(bound);
 	IOLog("oneios-hid: IOHIDFamily and IOHIDEventDriver loaded, the device classes registered below IOHIDDevice; "
 	    "the devices start when IOHIDResource is there\n");
 	return true;
@@ -687,7 +875,8 @@ oneios_hid_thread(void *, wait_result_t)
 	// The transport first: it finds xnuhost's input devices before it returns, and the devices install their sinks
 	// when they start.
 	droidvm_input_start();
-	IOLog("oneios-hid: virtio-input: %u device(s) in the device tree, %u started\n", droidvm_input_found, droidvm_input_started);
+	IOLog("oneios-hid: virtio-input: %u device(s) in the device tree, %u started%s\n", droidvm_input_found, droidvm_input_started,
+	    droidvm_motion_present() ? "; motion sensors among them" : "");
 	const bool buttons = publish(native_hid_input_allocate(), resource, "buttons");
 	const bool touch = publish(native_hid_touch_allocate(), resource, "touch screen");
 	// The pen: its own device, after the touch screen (its event driver takes the same personality: SPI, Digitizer page).
@@ -698,6 +887,7 @@ oneios_hid_thread(void *, wait_result_t)
 	} else if (oneios_pen) {
 		IOLog("oneios-hid: pen: oneios-pen=1, but xnuhost gave no pen device (pen=off, or no pen found on the host)\n");
 	}
+	oneios_motion_publish(resource);
 	resource->release();
 	oneios_als_device_start();
 	oneios_hid_stage = buttons && touch ? 5 : 0x84;
@@ -713,6 +903,9 @@ oneios_hid_input_start(void)
 	PE_parse_boot_argn("oneios-hid-buttons-builtin", &oneios_hid_buttons_builtin, sizeof(oneios_hid_buttons_builtin));
 	PE_parse_boot_argn("oneios-hid-queue-kib", &oneios_hid_queue_kib, sizeof(oneios_hid_queue_kib));
 	PE_parse_boot_argn("oneios-pen", &oneios_pen, sizeof(oneios_pen));
+	PE_parse_boot_argn("oneios-motion", &oneios_motion, sizeof(oneios_motion));
+	oneios_motion &= 0xf;
+	PE_parse_boot_argn("oneios-als-spu", &oneios_als_spu, sizeof(oneios_als_spu));
 	if (!enabled || oneios_hid_stage) {
 		return;
 	}

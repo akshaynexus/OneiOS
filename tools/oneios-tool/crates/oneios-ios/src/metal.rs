@@ -78,6 +78,9 @@ pub fn stage_edit(root: &Path, hooks: &Path, jobs: &str, knows: bool, rt: bool) 
                 a.push(Value::String("patches/mesa/trace-turnip-init.patch".into()));
                 // userland/metal/turnip-idle-bo-cache.patch: the idle trim of Turnip's BO cache, applied after the trace patch.
                 a.push(Value::String("patches/mesa/turnip-idle-bo-cache.patch".into()));
+                // userland/metal/turnip-submit-split.patch (Droid-VM/UniXNU fb9fb47): a kernel submission ends only where a
+                // command buffer begins, after the idle one.
+                a.push(Value::String("patches/mesa/turnip-submit-split.patch".into()));
             }
             _ => bail!("{}: no list \"patches\"", pins.display()),
         },
@@ -105,8 +108,8 @@ pub fn stage_edit(root: &Path, hooks: &Path, jobs: &str, knows: bool, rt: bool) 
             ("timeout=1800)", "timeout=10800)".into(), "a longer limit for the fat-LTO Rust build"),
             (
                 "\n\ndef git_tree(*steps):",
-                "\n\nPATCHES.append(ROOT / 'patches/metal2vulkan/trace-metal-vulkan-init.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/m2v-spare-command-pools.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/m2v-idle-memory.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/m2v-compile-deadline.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/90101-large-indexed-constants-to-blob.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/90102-blob-constant-gep-pointers.patch')\n\n\ndef git_tree(*steps):".into(),
-                "record Vulkan initialization diagnostics; reuse command pools and trim idle GPU memory; extend pipeline compile deadlines for non-render-server clients; retain this branch's Adreno shader fixes (0101/0102)",
+                "\n\nPATCHES.append(ROOT / 'patches/metal2vulkan/trace-metal-vulkan-init.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/m2v-spare-command-pools.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/m2v-idle-memory.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/90101-large-indexed-constants-to-blob.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/90102-blob-constant-gep-pointers.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/90110-shader-fix-switch.patch')\nPATCHES.append(ROOT / 'patches/metal2vulkan/m2v-compile-deadline.patch')\n\n\ndef git_tree(*steps):".into(),
+                "record Vulkan initialization diagnostics in the translator patch stack; spare command pools follow their recent use (m2v-spare-command-pools.patch); the idle trim ages the spare image blocks, the memory census (m2v-idle-memory.patch); the Adreno shader fixes 0101 and 0102 behind their switch, on unless oneios-m2v-shader-fix=0 (90110-shader-fix-switch.patch); the compile deadline per process (m2v-compile-deadline.patch)",
             ),
         ],
     )?;
@@ -155,7 +158,12 @@ pub fn stage_edit(root: &Path, hooks: &Path, jobs: &str, knows: bool, rt: bool) 
 
     // The plug-in's shared cache addresses: upstream's are the iPad17,3 24A446 cache's.
     let plugin = root.join("drivers/AdrenoMetal/NativeAdrenoMetalPlugin.mm");
-    let mut text = std::fs::read_to_string(&plugin).with_context(|| plugin.display().to_string())?;
+    let text = std::fs::read_to_string(&plugin).with_context(|| plugin.display().to_string())?;
+    // the bool debug options' numbers first: they follow the upstream address, which the list below then replaces
+    let (mut text, said) = hook_options(&text, &hooks)?;
+    for line in said {
+        println!("metal: staged NativeAdrenoMetalPlugin.mm: {line}");
+    }
     let anchor = hooks.get("anchor").ok_or_else(|| anyhow!("the hooks file has no anchor"))?;
     let branch = hooks.get("branch").ok_or_else(|| anyhow!("the hooks file has no branch"))?;
     let list = |k: &str| hooks.get(k).and_then(|v| v.as_array()).cloned().unwrap_or_default();
@@ -198,8 +206,92 @@ pub fn stage_edit(root: &Path, hooks: &Path, jobs: &str, knows: bool, rt: bool) 
     if !unknown.is_empty() {
         bail!("shared cache addresses in the arm64e code that the hooks file does not name: {}", unknown.into_iter().collect::<Vec<_>>().join(", "));
     }
+    // at the top, so that the plug-in's own code and the OneiOS files appended to it (DisplayWide.inc) both see them
+    let defines = hook_defines(&hooks)?;
+    let text = format!("{defines}{text}");
+    println!(
+        "metal: staged NativeAdrenoMetalPlugin.mm: this target's QuartzCore constants at the top, for the OneiOS files appended after it ({} defines)",
+        defines.matches("#define").count()
+    );
     std::fs::write(&plugin, text)?;
     Ok(())
+}
+
+/// The hooks file's QuartzCore bool debug options (`"options"`: `base`, the upstream address of `_ca_debug_options`,
+/// and `bool`, a list of `name`, `upstream`, `value`): init_debug stores option N at `_ca_debug_options + N`, and the
+/// numbers move between builds (24A446: CA_FORCE_FP16_FRAMEBUFFER 128, CA_ALLOW_EDR_MIRRORING 156; 24B156: 129 and
+/// 159; read in each build's init_debug table, docs/gpu.md section 7). Every `BASE + N` of the plug-in's text gets the
+/// target's number in one pass; an N the file does not name, or a named one the text never has, is refused. The
+/// address itself is the `replace` list's (`stage_edit` replaces it after this). A hooks file with no `options`
+/// leaves the text as it is. The text, and a line for each number that changed.
+pub fn hook_options(text: &str, hooks: &serde_json::Value) -> Result<(String, Vec<String>)> {
+    let Some(options) = hooks.get("options") else { return Ok((text.to_string(), Vec::new())) };
+    let base = s(options, "base")?;
+    let mut map: Vec<(u64, u64, String)> = Vec::new();
+    let list = options.get("bool").and_then(|v| v.as_array()).ok_or_else(|| anyhow!("the hooks file: \"options\" has no list \"bool\""))?;
+    for o in list {
+        let n = |k: &str| o.get(k).and_then(|v| v.as_u64()).ok_or_else(|| anyhow!("the hooks file: option {o} has no number {k:?}"));
+        map.push((n("upstream")?, n("value")?, s(o, "name")?.to_string()));
+    }
+    let lead = format!("{base} + ");
+    let (mut out, mut rest) = (String::with_capacity(text.len()), text);
+    let mut seen = vec![0usize; map.len()];
+    while let Some(i) = rest.find(&lead) {
+        let after = &rest[i + lead.len()..];
+        let digits = after.chars().take_while(char::is_ascii_digit).count();
+        out.push_str(&rest[..i + lead.len()]);
+        let number: u64 = after[..digits].parse().map_err(|_| anyhow!("NativeAdrenoMetalPlugin.mm: {lead}is not followed by a number"))?;
+        let k = map
+            .iter()
+            .position(|(up, _, _)| *up == number)
+            .ok_or_else(|| anyhow!("NativeAdrenoMetalPlugin.mm has {lead}{number}, an option the hooks file does not name"))?;
+        seen[k] += 1;
+        out.push_str(&map[k].1.to_string());
+        rest = &after[digits..];
+    }
+    out.push_str(rest);
+    let mut said = Vec::new();
+    for (k, (up, value, name)) in map.iter().enumerate() {
+        if seen[k] == 0 {
+            bail!("NativeAdrenoMetalPlugin.mm has no {lead}{up} ({name}): the hooks file is for another revision");
+        }
+        if up != value {
+            said.push(format!("{lead}{up} -> {lead}{value} ({} places): {name}, this build's number", seen[k]));
+        }
+    }
+    Ok((out, said))
+}
+
+/// The C defines of this target's QuartzCore constants that the OneiOS files appended to the plug-in use
+/// (userland/metal/DisplayWide.inc), from the hooks file: `ONEIOS_HOOKS_TARGET`, `ONEIOS_CA_RENDER_SERVER_START` (the
+/// anchor), `ONEIOS_CA_DEBUG_OPTIONS` (the `replace` value of `options.base`) and `ONEIOS_CA_OPTION_<NAME>` for each
+/// bool option. Without `options` only the first two.
+pub fn hook_defines(hooks: &serde_json::Value) -> Result<String> {
+    let anchor = hooks.get("anchor").ok_or_else(|| anyhow!("the hooks file has no anchor"))?;
+    let mut out = format!(
+        "// OneiOS (oneios-tool ios metal-stage-edit): this target's QuartzCore constants (userland/metal/hooks), for the\n// OneiOS files appended to this one.\n#define ONEIOS_HOOKS_TARGET \"{}\"\n#define ONEIOS_CA_RENDER_SERVER_START {}ull\n",
+        s(hooks, "target")?,
+        s(anchor, "value")?
+    );
+    if let Some(options) = hooks.get("options") {
+        let base = s(options, "base")?;
+        let replace = hooks.get("replace").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let item = replace
+            .iter()
+            .find(|i| i.get("upstream").and_then(|u| u.as_str()) == Some(base))
+            .ok_or_else(|| anyhow!("the hooks file: options.base {base} is not in \"replace\""))?;
+        out.push_str(&format!("#define ONEIOS_CA_DEBUG_OPTIONS {}ull\n", s(item, "value")?));
+        for o in options.get("bool").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
+            let name = s(&o, "name")?;
+            if name.is_empty() || !name.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_') {
+                bail!("the hooks file: option name {name:?} is not a C name");
+            }
+            let value = o.get("value").and_then(|v| v.as_u64()).ok_or_else(|| anyhow!("the hooks file: option {name} has no number \"value\""))?;
+            out.push_str(&format!("#define ONEIOS_CA_OPTION_{name} {value}\n"));
+        }
+    }
+    out.push('\n');
+    Ok(out)
 }
 
 /// What the camera's pipeline (cameracaptured: CMCapture, CMImaging) needs of the frontend at b0d6a07, as text edits of
@@ -296,6 +388,25 @@ fn frontend_camera_edits() -> Vec<(&'static str, String, &'static str)> {
             .into(),
             "NBLibrary answers newFunctionWithName:constantValues:pipelineLibrary:error: (CMImaging's FigMetalContext)",
         ),
+        (
+            concat!(
+                " // Metal builds a kernel that reads a constant nobody set; the runtime refuses it: once more with those constants zero.\n",
+                " if(!handle) {\n",
+                "  NBFunction *rebuilt=zeroRestFunction((NBFunction *)d.computeFunction);\n"
+            ),
+            concat!(
+                " // Metal builds a kernel that reads a constant nobody set; the runtime refuses it: once more with those constants zero.\n",
+                " // OneiOS (oneios-tool ios metal-stage-edit; Droid-VM/NativeMetal 3c46b5e, MIT): the rebuilt function lives to the end of\n",
+                " // the call, as the reflection below reads its handle: held in the block alone, ARC freed it with the block and the\n",
+                " // reflection read a released function (cameracaptured's CCPortrait kernels: SIGSEGV at 0 in\n",
+                " // nmb_compute_pipeline_reflection during its precompilation, every boot).\n",
+                " NBFunction *rebuilt=nil;\n",
+                " if(!handle) {\n",
+                "  rebuilt=zeroRestFunction((NBFunction *)d.computeFunction);\n"
+            )
+            .into(),
+            "a compute pipeline rebuilt with its unset constants zero keeps its function until the reflection is read (NativeMetal 3c46b5e: cameracaptured's crash)",
+        ),
     ]
 }
 
@@ -388,6 +499,8 @@ fn file_mode(p: &Path) -> Result<u32> {
 
 /// The Galaxy A56's Metal plug-in (userland/metal-amd): a bundle folder of this name keeps it under addons/.
 const RADEON_BUNDLE: &str = "OneiOSRadeonMetal";
+/// The Galaxy A56's OpenGL ES (userland/metal-amd/gl, docs/a56-gpu.md 4a): a bundle folder of this name keeps it too.
+const RADEON_GL_BUNDLE: &str = "OneiOSRadeonGL";
 
 /// The name a Metal bundle has under addons/: the A56's plug-in (a folder named `OneiOSRadeonMetal.bundle`) keeps its
 /// own; every other folder is the Adreno plug-in, NativeAdrenoMetal, whatever the folder is called (as before the
@@ -395,6 +508,7 @@ const RADEON_BUNDLE: &str = "OneiOSRadeonMetal";
 fn addon_bundle_name(bundle: &Path) -> &'static str {
     match bundle.file_name().and_then(|n| n.to_str()) {
         Some(n) if n.strip_suffix(".bundle") == Some(RADEON_BUNDLE) => RADEON_BUNDLE,
+        Some(n) if n.strip_suffix(".bundle") == Some(RADEON_GL_BUNDLE) => RADEON_GL_BUNDLE,
         _ => "NativeAdrenoMetal",
     }
 }
@@ -402,6 +516,23 @@ fn addon_bundle_name(bundle: &Path) -> &'static str {
 /// The Metal plug-in's files as the kernel's 0031 union wants them: `addons/<name>.bundle/...` in os.walk's order, then
 /// the `addons/<name>.publish` marker (the name: [`addon_bundle_name`]).
 fn metal_files(bundle: &Path) -> Result<Vec<AddonFile>> {
+    if addon_bundle_name(bundle) == RADEON_GL_BUNDLE {
+        bail!("{}: the A56's OpenGL ES bundle is not a Metal plug-in: give it with --gl", bundle.display());
+    }
+    bundle_files(bundle, true)
+}
+
+/// The A56's OpenGL ES bundle (a folder named `OneiOSRadeonGL.bundle`) under addons/ beside the Metal plug-in:
+/// `addons/OneiOSRadeonGL.bundle/...`, which 0031's union puts in /System/Library/Extensions, where libGFXShared loads
+/// the accelerator's IOGLESBundleName. No .publish marker (that is the Metal plug-in's).
+fn gl_files(bundle: &Path) -> Result<Vec<AddonFile>> {
+    if addon_bundle_name(bundle) != RADEON_GL_BUNDLE {
+        bail!("{}: not an OneiOSRadeonGL.bundle folder (userland/metal-amd/gl/build.sh plugin)", bundle.display());
+    }
+    bundle_files(bundle, false)
+}
+
+fn bundle_files(bundle: &Path, publish: bool) -> Result<Vec<AddonFile>> {
     let mut files: Vec<AddonFile> = Vec::new();
     let name = addon_bundle_name(bundle);
     fn walk(dir: &Path, rel: &str, bundle: &str, out: &mut Vec<AddonFile>) -> Result<()> {
@@ -430,7 +561,9 @@ fn metal_files(bundle: &Path) -> Result<Vec<AddonFile>> {
         Ok(())
     }
     walk(bundle, "", name, &mut files)?;
-    files.push((format!("addons/{name}.publish"), 0o644, b"1\n".to_vec()));
+    if publish {
+        files.push((format!("addons/{name}.publish"), 0o644, b"1\n".to_vec()));
+    }
     Ok(files)
 }
 
@@ -488,8 +621,11 @@ fn pack(files: &[AddonFile]) -> Result<Vec<u8>> {
 
 /// `ios gpuaddon BUNDLE OUTPUT`: the Metal bundle alone as the boot addon (byte for byte what it was before
 /// `ios addon`).
-pub fn gpuaddon(bundle: &Path, output: &Path) -> Result<()> {
-    let files = metal_files(bundle)?;
+pub fn gpuaddon(bundle: &Path, output: &Path, gl: Option<&Path>) -> Result<()> {
+    let mut files = metal_files(bundle)?;
+    if let Some(gl) = gl {
+        files.extend(gl_files(gl)?);
+    }
     let blob = pack(&files)?;
     std::fs::write(output, &blob).with_context(|| output.display().to_string())?;
     println!("metal: {}: {} files, {} bytes", output.display(), files.len(), blob.len());
@@ -500,13 +636,16 @@ pub fn gpuaddon(bundle: &Path, output: &Path) -> Result<()> {
 /// plug-in under addons/ (hosted 0031's union), the capture plug-in under camera/ (hosted 0090's), or both; and
 /// OUTPUT.cdhashes, one `CDHASH NAME` line for each Mach-O file in it: the CDHashes the image's owner-trust.json must
 /// list (`oneios-tool phone addon OUTPUT` adds them).
-pub fn addon(output: &Path, metal: Option<&Path>, camera: Option<&Path>) -> Result<()> {
+pub fn addon(output: &Path, metal: Option<&Path>, camera: Option<&Path>, gl: Option<&Path>) -> Result<()> {
     if metal.is_none() && camera.is_none() {
         bail!("ios addon OUTPUT --metal BUNDLE and/or --camera DIR: nothing to put in it");
     }
     let mut files = Vec::new();
     if let Some(bundle) = metal {
         files.extend(metal_files(bundle)?);
+    }
+    if let Some(bundle) = gl {
+        files.extend(gl_files(bundle)?);
     }
     let metal_count = files.len();
     if let Some(dir) = camera {
@@ -525,7 +664,7 @@ pub fn addon(output: &Path, metal: Option<&Path>, camera: Option<&Path>) -> Resu
     let list = format!("{}.cdhashes", output.display());
     std::fs::write(&list, &cdhashes).with_context(|| list.clone())?;
     println!(
-        "addon: {}: {} files ({} of the Metal plug-in under addons/, {} of the capture plug-in under camera/), {} bytes; {} CDHashes in {list}",
+        "addon: {}: {} files ({} of the Metal plug-in (and the A56's OpenGL ES) under addons/, {} of the capture plug-in under camera/), {} bytes; {} CDHashes in {list}",
         output.display(),
         files.len(),
         metal_count,
@@ -536,6 +675,88 @@ pub fn addon(output: &Path, metal: Option<&Path>, camera: Option<&Path>) -> Resu
     Ok(())
 }
 
+
+/// The Galaxy A56's boot addon in memory: the Metal plug-in (`OneiOSRadeonMetal.bundle`) and, when given, its OpenGL ES
+/// (`OneiOSRadeonGL.bundle`) under addons/, as `ios gpuaddon BUNDLE OUT --gl GL` writes it, and the CDHash of every Mach-O
+/// in it (sorted, each once): what the image's owner-trust.json must list. The phone's Update the kernel and Make iOS image
+/// build it from the staged runtime's lib/guest/ (oneios-imagebuild a56gpu; docs/a56-gpu.md 6).
+pub fn a56_addon(metal: &Path, gl: Option<&Path>) -> Result<(Vec<u8>, Vec<String>)> {
+    if addon_bundle_name(metal) != RADEON_BUNDLE {
+        bail!("{}: not an OneiOSRadeonMetal.bundle folder (userland/metal-amd/air/build.sh plugin)", metal.display());
+    }
+    let mut files = metal_files(metal)?;
+    if let Some(gl) = gl {
+        files.extend(gl_files(gl)?);
+    }
+    let mut cdhashes: Vec<String> = Vec::new();
+    for (_, _, data) in &files {
+        if data.get(..4) == Some(&[0xcf, 0xfa, 0xed, 0xfe]) {
+            let slices = oneios_tweaks::macho::describe(data).map_err(|e| anyhow!("{e}"))?;
+            cdhashes.extend(slices.into_iter().map(|s| s.cdhash));
+        }
+    }
+    cdhashes.sort();
+    cdhashes.dedup();
+    Ok((pack(&files)?, cdhashes))
+}
+
+/// `ios bundle-record ROOT BUNDLE RECORD TARGET [SOURCE...]`: the build record of one of our guest bundles (the Galaxy
+/// A56's OneiOSRadeonMetal and OneiOSRadeonGL), in the shape of NativeAdrenoMetal.build.json that runtime/package.sh
+/// and the package's guest check read: "bundle", "target", "files" (each Mach-O of the bundle: bytes, cdhash, arch,
+/// page_size, identifier, minos), "cdhashes" and "sources" (each SOURCE `NAME` is external/NAME's HEAD in ROOT, or
+/// `NAME=COMMIT` as given: a source outside external/, as iOSPlus10's NegroniGL).
+pub fn bundle_record(root: &Path, bundle: &Path, record: &Path, target: &str, sources: &[String]) -> Result<()> {
+    let mut files = Map::new();
+    let mut stack = vec![(bundle.to_path_buf(), String::new())];
+    while let Some((dir, rel)) = stack.pop() {
+        let mut entries: Vec<_> = std::fs::read_dir(&dir).with_context(|| dir.display().to_string())?.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+            let r = if rel.is_empty() { name } else { format!("{rel}/{name}") };
+            if p.is_dir() {
+                stack.push((p, r));
+                continue;
+            }
+            let data = std::fs::read(&p).with_context(|| p.display().to_string())?;
+            if data.get(..4) != Some(&[0xcf, 0xfa, 0xed, 0xfe]) {
+                continue;
+            }
+            let info = oneios_tweaks::macho::describe(&data).map_err(|e| anyhow!("{}: {e}", p.display()))?.into_iter().next().ok_or_else(|| anyhow!("{}: no slice", p.display()))?;
+            let mut f = Map::new();
+            f.insert("bytes".into(), Value::Number(data.len().into()));
+            f.insert("cdhash".into(), Value::String(info.cdhash));
+            f.insert("arch".into(), Value::String(info.arch));
+            f.insert("page_size".into(), Value::Number(info.page_size.into()));
+            f.insert("identifier".into(), Value::String(info.identifier));
+            f.insert("minos".into(), info.minos.map(Value::String).unwrap_or(Value::Null));
+            files.insert(r, Value::Object(f));
+        }
+    }
+    if files.is_empty() {
+        bail!("{}: no Mach-O in the bundle", bundle.display());
+    }
+    let mut cdhashes: Vec<String> = files.values().filter_map(|f| if let Value::Object(m) = f { m.get("cdhash").map(Value::text) } else { None }).collect();
+    cdhashes.sort();
+    let mut pins = Map::new();
+    for s in sources {
+        match s.split_once('=') {
+            Some((name, commit)) => pins.insert(name.into(), Value::String(commit.into())),
+            None => pins.insert(s.clone(), Value::String(git_head(&root.join("external").join(s)))),
+        };
+    }
+    let mut r = Map::new();
+    r.insert("bundle".into(), Value::String(addon_bundle_name(bundle).to_string() + ".bundle"));
+    r.insert("target".into(), Value::String(target.into()));
+    r.insert("files".into(), Value::Object(files));
+    r.insert("cdhashes".into(), Value::Array(cdhashes.into_iter().map(Value::String).collect()));
+    r.insert("sources".into(), Value::Object(pins));
+    let text = oneios_json::to_pretty(&Value::Object(r)) + "\n";
+    std::fs::write(record, text).with_context(|| record.display().to_string())?;
+    println!("metal: {}: the build record of {}", record.display(), bundle.display());
+    Ok(())
+}
 
 /// The files of a sidecar: (name, mode, the unpacked bytes). The reader the tests check `gpuaddon` with.
 pub fn read_gpuaddon(blob: &[u8]) -> Result<Vec<(String, u32, Vec<u8>)>> {
@@ -573,6 +794,75 @@ pub fn read_gpuaddon(blob: &[u8]) -> Result<Vec<(String, u32, Vec<u8>)>> {
 mod tests {
     use super::*;
 
+    fn hooks_file(target: &str) -> serde_json::Value {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../userland/metal/hooks").join(format!("{}.json", target.replace(' ', "-")));
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn each_build_gets_its_own_option_numbers() {
+        let text = "a(0x1e702116c + 156 + slide); b(0x1e702116c + 128 + gSlide); c(0x1e702116c + 156 + gSlide); 0x1e702116c + 128)\n";
+        // 24A446: the numbers are upstream's, nothing said
+        let (same, said) = hook_options(text, &hooks_file("iPhone18,2 24A446")).unwrap();
+        assert!(same == text && said.is_empty());
+        // 24B156: 128 -> 129, 156 -> 159, in one pass (no number is changed twice)
+        let (b, said) = hook_options(text, &hooks_file("iPhone18,2 24B156")).unwrap();
+        assert_eq!(b, "a(0x1e702116c + 159 + slide); b(0x1e702116c + 129 + gSlide); c(0x1e702116c + 159 + gSlide); 0x1e702116c + 129)\n");
+        assert_eq!(said.len(), 2);
+        assert!(said[0].contains("+ 128 -> 0x1e702116c + 129 (2 places): CA_FORCE_FP16_FRAMEBUFFER"), "{said:?}");
+        // an option the file does not name, or a named one not in the text: refused
+        assert!(hook_options("x(0x1e702116c + 140)", &hooks_file("iPhone18,2 24B156")).unwrap_err().to_string().contains("+ 140, an option the hooks file does not name"));
+        assert!(hook_options("x(0x1e702116c + 128)", &hooks_file("iPhone18,2 24B156")).unwrap_err().to_string().contains("no 0x1e702116c + 156 (CA_ALLOW_EDR_MIRRORING)"));
+        // no "options": the text as it was
+        assert_eq!(hook_options("0x1e702116c + 140", &serde_json::json!({})).unwrap().0, "0x1e702116c + 140");
+    }
+
+    #[test]
+    fn the_defines_are_the_targets() {
+        let a = hook_defines(&hooks_file("iPhone18,2 24A446")).unwrap();
+        for line in ["#define ONEIOS_HOOKS_TARGET \"iPhone18,2 24A446\"", "#define ONEIOS_CA_RENDER_SERVER_START 0x1846dce88ull", "#define ONEIOS_CA_DEBUG_OPTIONS 0x1e702516cull", "#define ONEIOS_CA_OPTION_CA_FORCE_FP16_FRAMEBUFFER 128"] {
+            assert!(a.contains(&format!("{line}\n")), "{a}");
+        }
+        let b = hook_defines(&hooks_file("iPhone18,2 24B156")).unwrap();
+        for line in ["#define ONEIOS_HOOKS_TARGET \"iPhone18,2 24B156\"", "#define ONEIOS_CA_RENDER_SERVER_START 0x1845ce544ull", "#define ONEIOS_CA_DEBUG_OPTIONS 0x1edf3e5ccull", "#define ONEIOS_CA_OPTION_CA_FORCE_FP16_FRAMEBUFFER 129", "#define ONEIOS_CA_OPTION_CA_ALLOW_EDR_MIRRORING 159"] {
+            assert!(b.contains(&format!("{line}\n")), "{b}");
+        }
+        // DisplayWide.inc uses the defines, and no build's numbers of its own
+        let inc = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../userland/metal/DisplayWide.inc")).unwrap();
+        let code: String = inc.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        assert!(code.contains("ONEIOS_CA_DEBUG_OPTIONS + ONEIOS_CA_OPTION_CA_FORCE_FP16_FRAMEBUFFER + slide") && code.contains("- ONEIOS_CA_RENDER_SERVER_START;"));
+        assert!(regex::Regex::new(r"0x1[0-9a-f]{8}").unwrap().find(&code).is_none(), "an address in DisplayWide.inc's code");
+    }
+
+    /// Both hooks files against the plug-in of the pinned NativeMetal (when external/ has it): every address and option
+    /// the arm64e code uses is named, and what stage_edit makes of it holds only the target's.
+    #[test]
+    fn both_hooks_files_fit_the_pinned_plugin() {
+        let upstream = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../external/NativeMetal/NativeAdrenoMetalPlugin.mm");
+        let Ok(text) = std::fs::read_to_string(&upstream) else {
+            eprintln!("skipped: no {} (scripts/setup/get-references.sh NativeMetal)", upstream.display());
+            return;
+        };
+        for target in ["iPhone18,2 24A446", "iPhone18,2 24B156"] {
+            let hooks = hooks_file(target);
+            let (mut t, _) = hook_options(&text, &hooks).unwrap();
+            let mut items = vec![hooks["anchor"].clone()];
+            items.extend(hooks["replace"].as_array().unwrap().iter().cloned());
+            for item in &items {
+                let (new, n) = replace_address(&t, item["upstream"].as_str().unwrap(), item["value"].as_str().unwrap());
+                assert!(n > 0, "{target}: no {}", item["upstream"]);
+                t = new;
+            }
+            assert!(t.contains(&format!("{} + slide", hooks["branch"]["address"].as_str().unwrap())), "{target}");
+            if target.ends_with("24B156") {
+                for gone in ["0x1846dce88", "0x184461928", "0x184461838", "0x1e7021014", "0x1e7021104", "0x1e702116c", "0x1e701bdd9", "0x1e7020780", "0x1e9021680"] {
+                    assert!(!t.contains(gone), "{target}: {gone} is still there");
+                }
+                assert!(t.contains("0x1edf3e5cc + 159 + slide") && t.contains("0x1edf3e5cc + 129 + gSlide"));
+            }
+        }
+    }
+
     #[test]
     fn addresses_not_followed_by_a_hex_digit() {
         let (t, n) = replace_address("a 0x1e7021014; b 0x1e70210145 c 0x1e7021014)", "0x1e7021014", "0x1e7025014");
@@ -593,7 +883,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(b.join("bin"), std::fs::Permissions::from_mode(0o755)).unwrap();
         let out = dir.join("a.gpuaddon");
-        gpuaddon(&b, &out).unwrap();
+        gpuaddon(&b, &out, None).unwrap();
         let blob = std::fs::read(&out).unwrap();
         let files = read_gpuaddon(&blob).unwrap();
         let names: Vec<(&str, u32, usize)> = files.iter().map(|(n, m, d)| (n.as_str(), *m, d.len())).collect();
@@ -611,6 +901,41 @@ mod tests {
     }
 
     #[test]
+    fn the_a56_gl_bundle_goes_beside_the_metal_plugin() {
+        // userland/metal-amd/gl's OneiOSRadeonGL.bundle (docs/a56-gpu.md 4a): its own name under addons/, after the Metal
+        // plug-in and its .publish marker, with no marker of its own (xnuhost's gl_in_addon looks for its executable)
+        let dir = std::env::temp_dir().join(format!("oneios-ios-addon-a56gl-{}", std::process::id()));
+        let (m, g) = (dir.join("OneiOSRadeonMetal.bundle"), dir.join("OneiOSRadeonGL.bundle"));
+        for (b, exe) in [(&m, "OneiOSRadeonMetal"), (&g, "OneiOSRadeonGL")] {
+            std::fs::create_dir_all(b).unwrap();
+            std::fs::write(b.join("Info.plist"), b"<plist/>").unwrap();
+            std::fs::write(b.join(exe), b"mach-o").unwrap();
+            std::fs::write(b.join("oneios-target"), b"iPhone10,3 20F66\n").unwrap();
+        }
+        let out = dir.join("a.gpuaddon");
+        gpuaddon(&m, &out, Some(&g)).unwrap();
+        let names: Vec<String> = read_gpuaddon(&std::fs::read(&out).unwrap()).unwrap().into_iter().map(|f| f.0).collect();
+        assert_eq!(
+            names,
+            vec![
+                "addons/OneiOSRadeonMetal.bundle/Info.plist",
+                "addons/OneiOSRadeonMetal.bundle/OneiOSRadeonMetal",
+                "addons/OneiOSRadeonMetal.bundle/oneios-target",
+                "addons/OneiOSRadeonMetal.publish",
+                "addons/OneiOSRadeonGL.bundle/Info.plist",
+                "addons/OneiOSRadeonGL.bundle/OneiOSRadeonGL",
+                "addons/OneiOSRadeonGL.bundle/oneios-target",
+            ]
+        );
+        // the same through `ios addon --gl`; a folder of another name is refused as --gl, the GL bundle as the Metal one
+        addon(&dir.join("b.gpuaddon"), Some(&m), None, Some(&g)).unwrap();
+        assert_eq!(read_gpuaddon(&std::fs::read(dir.join("b.gpuaddon")).unwrap()).unwrap().len(), 7);
+        assert!(gpuaddon(&m, &out, Some(&m)).is_err());
+        assert!(gpuaddon(&g, &out, None).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn the_a56_bundle_keeps_its_name_in_the_sidecar() {
         // userland/metal-amd's OneiOSRadeonMetal.bundle: its own name under addons/ and its own .publish marker
         let dir = std::env::temp_dir().join(format!("oneios-ios-addon-a56-{}", std::process::id()));
@@ -619,7 +944,7 @@ mod tests {
         std::fs::write(b.join("Info.plist"), b"<plist/>").unwrap();
         std::fs::write(b.join("OneiOSRadeonMetal"), b"mach-o").unwrap();
         let out = dir.join("a.gpuaddon");
-        gpuaddon(&b, &out).unwrap();
+        gpuaddon(&b, &out, None).unwrap();
         let files = read_gpuaddon(&std::fs::read(&out).unwrap()).unwrap();
         let names: Vec<&str> = files.iter().map(|(n, _, _)| n.as_str()).collect();
         assert_eq!(
@@ -665,6 +990,9 @@ mod tests {
         assert_eq!(text.matches("nbKnownOptions(").count(), 8);
         assert!(text.contains("pipelineLibrary:(id)library\n                                 error:(NSError **)error {"));
         assert!(text.contains("heap.options=(MTLResourceOptions)heapOptions;"));
+        // NativeMetal 3c46b5e: the rebuilt function is declared before the retry's block, not inside it
+        assert!(text.contains(" NBFunction *rebuilt=nil;\n if(!handle) {\n  rebuilt=zeroRestFunction((NBFunction *)d.computeFunction);\n"));
+        assert!(!text.contains("  NBFunction *rebuilt=zeroRestFunction((NBFunction *)d.computeFunction);"));
         // a frontend that no longer has an anchor is refused, not built without the fix
         std::fs::write(dir.join("d/F.mm"), "nothing").unwrap();
         assert!(edit(&dir, "d/F.mm", &edits).is_err());
@@ -681,7 +1009,7 @@ mod tests {
         std::fs::write(cam.join("H9ISP.mediacapture"), b"not a Mach-O").unwrap();
         // the camera plug-in alone: one file under camera/, no Metal file (hosted 0090 keeps the seed's Metal plug-in)
         let out = dir.join("c.gpuaddon");
-        addon(&out, None, Some(&cam)).unwrap();
+        addon(&out, None, Some(&cam), None).unwrap();
         let files = read_gpuaddon(&std::fs::read(&out).unwrap()).unwrap();
         assert_eq!(files.iter().map(|f| (f.0.as_str(), f.1)).collect::<Vec<_>>(), vec![("camera/MediaCapture/H9ISP.mediacapture", 0o644)]);
         assert_eq!(files[0].2, b"not a Mach-O");
@@ -689,7 +1017,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.join("c.gpuaddon.cdhashes")).unwrap(), "");
         // both: the Metal files first (as `ios gpuaddon` writes them), then the camera's; the file itself is taken too
         let both = dir.join("b.gpuaddon");
-        addon(&both, Some(&b), Some(&cam.join("H9ISP.mediacapture"))).unwrap();
+        addon(&both, Some(&b), Some(&cam.join("H9ISP.mediacapture")), None).unwrap();
         let names: Vec<String> = read_gpuaddon(&std::fs::read(&both).unwrap()).unwrap().into_iter().map(|f| f.0).collect();
         assert_eq!(
             names,
@@ -697,13 +1025,13 @@ mod tests {
         );
         // the Metal part is byte for byte `ios gpuaddon`'s
         let metal = dir.join("m.gpuaddon");
-        gpuaddon(&b, &metal).unwrap();
-        addon(&dir.join("m2.gpuaddon"), Some(&b), None).unwrap();
+        gpuaddon(&b, &metal, None).unwrap();
+        addon(&dir.join("m2.gpuaddon"), Some(&b), None, None).unwrap();
         assert_eq!(std::fs::read(&metal).unwrap(), std::fs::read(dir.join("m2.gpuaddon")).unwrap());
         // refusals: nothing asked for, a file of another name
-        assert!(addon(&dir.join("x"), None, None).is_err());
+        assert!(addon(&dir.join("x"), None, None, None).is_err());
         std::fs::write(dir.join("other.dylib"), b"x").unwrap();
-        assert!(addon(&dir.join("x"), None, Some(&dir.join("other.dylib"))).is_err());
+        assert!(addon(&dir.join("x"), None, Some(&dir.join("other.dylib")), None).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
