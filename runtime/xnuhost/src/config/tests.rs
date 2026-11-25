@@ -1220,7 +1220,7 @@ fn host_device() {
     assert!(c.hw.choose(Bridge::Haptics, Backend::Unset).0 == Backend::Treble && c.hw.fallback_allowed());
     assert!(c
         .host_line
-        .contains("width=720, height=1560, scale=2, hz=60, return-graceful-ms=4000, hw-backend-haptics=treble"));
+        .contains("width=720, height=1560, scale=2, hz=60, return-graceful-ms=4000, astc=0, hw-backend-haptics=treble"));
     // the frame is one setting: an image set made at the panel's scale (roottweak writes scale=3) gets the frame and @2x;
     // an image set or a command line that gives a width or a height keeps its own frame and scale
     let conf = format!("{image}/xnuhost.conf");
@@ -1556,7 +1556,7 @@ fn the_switches() {
         .into();
     let line = c.switches_line();
     assert!(line.contains(" wifi-joined-scan=plain ") && line.contains(" gpu-blob-entries=16384 "), "{line}");
-    assert!(line.contains(" decoder=off decoder-codecs=vp9,av1 "), "{line}");
+    assert!(line.contains(" decoder=off decoder-codecs=vp9,av1 astc=1 "), "{line}");
     assert!(
         line.contains(
             " oneios-wifi-rssi=0 oneios-telemetry-jobs=1 oneios-pool-cut=0 oneios-pressure-big=0 oneios-disable-allowed=0 \

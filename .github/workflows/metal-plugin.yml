@@ -71,8 +71,19 @@ jobs:
           kernel/fetch.sh Droid-VM-UniXNU
           scripts/setup/get-references.sh NativeMetal NativeAdreno NativeMobileDisplay AdrenoPM4 metal2vulkan mesa-droidvm
           scripts/setup/get-references.sh -l
-      - name: The toolchain's answer (logged; the link uses the SDK's stubs when there are none)
-        run: scripts/setup/ios-toolchain.sh || true
+      - name: Check the toolchain (the image's custom stubs are optional)
+        run: |
+          set -euo pipefail
+          if report=$(scripts/setup/ios-toolchain.sh 2>&1); then
+            printf '%s\n' "$report"
+          elif [[ "$report" == "ios toolchain: missing: the iOS 27 stubs in "*" (scripts/setup/ios-toolchain.sh --tbd, after the image set is built)" ]]; then
+            printf '%s\n' "$report"
+            echo "Using Xcode SDK stubs; this workflow has no guest image-set input."
+          else
+            printf '%s\n' "$report" >&2
+            echo "::error::The iOS linker toolchain check failed."
+            exit 1
+          fi
       - name: Build the bundle and the GPU addon
         env:
           ONEIOS_METAL_TARGET: ${{ inputs.target }}

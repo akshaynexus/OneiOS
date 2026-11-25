@@ -218,7 +218,9 @@ guest plug-ins.
   tests only.
 - **metal-plugin**: manual-only Xcode 27 build on `xcode-27`. It fetches the pinned public sources, builds
   `NativeAdrenoMetal.bundle` and its `.gpuaddon` sidecar for the selected target, and uploads the bundle, build record,
-  check report and build log as a separate artifact. It does not publish a release or feed the runtime job.
+  check report and build log as a separate artifact. It has no guest image-set input, so it accepts the absence of the
+  image-specific linker stubs and uses Xcode's SDK stubs; missing Xcode SDK or linker requirements fail before the build.
+  It does not publish a release or feed the runtime job.
 - **runtime**: what `ci.yml` and the old `release.yml` did, on every build. `app/` must be an empty submodule
   folder (this job never checks the fork out); no firmware and no Python in git (`check-tracked-files.sh`: a
   tracked `*.py`, or an executable with a python shebang, fails it since 2026-11-21); `bash -n`, `shellcheck -S error`; NDK 28.2.13676358, Rust and
