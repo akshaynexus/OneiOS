@@ -1218,9 +1218,9 @@ fn host_device() {
             == PanelMode { width: 720, height: 1560, hz: 60 }
     );
     assert!(c.hw.choose(Bridge::Haptics, Backend::Unset).0 == Backend::Treble && c.hw.fallback_allowed());
-    assert!(c
-        .host_line
-        .contains("width=720, height=1560, scale=2, hz=60, return-graceful-ms=4000, astc=0, hw-backend-haptics=treble"));
+    assert!(c.host_line.contains(
+        "width=720, height=1560, scale=2, hz=60, return-graceful-ms=4000, astc=0, hw-backend-haptics=treble"
+    ));
     // the frame is one setting: an image set made at the panel's scale (roottweak writes scale=3) gets the frame and @2x;
     // an image set or a command line that gives a width or a height keeps its own frame and scale
     let conf = format!("{image}/xnuhost.conf");

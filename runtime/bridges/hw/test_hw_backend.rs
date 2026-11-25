@@ -57,8 +57,7 @@ fn host_device() {
             let key = c.split('=').next().unwrap_or("");
             let device_key = matches!(
                 key,
-                "gpu" | "panel-fallback" | "hz" | "width" | "height" | "scale"
-                    | "return-graceful-ms" | "astc"
+                "gpu" | "panel-fallback" | "hz" | "width" | "height" | "scale" | "return-graceful-ms" | "astc"
             );
             assert!(device_key || key.starts_with("hw-backend"), "{c}");
         }
