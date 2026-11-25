@@ -509,6 +509,7 @@ impl Policy {
             let cost = if self.down_at_bottom { self.at_bottom(gpu_us) } else { self.at_governor(gpu_us) };
             self.easy = if cost <= fit { self.easy + 1 } else { 0 };
             if !self.down_at_bottom
+                && self.misses == 0
                 && self.gov_x16 > DOWN_GUESS_X16
                 && (gpu_us as u64 * DOWN_GUESS_X16 as u64 / 16) as u32 <= fit
             {
