@@ -1557,14 +1557,25 @@ fn the_switches() {
     let line = c.switches_line();
     assert!(line.contains(" wifi-joined-scan=plain ") && line.contains(" gpu-blob-entries=16384 "), "{line}");
     assert!(line.contains(" decoder=off decoder-codecs=vp9,av1 astc=1 "), "{line}");
-    assert!(
-        line.contains(
-            " oneios-wifi-rssi=0 oneios-telemetry-jobs=1 oneios-pool-cut=0 oneios-pressure-big=0 oneios-disable-allowed=0 \
-             oneios-nested-exact=0 oneios-upgrade-flush=1 oneios-fill-fast-fault=0 oneios-idle-spares=0 \
-             oneios-bo-cache-idle=0 oneios-dont-care=0 oneios-queue-priority=0 (docs/switches.md)"
-        ),
-        "{line}"
-    );
+    // Check values by key: adding a switch must not break this assertion merely because it appears
+    // between existing keys in the human-readable summary.
+    for (key, value) in [
+        ("oneios-wifi-rssi", "0"),
+        ("oneios-telemetry-jobs", "1"),
+        ("oneios-pool-cut", "0"),
+        ("oneios-pressure-big", "0"),
+        ("oneios-disable-allowed", "0"),
+        ("oneios-nested-exact", "0"),
+        ("oneios-upgrade-flush", "1"),
+        ("oneios-fill-fast-fault", "0"),
+        ("oneios-idle-spares", "0"),
+        ("oneios-bo-cache-idle", "0"),
+        ("oneios-dont-care", "0"),
+        ("oneios-queue-priority", "0"),
+    ] {
+        assert!(line.contains(&format!(" {key}={value} ")), "{key}={value}: {line}");
+    }
+    assert!(line.contains(" (docs/switches.md); "), "{line}");
     assert!(
         line.ends_with(
             "not at the default: stop-loop timer-coalesce uclamp-rule gpu-down gpu-blob-entries wifi-ring-wait wifi-send-wait \

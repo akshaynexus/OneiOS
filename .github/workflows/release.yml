@@ -96,12 +96,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Cache the pinned NDK (setup-build.sh's sdkmanager install becomes a restore after the first run)
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (Node 24)
         with:
           path: /usr/local/lib/android/sdk/ndk/28.2.13676358
           key: ci-ndk-28.2.13676358
       - name: Cache the Rust toolchain and cargo (the warm builds of the tool and of the runtime ride in their target dirs)
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (Node 24)
         with:
           path: |
             ~/.rustup
@@ -263,8 +263,9 @@ jobs:
       - name: mksh for the script tests
         run: sudo apt-get install -y --no-install-recommends mksh || echo "::warning::mksh could not be installed; the script tests run under dash only"
       - name: Unit tests and the debug APK (full edition, no packed sets)
+        timeout-minutes: 55
         working-directory: app/app-android
-        run: ./gradlew --max-workers=3 test assembleFullDebug
+        run: timeout --signal=TERM --kill-after=30s 50m ./gradlew --max-workers=3 --console=plain --init-script "$GITHUB_WORKSPACE/.github/scripts/gradle-test-events.gradle" test assembleFullDebug
       - name: Name the APK, its version
         id: apk
         run: |
@@ -356,37 +357,23 @@ jobs:
           "$sdkmanager" "platforms;android-37.0" "build-tools;37.0.0"
       - name: Guest app
         run: app/scripts/build-guest-manager.sh --debug
+      - name: GNU coreutils for a bounded test run
+        run: brew install coreutils
       - name: Unit tests on macOS (./gradlew test, core:root's script tests among them)
+        timeout-minutes: 55
         working-directory: app/app-android
-        env:
-          # 45, not 30 (2026-11-23): a good run of the fork's tests took 28 min 54 s on main (707 tests), and two runs
-          # on a slower macos-15 runner were still passing tests at 30 min (680 and 675 done, a different test each
-          # time) when the watchdog stopped them. The job's own limit is 60 min; setup takes about 8.
-          WATCHDOG_MIN: 45
         run: |
           set -euo pipefail
+          brew_bin=$(command -v brew)
+          timeout_bin=$("$brew_bin" --prefix coreutils)/bin/gtimeout
+          [ -x "$timeout_bin" ] || { echo "::error::GNU timeout is missing at $timeout_bin"; exit 1; }
           PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -Ev '^(/opt/homebrew|/usr/local)(/|$)' | paste -sd: -)
           export PATH
           for t in gstat gsha256sum gtimeout gtac gsed; do command -v "$t" > /dev/null && echo "note: $t is still on PATH: $(command -v "$t")"; done
           echo "macOS $(sw_vers -productVersion), sh: $(ls -l /bin/sh | awk '{print $NF}'), stat: $(command -v stat)"
-          # Every test's start and end in the log (.github/scripts/gradle-test-events.gradle). The watchdog: a run
-          # that is not done after WATCHDOG_MIN minutes prints the processes and the test JVMs' threads (where it
-          # hangs), then stops Gradle, so that the failed tests and the reports below still come out (the first
-          # runs, 2026-11-15, hung in :core:root:testDebugUnitTest until the job's limit cancelled everything).
-          ./gradlew --max-workers=3 --continue --init-script "$GITHUB_WORKSPACE/.github/scripts/gradle-test-events.gradle" test &
-          g=$!
-          s=0
-          while kill -0 "$g" 2>/dev/null; do
-            sleep 10; s=$((s + 10))
-            if [ "$s" -ge $((WATCHDOG_MIN * 60)) ]; then
-              echo "::error::./gradlew test is still running after $WATCHDOG_MIN minutes: the processes and the test JVMs' threads follow, then Gradle is stopped"
-              ps -axww -o pid,ppid,etime,state,command | grep -Ev ' (/System/|/usr/libexec/|/usr/sbin/|/sbin/launchd)' | cut -c1-400
-              for p in $(jps -l | awk '/Gradle Test Executor|GradleWorkerMain/ { print $1 }'); do echo "=== jstack $p"; jstack "$p" | awk '/^"/ { keep = /Test worker|main/ } keep'; done
-              ./gradlew --stop || true; kill "$g" 2>/dev/null || true
-              exit 1
-            fi
-          done
-          wait "$g"
+          # Plain per-test events identify the last test reached; GNU timeout bounds the process group without an
+          # unbounded jstack/Gradle-stop diagnostic path. The step leaves five minutes for summaries and artifacts.
+          "$timeout_bin" --signal=TERM --kill-after=30s 50m ./gradlew --max-workers=3 --console=plain --continue --init-script "$GITHUB_WORKSPACE/.github/scripts/gradle-test-events.gradle" test
       - name: Failed tests
         if: failure()
         working-directory: app/app-android
