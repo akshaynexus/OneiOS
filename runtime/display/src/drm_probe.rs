@@ -388,9 +388,9 @@ mod linux {
                 continue;
             }
             let n_modes = (conn.count_modes as usize).min(modes.len());
-            let has_1440_120 = modes[..n_modes]
-                .iter()
-                .any(|m| m.hdisplay == 1440 && m.vdisplay == 3120 && mode_hz(m.clock, m.htotal, m.vtotal, m.vrefresh) == 120);
+            let has_1440_120 = modes[..n_modes].iter().any(|m| {
+                m.hdisplay == 1440 && m.vdisplay == 3120 && mode_hz(m.clock, m.htotal, m.vtotal, m.vrefresh) == 120
+            });
             let _ = writeln!(
                 out,
                 "connector {}: {}-{} {} {}x{}mm encoder={} modes={} (1440x3120@120={})",
@@ -421,7 +421,11 @@ mod linux {
                 continue;
             }
             let mode_str = if crtc.mode_valid != 0 { format_mode(&crtc.mode) } else { "none".into() };
-            let _ = writeln!(out, "crtc {}: fb={} mode_valid={} mode={}", crtc.crtc_id, crtc.fb_id, crtc.mode_valid, mode_str);
+            let _ = writeln!(
+                out,
+                "crtc {}: fb={} mode_valid={} mode={}",
+                crtc.crtc_id, crtc.fb_id, crtc.mode_valid, mode_str
+            );
             let mut props = [0u32; 64];
             let mut prop_vals = [0u64; 64];
             let mut obj = ObjGetProperties {

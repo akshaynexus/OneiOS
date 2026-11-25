@@ -1005,8 +1005,12 @@ fn drm_flush(d: &Display, drm: &mut Drm, x: u32, y: u32, w: u32, h: u32) {
         }
         drm.page_flip = false;
     }
-    let mut clip =
-        kms::ClipRect { x1: (cx + ox) as u16, y1: (cy + oy) as u16, x2: (cx + ox + cw) as u16, y2: (cy + oy + ch) as u16 };
+    let mut clip = kms::ClipRect {
+        x1: (cx + ox) as u16,
+        y1: (cy + oy) as u16,
+        x2: (cx + ox + cw) as u16,
+        y2: (cy + oy + ch) as u16,
+    };
     let mut dirty =
         kms::FbDirty { fb_id: buf.fb, clips_ptr: &mut clip as *mut _ as u64, num_clips: 1, ..Default::default() };
     kms::call(drm.fd.as_raw_fd(), kms::DIRTYFB, &mut dirty); // command-mode panels need it; others ignore it

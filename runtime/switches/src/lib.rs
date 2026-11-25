@@ -247,7 +247,7 @@ pub const SWITCHES: &[Switch] = &[
     text(
         conf("gpu-kgsl-ui-rb", BOOL, "0", Some("1")),
         "GPU",
-        "Keep render server out of Android UI ringbuffer",
+        "Skip Android UI GPU ringbuffer",
         "0: the render server and front app run at KGSL priority 8 (out of Android's 4-7 UI ringbuffer, avoiding tile-memory \
          collisions with One UI). 1: priority 4 (in the UI ringbuffer, as before).",
     ),
