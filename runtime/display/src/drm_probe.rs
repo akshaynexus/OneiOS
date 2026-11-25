@@ -330,11 +330,8 @@ mod linux {
             DRM_IOCTL_SET_CLIENT_CAP,
             &mut SetClientCap { capability: DRM_CLIENT_CAP_UNIVERSAL_PLANES, value: 1 },
         );
-        let atomic_ok = call(
-            raw,
-            DRM_IOCTL_SET_CLIENT_CAP,
-            &mut SetClientCap { capability: DRM_CLIENT_CAP_ATOMIC, value: 1 },
-        );
+        let atomic_ok =
+            call(raw, DRM_IOCTL_SET_CLIENT_CAP, &mut SetClientCap { capability: DRM_CLIENT_CAP_ATOMIC, value: 1 });
         let _ = writeln!(
             out,
             "caps: dumb_buffer={} monotonic_ts={} universal_planes={} atomic={}",

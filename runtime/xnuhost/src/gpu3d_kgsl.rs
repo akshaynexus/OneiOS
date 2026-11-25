@@ -748,8 +748,7 @@ impl Gpu3d for Kgsl {
                     Some(i) => {
                         let now = now_us() * 1000;
                         let c = s.ctx[i];
-                        let display_off =
-                            OFF_LEVEL.load(Ordering::Relaxed) && !onebridges::brightness::display_on();
+                        let display_off = OFF_LEVEL.load(Ordering::Relaxed) && !onebridges::brightness::display_on();
                         let (action, next, lowest) = if display_off {
                             let action = if s.pol.level == policy::Level::Top {
                                 s.pol.level = policy::Level::Governor;

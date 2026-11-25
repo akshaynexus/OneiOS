@@ -1,8 +1,6 @@
 --- a/src/drm/drm2kgsl/drm2kgsl_renderer.c
 +++ b/src/drm/drm2kgsl/drm2kgsl_renderer.c
-@@ -1989,14 +1989,23 @@
- void
- drm2kgsl_renderer_set_class(struct virgl_context *vctx, unsigned cls, bool lowest)
+@@ -2019,7 +2019,7 @@
  {
     struct kgsl_context *kctx = to_kgsl_context(to_drm_context(vctx));
     kctx->oneios_class = cls;
@@ -10,8 +8,8 @@
 +   kctx->oneios_lowest = lowest;
  }
  
- static void
- kgsl_constraint_update(struct kgsl_context *kctx, uint32_t drawctxt_id)
+ void
+@@ -2038,6 +2038,13 @@
  {
     if (!__atomic_load_n(&g_oneios_driven, __ATOMIC_ACQUIRE))
        oneios_hold_extend();                /* ONEIOS (0008): xnuhost holds the clock itself (drm2kgsl_renderer_set_level) */
@@ -25,7 +23,9 @@
     const bool want = kgsl_constraint_now(kctx);
     if (want != kctx->constraint_on && kgsl_set_pwr_constraint(kctx->base.fd, drawctxt_id, want)) {
        kctx->constraint_on = want;
-@@ -2035,13 +2044,18 @@
+@@ -2059,19 +2066,21 @@
+     * ONEIOS_GPU_PRIORITY=off: the guest's queue priority as upstream), and a background
+     * context's queues can carry KGSL's lowest level. A priority this KGSL refuses: the queue is made without one, once said. */
     static int by_class = -1;
 +   static int ui_rb = -1;
     if (by_class < 0) {
@@ -47,10 +47,11 @@
 +               (constrained || by_class ? KGSL_CONTEXT_PWR_CONSTRAINT : 0) |
                 priority,
     };
-@@ -2141,7 +2155,7 @@
-          _drm_log(VIRGL_LOG_LEVEL_WARNING, "context %u: %s\n", id, __atomic_load_n(&g_oneios_driven, __ATOMIC_ACQUIRE)
-                   ? "a deadline queue: at the top level only for frames that would miss their deadline (xnuhost's policy)"
-                   : "constrained while it submits at an animation's rate");
+ 
+@@ -2165,7 +2174,7 @@
+             _drm_log(VIRGL_LOG_LEVEL_WARNING, "context %u: %s\n", id, __atomic_load_n(&g_oneios_driven, __ATOMIC_ACQUIRE)
+                      ? "a deadline queue: at the top level only for frames that would miss their deadline (xnuhost's policy)"
+                      : "constrained while it submits at an animation's rate");
 -         const bool lowest = kctx->oneios_class == OG_CLASS_BACKGROUND && (!getenv("ONEIOS_GPU_PRIORITY") || strcmp(getenv("ONEIOS_GPU_PRIORITY"), "off"));
 +         const bool lowest = !getenv("ONEIOS_GPU_PRIORITY") || strcmp(getenv("ONEIOS_GPU_PRIORITY"), "off");
           unsigned ring_idx = (MIN2(q->prio, g_nr_timelines - 1) + 1) |
