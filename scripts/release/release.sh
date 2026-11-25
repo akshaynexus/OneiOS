@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build, check and publish a OneiOS release from this machine, without waiting for GitHub Actions: the runtime
 # package, the phone's oneios-tool and the OneOS APK, the same files and checks as .github/workflows/release.yml.
-#   scripts/release/release.sh VERSION [--build-only] [--runtime-only | --apk-only] [--skip-tests] [--metal-dir DIR [--metal-more-dir DIR]... | --no-metal]
+#   scripts/release/release.sh VERSION [--build-only] [--runtime-only | --apk-only] [--skip-tests] [--metal-rt] [--metal-dir DIR [--metal-more-dir DIR]... | --no-metal]
 #            [--metal-amd-dir DIR | --no-metal-amd]
 #   scripts/bg.sh release scripts/release/release.sh 0.1.14     (it takes 10-20 minutes: run it in tmux)
 # VERSION is N.N.N or N.N.N-suffix; the release is the tag vVERSION, made at HEAD (which must be on origin/main).
@@ -51,7 +51,7 @@ FORK_REPO=akshaynexus/OneOS
 KEYSTORE=$ROOT/secrets/oneios-debug.keystore
 die() { echo "release: $*" >&2; exit 1; }
 
-VERSION= PUBLISH=1 RUNTIME=1 APK=1 TESTS=1 METAL=build METAL_FROM= METAL_MORE_FROM= METAL_AMD=build METAL_AMD_FROM=
+VERSION= PUBLISH=1 RUNTIME=1 APK=1 TESTS=1 METAL=build METAL_RT= METAL_FROM= METAL_MORE_FROM= METAL_AMD=build METAL_AMD_FROM=
 # The iOS builds the Metal plug-in is built for: the default first (lib/guest/), then each other (lib/guest/<build>/;
 # userland/metal/hooks/<device>-<build>.json).
 METAL_TARGETS=("iPhone18,2 24A446" "iPhone18,2 24B156")
@@ -63,6 +63,7 @@ for a in "$@"; do
   case $a in
   --metal-dir) want_dir=1 ;;
   --metal-more-dir) want_dir=2 ;;
+  --metal-rt) METAL_RT=rt ;;
   --no-metal) METAL=none ;;
   --metal-amd-dir) want_amd=1 ;;
   --no-metal-amd) METAL_AMD=none ;;
@@ -228,13 +229,13 @@ lane_runtime() {
     ext:Droid-VM-UniXNU ext:NativeAdreno ext:AdrenoPM4 ext:NativeMobileDisplay)
   case $METAL in
     build)
-      cached_build metal-24A446 "$(plugin_key "${METAL_TARGETS[0]}" "${metal_in[@]}")" "$g" \
-        env METAL_OUT="$g" userland/metal/build.sh
+      cached_build "metal-${METAL_RT:-default}-24A446" "$(plugin_key "${METAL_TARGETS[0]}" "$METAL_RT" "${metal_in[@]}")" "$g" \
+        env METAL_RUNTIME="$METAL_RT" METAL_OUT="$g" userland/metal/build.sh
       cached_build camera "$(plugin_key camera userland/camera "${tools[@]}")" "$g/camera" userland/camera/build.sh "$g/camera"
       for target in "${METAL_TARGETS[@]:1}"; do
         t=$g-${target#* }
-        cached_build "metal-${target#* }" "$(plugin_key "$target" "${metal_in[@]}")" "$t" \
-          env ONEIOS_METAL_TARGET="$target" METAL_OUT="$t" userland/metal/build.sh
+        cached_build "metal-${METAL_RT:-default}-${target#* }" "$(plugin_key "$target" "$METAL_RT" "${metal_in[@]}")" "$t" \
+          env METAL_RUNTIME="$METAL_RT" ONEIOS_METAL_TARGET="$target" METAL_OUT="$t" userland/metal/build.sh
         rm -rf "$t/camera"; cp -R "$g/camera" "$t/camera"
         more_metal="$more_metal $t"
       done

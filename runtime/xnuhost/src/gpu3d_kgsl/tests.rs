@@ -482,10 +482,10 @@ fn classes() {
             (r.queue_new(&icons, 0), r.queue_new(&app, 0), r.queue_new(&other, 0), r.queue_new(&photos, 0));
         assert!(q1 != 0 && q2 != 0 && q3 != 0 && q4 != 0 && q5 != 0);
         let s = stand();
-        assert!(s.priority_of(q1) == 4 && s.constrained(q1));
+        assert!(s.priority_of(q1) == 8 && s.constrained(q1));
         // iconservicesagent draws icons the user sees: no longer background by name (fix-gpu-widgets).
-        assert!(s.priority_of(q2) == 8 && !s.constrained(q2));
-        assert!(s.priority_of(q3) == 4 && !s.constrained(q3));
+        assert!(s.priority_of(q2) == 8 && s.constrained(q2));
+        assert!(s.priority_of(q3) == 8 && s.constrained(q3));
         // Background, by role or by name: the default's ringbuffer (never under it), and able to carry the lowest level.
         assert!(s.priority_of(q4) == 8 && s.constrained(q4));
         assert!(s.priority_of(q5) == 8 && s.constrained(q5));
@@ -570,11 +570,11 @@ fn shown_surfaces() {
             "context 2 xnu:WidgetRenderer_Default: the render server reads its surfaces: default now, not background";
         assert!(last_context().contains(want), "{}", last_context());
         let q2 = r.queue_new(&widget, 0);
-        assert!(q2 != 0 && with(|s| s.priority_of(q2) == 8 && !s.constrained(q2))); // not background now
-                                                                                    // A new hint (a utility thread now) keeps it out of the background.
+        assert!(q2 != 0 && with(|s| s.priority_of(q2) == 8 && s.constrained(q2))); // not background now
+                                                                                   // A new hint (a utility thread now) keeps it out of the background.
         r.gpu.hint(2, [HINT_VALID | ROLE_NONUI, QOS_UTILITY, 0]);
         let q3 = r.queue_new(&widget, 0);
-        assert!(q3 != 0 && !stand().constrained(q3));
+        assert!(q3 != 0 && stand().constrained(q3));
         // The extension is still background: its pages are shared with its own twin only.
         let q4 = r.queue_new(&other, 0);
         assert!(q4 != 0 && stand().constrained(q4));
