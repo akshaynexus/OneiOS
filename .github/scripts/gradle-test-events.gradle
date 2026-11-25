@@ -1,4 +1,4 @@
-// CI (the apk-macos job of .github/workflows/release.yml): `./gradlew --init-script <this> test` prints every unit
+// CI (the apk and apk-macos jobs of .github/workflows/release.yml): `./gradlew --init-script <this> test` prints every unit
 // test as it starts and ends, with the whole exception of a failure, so that a test that hangs is the last
 // "STARTED" line of the log and a failure shows its message without the report. Changes nothing else of the build.
 allprojects {

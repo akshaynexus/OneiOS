@@ -1574,7 +1574,7 @@ conf keeps it too. Test: `ios16_coreimage_fixup_is_left_out_only_with_the_a56_gl
 
 ## 7. The Metal plug-in (`userland/metal`)
 
-**Build notes (2026-11-23, integration-switches; docs/switches.md "Found while building the Metal plug-in").**
+**Build notes (2026-11-23, integration-switches; shader fixes enabled 2026-11-24).**
 `build.sh turnip` removes `build/mesa-tu-ios27` when the inputs of its cross file changed (the SDK, the compilers,
 the base script), since an existing directory only gets `meson configure`. The `9xxx` copies of
 `patches/metal2vulkan`: since 2026-11-25 90101, 90102 and the switch 90110 are in the bridge's list (`ios

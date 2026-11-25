@@ -175,9 +175,8 @@ rc=0; KERNEL_DIR=$T/k KERNEL_MORE_DIRS=$T/k2 "$ROOT/runtime/package.sh" $V > "$T
 ok "two kernels: kernel/24B156/ beside kernel/, runtime.json \"kernels\" lists both; refused alone or not releasable"
 
 # 5. The guest's plug-ins (METAL_DIR, CAMERA_DIR: lib/guest/): made-up signed Mach-Os (`debug fixture`), taken and named
-# in runtime.json; Apple's code or an executable there refused. lib/guest/NOTICE takes the licence texts from
-# external/ (scripts/setup/get-references.sh): without those checkouts (CI's runtime job fetches virglrenderer only)
-# this part is not run, and says so.
+# in runtime.json; Apple's code or an executable there refused. lib/guest/NOTICE takes licence texts from
+# METAL_LICENSES_DIR (default external/); CI supplies the pinned licence files from the Metal build job.
 guest_dir() { # DIR TARGET: userland/metal/build.sh's output folder, and DIR/camera as userland/camera/build.sh's
   local d=$1 b=$1/NativeAdrenoMetal.bundle p t
   mkdir -p "$b" "$d/camera"
@@ -191,7 +190,8 @@ guest_dir() { # DIR TARGET: userland/metal/build.sh's output folder, and DIR/cam
   printf '{"bundle": "NativeAdrenoMetal.bundle", "target": "%s", "files": {"NativeAdrenoMetal": {"cdhash": "%s"}, "libvulkan_freedreno.dylib": {"cdhash": "%s"}}, "cdhashes": ["%s", "%s"], "sources": {"NativeMetal": "b0d6a07a3da3e23486593aff235904177e94a3ff"}}\n' \
     "$2" "$p" "$t" "$p" "$t" > "$d/NativeAdrenoMetal.build.json"
 }
-if [ -f "$ROOT/external/metal2vulkan/LICENSE-GPL-2.0" ] && [ -f "$ROOT/external/mesa-droidvm/LICENSING.md" ]; then
+METAL_LICENSES_DIR=${METAL_LICENSES_DIR:-$ROOT/external}
+if [ -f "$METAL_LICENSES_DIR/metal2vulkan/LICENSE-GPL-2.0" ] && [ -f "$METAL_LICENSES_DIR/mesa-droidvm/LICENSING.md" ]; then
   rm -rf "$T/extra" "$OUT_DIR" "$T/g"
   guest_dir "$T/g" "iPhone18,2 24A446"
   METAL_DIR=$T/g CAMERA_DIR=$T/g/camera "$ROOT/runtime/package.sh" $V > "$T/log" 2>&1 || { cat "$T/log"; fail "package with the guest plug-ins"; }

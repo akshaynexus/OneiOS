@@ -234,7 +234,7 @@ sensors-light=auto
   e84a46e unchanged; handed to the Mac as `out/handoff/s24fps-8ded46c/`. Not booted.
 - Not tested on a phone: any non-default value, and most defaults (column "Phone").
 
-## Found while building the Metal plug-in (2026-11-23)
+## Found while building the Metal plug-in (2026-11-23; shader fixes enabled 2026-11-24)
 
 - `userland/metal/patches/metal2vulkan/0101-0103` are copied into the staged tree as `90101-...`; the base's
   `build-adreno-metal-bridge.py` applies a fixed list of names, not every `*.patch`. Until 2026-11-25 no plug-in built

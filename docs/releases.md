@@ -204,28 +204,38 @@ runtime/package.sh 0.1.7-dev                           # -> out/release/oneios-r
 
 ## CI and releases
 
-One workflow, `.github/workflows/release.yml` ("build and release"; `ci.yml` and the runtime-only `release.yml` of
-before 2026-11-15 were merged into it). Its jobs:
+The "build and release" workflow, `.github/workflows/release.yml`, builds the runtime and app. A separate,
+manual-only `.github/workflows/metal-plugin.yml` builds the Metal plug-in for a selected target. The jobs in
+"build and release" are:
 
 ```
 plan ──┬── runtime    ubuntu-24.04   the runtime package and its checks
        ├── apk        ubuntu-24.04   the OneOS app (submodule app/) and its checks
-       ├── apk-macos  macos-15       ./gradlew test of the same app on a Mac
+       ├── apk-macos  xcode-27       ./gradlew test of the same app on a Mac
        └───────────── release        needs runtime and apk; a tag or a dispatch only
 ```
 
-`runtime`, `apk` and `apk-macos` start together after `plan` and run on their own runners.
+`runtime`, `apk` and `apk-macos` start together after `plan`. The runtime job does not build or download the optional
+guest plug-ins.
 
 | Trigger | Builds | Releases |
 |---|---|---|
-| a pull request, a push to `main` | runtime, apk, apk-macos | nothing (the runtime package and the APK are artifacts for 14 days) |
-| a tag `vN.N.N` or `vN.N.N-suffix` on `main` | all three | the runtime and the APK on the release of the tag |
-| a dispatch on `main` (Actions, "build and release", Run workflow; inputs `version` and `both` / `runtime only` / `apk only`) | what was asked (apk-macos with the APK) | the release `v<version>`, its tag made at the dispatched commit when missing |
+| a pull request, a push to `main` | runtime, apk, apk-macos | nothing (the runtime package and APK are Actions artifacts) |
+| a tag `vN.N.N` or `vN.N.N-suffix` on `main` | all three build jobs | the runtime and the APK on the release of the tag |
+| a dispatch on `main` (Actions, "build and release", Run workflow; inputs `version` and `both` / `runtime only` / `apk only`) | runtime and/or apk as selected; apk-macos with apk | the release `v<version>`, its tag made at the dispatched commit when missing |
+| a dispatch of `metal-plugin` (Actions; input `target`, default `iPhone18,2 24A446`) | the selected Metal plug-in on `xcode-27` | no release; a separate Actions artifact |
 
 - **plan**: whether the run releases, the version (`0.0.0-ci` when not), what it builds. A release's version must be
   `N.N.N[-suffix]` and its commit on `main`. A tag whose release exists already (published from a build machine by
   `scripts/release/release.sh`, "Releasing from a build machine" below) does not release again: its run builds and
   tests only.
+- **metal-plugin**: manual-only Xcode 27 build on `xcode-27`. It fetches the pinned public sources, builds
+  `NativeAdrenoMetal.bundle` and its `.gpuaddon` sidecar for the selected target, and uploads the bundle, build record,
+  check report and build log as a separate artifact. It has no guest image-set input, so it accepts the absence of the
+  image-specific linker stubs and uses Xcode's SDK stubs; missing Xcode SDK or linker requirements fail before the build.
+  The target must have a checked-in hooks file before any toolchain fetch; a successful run verifies the target marker,
+  arm64e binaries, Mach-O check, build record and sidecar, and uploads a SHA-256 manifest. Missing build outputs fail the
+  job. It does not publish a release or feed the runtime job.
 - **runtime**: what `ci.yml` and the old `release.yml` did, on every build. `app/` must be an empty submodule
   folder (this job never checks the fork out); no firmware and no Python in git (`check-tracked-files.sh`: a
   tracked `*.py`, or an executable with a python shebang, fails it since 2026-11-21); `bash -n`, `shellcheck -S error`; NDK 28.2.13676358, Rust and
@@ -239,8 +249,10 @@ plan ──┬── runtime    ubuntu-24.04   the runtime package and its check
   --self-test`; every executable `*/tests/host.sh` of another area, among them `runtime/tests/host.sh`: the Rust
   workspace's `cargo test`, `cargo fmt --check`, `cargo clippy -D warnings` and `runtime/xnuhost/check-arm64.sh smoke
   check`); the pinned kernel when
-  `kernel/release-kernel.txt` names one; `runtime/package.sh <version>` (the Apple-file refusal and the elf-check of
-  the stage, and `bin/oneios-tool` built for the phone); the drm2kgsl check and `runtime/package/elf-check.sh` on
+  `kernel/release-kernel.txt` names one (fetched from `akshaynexus/OneiOS`, where `kernel/publish.sh` publishes it);
+  `runtime/package.sh <version>` (the Apple-file refusal and elf-check of the stage, plus `bin/oneios-tool` built for
+  the phone; optional plug-ins are included only when their directories are supplied); the drm2kgsl check and
+  `runtime/package/elf-check.sh` on
   the unpacked archive; the members check (above); `.github/scripts/check-phone-tool.sh <version>` ("oneios-tool for
   the phone", below). Artifact `oneios-runtime`: the `.tar.zst`, its `.sha256`, `.runtime.json`, and
   `oneios-tool-<version>-android-arm64` with its `.sha256`. Its limit is 45 min (the tool's Android build comes on
@@ -251,7 +263,8 @@ plan ──┬── runtime    ubuntu-24.04   the runtime package and its check
   cache); Android SDK platform 37 and build-tools 37.0.0; the debug key of the secret `ONEIOS_DEBUG_KEYSTORE_B64`
   (set since 2026-11-22: the key of `secrets/oneios-debug.keystore`, "The debug key" below; without the secret a key
   of the run's own); `app/scripts/build-guest-manager.sh --debug`; mksh;
-  `./gradlew --max-workers=3 test assembleFullDebug` in `app/app-android` (what `oneios-tool app build` runs); the
+  `./gradlew --max-workers=3 test assembleFullDebug` in `app/app-android` (what `oneios-tool app build` runs), with
+  plain per-test start/end logs and a 50-minute process-group timeout (the step is capped at 55 minutes); the
   APK's versionName and versionCode from `aapt2 dump badging` (the versionCode must be `app/build.gradle.kts`'s);
   `check-apk.sh` (above). Artifact `oneos-apk`: `OneOS-oneios-<versionName>-debug.apk` and its `.sha256`.
   The commit recorded for `app/` is `ff2e4a6` (2026-11-23: fork branch `sm8850-support` on `5568231`, for `oneios`: the tribalfs packages from their three GitHub Packages registries with the environment's token first, JitPack never asked for them (YMGPwcca/OneOS `ab28274`, `590b4a6`); an early return writes the shmem THP mode back too, which the switch now writes only under its stop lock (part of their `403d8b4`); the Galaxy S26 Ultra warned with what is known, not refused (their refusal not taken: `docs/s26.md`); Gradle tests on the build laptop (:core:model:test :core:safety:test :core:root:testDebugUnitTest): 706, 0 failures) on `5568231` (2026-11-23: fork branch `s928w-support` on `726b66a`, for `oneios`: every S24 Ultra model number, the Canadian SM-S928W with its US bootloader and vendor model too, gets the SM-S928B's iOS 27 card, gate and switch, host-tested in `OneiosTest`, `ProfilesTest` and `OneiosScriptTest`; Gradle tests on the build laptop (:core:model:test :core:safety:test :core:root:testDebugUnitTest): 703, 0 failures) on `726b66a` (2026-11-23: fork `oneios` with `0cd45ad`, the boot screen's bar, and `2ef79b6`, CI signs with the shared key, merged into the upstream merge; the merged tree's Gradle tests on the build laptop: 701, 0 failures) on `6abbf5b` (2026-11-22: upstream OneOS 0.5.32 to 0.5.35 merged into `oneios` (`925a978`: Debloat, PixelOS 17, the Z Fold8's One UI 9.5 files, Bring apps search, Wireless debugging paired in a guest; no iOS script, root verb, stage path or session ABI changed), then the core:root tests' `head` stand-in for `head -c 0` on a Mac (`6abbf5b`); version 0.5.65 (194); on the Mac `./gradlew test assembleFullDebug` built 0.5.64 (193) at `925a978`, 700 tests, 1 failure (that `head`), then `:core:root` 320 tests, 0 failures, 6 skipped; not run on the phone; before it `43fc1b3`: a check that another job blocks waits visibly and starts by itself, the button spins only while a job runs; before it `bc837b4`: status quick by the files' ids, its steps and seconds shown, 20 s without an answer from su is "Root didn't answer", the setup steps on iOS 27's page, clearer runtime and image choices, live hardware-check output, debug builds signed with the shared key; 689 tests, 0 failures, 76 skipped; before it `5ffc71c`, the CI doc on the key, and `84b0ba5`: the pairing files without XnuPrelink's Python sources, kb
@@ -261,14 +274,16 @@ plan ──┬── runtime    ubuntu-24.04   the runtime package and its check
   on the phone (`53abb04`). Tested on the Linux PC: `./gradlew test` 679 tests, 0 failures, 75 skipped (the shell-script
   suites, which need dash, busybox or mksh, and one test gated on a real tool) and `assembleFullDebug`; not run on the
   phone.
-- **apk-macos**: the same checkout, token, JDK, SDK and guest app on `macos-15`, then `./gradlew --continue test`
+- **apk-macos**: the same checkout, token, JDK, SDK and guest app on `xcode-27`, then `./gradlew --continue test`
   with Homebrew's folders taken off `PATH`, so that core:root's script tests use the harness's stand-ins over
-  macOS's own `stat`, `shasum`, `perl` and `awk` (a Mac without coreutils). Every test's start and end is in the
-  log (`--init-script .github/scripts/gradle-test-events.gradle`, failures with their whole exception). A watchdog
-  stops Gradle after 45 minutes (30 until 2026-11-23: a good run takes about 29 on main, and slower runners were
-  still passing tests at 30) and first prints the processes and the test JVMs' threads (`jstack`), so a hung
-  test is named and the reports still come out. On a failure the job summary lists the failed tests; the reports
-  and results are the artifact `oneos-tests-macos`. Not a gate of the release. The macOS results are in
+  macOS's own `stat`, `shasum`, `perl` and `awk` (a Mac without coreutils). GNU `timeout` is invoked by its absolute
+  Homebrew path, not added to the test `PATH`. Every test's start and end is in the log
+  (`--init-script .github/scripts/gradle-test-events.gradle`, failures with their whole exception); the last `STARTED`
+  event identifies a test that stalls. GNU `timeout` sends TERM to the Gradle process group after 50 minutes and KILL
+  after a 30-second grace period; the step limit is 55 minutes within the 60-minute job. This bounded process-group
+  timeout replaces the old watchdog, whose unbounded `jstack`/Gradle-stop diagnostics could themselves stall. On a
+  failure the job summary lists the failed tests; the reports and results are the artifact `oneos-tests-macos`.
+  Not a gate of the release. The macOS results are in
   "macOS: the fork's unit tests" below.
 - **release**: needs runtime and apk (each a success, or skipped because the dispatch asked for the other only).
   Checks the commit is on `main` and that the tag, when it exists, is at the built commit (a tag is never moved);

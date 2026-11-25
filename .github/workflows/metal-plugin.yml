@@ -1,0 +1,165 @@
+# Build the Metal plug-in (NativeAdrenoMetal.bundle) on a macOS runner: Xcode's iPhoneOS SDK, the pins'
+# public sources, this tree's patches — no Apple image, no shared cache (the link uses the SDK's .tbd
+# stubs; the plug-in's shared-cache addresses come from userland/metal/hooks/<product>-<build>.json, which
+# is committed). Manual run only; download the artifact and stage it on the phone.
+#
+#   Actions -> metal-plugin -> Run workflow, target "iPhone18,2 24A446"
+#
+# What it builds, and why the flags: docs/gpu.md section 7, userland/metal/build.sh. The bundle's
+# oneios-target must be the guest's (the image set's build id), or `oneios-tool image tweaks` will not
+# place it; the GPU addon is the same bundle as a kernelkc.gpuaddon sidecar (oneios-tool phone addon).
+name: metal-plugin
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'The guest to build for: "<product> <build>" (userland/metal/hooks/<product>-<build>.json)'
+        required: true
+        default: 'iPhone18,2 24A446'
+permissions:
+  contents: read
+jobs:
+  build:
+    # xcode-27 is the image that carries the toolchain and SDK this plug-in is built for (iOS 27, arm64e); the
+    # generic macos-15 label only has Xcode 26 and its queue was starved ("The job was not acquired by Runner of
+    # type hosted even after multiple attempts"), so two runs in a row built nothing at all.
+    runs-on: xcode-27
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Restore executable bits (an upload drops them)
+        # git grep -z: macOS's grep has no -Z, so the old ls-files|xargs grep pipeline handed chmod one
+        # newline-joined name and the step failed on every runner.
+        run: git grep -zIl -e '^#!' | xargs -0 -r chmod +x
+      - name: Validate the requested guest target before fetching toolchains
+        env:
+          ONEIOS_METAL_TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          target_slug=${ONEIOS_METAL_TARGET/ /-}
+          case "$target_slug" in
+            ''|*..*|*[!A-Za-z0-9,._-]*) echo "::error::Invalid Metal target: $ONEIOS_METAL_TARGET"; exit 1 ;;
+          esac
+          if [[ "$ONEIOS_METAL_TARGET" != *" "* || "${ONEIOS_METAL_TARGET#* }" == *" "* ]]; then
+            echo "::error::Target must be '<product> <build>': $ONEIOS_METAL_TARGET"
+            exit 1
+          fi
+          hooks="userland/metal/hooks/$target_slug.json"
+          [ -s "$hooks" ] || { echo "::error::No checked-in shared-cache hooks for $ONEIOS_METAL_TARGET ($hooks)"; exit 1; }
+          echo "Using target $ONEIOS_METAL_TARGET with $hooks"
+      - name: Xcode with the iPhoneOS SDK
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          # The newest Xcode the runner has; the build only needs its clang, ld and iPhoneOS SDK.
+          pick=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$pick" ]; then sudo xcode-select -s "$pick/Contents/Developer"; fi
+          xcodebuild -version
+          sdk=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "iPhoneOS SDK: $sdk"
+          # The plug-in's deployment target: 27.0 when the SDK is 27 or newer, else the SDK's own.
+          ver=$(sed -n 's/.*"Version" *: *"\([0-9.]*\)".*/\1/p' "$sdk/SDKSettings.json" | head -1)
+          case "$ver" in
+            2[7-9]*|[3-9][0-9]*) min=27.0 ;;
+            *) min=${ver%.*} ; [ -n "$min" ] || min=26.0 ;;
+          esac
+          echo "SDK $ver, the plug-in's deployment target $min"
+          echo "IOS_MIN=$min" >> "$GITHUB_ENV"
+          echo "IOS_TARGET=arm64e-apple-ios$min" >> "$GITHUB_ENV"
+      - name: Homebrew's build tools
+        timeout-minutes: 20
+        run: brew install ninja glslang shaderc spirv-tools bison llvm uv
+      - name: Build dependencies for the pinned sources
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          # Keep the pinned builders' Python dependencies isolated from the runner image.
+          uv venv --python 3.12 "$RUNNER_TEMP/py"
+          uv pip install --python "$RUNNER_TEMP/py/bin/python" meson mako pyyaml packaging
+          echo "$RUNNER_TEMP/py/bin" >> "$GITHUB_PATH"
+      - name: Rust 1.98.0 with rust-src (the bridge builds std for the guest)
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup +1.98.0 component add rust-src
+          cargo +1.98.0 --version
+      - name: The pinned sources
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          # The kernel base (Droid-VM-UniXNU, the plug-in's build scripts), then the six the plug-in compiles.
+          kernel/fetch.sh Droid-VM-UniXNU
+          scripts/setup/get-references.sh NativeMetal NativeAdreno NativeMobileDisplay AdrenoPM4 metal2vulkan mesa-droidvm
+          scripts/setup/get-references.sh -l
+      - name: Check the toolchain (the image's custom stubs are optional)
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          if report=$(scripts/setup/ios-toolchain.sh 2>&1); then
+            printf '%s\n' "$report"
+          elif [[ "$report" == "ios toolchain: missing: the iOS 27 stubs in "*" (scripts/setup/ios-toolchain.sh --tbd, after the image set is built)" ]]; then
+            printf '%s\n' "$report"
+            echo "Using Xcode SDK stubs; this workflow has no guest image-set input."
+          else
+            printf '%s\n' "$report" >&2
+            echo "::error::The iOS linker toolchain check failed."
+            exit 1
+          fi
+      - name: Build the bundle and the GPU addon
+        timeout-minutes: 120
+        env:
+          ONEIOS_METAL_TARGET: ${{ inputs.target }}
+          JOBS: '6'
+        run: |
+          set -euo pipefail
+          userland/metal/build.sh all 2>&1 | tee metal-build.log
+      - name: Verify the target-tagged bundle and GPU addon
+        env:
+          ONEIOS_METAL_TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          bundle=out/userland/NativeAdrenoMetal.bundle
+          addon=out/userland/NativeAdrenoMetal.gpuaddon
+          record=out/userland/NativeAdrenoMetal.build.json
+          check=out/userland/NativeAdrenoMetal.check.txt
+          runtime=out/userland/NativeAdrenoMetal.runtime
+          for file in "$bundle/NativeAdrenoMetal" "$bundle/libvulkan_freedreno.dylib" "$bundle/oneios-target" "$addon" "$record" "$check" "$runtime"; do
+            [ -s "$file" ] || { echo "::error::Required Metal build output is missing or empty: $file"; exit 1; }
+          done
+          [ "$(cat "$bundle/oneios-target")" = "$ONEIOS_METAL_TARGET" ] || { echo "::error::Bundle target does not match $ONEIOS_METAL_TARGET"; exit 1; }
+          grep -Fq "\"target\": \"$ONEIOS_METAL_TARGET\"" "$record" || { echo "::error::Build record target does not match $ONEIOS_METAL_TARGET"; exit 1; }
+          grep -Fq '"arch": "arm64e"' "$record" || { echo "::error::Build record does not identify arm64e binaries"; exit 1; }
+          grep -Fq 'ios macho-check passed' "$record" || { echo "::error::Build record does not confirm the Mach-O check"; exit 1; }
+          manifest=out/userland/NativeAdrenoMetal.sha256
+          find "$bundle" -type f -print0 | xargs -0 shasum -a 256 > "$manifest"
+          shasum -a 256 "$addon" "$record" "$check" "$runtime" >> "$manifest"
+          cat "$manifest"
+          {
+            echo "### Metal plug-in outputs verified"
+            echo "- Target: \`$ONEIOS_METAL_TARGET\`"
+            echo "- Bridge runtime: \`$(cat "$runtime")\`"
+            echo "- Bundle, arm64e binaries, Mach-O check, build record, and NGPUADD2 sidecar are present."
+            echo "- SHA-256 manifest: \`out/userland/NativeAdrenoMetal.sha256\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: What was built
+        if: always()
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          { ls -l out/userland 2>/dev/null || true; cat out/userland/NativeAdrenoMetal.build.json 2>/dev/null || true; } | tee -a metal-build.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        timeout-minutes: 10
+        with:
+          name: NativeAdrenoMetal
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            out/userland/NativeAdrenoMetal.bundle
+            out/userland/NativeAdrenoMetal.gpuaddon
+            out/userland/NativeAdrenoMetal.build.json
+            out/userland/NativeAdrenoMetal.check.txt
+            out/userland/NativeAdrenoMetal.runtime
+            out/userland/NativeAdrenoMetal.sha256
+            metal-build.log

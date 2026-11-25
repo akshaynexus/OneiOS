@@ -21,7 +21,9 @@ jobs:
           pin=$(awk '$1=="metal2vulkan" {print $3}' scripts/setup/get-references.sh)
           echo "pin=$pin" >> "$GITHUB_OUTPUT"
       - name: Restore executable bits (an upload drops them)
-        run: git ls-files -z | xargs -0 grep -lZI '^#!' 2>/dev/null | xargs -0 -r chmod +x
+        # git grep -z: macOS's grep has no -Z, so the old ls-files|xargs grep pipeline handed chmod one
+        # newline-joined name and the step failed on every runner.
+        run: git grep -zIl -e '^#!' | xargs -0 -r chmod +x
       - name: metal2vulkan at the pin
         run: |
           set -euo pipefail
