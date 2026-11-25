@@ -170,11 +170,20 @@ struct Client {
     stats: Stats,
 }
 
-/// The DRM back end's buffer and mode.
-struct Drm {
-    fd: OwnedFd,
+/// One KMS dumb buffer.
+struct DrmBuf {
     fb: u32,
     map: *mut u8,
+}
+
+/// The DRM back end's double-buffered dumb buffers and mode.
+struct Drm {
+    fd: OwnedFd,
+    crtc: u32,
+    bufs: [DrmBuf; 2],
+    front: usize,
+    page_flip: bool,
+    prev_dirty: (u32, u32, u32, u32),
     w: u32,
     h: u32,
     stride: u32,
@@ -599,6 +608,7 @@ mod kms {
     pub const GETENCODER: u32 = iowr(0xa6, std::mem::size_of::<Encoder>());
     pub const GETCONNECTOR: u32 = iowr(0xa7, std::mem::size_of::<Connector>());
     pub const ADDFB: u32 = iowr(0xae, std::mem::size_of::<FbCmd>());
+    pub const PAGE_FLIP: u32 = iowr(0xb0, std::mem::size_of::<PageFlip>());
     pub const DIRTYFB: u32 = iowr(0xb1, std::mem::size_of::<FbDirty>());
     pub const CREATE_DUMB: u32 = iowr(0xb2, std::mem::size_of::<CreateDumb>());
     pub const MAP_DUMB: u32 = iowr(0xb3, std::mem::size_of::<MapDumb>());
@@ -720,6 +730,15 @@ mod kms {
     }
     #[repr(C)]
     #[derive(Default)]
+    pub struct PageFlip {
+        pub crtc_id: u32,
+        pub fb_id: u32,
+        pub flags: u32,
+        pub reserved: u32,
+        pub user_data: u64,
+    }
+    #[repr(C)]
+    #[derive(Default)]
     pub struct FbDirty {
         pub fb_id: u32,
         pub flags: u32,
@@ -732,7 +751,7 @@ mod kms {
     const _: () = assert!(std::mem::size_of::<Connector>() == 80 && std::mem::size_of::<Encoder>() == 20);
     const _: () = assert!(std::mem::size_of::<CreateDumb>() == 32 && std::mem::size_of::<FbCmd>() == 28);
     const _: () = assert!(std::mem::size_of::<MapDumb>() == 16 && std::mem::size_of::<Crtc>() == 104);
-    const _: () = assert!(std::mem::size_of::<FbDirty>() == 24);
+    const _: () = assert!(std::mem::size_of::<PageFlip>() == 24 && std::mem::size_of::<FbDirty>() == 24);
 
     /// The ioctl, true when it worked.
     pub fn call<T>(fd: RawFd, request: u32, arg: *mut T) -> bool {
@@ -835,7 +854,11 @@ fn drm_init() -> Result<Drm, ()> {
             continue;
         }
         let n = conn.count_modes.min(32) as usize;
-        let mode = modes[..n].iter().find(|m| m.kind & kms::MODE_TYPE_PREFERRED != 0).copied().unwrap_or(modes[0]);
+        let mode = modes[..n]
+            .iter()
+            .max_by_key(|m| (m.vrefresh, (m.kind & kms::MODE_TYPE_PREFERRED != 0) as u32))
+            .copied()
+            .unwrap_or(modes[0]);
         let mut enc = kms::Encoder {
             encoder_id: if conn.encoder_id != 0 { conn.encoder_id } else { conn_encoders[0] },
             ..Default::default()
@@ -852,49 +875,56 @@ fn drm_init() -> Result<Drm, ()> {
         if crtc == 0 {
             continue;
         }
-        let mut dumb = kms::CreateDumb {
-            width: mode.hdisplay as u32,
-            height: mode.vdisplay as u32,
-            bpp: 32,
-            ..Default::default()
-        };
-        if !kms::call(raw, kms::CREATE_DUMB, &mut dumb) {
-            loge!("display: dumb buffer: {}", std::io::Error::last_os_error());
-            return Err(());
+        let mut bufs = Vec::with_capacity(2);
+        let mut pitch = 0u32;
+        for _ in 0..2 {
+            let mut dumb = kms::CreateDumb {
+                width: mode.hdisplay as u32,
+                height: mode.vdisplay as u32,
+                bpp: 32,
+                ..Default::default()
+            };
+            if !kms::call(raw, kms::CREATE_DUMB, &mut dumb) {
+                loge!("display: dumb buffer: {}", std::io::Error::last_os_error());
+                return Err(());
+            }
+            let mut fb = kms::FbCmd {
+                width: dumb.width,
+                height: dumb.height,
+                pitch: dumb.pitch,
+                bpp: 32,
+                depth: 24,
+                handle: dumb.handle,
+                ..Default::default()
+            };
+            let mut map = kms::MapDumb { handle: dumb.handle, ..Default::default() };
+            if !kms::call(raw, kms::ADDFB, &mut fb) || !kms::call(raw, kms::MAP_DUMB, &mut map) {
+                loge!("display: framebuffer: {}", std::io::Error::last_os_error());
+                return Err(());
+            }
+            // SAFETY: maps the dumb buffer the kernel just made, at the offset it gave.
+            let p = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    dumb.size as usize,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    raw,
+                    map.offset as libc::off_t,
+                )
+            };
+            if p == libc::MAP_FAILED {
+                return Err(());
+            }
+            // SAFETY: the mapping just made, dumb.size bytes.
+            unsafe { std::ptr::write_bytes(p as *mut u8, 0, dumb.size as usize) };
+            pitch = dumb.pitch;
+            bufs.push(DrmBuf { fb: fb.fb_id, map: p as *mut u8 });
         }
-        let mut fb = kms::FbCmd {
-            width: dumb.width,
-            height: dumb.height,
-            pitch: dumb.pitch,
-            bpp: 32,
-            depth: 24,
-            handle: dumb.handle,
-            ..Default::default()
-        };
-        let mut map = kms::MapDumb { handle: dumb.handle, ..Default::default() };
-        if !kms::call(raw, kms::ADDFB, &mut fb) || !kms::call(raw, kms::MAP_DUMB, &mut map) {
-            loge!("display: framebuffer: {}", std::io::Error::last_os_error());
-            return Err(());
-        }
-        // SAFETY: maps the dumb buffer the kernel just made, at the offset it gave.
-        let p = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                dumb.size as usize,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                raw,
-                map.offset as libc::off_t,
-            )
-        };
-        if p == libc::MAP_FAILED {
-            return Err(());
-        }
-        // SAFETY: the mapping just made, dumb.size bytes.
-        unsafe { std::ptr::write_bytes(p as *mut u8, 0, dumb.size as usize) };
+        let Ok([b0, b1]) = <[DrmBuf; 2]>::try_from(bufs) else { return Err(()) };
         let mut set = kms::Crtc {
             crtc_id: crtc,
-            fb_id: fb.fb_id,
+            fb_id: b0.fb,
             set_connectors_ptr: connector as *const u32 as u64,
             count_connectors: 1,
             mode,
@@ -905,41 +935,84 @@ fn drm_init() -> Result<Drm, ()> {
             loge!("display: mode set {}x{}: {}", mode.hdisplay, mode.vdisplay, std::io::Error::last_os_error());
             return Err(());
         }
-        logi!("display: KMS {}x{} on connector {}, crtc {}", dumb.width, dumb.height, connector, crtc);
-        return Ok(Drm { fd, fb: fb.fb_id, map: p as *mut u8, w: dumb.width, h: dumb.height, stride: dumb.pitch });
+        logi!(
+            "display: KMS {}x{}@{} on connector {}, crtc {} (double-buffered)",
+            mode.hdisplay,
+            mode.vdisplay,
+            mode.vrefresh,
+            connector,
+            crtc
+        );
+        return Ok(Drm {
+            fd,
+            crtc,
+            bufs: [b0, b1],
+            front: 0,
+            page_flip: true,
+            prev_dirty: (0, 0, mode.hdisplay as u32, mode.vdisplay as u32),
+            w: mode.hdisplay as u32,
+            h: mode.vdisplay as u32,
+            stride: pitch,
+        });
     }
     loge!("display: no connected KMS connector");
     Err(())
 }
 
-fn drm_flush(d: &Display, drm: &Drm, x: u32, y: u32, w: u32, h: u32) {
-    // The guest frame is copied to the panel's buffer, centred if their sizes differ.
+fn drm_flush(d: &Display, drm: &mut Drm, x: u32, y: u32, w: u32, h: u32) {
+    // Copy the union of this frame's damage and the previous frame's damage into the back buffer so both
+    // buffers stay in sync across page-flips.
+    let (px, py, pw, ph) = drm.prev_dirty;
+    let (cx, cy, cw, ch) = if drm.page_flip && pw > 0 && ph > 0 {
+        let nx = x.min(px);
+        let ny = y.min(py);
+        let nx2 = (x + w).max(px + pw);
+        let ny2 = (y + h).max(py + ph);
+        (nx, ny, nx2 - nx, ny2 - ny)
+    } else {
+        (x, y, w, h)
+    };
+    let target = if drm.page_flip { 1 - drm.front } else { drm.front };
+    let buf = &drm.bufs[target];
     let f = &d.frame;
     let ox = if drm.w > f.width { (drm.w - f.width) / 2 } else { 0 };
     let oy = if drm.h > f.height { (drm.h - f.height) / 2 } else { 0 };
-    let mut row = y;
-    while row < y + h && row + oy < drm.h {
-        let width = if x + w + ox <= drm.w {
-            w
-        } else if x + ox < drm.w {
-            drm.w - x - ox
+    let mut row = cy;
+    while row < cy + ch && row + oy < drm.h {
+        let width = if cx + cw + ox <= drm.w {
+            cw
+        } else if cx + ox < drm.w {
+            drm.w - cx - ox
         } else {
             0
         };
         // SAFETY: both rows lie inside their buffers (the clipping above); the frame is mapped for the process's life.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                f.as_ptr().add(row as usize * f.stride as usize + x as usize * 4),
-                drm.map.add((row + oy) as usize * drm.stride as usize + (x + ox) as usize * 4),
+                f.as_ptr().add(row as usize * f.stride as usize + cx as usize * 4),
+                buf.map.add((row + oy) as usize * drm.stride as usize + (cx + ox) as usize * 4),
                 width as usize * 4,
             )
         };
         row += 1;
     }
-    let mut clip =
-        kms::ClipRect { x1: (x + ox) as u16, y1: (y + oy) as u16, x2: (x + ox + w) as u16, y2: (y + oy + h) as u16 };
+    if drm.page_flip {
+        let mut flip = kms::PageFlip { crtc_id: drm.crtc, fb_id: buf.fb, ..Default::default() };
+        if kms::call(drm.fd.as_raw_fd(), kms::PAGE_FLIP, &mut flip) {
+            drm.front = target;
+            drm.prev_dirty = (x, y, w, h);
+            return;
+        }
+        drm.page_flip = false;
+    }
+    let mut clip = kms::ClipRect {
+        x1: (cx + ox) as u16,
+        y1: (cy + oy) as u16,
+        x2: (cx + ox + cw) as u16,
+        y2: (cy + oy + ch) as u16,
+    };
     let mut dirty =
-        kms::FbDirty { fb_id: drm.fb, clips_ptr: &mut clip as *mut _ as u64, num_clips: 1, ..Default::default() };
+        kms::FbDirty { fb_id: buf.fb, clips_ptr: &mut clip as *mut _ as u64, num_clips: 1, ..Default::default() };
     kms::call(drm.fd.as_raw_fd(), kms::DIRTYFB, &mut dirty); // command-mode panels need it; others ignore it
 }
 
@@ -1115,7 +1188,7 @@ pub fn flush(x: u32, y: u32, w: u32, h: u32) {
     crate::input::frame_shown(); // input.rs's touch-to-frame measurement
     let Some(d) = DISPLAY.get() else { return };
     if let Some(drm) = d.drm.as_ref() {
-        drm_flush(d, &drm.lock().unwrap_or_else(|e| e.into_inner()), x, y, w, h);
+        drm_flush(d, &mut drm.lock().unwrap_or_else(|e| e.into_inner()), x, y, w, h);
     }
     if d.backend != DisplayBackend::Shm {
         return;

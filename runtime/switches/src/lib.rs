@@ -245,6 +245,20 @@ pub const SWITCHES: &[Switch] = &[
          only when it would fit at the lowest clock (before: on the S24 Ultra it stayed at the top).",
     ),
     text(
+        conf("gpu-kgsl-ui-rb", BOOL, "0", Some("1")),
+        "GPU",
+        "Skip Android UI GPU ringbuffer",
+        "0: the render server and front app run at KGSL priority 8 (out of Android's 4-7 UI ringbuffer, avoiding tile-memory \
+         collisions with One UI). 1: priority 4 (in the UI ringbuffer, as before).",
+    ),
+    text(
+        conf("gpu-off-level", BOOL, "1", Some("0")),
+        "GPU",
+        "Lowest GPU level when iOS display is off",
+        "1: hold KGSL at its lowest clock while iOS's display is off so standby wakes do not boost the GPU. 0: leave the \
+         render server at the governor's choice (as before).",
+    ),
+    text(
         conf("gpu-blob-entries", Kind::Int { min: 16384, max: 65532 }, "65532", Some("16384")),
         "GPU",
         "GPU blob size limit",

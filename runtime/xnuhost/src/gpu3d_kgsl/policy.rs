@@ -172,11 +172,19 @@ pub fn class_of(name: &[u8], hint: u8, qos: u8, shown: bool, background: Option<
 /// empty, so its fences had no bound, and the class a queue was made with (by name or by role at the context's
 /// creation) stays its priority for good. None takes the first ringbuffer (0-3, Android's compositor's). Every class
 /// gets an explicit one, so the order holds whatever the kernel's default for KGSL_CONTEXT_PRIORITY_UNDEF is.
-pub fn kgsl_priority(c: Class) -> u32 {
+/// The KGSL priority (0 highest, 15 lowest; four to a ringbuffer, KGSL_CONTEXT_PRIORITY_SHIFT 12) of a class's queues.
+/// With `ui_rb = false` (`gpu-kgsl-ui-rb=0`, default), every class gets 8 (third ringbuffer), keeping iOS's render server
+/// and front app out of Android's UI ringbuffer (4-7). With `ui_rb = true` (`gpu-kgsl-ui-rb=1`), render server and front
+/// app get 4 (second ringbuffer), everything else 8.
+pub fn kgsl_priority_for(c: Class, ui_rb: bool) -> u32 {
     match c {
-        Class::Render | Class::Front => 4,
+        Class::Render | Class::Front if ui_rb => 4,
         _ => 8,
     }
+}
+
+pub fn kgsl_priority(c: Class) -> u32 {
+    kgsl_priority_for(c, true)
 }
 
 // ---- whose surfaces another process reads ------------------------------------------------------------------------------

@@ -300,6 +300,8 @@ adb shell su -c '/data/local/tmp/oneios-display-test/displayctl test -- --datasp
 adb shell su -c '/data/local/tmp/oneios-display-test/displayctl test --seconds 20 --format rgba16f'
 # what surfaceflinger has while it runs (second shell)
 adb shell su -c 'dumpsys SurfaceFlinger --list' | grep OneiOS
+# read-only DRM/KMS probe (stage 3a of docs/plan-ios-first-session.md; no master, nothing set)
+adb shell su -c '/data/local/tmp/oneios-display-test/displayctl drm'
 # clean up
 adb shell su -c 'rm -rf /data/local/tmp/oneios-display-test'
 ```

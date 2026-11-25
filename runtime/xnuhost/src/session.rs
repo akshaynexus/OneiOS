@@ -590,6 +590,8 @@ fn set_switches(config: &Config) {
     crate::cpu::UCLAMP_ALL.store(config.uclamp_rule == crate::config::UclampRule::All, Ordering::Relaxed);
     crate::cpu::TIMER_COALESCE.store(config.timer_coalesce, Ordering::Relaxed);
     crate::gpu3d_kgsl::DOWN_AT_BOTTOM.store(config.gpu_down == GpuDown::Bottom, Ordering::Relaxed);
+    crate::gpu3d_kgsl::UI_RB.store(config.gpu_kgsl_ui_rb, Ordering::Relaxed);
+    crate::gpu3d_kgsl::OFF_LEVEL.store(config.gpu_off_level, Ordering::Relaxed);
 }
 
 fn hostcalls_vector() -> u64 {

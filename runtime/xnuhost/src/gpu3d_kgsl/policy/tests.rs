@@ -81,6 +81,7 @@ fn classes() {
     assert!(kgsl_priority(Class::Default) == 8 && kgsl_priority(Class::Background) == 8);
     for c in [Class::Default, Class::Render, Class::Front, Class::Background] {
         assert!((4..=11).contains(&kgsl_priority(c)));
+        assert_eq!(kgsl_priority_for(c, false), 8);
     }
 }
 

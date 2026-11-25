@@ -119,7 +119,7 @@ impl Pattern {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: displayctl test [--seconds N] [--size WxH] [--format bgrx|rgba16f] [--helper PATH] [-- helper options]"
+        "usage: displayctl test [--seconds N] [--size WxH] [--format bgrx|rgba16f] [--helper PATH] [-- helper options]\n       displayctl drm [PATH]"
     );
     ExitCode::from(2)
 }
@@ -218,8 +218,28 @@ fn mkdtemp(template: &str) -> Result<PathBuf, Errno> {
     Ok(PathBuf::from(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
+fn run_drm(args: &[String]) -> ExitCode {
+    if args.len() > 3 {
+        return usage();
+    }
+    let path = args.get(2).map(String::as_str).unwrap_or("/dev/dri/card0");
+    match oneios_display::drm_probe::probe(path) {
+        Ok(report) => {
+            print!("{report}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("displayctl drm: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("drm") {
+        return run_drm(&args);
+    }
     let o = match parse(&args) {
         Ok(o) => o,
         Err(code) => return code,

@@ -581,6 +581,7 @@ impl Session {
         if pool_bytes != 0 {
             // The GPU's level and priorities (gpu3d_kgsl, drm2kgsl patch 0008; docs/gpu.md 2.2b) read these.
             std::env::set_var("ONEIOS_GPU_LEVEL", config.gpu_level.as_str());
+            std::env::set_var("ONEIOS_GPU_KGSL_UI_RB", if config.gpu_kgsl_ui_rb { "1" } else { "0" });
             if !config.gpu_priority {
                 std::env::set_var("ONEIOS_GPU_PRIORITY", "off");
             }

@@ -111,6 +111,10 @@ fn test_displayctl(c: &mut Checks, dir: &Path, me: &str) {
     }
     let (code, _) = displayctl(dir, &["test", "--format", "rgb565"]);
     c.check(code == Some(2), "a format it does not make: usage");
+    let (code, out) = displayctl(dir, &["drm", "/no/such/card0"]);
+    c.check(code == Some(1) && out.contains("displayctl drm:"), "drm missing node reports error");
+    let (code, out) = displayctl(dir, &["drm", "a", "b"]);
+    c.check(code == Some(2) && out.contains("usage:"), "drm extra args rejected");
 }
 
 /// This program as the helper displayctl starts (--socket PATH --wait N): connects, takes the hello, reads flushes

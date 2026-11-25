@@ -15,7 +15,7 @@ mod session;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub use session::{AlsFn, AlsSample, Bright, Info, Options, TraceFn};
+pub use session::{display_on, AlsFn, AlsSample, Bright, Info, Options, TraceFn};
 
 /// The level scale of the bridge channel (struct ob_bright_set; drivers/brightness/oneios_bl_request.h's
 /// OBL_FRACTION_FULL).
