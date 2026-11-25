@@ -37,7 +37,7 @@ window) around a ustar archive of regular files, `runtime.json` first, no top fo
 | `lib/profiles/*.toml` | this repository's IPSW profiles (`profiles/`: the members' names, sizes and hashes, no Apple file), and its host records (`profiles/host-*.toml`: what is known of each host phone, read by no code; the S24 Ultra's names every model number, the SM-S928W too), for the phone's `oneios-tool serve` `fetch`: the OneOS app's Make iOS image fetches the IPSW's members with `$STAGE/runtime/lib/profiles/ios-27.0.1-iPhone18-2.toml`, and on a Galaxy A56 with `ios-16.5-a56.toml` (iOS 16.5 20F66, Apple's pins since 2026-11-23; docs/a56.md; `runtime/package/test.sh` checks it is packed) (a package path has no comma; `runtime/package.sh` step 1c) |
 | `scripts/*` | `runtime/scripts/*`, when there are any |
 | `kernel/xnu.macho`, `kernel/xnu.macho.build.json` | the XNU that `kernel/` builds from Apple's open source, and its build record. Only when a kernel was built |
-| `lib/guest/NativeAdrenoMetal.bundle/*`, `lib/guest/NativeAdrenoMetal.build.json`, `lib/guest/camera/H9ISP.mediacapture`, `lib/guest/NOTICE` | the guest's own iOS plug-ins, built by CI for iPhone18,2 / iOS build 24A446 from pinned sources: the Metal plug-in as `userland/metal/build.sh` leaves it, with its build record (target, CDHashes, source pins), and the capture plug-in. Both are built from source and signed ad hoc; no Apple code (the check below). Local builds can pass `METAL_DIR` and `CAMERA_DIR` to `runtime/package.sh`; `scripts/release/release.sh` builds them from HEAD. The phone's Make iOS image seeds them when the bundle target matches ([image-format.md](image-format.md), "The Metal plug-in of an image made on the phone"). `lib/guest/NOTICE` lists the sources and includes their license texts; CI transfers only those texts via `METAL_LICENSES_DIR`, while local packaging reads them from `external/`. About 36 MB unpacked |
+| `lib/guest/NativeAdrenoMetal.bundle/*`, `lib/guest/NativeAdrenoMetal.build.json`, `lib/guest/camera/H9ISP.mediacapture`, `lib/guest/NOTICE` | optional guest plug-ins. `scripts/release/release.sh` builds the Metal and capture plug-ins from pinned sources and passes them to `runtime/package.sh`; the Actions workflow `metal-plugin.yml` builds the Metal plug-in only and uploads a separate artifact. A package includes them only when `METAL_DIR` and `CAMERA_DIR` are passed. Both plug-ins are signed ad hoc; no Apple code (the check below). The phone's Make iOS image seeds a matching Metal bundle ([image-format.md](image-format.md), "The Metal plug-in of an image made on the phone"). `lib/guest/NOTICE` lists their source licences. About 36 MB unpacked |
 | `NOTICE`, `LICENSE` | licences; with a kernel, the APSL notice (`kernel/NOTICE.kernel`) |
 
 ## What is never in a release
@@ -191,32 +191,34 @@ runtime/package.sh 0.1.7-dev                           # -> out/release/oneios-r
 
 ## CI and releases
 
-One workflow, `.github/workflows/release.yml` ("build and release"; `ci.yml` and the runtime-only `release.yml` of
-before 2026-11-15 were merged into it). Its jobs:
+The "build and release" workflow, `.github/workflows/release.yml`, builds the runtime and app. A separate,
+manual-only `.github/workflows/metal-plugin.yml` builds the Metal plug-in for a selected target. The jobs in
+"build and release" are:
 
 ```
-plan ──┬── metal      xcode-27       the iPhone18,2 plug-ins, built with Xcode 27.2 from pinned sources
+plan ──┬── runtime    ubuntu-24.04   the runtime package and its checks
        ├── apk        ubuntu-24.04   the OneOS app (submodule app/) and its checks
-       ├── apk-macos  macos-15       ./gradlew test of the same app on a Mac
-       ├── runtime    ubuntu-24.04   needs metal; the runtime package and its checks
+       ├── apk-macos  xcode-27       ./gradlew test of the same app on a Mac
        └───────────── release        needs runtime and apk; a tag or a dispatch only
 ```
 
-`metal`, `apk` and `apk-macos` start together after `plan`; `runtime` starts after the Metal artifact is verified.
+`runtime`, `apk` and `apk-macos` start together after `plan`. The runtime job does not build or download the optional
+guest plug-ins.
 
 | Trigger | Builds | Releases |
 |---|---|---|
-| a pull request, a push to `main` | metal, runtime, apk, apk-macos | nothing (the Metal artifact, runtime package and APK are artifacts for 14 days) |
-| a tag `vN.N.N` or `vN.N.N-suffix` on `main` | all four jobs | the runtime and the APK on the release of the tag |
-| a dispatch on `main` (Actions, "build and release", Run workflow; inputs `version` and `both` / `runtime only` / `apk only`) | what was asked (Metal with runtime; apk-macos with APK) | the release `v<version>`, its tag made at the dispatched commit when missing |
+| a pull request, a push to `main` | runtime, apk, apk-macos | nothing (the runtime package and APK are Actions artifacts) |
+| a tag `vN.N.N` or `vN.N.N-suffix` on `main` | all three build jobs | the runtime and the APK on the release of the tag |
+| a dispatch on `main` (Actions, "build and release", Run workflow; inputs `version` and `both` / `runtime only` / `apk only`) | runtime and/or apk as selected; apk-macos with apk | the release `v<version>`, its tag made at the dispatched commit when missing |
+| a dispatch of `metal-plugin` (Actions; input `target`, default `iPhone18,2 24A446`) | the selected Metal plug-in on `xcode-27` | no release; a separate Actions artifact |
 
 - **plan**: whether the run releases, the version (`0.0.0-ci` when not), what it builds. A release's version must be
   `N.N.N[-suffix]` and its commit on `main`. A tag whose release exists already (published from a build machine by
   `scripts/release/release.sh`, "Releasing from a build machine" below) does not release again: its run builds and
   tests only.
-- **metal**: Xcode 27.2 on the `xcode-27` runner, with pinned Rust, Python, Mesa and Metal source references. Builds
-  `NativeAdrenoMetal.bundle` and `H9ISP.mediacapture` for iPhone18,2 / 24A446, verifies the target, and uploads a
-  checksum-protected archive with source license texts. The runtime job needs this artifact.
+- **metal-plugin**: manual-only Xcode 27 build on `xcode-27`. It fetches the pinned public sources, builds
+  `NativeAdrenoMetal.bundle` and its `.gpuaddon` sidecar for the selected target, and uploads the bundle, build record,
+  check report and build log as a separate artifact. It does not publish a release or feed the runtime job.
 - **runtime**: what `ci.yml` and the old `release.yml` did, on every build. `app/` must be an empty submodule
   folder (this job never checks the fork out); no firmware and no Python in git (`check-tracked-files.sh`: a
   tracked `*.py`, or an executable with a python shebang, fails it since 2026-11-21); `bash -n`, `shellcheck -S error`; NDK 28.2.13676358, Rust and
@@ -231,8 +233,8 @@ plan ──┬── metal      xcode-27       the iPhone18,2 plug-ins, built wi
   workspace's `cargo test`, `cargo fmt --check`, `cargo clippy -D warnings` and `runtime/xnuhost/check-arm64.sh smoke
   check`); the pinned kernel when
   `kernel/release-kernel.txt` names one (fetched from `akshaynexus/OneiOS`, where `kernel/publish.sh` publishes it);
-  `runtime/package.sh <version>` with `REQUIRE_METAL=1` and the Metal/camera artifact (the Apple-file refusal, plug-in
-  manifest and elf-check of the stage, plus `bin/oneios-tool` built for the phone); the drm2kgsl check and
+  `runtime/package.sh <version>` (the Apple-file refusal and elf-check of the stage, plus `bin/oneios-tool` built for
+  the phone; optional plug-ins are included only when their directories are supplied); the drm2kgsl check and
   `runtime/package/elf-check.sh` on
   the unpacked archive; the members check (above); `.github/scripts/check-phone-tool.sh <version>` ("oneios-tool for
   the phone", below). Artifact `oneios-runtime`: the `.tar.zst`, its `.sha256`, `.runtime.json`, and

@@ -45,7 +45,7 @@ fn host_device() {
 
     // The table: the home device first; names unique; every entry matches by a model; its xnuhost settings are only the
     // keys the config merges as device defaults (gpu, panel-fallback, hz, width, height, scale, return-graceful-ms,
-    // hw-backend*), its environment ones only
+    // astc, hw-backend*), its environment ones only
     // variables a bridge reads. The S24 Ultra's entry holds nothing: its behaviour is today's.
     let t = host_table();
     assert!(t.len() == 5 && t[0].name == "galaxy-s24-ultra");
@@ -55,8 +55,11 @@ fn host_device() {
         assert!(t[..i].iter().all(|o| !o.name.eq_ignore_ascii_case(e.name)));
         for c in e.config {
             let key = c.split('=').next().unwrap_or("");
-            let device_key =
-                matches!(key, "gpu" | "panel-fallback" | "hz" | "width" | "height" | "scale" | "return-graceful-ms");
+            let device_key = matches!(
+                key,
+                "gpu" | "panel-fallback" | "hz" | "width" | "height" | "scale"
+                    | "return-graceful-ms" | "astc"
+            );
             assert!(device_key || key.starts_with("hw-backend"), "{c}");
         }
         for v in e.env {

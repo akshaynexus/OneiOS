@@ -50,18 +50,14 @@ jobs:
           echo "IOS_MIN=$min" >> "$GITHUB_ENV"
           echo "IOS_TARGET=arm64e-apple-ios$min" >> "$GITHUB_ENV"
       - name: Homebrew's build tools
-        run: brew install ninja glslang shaderc spirv-tools bison llvm
-      - name: Python tools (the base's scripts and Mesa's meson)
+        run: brew install ninja glslang shaderc spirv-tools bison llvm uv
+      - name: Build dependencies for the pinned sources
         run: |
           set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/py"
-          "$RUNNER_TEMP/py/bin/pip" install --quiet --upgrade pip
-          # packaging: Mesa's meson.build reads packaging.version when the interpreter is 3.12+
-          # (distutils is gone there), and a fresh venv has mako and yaml but not packaging, so
-          # configure stopped at "One of Python (3.x) packaging or distutils module is required."
-          "$RUNNER_TEMP/py/bin/pip" install --quiet meson mako pyyaml packaging
+          # Keep the pinned builders' Python dependencies isolated from the runner image.
+          uv venv --python 3.12 "$RUNNER_TEMP/py"
+          uv pip install --python "$RUNNER_TEMP/py/bin/python" meson mako pyyaml packaging
           echo "$RUNNER_TEMP/py/bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/py/bin/python3" -c 'import packaging.version, mako, yaml, mesonbuild; print("python tools ok")'
       - name: Rust 1.98.0 with rust-src (the bridge builds std for the guest)
         run: |
           set -euo pipefail
