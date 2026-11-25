@@ -68,6 +68,7 @@ struct State {
     name: String,   // the configuration's ID_NAME (at most 31 bytes)
     serial: String, // ID_SERIAL
     keys: Vec<u16>, // its EV_KEY bits (at most 8)
+    props: u8,      // its INPUT_PROP_* bits (the touch screen's and the pen's: INPUT_PROP_DIRECT)
 }
 
 /// The device's state (behind the device's lock).
@@ -94,7 +95,7 @@ impl State {
                 8
             }
             CFG_PROP_BITS => {
-                out[0] = 1 << 1; // INPUT_PROP_DIRECT
+                out[0] = self.props;
                 1
             }
             CFG_EV_BITS if self.subsel == EV_KEY as u8 => {
@@ -202,6 +203,7 @@ pub fn create(base: u64, spi: u32) -> Option<InputDev> {
         name: String::new(),
         serial: String::new(),
         keys: Vec::new(),
+        props: 1 << 1, // INPUT_PROP_DIRECT
     };
     let info = virtio::Info { device_id: 18, features: 0, nqueues: 2, manual: 1 };
     let dev = Virtio::create(base, spi, info, Input { st: RefCell::new(st) }, "virtio-input").ok()?;
@@ -216,6 +218,12 @@ pub fn set_identity(dev: &Virtio<Input>, name: &str, serial: &str, keys: &[u16])
     s.name = clip(name, 31);
     s.serial = clip(serial, 31);
     s.keys = keys.iter().take(MAX_KEYS).map(|&k| if k < 512 { k } else { 0 }).collect();
+}
+
+/// The device's INPUT_PROP_* bits (default INPUT_PROP_DIRECT; the motion device: INPUT_PROP_ACCELEROMETER, motion.rs).
+pub fn set_props(dev: &Virtio<Input>, props: u8) {
+    let g = dev.lock();
+    g.st.borrow_mut().props = props;
 }
 
 /// An axis of the device's configuration (what input.rs takes from EVIOCGABS).

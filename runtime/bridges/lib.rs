@@ -25,6 +25,8 @@ pub mod log;
 pub mod net;
 /// The protocols shared with the guest's drivers (drivers/bridge, drivers/net, drivers/haptics).
 pub mod proto;
+/// The motion sensors and the front light sensor: the sensor hub (SSC) over QRTR.
+pub mod sensors;
 /// The switches xnuhost sets once from its config (docs/switches.md).
 pub mod switches;
 /// Temperatures and thermal steps.

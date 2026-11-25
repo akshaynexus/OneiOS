@@ -101,6 +101,13 @@ pub trait Device: Send + Sized + 'static {
     fn kick(&self, dev: &Virtio<Self>, queue: u32) {
         let _ = (dev, queue);
     }
+    /// Queues (a bit per index) whose driver's VIRTQ_AVAIL_F_NO_INTERRUPT the transport honours: a chain returned there
+    /// while the driver's avail ring has the flag sets no interrupt status and raises nothing. None by default (every
+    /// return raises the line, whatever the flag: the drivers of the other devices rely on it). The media device
+    /// (2026-11-25): its guest polls the command queue, answered inside the notify, and waits on the event queue's.
+    fn quiet_queues(&self) -> u32 {
+        0
+    }
 }
 
 // ---- a part of a chain ----------------------------------------------------------------------------------------------
@@ -653,6 +660,13 @@ impl<D: Device> Virtio<D> {
         n
     }
 
+    /// Whether the driver set VIRTQ_AVAIL_F_NO_INTERRUPT (bit 0 of its avail ring's flags); false for a ring not in RAM.
+    fn no_interrupt(q: &Queue) -> bool {
+        let Some(avail) = translate(q.avail, 2) else { return false };
+        // SAFETY: the ring's first two bytes (its flags) are mapped; read as the guest's u16, with acquire.
+        unsafe { ring_index(avail.as_ptr().cast()) }.is_some_and(|f| f.load(Ordering::Acquire) & 1 != 0)
+    }
+
     /// The guest's avail index of a queue, `None` if its ring is not in RAM.
     fn avail_idx(q: &Queue) -> Option<(u16, NonNull<u8>)> {
         let avail = translate(q.avail, 4 + 2 * u64::from(q.num))?;
@@ -701,6 +715,9 @@ impl<D: Device> Virtio<D> {
             idx.store(at.wrapping_add(1), Ordering::Release);
         }
         st.st[qi].returned += 1;
+        if self.device.quiet_queues() & (1 << qi) != 0 && Self::no_interrupt(&q) {
+            return; // the driver asked for none on this queue (VIRTQ_AVAIL_F_NO_INTERRUPT)
+        }
         self.raise(st, ISR_QUEUE);
     }
 

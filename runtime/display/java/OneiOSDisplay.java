@@ -28,9 +28,26 @@ public final class OneiOSDisplay {
 
     private static void log(String line) { System.err.println("oneios-display: " + line); }
 
+    /** run()'s answer when xnuhost closed the socket without asking this helper to stop. */
+    static final int CLOSED = 6;
+    /** As many reconnections as xnuhost restarts the guest in place (XNUHOST_RESTARTS, session.rs guest_restart). */
+    static final int RECONNECTS = 8;
+
     public static void main(String[] args) {
         int code;
-        try { code = run(args); } catch (Throwable failure) { failure.printStackTrace(System.err); code = 5; }
+        try {
+            // A guest restart in place (iOS restarting itself, or its kernel starting the Data store over for a new
+            // seed: the first boot of every new image) re-execs xnuhost, which closes this socket and makes it again.
+            // The helper connects again instead of leaving: before 2026-11-25 it left, xnuhost found "no helper
+            // connected within 10 s", and iOS ran on with nothing showing it (phone, v0.1.30, a new 27.2.1 image).
+            // The return to One UI kills this process (oneios_return.sh); without that, nOpen's wait ends it.
+            code = run(args);
+            for (int again = 1; code == CLOSED && again <= RECONNECTS; again++) {
+                log("xnuhost closed the socket without a stop: connecting again (" + again + " of " + RECONNECTS + "; a guest restart in place)");
+                code = run(args);
+            }
+            if (code == CLOSED) code = 0;
+        } catch (Throwable failure) { failure.printStackTrace(System.err); code = 5; }
         System.err.flush();
         System.exit(code);
     }
@@ -154,7 +171,8 @@ public final class OneiOSDisplay {
             nClose(handle);
         }
         log("layer removed");
-        return result < 0 ? 4 : 0;
+        // nRun: 0 xnuhost closed the socket (End::Closed), 1 asked to stop (End::Stopped), < 0 a failure.
+        return result < 0 ? 4 : result == 0 ? CLOSED : 0;
     }
 
     // ---- layers -------------------------------------------------------------------------------
@@ -207,35 +225,27 @@ public final class OneiOSDisplay {
      */
     private static int[] panel(Object transaction, boolean project, boolean takeover, int[] logical) {
         Object token = null;
-        int[] mode = null;                 // active width, height, max Hz; native width, height, max Hz, ids
+        int[] mode = null;                 // pick(): active width, height, hz; native width, height, hz, id; active id
         try {
             Object[] display = display();
             token = display[1];
             mode = mode((Long) display[0], token);
-            log("panel modes: active " + mode[0] + "x" + mode[1] + " mode id " + mode[7] + " (up to " + mode[2]
-                + " Hz), native " + mode[3] + "x" + mode[4] + " at " + mode[5] + " Hz (mode id " + mode[6] + ")");
-            // Refresh policy can be capped even while the native resolution and mode id are already active. In an
-            // explicit takeover, reopen the mode ranges every time; wait for a mode switch only when the id/size differs.
-            if (takeover && token != null && mode != null) {
-                boolean needsSwitch = mode[0] != mode[3] || mode[1] != mode[4] || mode[7] != mode[6];
-                boolean requested = nativeMode(token, mode[6], mode[5]);
-                if (requested && needsSwitch) {
+            log("panel modes: active " + mode[0] + "x" + mode[1] + " (mode id " + mode[7] + ", up to " + mode[2] + " Hz), native "
+                + mode[3] + "x" + mode[4] + " at " + mode[5] + " Hz (mode id " + mode[6] + ")");
+            if (takeover) {
+                // Asked in every takeover, not only when the size differs: One UI can leave the panel at its native
+                // resolution with the refresh ranges capped at 60 Hz (Motion smoothness: Standard), which neither the
+                // size nor the mode id shows (the port of orumanayurpanjayat-ux/OneiOS 84cb2ef).
+                boolean was = isNative(mode);
+                boolean asked = nativeMode(token, mode[6], mode[5]);
+                if (asked && !was) {
                     // the switch happens at a vsync of surfaceflinger's: wait for it to be the active mode
-                    for (int tries = 0; tries < 20; tries++) {
+                    for (int tries = 0; tries < 20 && !isNative(mode); tries++) {
                         Thread.sleep(50);
                         mode = mode((Long) display[0], token);
-                        if (mode[0] == mode[3] && mode[1] == mode[4] && mode[7] == mode[6]) break;
                     }
                 }
-                if (!requested) {
-                    log("the native mode request failed; active mode id " + mode[7] + " at " + mode[0] + "x" + mode[1]);
-                } else if (mode[0] == mode[3] && mode[1] == mode[4] && mode[7] == mode[6]) {
-                    log("the panel selected its native mode " + mode[0] + "x" + mode[1] + " (mode id " + mode[7]
-                        + ", up to " + mode[5] + " Hz)");
-                } else {
-                    log("the native mode is not active (mode id " + mode[7] + "): panel stays at " + mode[0] + "x" + mode[1]
-                        + "; the guest's frame is scaled only if its size differs");
-                }
+                log(takeoverLine(mode, asked, was));
             }
         } catch (Throwable unavailable) {
             log("the display's modes are not readable (" + unavailable + ")");
@@ -329,7 +339,7 @@ public final class OneiOSDisplay {
 
     /**
      * {active width, height, the highest refresh rate among the modes of that size;
-     *  native width, height, its highest refresh rate, the id of that native mode, active mode id}.
+     *  native width, height, its highest refresh rate, the id of the native mode at that rate; the active mode's id}.
      * The native mode is the largest the panel has, not the one it is in.
      */
     private static int[] mode(long id, Object token) throws Exception {
@@ -416,5 +426,21 @@ public final class OneiOSDisplay {
             if (nativeAt < 0 || area > most || (area == most && widths[i] == widths[nativeAt] && rates[i] > rates[nativeAt])) nativeAt = i;
         }
         return new int[]{width, height, best, widths[nativeAt], heights[nativeAt], rates[nativeAt], ids[nativeAt], active};
+    }
+
+    /** pick()'s answer: the active mode is the native one, by id (the same size at a lower rate is another mode). */
+    static boolean isNative(int[] mode) {
+        return mode[0] == mode[3] && mode[1] == mode[4] && mode[7] == mode[6];
+    }
+
+    /** The takeover's line after the request: pick()'s answer, whether surfaceflinger took the specs, was it native before. */
+    static String takeoverLine(int[] mode, boolean asked, boolean was) {
+        String active = mode[0] + "x" + mode[1] + " (mode id " + mode[7] + ")";
+        boolean sameSize = mode[0] == mode[3] && mode[1] == mode[4];
+        String frame = sameSize ? "the frame is shown 1:1" : "the guest's frame is scaled to it";
+        if (!asked) return "the native mode was not asked for: the panel stays at " + active + "; " + frame;
+        if (isNative(mode)) return "the panel is in its native mode " + active + ", refresh ranges open to " + mode[5] + " Hz"
+            + (was ? " (it was already in that mode: only the ranges were asked for)" : "");
+        return "the native mode (id " + mode[6] + ") is not active after 1 s: the panel stays at " + active + "; " + frame;
     }
 }

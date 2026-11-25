@@ -91,7 +91,8 @@ The first host test's guest was written beside the device. Read against the real
 And the worker's polling: it asked the backend every 20 ms for ever (50 wake-ups a second with nobody using the
 device) and every millisecond while a session was open. Now: every millisecond for 2 s after the guest's last command
 or the backend's last frame, every 50 ms while a session is open and quiet, and **not at all with no session**: it
-sleeps until a command or a kick.
+sleeps until a command or a kick. Since 2026-11-25 the 1 ms looks are gone too for the helper and the stand-in: "The
+worker waits for the encoder" below.
 
 **Tested [F]:** `test_encoder` (C, 214 checks; now `cargo test -p oneencoder --test encoder`, the same cases): the device driven over xnuhost's real transport (`xh_core::virtio`; the C's `virtio.c`) by a guest of
 plain memory that now does MMAP, CLOSE and ENUM_FMT **as `DroidVMVirtioMedia.c` does** (the place in the pool with
@@ -252,6 +253,60 @@ bytes); `8bit`: P010 is taken and coded 8-bit, Main10 never tried (`backend_ndk`
 line: `oneios-encoder 3 [no-main10] [no-warmup]`; `no-warmup` skips the warm-up thread and `prepare()` (the helper starts
 at the first encode). The binder threads start either way.
 
+## The interrupt (fix/codec-irq, 2026-11-25)
+
+The device raises its SPI through xh-core's transport on every used-ring write, as every device does. Since 2026-11-25
+it honours the guest's `VIRTQ_AVAIL_F_NO_INTERRUPT` on both its queues (`quiet_queues` in `media_device.rs`, the
+transport's `Device::quiet_queues`): the staged `DroidVMVirtioMedia.c` (edit 7) sets it on the command queue, whose
+answers it reads as soon as its notify returns (`command` answers inside the notify), and clears it on the event
+queue, whose interrupt wakes its event worker (a DQBUF or a V4L2 event pushed by the worker). With
+`oneios-codec-irq=0`, or an older kernel, the guest sets it on both and polls: the line stays down. Test:
+`tests/interrupt.rs` (commands raise nothing, the decoder's SOURCE_CHANGE raises the SPI once, the ack lowers it, both
+flags set: no line and the event still comes). The guest side: `kernel/patches/oneios-hosted/codec/README.md`, "The
+transport on the interrupt".
+
+## The worker waits for the encoder (fix/codec-irq, 2026-11-25)
+
+**Why [F, read in the code].** The device's worker asked an encoder session's backend for coded units every
+millisecond for 2 s (`MEDIA_BUSY_MS`) after each of the guest's commands and each unit: the backend had no callback.
+While anything encodes, and also during a decode while an encoder session was open or an event waited for a guest
+buffer (each command, a decoder's too, restarted the 2 s), that was up to 1000 wake-ups a second of a host thread,
+each a timer and a look under the device's lock, and each unit handed on up to 1 ms late. The helper's units already arrive on a thread of their own (its socket's receive
+thread), so the worker could be told.
+
+**The fix.**
+- `Session::wakes(Wakeup) -> bool` (`backend.rs`): the worker hands its wake-up to each encoder session when it opens.
+  The helper backend (`backend_helper.rs`) keeps it in the session's slot and its receive thread calls it, with the
+  state's lock let go, after each `ENC_MSG_CODED` is in the ring, at `ENC_MSG_EOS`, and for every session when the
+  helper ends; it says true. The stand-in says true without keeping it: its units are coded in the poll from what a
+  `feed` or `drain` left, and those come in a guest's command, which wakes the worker anyway. The NDK's MediaCodec
+  in-process (`backend_ndk.rs`: encctl on the phone) says false, the default.
+- The worker (`media_device.rs` `worker`) sleeps until woken: a command, a kick of the event queue, a decoder's
+  result, an encoder's unit. A wake-up that comes while it works is kept for its next sleep (a flag under the
+  sleep's lock): none is lost. With an encoder session open, or an event waiting for a guest buffer, it looks again
+  `MEDIA_IDLE_MS` (50 ms) after its last look at most (the guard, unchanged: a lost wake-up would cost that much,
+  never a stalled stream). The 1 ms looks for `MEDIA_BUSY_MS` remain only for a session whose backend said false.
+- No switch: each command does what it did, only the worker's looks between them changed. The old path stays
+  reachable through a backend that cannot wake (the test below drives it). The session's line says which:
+  `encoder: session N: HEVC WxH on mediacodec-helper: 8-bit`, or `...; asked every 1 ms (the backend cannot wake the
+  worker)`.
+- **The line:** `media: 30 s: worker woken N: by data (commands, kicks, results, coded units) N, by the timeout N; 1 ms
+  looks N`: the worker's wake-ups since the last such line, said 30 s after the first wake-up that follows it and not
+  at all while the worker sleeps (one more wake-up, counted "by the timeout", for the line itself).
+
+**Tested [F, the build laptop].** `cargo test -p oneencoder`: unit `the_wakes_line_comes_once_a_window_and_only_while_
+the_worker_wakes`, `a_wake_up_while_the_worker_works_is_kept_for_its_next_sleep`; `tests/wakes.rs`: 2 s of 30 frames a
+second through one encoder session as `DroidVMVTHost.cpp` drives it, counting the worker's wake-ups: a backend like
+MediaCodec (each unit 4 ms after its frame, on a thread of its own) that wakes the worker gave about 280-320 wake-ups
+by data, 0 by the timeout and 0 1 ms looks; the same backend unable to wake it, over 1000 1 ms looks (every unit out
+either way); the helper process (the stand-in in MediaCodec's place), 0 1 ms looks. Not booted.
+
+**What a phone session must show.** While a video plays or the camera records: `media: 30 s: ...; 1 ms looks 0`,
+"by the timeout" in the tens at most (the 50 ms guard runs only while an encoder session is open), "by data" about
+the commands' and units' count. `1 ms looks` above 0 means a backend that cannot wake the worker (the session's line
+says `asked every 1 ms`). `oneios-perf`'s and `oneios-cpu`'s xnuhost numbers no higher than before for the same
+video.
+
 ## The decoder (fix/hw-decode, 2026-11-24)
 
 **Why:** YouTube in Safari decoded on the CPU, and the phone got hot. The device was an encoder only, so iOS's
@@ -276,8 +331,9 @@ paravirtualized decoder had nothing to use. The guest's side and 24A446's messag
 **No polling.**
 - A decoder gives its results to a `DecodeSink`: the device queues them and wakes its worker. The worker turns them
   into events.
-- With only decoder sessions open the worker sleeps until woken. The 1 ms busy look and the 50 ms idle look are for
-  encoder sessions alone, whose backend has no callback.
+- With only decoder sessions open the worker sleeps until woken. The 50 ms guard is for encoder sessions alone (and an
+  event that waits for a guest buffer); the 1 ms busy look, since 2026-11-25, only for an encoder backend that cannot
+  wake the worker ("The worker waits for the encoder" below).
 - In the helper, MediaCodec runs in asynchronous mode. Its callbacks feed the waiting frames and place the waiting
   pictures. The helper's main thread only reads the socket.
 

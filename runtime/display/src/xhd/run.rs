@@ -25,13 +25,15 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::path::PathBuf;
 use std::sync::{Condvar, Mutex, MutexGuard};
 
-/// A locked buffer of the layer: `stride` pixels a row, `format` the buffer's (AHARDWAREBUFFER_FORMAT_*).
+/// A locked buffer of the layer: `stride` pixels a row, `format` the buffer's (AHARDWAREBUFFER_FORMAT_*). `key` tells
+/// the buffers apart for xhd::buffers (the window's: the address it is mapped at; the write-only ones: their slot).
 pub struct Locked {
     pub width: i32,
     pub height: i32,
     pub stride: i32,
     pub format: i32,
     pub bits: *mut u8,
+    pub key: usize,
 }
 
 /// What the run loop needs of the layer (jni.rs: the NDK's ANativeWindow on the layer's Surface). Only the poster's
@@ -43,7 +45,10 @@ pub trait Layer {
     fn dataspace(&self) -> i32;
     /// Locks a buffer whole (the rectangle asked for: all of it). The error is the NDK's (negative) number.
     fn lock(&self, width: u32, height: u32) -> Result<Locked, i32>;
-    fn unlock_and_post(&self);
+    /// Posts the locked buffer; `changed`: what this post changes against the last one (its damage).
+    fn unlock_and_post(&self, changed: &Rect);
+    /// xnuhost's options (OPTION_*), before the first lock (xhd::present chooses its path by them). The window: nothing.
+    fn choose(&self, _options: u32) {}
 }
 
 /// How the run loop ended (nRun's answer to the Java half).
@@ -183,6 +188,8 @@ struct Shared {
     forgotten: u64,
     /// The hold for session/ready ended: its seconds and the flushes that came meanwhile (the first post says them).
     held: Option<(f64, u64)>,
+    /// xnuhost's options as the reader has them (the poster gives them to the layer before its first lock).
+    options: u32,
 }
 
 struct Pipe {
@@ -246,6 +253,7 @@ pub fn run(
             buffers_seen: 0,
             forgotten: 0,
             held: None,
+            options: 0,
         }),
         work: Condvar::new(),
         posted: Condvar::new(),
@@ -376,6 +384,7 @@ fn read_loop(
         }
         let mut s = pipe.lock();
         let sh = &mut *s;
+        sh.options = direct.options;
         // What this round changes against the snapshot: xnuhost's own damage, the direct frame's changed tiles, and
         // what an earlier refused read put into the snapshot.
         let mut changed = std::mem::take(&mut unposted);
@@ -497,6 +506,12 @@ fn post_loop(f: &Frame, layer: &dyn Layer, mut format: i32, mut dataspace: i32, 
             if let Some(e) = s.end {
                 return e;
             }
+            if frames == 0 {
+                // xnuhost's options come right after the hello, before any frame: the reader has them by now.
+                let options = s.options;
+                drop(s);
+                layer.choose(options);
+            }
         }
         // Locked whole: Surface then copies nothing back from the last buffer (xhd::buffers), and the poster fills
         // what this buffer lacks itself. No lock of ours is held while the layer hands out a buffer.
@@ -533,7 +548,7 @@ fn post_loop(f: &Frame, layer: &dyn Layer, mut format: i32, mut dataspace: i32, 
         let usable = buffer.width > 0 && buffer.height > 0 && buffer.stride >= buffer.width && !buffer.bits.is_null();
         // Only a buffer of the frame's own size is filled to the last pixel and so known afterwards.
         let exact = usable && buffer.width as u32 == f.width && buffer.height as u32 == f.height;
-        let bits = buffer.bits as usize;
+        let key = buffer.key;
         // The buffer's own format decides the copy (RGBA_8888 and RGBX_8888 are both R,G,B bytes).
         let layout = if buffer.format == BUFFER_BGRA_8888 || buffer.format == BUFFER_RGBA_FP16 {
             buffer.format
@@ -547,7 +562,7 @@ fn post_loop(f: &Frame, layer: &dyn Layer, mut format: i32, mut dataspace: i32, 
         let changed_at = std::mem::take(&mut s.changed_at);
         // What this buffer lacks and what this post changes (the first four buffers: whole, as a buffer not seen yet
         // is).
-        let mut fill = if frames < 4 { whole } else { buffers.fill(bits, &changed) };
+        let mut fill = if frames < 4 { whole } else { buffers.fill(key, &changed) };
         let mut filled = 0;
         if usable && fill.clip(width, height) {
             let dst_stride = buffer.stride as usize * bytes;
@@ -561,9 +576,9 @@ fn post_loop(f: &Frame, layer: &dyn Layer, mut format: i32, mut dataspace: i32, 
         }
         drop(s);
         let t2 = sys::now_us();
-        layer.unlock_and_post();
+        layer.unlock_and_post(&changed);
         if exact {
-            buffers.posted(bits, &changed);
+            buffers.posted(key, &changed);
         } else {
             buffers.reset(f.width, f.height); // none of them is known then
         }

@@ -291,6 +291,11 @@ impl Cache<'_> {
 
 /// The record of `classes` (each Name or Name@bundle.id) of the kernelcache `raw`: what classes.json holds.
 pub fn record(raw: &[u8], prelink_report: Option<&str>, classes: &[String]) -> Result<Value> {
+    // One class per argument. A list in one argument (zsh does not split an unquoted $LIST) was looked up as one
+    // name and recorded as "no static initializer" under the first class's name (2026-11-25).
+    if let Some(item) = classes.iter().find(|c| c.chars().any(char::is_whitespace)) {
+        anyhow::bail!("classes: {item:?} is several words: give each class as its own argument (in zsh, ${{=LIST}} or an array)");
+    }
     let cache = Image::new(raw, 0)?;
     let slide = match prelink_report {
         Some(path) => {
@@ -344,4 +349,13 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_list_in_one_argument_is_refused() {
+        let error = super::record(&[], None, &["IOAESAccelerator IOSurface".to_string()]).unwrap_err().to_string();
+        assert!(error.contains("several words"), "{error}");
+    }
 }

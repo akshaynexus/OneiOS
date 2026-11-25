@@ -773,6 +773,34 @@ fn audio_helper() {
         }),
         host_late_max: AtomicU64::new(0),
     });
+    // The canary: the lateness above was measured only on the fake server's pulls and the test's sends, not on the
+    // helper's own writer thread, so a loaded host (release v0.1.29's tests lane, load average 24) could pass every
+    // on-time check and still give the helper an underrun (`assert_eq!(s.underruns, 0)` in speaker_case). This thread
+    // wakes every 2 ms on an absolute CLOCK_MONOTONIC schedule (sleep_until), as an ordinary thread of the helper would,
+    // and feeds its own lateness into the same maximum, so a host that runs any ordinary thread late skips the on-time
+    // checks instead of failing them. It holds only a Weak and ends once the test drops the fake.
+    {
+        let weak = Arc::downgrade(&fake);
+        std::thread::Builder::new()
+            .name("late-canary".into())
+            .spawn(move || {
+                const PERIOD: f64 = 0.002;
+                let mut due = time::monotonic_s() + PERIOD;
+                loop {
+                    sleep_until(due);
+                    let now = time::monotonic_s();
+                    let Some(fake) = weak.upgrade() else { break };
+                    fake.late(now - due);
+                    drop(fake);
+                    // The next wake on the schedule; a wake that missed slots counts once, then the schedule restarts.
+                    due += PERIOD;
+                    if due < now {
+                        due = now + PERIOD;
+                    }
+                }
+            })
+            .expect("the late canary's thread");
+    }
     let k = || fake.k();
     let mut p = Player { fake: Arc::clone(&fake), marks_sent: 0 };
 

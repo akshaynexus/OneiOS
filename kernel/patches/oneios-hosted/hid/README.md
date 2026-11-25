@@ -1,4 +1,4 @@
-# kernel/patches/oneios-hosted/hid: touch, buttons and the light sensor's HID device
+# kernel/patches/oneios-hosted/hid: touch, buttons, the motion sensors and the light sensor's HID device
 
 Owner: fable-hid (job Q4b of the board's queue of 2026-11-11). One archive of the hosted kernel,
 `build/oneios-hid/liboneioshid.a`, hooked into `kernel/build-hosted.sh` like `aes/`. There is no numbered patch: the
@@ -12,9 +12,15 @@ start is called from `oneios_drivers_start` (`drivers/bridge/OneiOSBridge.c`, a 
         "OneiOS touch screen"   Digitizer / Touch Screen, 10 fingers, Built-In, DisplayIntegrated
         "OneiOS buttons"        Consumer Menu (Home), Power, Volume +/-, Telephony Ring Enable, boot keyboard
         "OneiOS pen"            (oneios-pen=1, xnuhost pen=auto) Digitizer / Stylus from /arm-io/input-1: see "Pen"
-   -> Apple's IOHIDInterface -> IOHIDEventDriver (unchanged, in kernel.kc; matched by two personalities
-      this archive adds to the catalogue, see "Which event driver") -> backboardd
- OneiOSALSDevice (drivers/brightness)   Sensor / Ambient Light, same parent class, same archive
+   -> Apple's IOHIDInterface -> IOHIDEventDriver (unchanged, in kernel.kc; matched by four personalities
+      this archive adds to the catalogue, see "Which event driver" and "Motion sensors") -> backboardd
+ S24's sensor hub (xnuhost runtime/bridges/sensors) -> virtio-input "OneiOS motion sensors" (/arm-io/input-N)
+   -> AppleSPUHIDDevice x 1..4 (oneios-motion=MASK; DroidVMMotionHid.inc staged in a unit of its own)
+        accelerometer {0xff00, 3}, gyroscope {0xff00, 9}, device orientation {0x20, 0x8a}, compass {0xff00, 0x0a}
+   -> IOHIDEventDriver -> locationd, CoreMotion, backboardd's rotation                    see "Motion sensors"
+ OneiOSALSDevice (drivers/brightness)   Sensor / Ambient Light, same parent class, same archive; with oneios-als-spu=1
+                                        an iPhone's SPU light sensor {0xff00, 4}, its driver's dispatch wrapped
+                                        (OneiOSALSEvents.cpp): see "The SPU light sensor"
 ```
 
 ## Files
@@ -28,6 +34,8 @@ start is called from `oneios_drivers_start` (`drivers/bridge/OneiOSBridge.c`, a 
 | `oneios-tool kernel gen hid` | Checks the header against the record, stages and compiles the sources, generates the bindings, makes the archive |
 | `OneiOSHidInput.cpp` | `oneios_hid_input_start`: loads IOHIDFamily and IOHIDEventDriver, registers the classes below the live `IOHIDDevice`, starts the transport, publishes the two devices under `IOHIDResource`, starts the light sensor's device; the log lines |
 | `OneiOSSideKeys.inc` | The side keys of the transport: evdev key codes to the buttons device's report bits |
+| `OneiOSALSEvents.cpp` | (oneios-als-spu=1) the light sensor's IOHIDEventDriver gets a copy of its vtable with `dispatchEvent` wrapped, as NativeHidInput's edge wrapper does for the touch screen (its slot table, exported by `staged/hid_motion.rs`): each accelerometer event of that driver (the lux in X and Y) becomes an ambient light event (`setType` 12; level, raw channel 0, illuminance) |
+| `staged/hid_motion.rs` (in `tools/oneios-tool/crates/oneios-kernel/src`) | The motion edits: the transport keeps the magnetometer's axes and wakes the devices per frame; `DroidVMMotionHid.inc` gets the compass, frame-driven ticks and counts and becomes `DroidVMMotionHid.cpp`; NativeHidInput's slot table exported |
 | `OneiOSTouchTime.inc` | Each touch frame's scan time (xnuhost's `EV_MSC` / `MSC_TIMESTAMP`): kept while the frame is reported, so the touch report goes to the family with `handleReportWithTime(scan time)`; the latency counts of the log line |
 
 Sources taken unchanged and staged with anchored edits by the build (a changed anchor stops the build):
@@ -36,6 +44,9 @@ and `external/UniXNU-droidvm/package/DroidVMVirtioInput.c` (BSD-2-Clause-Patent)
 ringer bit and takes Home and the ringer from the button sink; the edge band is 3 mm of the phone's panel (54 of 1320 px across, 54 of 2868 down, as shares of
 the axes), not of the iPad's; the edge wrapper follows a change of event driver; product names; the transport reads the side keys from any device, and takes a device with side
 keys and no touch screen; the transport keeps each touch frame's scan time and the touch report carries it (see "Latency").
+Since sensors-als (2026-11-25) also `external/UniXNU-droidvm/package/DroidVMMotionHid.inc` (staged into a unit of its own),
+`DroidVMSensorProcessor.cpp` and `DroidVMMotion.c` (unchanged), all three from UniXNU-droidvm **f9121cd** (BSD-2-Clause-Patent);
+the transport's motion edits and NativeHidInput's slot-table export are `staged/hid_motion.rs` (see "Motion sensors").
 
 ## The layout header: evidence
 
@@ -241,7 +252,8 @@ uses it.
 
 Built by `kernel/build-hosted.sh` (needs `external/NativeHidInput` at 24f1f3f or later: `scripts/setup/get-references.sh
 NativeHidInput`, after removing an older checkout). Boot arguments: `oneios-pen=1` publishes the pen digitizer when xnuhost has a pen device (default 0, see "Pen"); `oneios-hid=0` starts nothing; `oneios-hid-log=0`
-silences the state lines; `oneios-hid-driverkit=1` adds no personalities; `oneios-hid-buttons-builtin=1` (off by default,
+silences the state lines (the light sensor's wrapper is still installed); `oneios-motion=MASK` publishes the motion devices (default 0, see
+"Motion sensors"); `oneios-als-spu=1` the SPU light sensor (default 0, see "The SPU light sensor"); `oneios-hid-driverkit=1` adds no personalities; `oneios-hid-buttons-builtin=1` (off by default,
 fix-power-key 2026-11-14, not proven) publishes `Built-In` and the Consumer Control pair (0x0C, 1) on the buttons' event
 service and interface, because backboardd lists the buttons as `eventSource: externalKeyboard` (`docs/hardware.md` 5,
 "The power key: a stand-in ..."; log `oneios-hid: buttons: Consumer Control, Built-In published ...`); `droidvm-input=0` leaves xnuhost's input
@@ -250,7 +262,7 @@ device alone.
 Console lines (`guest` lines of xnuhost's log), in the order of a good start:
 
 ```
-oneios-hid: IOHIDEventDriver personalities added for the touch screen and the buttons: the kernel's event driver takes them when they start, the DriverKit one is not waited for
+oneios-hid: IOHIDEventDriver personalities added for the touch screen, the buttons, the motion devices and the SPU light sensor: the kernel's event driver takes them when they start, the DriverKit one is not waited for
 droidvm input /arm-io/input-0: OneiOS touchscreen, touch
 oneios-hid: virtio-input: 1 device(s) in the device tree, 1 started
 oneios-hid: buttons: HID device started under IOHIDResource
@@ -272,6 +284,85 @@ it. "HID events queued" is the count each such user client keeps of the events A
 (its `DebugState`), read once a second while reports arrive. With `oneios-hid-driverkit=1`, between the two
 "event driver" lines (`AppleUserHIDEventService`, then `IOHIDEventDriver` 120 s later) the reports are accepted
 and go nowhere, and `contacts begun` stays 0.
+
+## Motion sensors (sensors-als, 2026-11-25; the kernel's default 0, xnuhost adds oneios-motion with sensors=auto, its default, to a collection without AppleSPU; v0.1.29 panicked, the fix is not booted)
+
+The accelerometer, gyroscope, device orientation and compass as an iPhone's sensor processor publishes them, from the
+S24 Ultra's sensor hub (xnuhost `sensors=`, `runtime/bridges/sensors`). After UniXNU-droidvm f9121cd, which proved the
+first three on iPadOS 27.0.1 24A446 (locationd, CoreMotion, backboardd's rotation; `droidvm-meta-repo` PROGRESS 10-28,
+11-02). Published only with **`oneios-motion=MASK`** (bit 0 accelerometer, 1 gyroscope, 2 device orientation, 3 compass;
+default 0) and when the transport found xnuhost's motion device; xnuhost adds `oneios-motion=7` (15 with a magnetometer)
+when it gives one, unless the command line has the switch.
+
+The device xnuhost gives: "OneiOS motion sensors", `INPUT_PROP_ACCELEROMETER`, `ABS_X/Y/Z` the gravity vector in iOS's
+panel frame (256 per g; face up on a table z = -256), `ABS_RX/RY/RZ` the angular velocity (16 per degree per second,
+counter-clockwise positive), `ABS_HAT0X/HAT0Y/HAT1X` the magnetic field (16 per microtesla), one frame per accelerometer
+sample (about 50 a second), none while iOS's display is off. DroidVM's transport already recognises it (kind
+`motion sensors`, `droidvm_motion`); `staged/hid_motion.rs` keeps the three magnetometer axes too, publishes them inside
+the frame's seqlock and wakes the devices after each frame.
+
+| Part | What |
+|---|---|
+| `DroidVMMotionHid.cpp` (staged from `DroidVMMotionHid.inc`) | `AppleSPUHIDDevice`, one per kind: the accelerometer `{0xff00, 3}` and gyroscope `{0xff00, 9}` (Sensor page acceleration and angular velocity: milli-g, milliradians per second), the device orientation `{0x20, 0x8a}` (one bit per UIDeviceOrientation and the vendor timestamp child CoreMotion needs), and ours, the compass `{0xff00, 0x0a}` (ios-redfin 0971's pair; Sensor page Compass 3D, magnetic flux X/Y/Z 0x0485-0x0487, thousandths of a microtesla: IOHIDEventDriver's `parseCompassElement`). Each descriptor ends with an empty `{0xff0c, 3}` application collection, the pair of IOHIDFamily's "HID Sensor" personality |
+| `DroidVMSensorProcessor.cpp` | `AppleSPUHIDDeviceUserClient`, the SPU command channel (type `ashd`, selectors 0-6, all taken, none does anything) that CoreMotion's orientation notifier opens through AppleSPULib; without it backboardd and SpringBoard crashed with locationd on the iPad. Its own module load (`droidvm_sensor_processor_register`); when that fails the orientation device is left out |
+| `DroidVMMotion.c` | `kern.droidvm_motion` (read only): the latest frame and orientation, registered when the transport finds the device (it replaces our old empty `droidvm_motion_register`) |
+| Registration (`OneiOSHidInput.cpp` `oneios_motion_register`) | In a module load of its own after the touch screen's, on bsd_init's thread like the others, only when `oneios-motion` is not 0 and neither class name exists yet. The class names are the iPhone's own (the platform sandbox lets backboardd and SpringBoard open only the services and user clients it names): `com.apple.driver.AppleSPU` has both. Since 2026-11-25 the registration also refuses a collection that has that kext at all (`OSKext::lookupKextWithIdentifier`; state 4): the name check sees only loaded kexts, and AppleSPU in the collection loads later (next row). A clash or a failed registration leaves the touch screen's classes as they were and says so |
+| Personality `{"SPU", 0xff0c, 3}` (`oneios_hid_personalities`) | IOHIDEventDriver at score 100000: it is the driver that starts. It does **not** keep Apple's personalities of the same pair from being tried: `IOService::probeCandidates` loads the kext of every candidate that passes `matchPassive` (`IOCatalogue::isModuleLoaded`), whatever its score. v0.1.29 (S24 Ultra, 2026-11-25 05:05, 24B156) panicked so 15 ms after the devices were published: `AppleSPUGestureDriver` (`{0xff0c, 3}`, Transport SPU) matched, com.apple.driver.AppleSPU loaded, "class AppleSPUHIDDevice is a duplicate". The fix is in the prelink: `prelink roots` leaves AppleSPU out of both collections, with AppleALSColorSensor (its `AppleSPUCT7xx` match the SPU light sensor's `{0xff00, 4}` on any transport), AppleEmbeddedLightSensor, AOPTouchKext and AppleHIDTransportSCMCommon, which link it and would bring it back as a dependency (`kernel/prelink/README.md`, "Which kexts"). UniXNU-droidvm's iPad kernelcache has no AppleSPU either |
+
+Guest wake-ups: the iPad's source ticks every 10 ms per device whatever happens (100 a second per kind). Staged, a device
+ticks when the transport publishes a frame (`oneios_motion_kick` re-arms each published device's timer at once) and
+otherwise once a second (the orientation's 2 s and 30 s re-sends still come from these ticks): about 50 a second per
+published kind while the host sends frames, 1 a second per kind while it sends none (iOS's display off).
+
+Log: `droidvm input /arm-io/input-N: OneiOS motion sensors, motion sensors` (the transport), `oneios-hid: virtio-input: N
+device(s) in the device tree, N started; motion sensors among them`, `oneios-hid: motion: AppleSPUHIDDevice registered
+below IOHIDDevice, its SPU channel AppleSPUHIDDeviceUserClient too (oneios-motion=0x7); the kernel's classes:
+com.apple.driver.AppleSPU is not in the collection` (whose classes are in use), a `HID device started under
+IOHIDResource` line per kind, `oneios-hid: motion: AppleSPUHIDDevice accelerometer, gyroscope, orientation published
+(oneios-motion=0x7)`, and every 60 s while frames come (from the touch screen's 1 s tick) `oneios-hid: motion: 60 s: N
+frames from the host, reports: accelerometer N, gyroscope N, orientation N, compass N; SPU channel opens N, commands N
+(since the boot)`. Each way it does not happen has its line: `... xnuhost has a motion device; nothing published
+(oneios-motion=0)`, `... oneios-motion=0x7, but xnuhost gave no motion device ...`, `... the class name AppleSPUHIDDevice
+is taken (com.apple.driver.AppleSPU loaded?) ...`, `... com.apple.driver.AppleSPU is in this kernel collection (prelinked
+before 2026-11-25's roots): ... no motion devices (prelink the collection again)` (then `nothing published:
+com.apple.driver.AppleSPU is in the collection`), `... did not register below IOHIDDevice ...`, `... the SPU channel's
+class did not register (N): the device orientation is left out`. In iOS's log (`oneios-tool phone pull-log`): locationd's
+`CLIoHidInterface` matching the services, CoreMotion's orientation, backboardd's interface orientation changes.
+
+Not known until a phone boot [U]: everything above runs on the phone for the first time; the iPhone's locationd may want
+more of the SPU than the iPad's did; the compass's units are redfin's (microtesla), not checked on 24A446.
+
+## The SPU light sensor (sensors-als, 2026-11-25; oneios-als-spu=1, added by xnuhost with sensors=auto, its default; not booted)
+
+On the phone the HID Sensor page light sensor (`drivers/brightness`) was refused by `AppleUSBALSService` and no lux reached
+CoreBrightness. With **`oneios-als-spu=1`** (xnuhost adds it when the light comes from the sensor hub) the device is an
+iPhone's SPU light sensor instead, the shape ios-redfin (0971, 1298) and Jesvi-iOS (`inject_sensors.c`) give
+CoreBrightness: the Apple vendor pair `{0xff00, 4}`, Transport SPU, Built-In, VendorID 0x5ac, `ALSCurveInfo`, Placement 0.
+
+- A fourth personality, `{"SPU", 0xff00, 4}` at score 100000, gives it the collection's IOHIDEventDriver at once.
+- That driver makes no ambient light event of any report (IOHIDFamily-2238.120.5), so the device sends the lux in an
+  accelerometer's three fields (X the low 15 bits, Y the rest, Z the millilux below one lux; `oneios_als_hid.h`, host
+  tested by `test_als_hid.c`) and `OneiOSALSEvents.cpp` wraps that one driver's `dispatchEvent` (a copy of its vtable, every
+  slot checked against NativeHidInput's table of IOHIDEventDriver's 220 discriminators first, exactly as the touch screen's
+  edge wrapper): an accelerometer event of that driver gets `setType(12)` (slot 19, discriminator 0x856b: clang's of
+  `_ZN10IOHIDEvent7setTypeEj`, the formula that gives NativeHidInput's proven ones; `setType` reallocates the event's
+  data for the new type) and the lux as its level (0xC0000), raw channel 0 (0xC0001) and illuminance (0xC000B), then goes on.
+  `watchLightSensor` installs it as soon as the driver is there (every 5 s for 30 minutes, also with `oneios-hid-log=0`).
+- A Feature report carries Report Interval (Sensor page 0x030e): IOHIDEventDriver writes CoreBrightness's
+  `ReportInterval` into it, so the device sees the sensor turned on. On 0 -> more (a wake) it sends the cached reading
+  again within 15 ms (redfin 1298), and 20 ms after the wrapper is in, before CoreBrightness's 250 ms
+  `FirstALSSampleTimeout`.
+
+Log: `ONEIOS ALS: SPU ambient light service (0xff00/4) published: ...`, `ONEIOS ALS: IOHIDEventDriver's dispatch wrapped (220
+slots): its lux events go on as ambient light events` or `ONEIOS ALS: the event driver's dispatch is not wrapped (WHY): no
+ambient light events`, `ONEIOS ALS: wake: the cached sample re-posted (ReportInterval 0 -> N us, N lux)`, and every 60 s
+while readings come `ONEIOS ALS: 60 s: N readings from the host, N events dispatched, last N lux, ReportInterval N us`. In
+iOS's log: CoreBrightness's `CBALSService` / ALS lines in backboardd.
+
+Not known until a phone boot [U]: whether CoreBrightness on 24A446 takes this service and reads the level or the
+illuminance; whether the kernel's `setIntegerValue` sets the illuminance field (0xC000B) of an ambient light event (redfin's
+kernel did; the public source has no field table). If the wrapper's line says it is not wrapped, the service sends
+accelerometer events nobody matches (locationd takes `{0xff00, 3}` only).
 
 ## Latency (touch, 2026-11-12)
 
@@ -319,6 +410,11 @@ staged edits builds and links (`HOSTED_OUT=touch`), and its `kernel.kc` prelinks
 when they are made.
 
 ## Tested, not tested (2026-11-11)
+
+sensors-als (2026-11-25): `cargo test -p oneios-kernel` (the motion edits on the pinned sources: `the_motion_edits_fit_the_pinned_sources`),
+`drivers/tests/host.sh` (both light sensor descriptors, the SPU report's lux through X and Y, the Report Interval feature,
+the wake rule), and `oneios-tool kernel gen hid` against a 24A446 tree's compile records (10 objects; NativeHidInput owns
+10 slots, OneiOSALSDevice 12, AppleSPUHIDDevice 10, all checked against the record): compiled and checked, not booted.
 
 On the PC, with main at `3202197` plus this work (series up to 0024, the display and the key store in), xnuhost
 under `qemu-aarch64 -cpu cortex-a710`, 8 vCPUs, the real image set, guest mode 1440 x 3120, `--no-input

@@ -479,3 +479,49 @@ fn health_held_keeps_bad_chains() {
     drop(held);
     assert_eq!(lines, ["virtio: 60 s: gpu#0 q0 +1"]);
 }
+
+/// A device whose queue 0 honours the driver's VIRTQ_AVAIL_F_NO_INTERRUPT (the media device's queues, 2026-11-25).
+struct Quiet;
+
+impl Device for Quiet {
+    fn quiet_queues(&self) -> u32 {
+        1
+    }
+}
+
+#[test]
+fn no_interrupt_is_honoured_only_on_the_queues_the_device_names() {
+    testing::install();
+    let reg = Registry::new();
+    let info = Info { device_id: 96, nqueues: 2, ..Info::default() };
+    let dev = Virtio::create_in(&reg, 0, 70, info, Quiet, "virtio-quiet").unwrap();
+    let ram = GuestRam::new(0x20000);
+    let mut d = Driver::up(dev.clone(), 0, 2, 8, ram.pa(0)).unwrap();
+    let flags = |q: u64| (q * testing::RING_BYTES + 0x1000) as usize; // each queue's avail ring flags
+    let buf = [(ram.pa(0x10000), 4, false)];
+    // queue 0, the flag set: returned with no interrupt status and no line
+    ram.set_u16(flags(0), 1);
+    let raised = testing::spi_raised(70);
+    assert_eq!(d.send(0, &buf, true), Some(0));
+    assert_eq!(d.used_idx(0), 1);
+    assert_eq!((testing::spi_raised(70), testing::spi_level(70), dev.mmio_read(0x60, 4)), (raised, false, 0));
+    // the flag cleared: the line rises, and goes down on the ack
+    ram.set_u16(flags(0), 0);
+    assert_eq!(d.send(0, &buf, true), Some(0));
+    assert_eq!((testing::spi_raised(70), testing::spi_level(70), dev.mmio_read(0x60, 4)), (raised + 1, true, 1));
+    dev.mmio_write(0x64, 4, 1);
+    assert!(!testing::spi_level(70));
+    // queue 1 is not the device's quiet one: the flag changes nothing (every other device's drivers rely on that)
+    ram.set_u16(flags(1), 1);
+    assert_eq!(d.send(1, &buf, true), Some(0));
+    assert_eq!((testing::spi_raised(70), testing::spi_level(70)), (raised + 2, true));
+    dev.mmio_write(0x64, 4, 1);
+    // a device that names none (Echo) raises whatever the flag
+    let echo_dev = echo(71, &reg);
+    let ram2 = GuestRam::new(0x20000);
+    let mut e = up(&echo_dev, &ram2, 0).unwrap();
+    ram2.set_u16(0x1000, 1);
+    let before = testing::spi_raised(71);
+    assert_eq!(e.send(0, &[(ram2.pa(0x10000), 4, false)], true), Some(0));
+    assert_eq!(testing::spi_raised(71), before + 1);
+}

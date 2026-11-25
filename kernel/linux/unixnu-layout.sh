@@ -13,6 +13,10 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SRC=${XNU_LINUX_PREFIX:-$ROOT/out/toolchain}
+# The real path: a worktree whose out/ (or out/toolchain) links to the main checkout's must not write its own path
+# into the shared layout's links, or they all break when that worktree is removed (2026-11-25: every ld, mig and
+# clang link named OneiOS-wt/codec-irq/out/toolchain/... after that worktree went, and both release kernels failed).
+SRC=$(cd "$SRC" && pwd -P)
 DST=$SRC/unixnu
 UNIXNU=$ROOT/external/Droid-VM-UniXNU
 [ -x "$SRC/cctools/bin/ld" ] && [ -x "$SRC/bin/migcom" ] || { echo "unixnu-layout: run kernel/linux/setup-toolchain.sh first" >&2; exit 1; }

@@ -198,6 +198,8 @@ The owner, 2026-11-24: the two metal2vulkan efforts are one stack on rt; the 624
 |---|---|---|
 | `m2v-idle-memory.patch`: the idle trim frees the old runtime's spare dedicated image blocks (`METAL2VULKAN_IDLE_SPARES`, boot word `oneios-idle-spares=0`) | rt keeps no spare image blocks: an idle allocation goes after 250 ms, one 16 MiB reserve per class (rt README, "Memory blocks and buffers") | unnecessary on rt (the switch does nothing there) |
 | `turnip-idle-bo-cache.patch`: Turnip's freed-BO cache trimmed after 60 s idle (boot word `oneios-bo-cache-idle=0`) | Turnip is the same in both add-ons | shared: `userland/metal/build.sh stage` builds the same Mesa for both runtimes, so it reaches the rt add-on once it is on `main` |
+| `turnip-submit-split.patch` (Droid-VM/UniXNU fb9fb47): a kernel submission ends only where a command buffer begins (the GPU hang at a render server's start), no switch | Turnip is the same in both add-ons | shared, as the row above |
+| The frontend edit of NativeMetal 3c46b5e: a compute pipeline rebuilt with its unset constants zero keeps its function until the reflection is read (cameracaptured's crash), no switch | the frontend is the same in both add-ons (`ios metal-stage-edit` edits it with or without `--rt`) | shared |
 | The GPU memory row (`CommandPoolRow.inc`'s `GM` line, weak `m2v_memory_census`) | rt has the figures in its gauges | the bridge answers `m2v_memory_census` from rt's gauges (`abi/device.rs`; words in its comment); `s` (spares) is 0 on rt |
 | The render-pass split counters (the `RP` line) | rt counted no splits | **rt 0008**: `Metrics::render_pass_splits` and `render_pass_barrier_splits`; the bridge counts the render encoders |
 

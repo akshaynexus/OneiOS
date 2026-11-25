@@ -1200,3 +1200,49 @@ fn an_a56_without_its_plugin_is_laid_out_as_2d() {
     assert_eq!(early_2d(true, false, false, never), None);
     assert_eq!(early_2d(false, false, true, never), None);
 }
+
+#[test]
+fn the_gl_bundle_is_found_in_the_gpuaddon_beside_the_metal_plugin() {
+    // the A56's OpenGL ES (docs/a56-gpu.md 4a): addons/OneiOSRadeonGL.bundle/OneiOSRadeonGL and its oneios-target, beside
+    // the Metal plug-in in the same sidecar (oneios-tool ios gpuaddon BUNDLE OUT --gl GLBUNDLE)
+    let both = addon(&[
+        ("addons/OneiOSRadeonMetal.bundle/Info.plist", b"<plist/>"),
+        (EXE, b"\xcf\xfa\xed\xfe"),
+        (TARGET, b"iPhone10,3 20F66\n"),
+        ("addons/OneiOSRadeonMetal.publish", b"1\n"),
+        ("addons/OneiOSRadeonGL.bundle/Info.plist", b"<plist/>"),
+        ("addons/OneiOSRadeonGL.bundle/OneiOSRadeonGL", b"\xcf\xfa\xed\xfe"),
+        ("addons/OneiOSRadeonGL.bundle/oneios-target", b"iPhone10,3 20F66\n"),
+    ]);
+    assert_eq!(
+        gl_in_addon(Some(&both), Some("20F66")).unwrap(),
+        Plugin { target: "iPhone10,3 20F66".into(), files: 3 }
+    );
+    // the Metal plug-in's answer is unchanged by the bundle beside it
+    assert_eq!(plugin_in_addon(Some(&both), Some("20F66")).unwrap().files, 3);
+    let metal_only = addon(&[(EXE, b"x"), (TARGET, b"iPhone10,3 20F66\n")]);
+    assert_eq!(
+        gl_in_addon(Some(&metal_only), Some("20F66")).unwrap_err(),
+        "the gpuaddon has no OneiOSRadeonGL plug-in (the A56's OpenGL ES)"
+    );
+    assert_eq!(
+        gl_in_addon(None, None).unwrap_err(),
+        "the kernel has no gpuaddon sidecar, so no OneiOSRadeonGL plug-in (the A56's OpenGL ES)"
+    );
+    assert_eq!(
+        gl_in_addon(Some(&both), Some("24A446")).unwrap_err(),
+        "the OneiOSRadeonGL plug-in is for \"iPhone10,3 20F66\", the image set is build 24A446"
+    );
+}
+
+/// The A56's OpenGL ES is offered only to a kernel that reads oneios-gpu-amd-gl (5966e71ce2aa on): on the pinned
+/// 181d8bf2d60a SpringBoard would find no GL driver with the CoreImage fixup left out.
+#[test]
+fn opengl_es_needs_a_kernel_that_reads_its_switch() {
+    let mut kc = vec![0u8; 4096];
+    kc.extend_from_slice(b"oneios-gpu-amd\0oneios-gpu-amd-cpu\0");
+    assert!(!kernel_knows_gl(&kc), "181d8bf2d60a's strings: no oneios-gpu-amd-gl");
+    kc.extend_from_slice(b"oneios-gpu-amd-gl\0");
+    assert!(kernel_knows_gl(&kc));
+    assert!(!kernel_knows_gl(b"oneios-gpu-amd-g"));
+}

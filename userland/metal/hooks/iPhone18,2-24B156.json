@@ -1,0 +1,24 @@
+{
+  "target": "iPhone18,2 24B156",
+  "cache_uuid": "78B55CFF-20F4-3A39-81AF-B6530B7E9789",
+  "source": "external/NativeMetal b0d6a07 NativeAdrenoMetalPlugin.mm, whose constants are the iPad17,3 24A446 cache's",
+  "how": "iOS 27.2.1's SystemOS cryptex (profiles/ios-27.2.1-iPhone18,2.toml), the cache's main file, .01, .25.dylddata, .26.dyldreadonly, .symbols and .81.dyldlinkedit copied out with `oneios-tool image apfs-copy`: `oneios-tool sym find` (code) and `sym find --no-index` (data symbols) for QuartzCore's symbols, `sym dis` of the three functions for the addresses they read; the option numbers from init_debug's table of 300 option names; docs/gpu.md section 7 has the commands and what each showed",
+  "anchor": {"symbol": "_CARenderServerStart", "upstream": "0x1846dce88", "value": "0x1845ce544"},
+  "branch": {"address": "0x18434d0e4", "word": "0x37000608", "what": "tbnz w8, #0 in CA::WindowServer::IOMFBDisplay::framebuffer_pixel_format (0x18434cff4), after ldrb of is_virtualized"},
+  "replace": [
+    {"upstream": "0x1e7021014", "value": "0x1edf3e474", "what": "debug_values[21], CA_DISPLAY_EDR_HEADROOM (float); debug_values is 0x1edf3e420; read by Display::edr_headroom at 0x18430b6d0"},
+    {"upstream": "0x1e7021104", "value": "0x1edf3e564", "what": "debug_values[81], CA_FP16_MIN_HEADROOM (float); read by framebuffer_pixel_format at 0x18434d044"},
+    {"upstream": "0x1e702116c", "value": "0x1edf3e5cc", "what": "_ca_debug_options; +129 CA_FORCE_FP16_FRAMEBUFFER (read at 0x18434d080), +159 CA_ALLOW_EDR_MIRRORING (read at 0x18434d08c): the options' numbers below"},
+    {"upstream": "0x1e701bdd9", "value": "0x1edf390c1", "what": "CADeviceIsVirtualized::is_virtualized (byte); stored by the block at 0x18442e290, read at 0x18434d0e0"},
+    {"upstream": "0x1e7020780", "value": "0x1edf3a908", "what": "CADeviceIsVirtualized::once (dispatch_once token); read at 0x18434d0d0"},
+    {"upstream": "0x1e9021680", "value": "0x1e2280290", "what": "the constant CFString the block at 0x18442e290 passes to MobileGestalt, IsVirtualDevice (a diagnostic note reads its text)"},
+    {"upstream": "0x184461838", "value": "0x18434cff4", "what": "framebuffer_pixel_format (named in comments)"},
+    {"upstream": "0x184461928", "value": "0x18434d0e4", "what": "framebuffer_pixel_format's branch (only patched with the boot argument sheng-fb-bgra=1); the same word, 0xc0 bytes before its target as in 24A446"}
+  ],
+  "options": {"base": "0x1e702116c", "what": "QuartzCore's bool debug options: init_debug stores option N at _ca_debug_options + N (the plug-in writes and reads two of them, DisplayWide.inc one); this build has 300 (24A446: 293), and the two are 1 and 3 later than in 24A446", "bool": [
+    {"name": "CA_FORCE_FP16_FRAMEBUFFER", "upstream": 128, "value": 129, "what": "read by framebuffer_pixel_format at 0x18434d080"},
+    {"name": "CA_ALLOW_EDR_MIRRORING", "upstream": 156, "value": 159, "what": "read by framebuffer_pixel_format at 0x18434d08c"}
+  ]},
+  "same": [],
+  "no_address": "RenderBox, WebGPU and ANGLE are told a GPU family by the caller's image path (dladdr), no address. The CADeviceIsVirtualized block (0x18442e290 here, 0x184541f10 in 24A446) is named in comments only, as sub_184541f10. The frontend's quartzCoreCallers diagnostic holds offsets of the iOS 17 (21H461) QuartzCore; it only reads, inside QuartzCore's image, and is left as upstream has it. /System/Library/PrivateFrameworks/RenderBox.framework/RenderBox, .../WebGPU.framework/WebGPU and .../WebCore.framework/Frameworks/libANGLE-shared.dylib are in this cache's image list under those paths, as in 24A446's."
+}

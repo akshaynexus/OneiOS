@@ -1,0 +1,108 @@
+OneiOS (port/oruma-2026-11-24, 2026-11-25): the switch of the Adreno shader fixes 0101 and 0102 (on by default since 2026-11-25).
+
+METAL2VULKAN_SHADER_FIX=1 (read once per process, env_vars::shader_fix; the Metal plug-in sets it unless the boot
+argument oneios-m2v-shader-fix=0, userland/metal/ShaderFix.inc) turns on 0101's rule (a run-time-indexed constant
+table past 4 KiB read from the constant blob) and 0102's cast and GEP arms of blob_const_offset. Off, both are the
+pin's code paths: the same translations, and the device profile's fingerprint is the pin's, so the shader cache's
+entries stay valid. On, the fingerprint takes the switch, so translations made with and without it never meet in
+the cache (metal2vulkan-runtime's shader cache keys an entry on the profile fingerprint). Applied after 0101 and 0102.
+
+diff --git a/crates/metal2vulkan/src/device/profile.rs b/crates/metal2vulkan/src/device/profile.rs
+index 5c5d8c3..ec466a0 100644
+--- a/crates/metal2vulkan/src/device/profile.rs
++++ b/crates/metal2vulkan/src/device/profile.rs
+@@ -438,6 +438,11 @@ fn fingerprint_of(fields: &ProfileFields) -> Hash256 {
+     note_fingerprint_derived();
+     let mut h = Hashing(Sha256::new());
+     h.0.update(b"metal2vulkan/device-profile/v1\0");
++    // OneiOS: the shader fix (env_vars::shader_fix) changes what is compiled; hashed only when on,
++    // so the fingerprint without it is the pin's and translations made with and without it never meet.
++    if crate::env_vars::shader_fix() {
++        h.0.update(b"oneios-shader-fix-0101-0102\0");
++    }
+     // `Hashing` never fails, and `Debug` of these plain-data types only fails when the
+     // writer does.
+     let _ = write!(h, "{:?}", fields);
+diff --git a/crates/metal2vulkan/src/env_vars.rs b/crates/metal2vulkan/src/env_vars.rs
+index e3adf03..82f8937 100644
+--- a/crates/metal2vulkan/src/env_vars.rs
++++ b/crates/metal2vulkan/src/env_vars.rs
+@@ -2,7 +2,8 @@
+ //!
+ //! Every supported variable has a typed accessor and a registry entry used by the `metal2vulkan`
+ //! binary's `--help`. Paths retain their raw `OsString`. Accessors read the environment when
+-//! called. No variable here changes what the library compiles.
++//! called. No variable here changes what the library compiles, but OneiOS's `METAL2VULKAN_SHADER_FIX`
++//! (read once, and hashed into the device profile's fingerprint).
+ 
+ use std::ffi::OsString;
+ 
+@@ -60,6 +61,16 @@ pub const REGISTRY: &[EnvVar] = &[
+                  its memory class (placed), bytes, offset and block, to show what makes and \
+                  frees blocks; set to anything but empty or 0",
+     },
++    EnvVar {
++        name: "METAL2VULKAN_SHADER_FIX",
++        default: "unset (off: the translations of the pin)",
++        effect:
++            "OneiOS: the Adreno shader fixes of patches 0101 and 0102 (a constant table indexed at \
++                 run time and past 4 KiB read from the constant blob, not copied per thread; \
++                 pointer constants that are casts or constant GEPs of a blob global lowered); \
++                 changes what the library compiles, so the device profile's fingerprint takes it; \
++                 read once per process; set to 1",
++    },
+ ];
+ 
+ /// Multi-line `--help` block listing every registry var.
+@@ -113,3 +124,15 @@ pub fn tool_path_override(cmd: &str) -> Option<OsString> {
+         cmd.replace('-', "_").to_ascii_uppercase()
+     ))
+ }
++
++/// OneiOS: whether the Adreno shader fixes of patches 0101 and 0102 translate (`REGISTRY`):
++/// `METAL2VULKAN_SHADER_FIX` is `1`. Read once per process, so every translation and the device
++/// profile's fingerprint (`device::profile`) agree; the Metal plug-in clears it with the boot
++/// argument `oneios-m2v-shader-fix=0` before its first device, else sets it (userland/metal/ShaderFix.inc).
++/// Off, the library compiles what the pin compiles, and the fingerprint is the pin's.
++pub fn shader_fix() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| {
++        std::env::var_os("METAL2VULKAN_SHADER_FIX").is_some_and(|value| value == "1")
++    })
++}
+diff --git a/crates/metal2vulkan/src/lower/access/blob.rs b/crates/metal2vulkan/src/lower/access/blob.rs
+index 8052d5a..2eb74ae 100644
+--- a/crates/metal2vulkan/src/lower/access/blob.rs
++++ b/crates/metal2vulkan/src/lower/access/blob.rs
+@@ -185,8 +185,10 @@ fn blob_const_offset(cx: &SelectCx<'_>, c: crate::air::ir::ConstId) -> Result<u3
+         Some(Const::Expr(ConstExpr::Cast {
+             op: CastOp::Bitcast | CastOp::AddrSpaceCast,
+             ops,
+-        })) => blob_const_offset(cx, ops[0]),
+-        Some(Const::Expr(ConstExpr::Gep { src_ty, ops, .. })) => {
++        })) if crate::env_vars::shader_fix() => blob_const_offset(cx, ops[0]),
++        // OneiOS: the cast and GEP arms only with the shader fix switched on (env_vars::shader_fix); off,
++        // a pointer constant other than a global's address is refused, as before.
++        Some(Const::Expr(ConstExpr::Gep { src_ty, ops, .. })) if crate::env_vars::shader_fix() => {
+             let (base, idx) = ops.split_first().ok_or_else(refuse)?;
+             let base = blob_const_offset(cx, *base)?;
+             let idx: Vec<Value> = idx.iter().map(|&i| Value::Const(i)).collect();
+diff --git a/crates/metal2vulkan/src/memory/plan.rs b/crates/metal2vulkan/src/memory/plan.rs
+index aa6b94b..e57c37c 100644
+--- a/crates/metal2vulkan/src/memory/plan.rs
++++ b/crates/metal2vulkan/src/memory/plan.rs
+@@ -1066,8 +1066,12 @@ impl Planner<'_> {
+                 // A table indexed at run time and past PRIVATE_CONSTANT_BYTES goes to the blob: as a
+                 // `Private` variable every thread holds its own copy in scratch memory, which an Adreno
+                 // backs per fiber (MercuryPoster's Flocon: 192 KiB of ramp tables a thread, refused).
+-                let big = u.indexed
+-                    && self.layouts.alloc_size(global.value_ty).unwrap_or(0) > PRIVATE_CONSTANT_BYTES;
++                // OneiOS: only with the shader fix switched on (env_vars::shader_fix); off, such a table
++                // stays `Private` as before.
++                let big = crate::env_vars::shader_fix()
++                    && u.indexed
++                    && self.layouts.alloc_size(global.value_ty).unwrap_or(0)
++                        > PRIVATE_CONSTANT_BYTES;
+                 let form = if closed
+                     && u.typed
+                     && !big

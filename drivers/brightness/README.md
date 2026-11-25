@@ -10,10 +10,10 @@ Marks: [V] read in a file here, [I] inference, [U] unknown. The service has run 
 | File | What | State |
 |---|---|---|
 | `OneiOSBacklight.cpp` | the backlight service CoreBrightness drives; the host's light readings (`oneios_als_read`, `oneios_als_listen`) | built into `liboneiosdrivers.a` |
-| `oneios_als_hid.h` | the light sensor's HID report descriptor and report | host test (`test_als_hid.c`, run by `drivers/tests/host.sh`) |
+| `oneios_als_hid.h` | the light sensor's HID report descriptors and reports (both shapes) | host test (`test_als_hid.c`, run by `drivers/tests/host.sh`) |
 | `oneios_bl_request.h` | what a `DisplayBrightness` request holds, decoded with integers (the kernel has no floating point) | host test (`test_bl_request.c`, 2028 checks, run by `drivers/tests/host.sh`) |
 | `BacklightMode.inc` | backboardd only: CoreBrightness's BLControl in place of VMBLControl (below, "Why the slider did nothing") | user space, appended to the Metal plug-in by `userland/metal/build.sh stage`; not in `liboneiosdrivers.a` |
-| `OneiOSALSDevice.cpp` | the HID device that carries the readings to the original `AppleUSBALSService` | built into the hosted kernel's HID archive (`kernel/patches/oneios-hosted/hid`, against its `OriginalHidDeviceABI.h`), not into `liboneiosdrivers.a` |
+| `OneiOSALSDevice.cpp` | the HID device that carries the readings: to the original `AppleUSBALSService` (default), or with `oneios-als-spu=1` as an iPhone's SPU light sensor (below, "The SPU light sensor") | built into the hosted kernel's HID archive (`kernel/patches/oneios-hosted/hid`, against its `OriginalHidDeviceABI.h`), not into `liboneiosdrivers.a` |
 
 ## The backlight service
 
@@ -85,6 +85,29 @@ does with one is still not seen.
 display. Until that is seen in a session: the userland should set
 `BKEnableALS` false in `com.apple.backboardd` (as the Mi A3's `root-brightness.py`), so backboardd does not
 wait for a sensor; auto-brightness is then off and the slider sets the level.
+
+### The SPU light sensor (sensors-als, 2026-11-25; `oneios-als-spu=1`, added by xnuhost with `sensors=auto`, its default; not booted)
+
+The shape the working ports give CoreBrightness (ios-redfin 23019ab4 `xnu/patches/0971`, `1298`; Jesvi-iOS a13e406
+`userland/src/inject_sensors.c`; both MIT): the Apple vendor pair `{0xff00, 4}` of an iPhone's sensor processor,
+Transport SPU, Built-In, VendorID 0x5ac, `ALSCurveInfo` (E0a 0, E0b 10, E1 150, E2 1500 lux; L0a 3, L0b 30, L1 150,
+L2 500 nits; Prefs thirdSlope 0: Jesvi's curve, its top our 500 nits) and Placement 0, on the device and on its event
+driver. xnuhost adds `oneios-als-spu=1` when the light comes from the sensor hub (`sensors=`); otherwise the device is
+the HID Sensor page one above.
+
+The collection's IOHIDEventDriver takes it (a personality of the HID archive) but makes no ambient light event, so the
+lux goes in an accelerometer's fields (`oneios_als_spu_descriptor`: X = lux & 0x7fff, Y = lux >> 15, Z = millilux %
+1000, unit exponent 0) and `kernel/patches/oneios-hosted/hid/OneiOSALSEvents.cpp` wraps that driver's dispatch to make
+each such event an ambient light event (the HID archive's README, "The SPU light sensor", has how). A Feature report
+(Report Interval, Sensor page 0x030e) reaches the device's `setReport` when CoreBrightness sets `ReportInterval`: on 0 ->
+more the cached reading goes out again within 15 ms (a 10 ms timer), and 20 ms after the wrapper is installed, before
+CoreBrightness's 250 ms `FirstALSSampleTimeout` (redfin 1298's "435-nit wake flash").
+
+Log: `ONEIOS ALS: SPU ambient light service (0xff00/4) published: ...`, `ONEIOS ALS: wake: the cached sample re-posted
+(ReportInterval 0 -> N us, N lux)` (once per wake), and every 60 s while readings come `ONEIOS ALS: 60 s: N readings from
+the host, N events dispatched, last N lux, ReportInterval N us` (the last also in the old shape, with 0 events). Host
+test: `test_als_hid.c` walks both descriptors and checks the SPU report's lux through X and Y, the feature's interval and
+the wake rule.
 
 ## Start, stop
 

@@ -709,11 +709,11 @@ for each of its four tiles. This lowers repeated mapping-table traversal and mak
 it still scans every guest row and does not remove the CPU copy. The next phone measurement is the existing
 `oneios-display: 10 s` read timing alongside xnuhost's `frame:` stages; no new timing-only instrumentation was added.
 
-### 2.5b The animation rate, ASTC and the pools' room (S24 local backport of e84a46e; 2026-11-25)
+### 2.5b The animation rate, ASTC and the pools' room (fix/s24-fps-heat-camera, 2026-11-25)
 
 From the gpumem session of 2026-11-24 (`docs/s24-fps-heat-camera.md`: free memory 1-36 MiB, 2-3 GiB of it GPU blobs,
 the pageout and the unmap storm on every core) and UniXNU-zizhan's measured changes. Each is one switch
-(docs/switches.md); not built or booted in this checkout.
+(docs/switches.md); none has run on a phone.
 
 - **The animation rate.** The in-process animation manager (AnimationKit's in iOS 27, `oneios-tool sym cstr`) asks its
   CADisplayLink for 20..120 a second, 30 preferred, and the guest's display offered 24..120 Hz: light animations ran
@@ -739,10 +739,29 @@ the pageout and the unmap storm on every core) and UniXNU-zizhan's measured chan
   `METAL2VULKAN_COMPILE_DEADLINE_S` (1-600), which `CompileDeadline.inc` sets to 120 in every client but backboardd
   (a frame of the render server waits for its compiles; another client waits at its pipeline's creation, off the frame
   path). Switch `oneios-compile-s=0`. 624bab3 add-on only.
+- **The display helper's buffers write-only** (the second round, from `docs/ports-2026-11-25-gpu.md` G1). The window's
+  buffers are CPU-cached, and each `ANativeWindow_lock` and post cleaned and invalidated the CPU's caches over the whole
+  18 MB buffer (YumikoHayamato/OneiOS cdb297bbf measured 85% of the helper's time in that maintenance on the S25, the
+  copy 10%). xnuhost's `display-present=ahb` (default) has the helper post three `CPU_WRITE_RARELY` AHardwareBuffers on
+  a child of its layer with ASurfaceTransaction, falling back to the window by itself (`runtime/display/README.md`
+  "Write-only buffers"). Switch `display-present=window`. Step 1 of the zero-copy panel pool.
+- **Turnip's kernel submissions cut at command buffers** (Droid-VM/UniXNU fb9fb47, `userland/metal/turnip-submit-split.patch`).
+  A list of more than 128 buffers was cut every 128, sometimes inside a command buffer; the later chunk then ran on BV
+  as well as BR with no thread control of its own and the GPU hung (`gmu: GPU hang detected`, the guest stalled 1-2 s;
+  Droid-VM: 5-10% of backboardd's starts, 0 in 80 after). Now a submission ends before a buffer whose first packet is
+  a CP_THREAD_CONTROL. No switch (a hang fix). Both add-ons (the same Turnip). Proof: no GPU hang or `gpu:` fault line
+  at a render server start; the one-time line `darwin: N command buffers' streams with no beginning among them` should
+  not appear.
+- **cameracaptured's crash in the reflection** (Droid-VM/NativeMetal 3c46b5e, a frontend edit in `frontend_camera_edits`):
+  a compute pipeline rebuilt with its unset function constants zero kept the rebuilt function only inside the retry's
+  block; ARC freed it there, and `nmb_compute_pipeline_reflection` read a released function (SIGSEGV at 0 during
+  cameracaptured's CCPortrait precompilation on Droid-VM, every boot). The function now lives to the end of the call.
+  No switch (a crash fix). Proof: no cameracaptured crash report naming `nmb_compute_pipeline_reflection`.
 
 Read and found right already: our guest display waits for the fence taken at the swap (`DroidVMVirtioGpuDisplay.cpp`
 reads `droidvm_virtgpu_submitted()` at the offer), the fix zizhan made in 49dee66. Not done: the CPU copy of the frame
-(2.5 item 2); the plan of a zero-copy panel pool is in `docs/s24-fps-heat-camera.md` "The zero-copy panel pool".
+itself (2.5 item 2; the write-only buffers take its cache maintenance away, not the copy); the plan of a zero-copy
+panel pool is in `docs/s24-fps-heat-camera.md` "The zero-copy panel pool".
 
 ## 3. Tests on the PC
 
@@ -984,7 +1003,8 @@ thread; none was seen.) Boot arguments:
 | `oneios-gpu-read-wait=1` | a test switch (widgets, 2026-11-13; off by default): the render server's command buffers wait, as they name the IOSurfaces they sample, for other processes' GPU work begun before them that writes those surfaces (the driver's own `awaitWriters`, at most 100 ms: what a newer plug-in asks for and this pin does not). One line at the render server's first surface ticket: `oneios-gpu-read-wait: on ...` or `off`; its waits are `oneios-gpu-sync`'s "reads that waited for writers" |
 | `oneios-adreno-selftest=1` | after the publish: IOKit's match of `IOAcceleratorES`, an in-kernel open with type `0x4149`, `GETPARAM(ABI_VERSION)` through the tunnel; two `oneios-adreno: selftest:` lines |
 | `oneios-gpu-amd=1` | (a56-gpu, 2026-11-24; xnuhost adds it when, and only when, it picks its amdgpu renderer) with 3D and an AMDGPU DRM capset: the Galaxy A56's accelerator instead of the Adreno one: the same `AGXAccelerator` with `MetalPluginName` `OneiOSRadeonMetal`, `MetalPluginClassName` `OneiOSRadeonMetalDevice`, `OneiOSDrmContext` `amdgpu`, serving open type `0x4149` (and the plug-in's markers) alone; published whatever `oneios-gpu-metal` says (20F66's `=0` is against the Adreno accelerator only). With anything else (no 3D, an MSM capset): nothing, never the Adreno accelerator. Not given or `=0`: the rule above. [a56-gpu.md](a56-gpu.md) 5, `gpu/OneiOSGpuChoice.h` |
-| `oneios-gpu-amd-cpu=a,b,...` | the processes that keep CPU composition on the A56's accelerator: its five discovery keys (`MetalPluginName`, `MetalPluginClassName`, `IOGLESBundleName`, `IOGLESMetalBundleName`, `IOGLESDefaultUseMetal`) read as absent there, as Jesvi-iOS's kernel does for its "incompatible core renderers". Not given: `backboardd,SpringBoard,mediaserverd,PosterBoard,CollectionsPoster,WeatherPoster,SBRendererService,MobileSlideShow`; empty: none (the test of backboardd on that Metal); `X*` a prefix, `*` every process. One `oneios-gpu-amd: NAME[PID] keeps CPU composition: KEY hidden` line for each of the first 32 processes. No effect on the Adreno accelerator |
+| `oneios-gpu-amd-cpu=a,b,...` | the processes that keep CPU composition on the A56's accelerator: its five discovery keys (`MetalPluginName`, `MetalPluginClassName`, `IOGLESBundleName`, `IOGLESMetalBundleName`, `IOGLESDefaultUseMetal`) read as absent there, as Jesvi-iOS's kernel does for its "incompatible core renderers". Not given: `backboardd,SpringBoard,mediaserverd,PosterBoard,CollectionsPoster,WeatherPoster,SBRendererService,MobileSlideShow`; empty: none (the test of backboardd on that Metal); `X*` a prefix, `*` every process. One `oneios-gpu-amd: NAME[PID] kept off the Metal plug-in: KEY hidden (oneios-gpu-amd-cpu); ...` line for each of the first 32 processes. With `oneios-gpu-amd-gl=1` they see `IOGLESBundleName` (only the four Metal keys hidden). No effect on the Adreno accelerator |
+| `oneios-gpu-amd-gl=1` | (the A56 GPU port's GL stage, 2026-11-25; [a56-gpu.md](a56-gpu.md) 4a) on the A56's accelerator: `IOGLESBundleName` `OneiOSRadeonGL` (the A56's OpenGL ES, `userland/metal-amd/gl`) for every process instead of `AppleMetalGLRenderer`, and the `oneios-gpu-amd-cpu` processes see it, so backboardd's CoreAnimation composites on OpenGL ES (no Metal device: its GL renderer). xnuhost adds it with `oneios-gpu-amd=1` when the gpuaddon carries `OneiOSRadeonGL.bundle`; `=0` or not given: as before. Rule: `gpu/OneiOSGpuChoice.h` `oneios_gpu_gles_bundle_for`, `oneios_gpu_cpu_hides` (`test_choice.c`). No effect on the Adreno accelerator |
 
 **How iOS finds the plug-in (`0031-gpu-addon-mount.patch`).** Metal loads
 `/System/Library/Extensions/<MetalPluginName>.bundle`. That folder is on the sealed system volume, so UniXNU's
@@ -1072,6 +1092,12 @@ stage step prints one `metal: staged ...` line for each):
   computePipelineStateFor:constants:additionalPipelineOptions:reflection:]` (read in the 24A446 cache) makes each compute
   function with that selector when it has a pipeline library. NBLibrary answers it (and its `completionHandler:` form)
   with the function `newFunctionWithName:constantValues:error:` makes; the pipeline library is not used.
+- (2026-11-25, fix/s24-fps-heat-camera, ported from Droid-VM/NativeMetal 3c46b5e, MIT) A SIGSEGV at 0 in
+  `nmb_compute_pipeline_reflection` (`Function::clone`): `newComputePipelineStateWithDescriptor:options:reflection:error:`
+  retries a kernel that reads an unset function constant with those constants zero, but held the rebuilt function in
+  the retry's block alone; ARC freed it at the block's end and the reflection read it. Droid-VM's cameracaptured died
+  so at its CCPortrait precompilation every boot. The eleventh edit declares the rebuilt function before the block.
+  That it is our "cameracaptured restarted" of 2026-11-23 is a guess: ReportCrash's log names the function if so.
 Tested: the edits' unit test (`cargo test -p oneios-ios`), and on the build laptop `userland/metal/build.sh` staged all ten
 edits (one `metal: staged ...` line each). **Built:** the laptop's Mesa step stopped before the frontend was
 compiled (2026-11-23), in `ir3_lexer.c` (`use of undeclared identifier 'Dl_info'`, `disk_cache.h:86`): the laptop's flex 2.6.10 writes
@@ -1511,6 +1537,15 @@ off in the root, is not taken: a fresh 20F66 Data store has the switch off alrea
 `text-fixup: dyld_shared_cache_arm64.07+0xa162c (8 bytes) applied`, and with Bold Text on no `trap ... pc 0x0 lr
 0x1c261c58c` (the lr moves with the slide: `CI::GLContext::init + 0xcc`) and no `crashed: SpringBoard`.
 
+**With the A56's OpenGL ES** ([a56-gpu.md](a56-gpu.md) 4a, 2026-11-25) the fixup is left out. That holds when xnuhost
+picked the amdgpu renderer, found `OneiOSRadeonGL.bundle` in the same gpuaddon, and the guest's boot arguments say
+`oneios-gpu-amd-gl=1` (`config::ios16_gl_driver`). The bundle answers CoreImage's EAGLContext: on radeonsi, or on
+softpipe when radeonsi does not open in that process (every process but backboardd). So CoreImage draws Bold Text's
+styled images instead of a blank bitmap: the full fix this section names. Its line is `ios16: CoreImage's GL fallback
+fixup left out: oneios-gpu-amd-gl=1, OneiOSRadeonGL answers its EAGLContext`. A hand-written `oneios-gpu-amd-gl=1`
+without the bundle keeps the fixup (the kernel would name a bundle that is not there). `oneios-gpu-amd-gl=0` in the
+conf keeps it too. Test: `ios16_coreimage_fixup_is_left_out_only_with_the_a56_gl_driver`.
+
 ## 6. Not done
 
 1. **Anything on the phone.** Run `gpuctl` first; then `xnuhost --gpu 3d` with a kernel that has `0005` and
@@ -1541,11 +1576,15 @@ off in the root, is not taken: a fresh 20F66 Data store has the switch off alrea
 
 **Build notes (2026-11-23, integration-switches; shader fixes enabled 2026-11-24).**
 `build.sh turnip` removes `build/mesa-tu-ios27` when the inputs of its cross file changed (the SDK, the compilers,
-the base script), since an existing directory only gets `meson configure`. The Metal bridge now applies Adreno-generic
-shader fixes 0101 and 0102 after the pinned bridge patches: large run-time-indexed constants use the shared constant
-blob instead of per-thread private copies, and constant GEP pointers into that blob lower correctly. Patch 0103 remains
-staged but unapplied because its process-specific allocation size has no safe policy wired in yet. The shader changes
-have not been booted on the S24 Ultra.
+the base script), since an existing directory only gets `meson configure`. The `9xxx` copies of
+`patches/metal2vulkan`: since 2026-11-25 90101, 90102 and the switch 90110 are in the bridge's list (`ios
+metal-stage-edit`), **on by default since the merge into main (2026-11-25)**, `oneios-m2v-shader-fix=0` turns them off (docs/switches.md, the
+plug-in's `ShaderFix.inc` sets `METAL2VULKAN_SHADER_FIX=1` unless it says 0); 90103 is in none (it does not apply on the bridge's
+stack). With the switch, a run-time-indexed constant table past 4 KiB is read from the constant blob (an Adreno backs a
+thread's private copy per fiber) and constant GEP and cast pointers into that blob are lowered; the device profile's
+fingerprint takes the switch, so the shader cache never serves a translation of the other setting. Ported from
+orumanayurpanjayat-ux/OneiOS `d157b43`, which applied both in every build; not booted with the switch on (the first boot
+with it on translates each shader again: the profile's fingerprint changed).
 
 **metal2vulkan's upstream (2026-11-23, fix/m2v-update): the pin stays 624bab3.** Upstream `development` at
 `6462199fa` (2026-11-23) is 9,217 commits newer. It is a new runtime: `metal2vulkan-rt`, written from 2026-11-17
@@ -1618,7 +1657,7 @@ their subject; those below are the ones about memory held at rest):
 **The first boot after this add-on.** The translator's records (`v1/<build>/`) are keyed by the translator's source,
 which did not change, so nothing is translated again. Turnip's `pipelineCacheUUID` is the build's `-Dtu-build-id`, a
 hash of the Mesa revision and the source diff (`build-turnip-darwin.py`), and `turnip-idle-bo-cache.patch` changes the
-diff: every pipeline's driver record misses once, and Turnip compiles it again (NIR to ir3) at its first use. How long
+diff (so does `turnip-submit-split.patch`, 2026-11-25: the add-on after it recompiles once more): every pipeline's driver record misses once, and Turnip compiles it again (NIR to ir3) at its first use. How long
 that takes on the phone is not measured (no line times it); each app's first opening after the add-on pays for its own
 pipelines, and later boots hit.
 
@@ -1641,8 +1680,8 @@ scripts/bg.sh metal userland/metal/build.sh      # stage, turnip, plugin, finish
 
 | Piece | Source | Notes |
 |---|---|---|
-| `libvulkan_freedreno.dylib` | `external/mesa-droidvm` cecc0e9 (Droid-VM/mesa, `droidvm`) + the 30 patches listed in Droid-VM-UniXNU `scripts/data/adreno-compiler-inputs.json` (`patches/mesa/`: `turnip-darwin-kmd`, `turnip-darwin-virtgpu`, ...), then this project's `userland/metal/trace-turnip-init.patch` and `turnip-idle-bo-cache.patch` (appended to the staged list by `ios metal-stage-edit`) | meson cross build, `-Dvulkan-drivers=freedreno -Dfreedreno-kmds=darwin`, release. Its 5633 weak flat-namespace imports are bound to the image itself (`macho-weak-self-binds.py`) |
-| `libadreno_metal_bridge.a` | `external/metal2vulkan` 624bab3 + NativeMetal `bridge/patches` 0001-0024 (without 0020) + Droid-VM-UniXNU `patches/metal2vulkan` 0011-0038 + this project's `userland/metal/trace-metal-vulkan-init.patch`, `m2v-spare-command-pools.patch`, `m2v-idle-memory.patch` and shader fixes 0101/0102 (appended to the bridge script's list by `ios metal-stage-edit`); 0103 remains staged but unapplied, `0104…NEEDS-REBASE` stays out, and the Mesa/nativemetal sets stay out as the wrong tree, behind `bridge/NativeMetalBridge.rs` | Rust 1.98.0, target `arm64e-apple-ios`, std built from `rust-src`, fat LTO. No `Cargo.lock` is pinned upstream: the crates are the newest that fit at build time |
+| `libvulkan_freedreno.dylib` | `external/mesa-droidvm` cecc0e9 (Droid-VM/mesa, `droidvm`) + the 30 patches listed in Droid-VM-UniXNU `scripts/data/adreno-compiler-inputs.json` (`patches/mesa/`: `turnip-darwin-kmd`, `turnip-darwin-virtgpu`, ...), then this project's `userland/metal/trace-turnip-init.patch`, `turnip-idle-bo-cache.patch` and `turnip-submit-split.patch` (Droid-VM/UniXNU fb9fb47: a kernel submission ends only where a command buffer begins; appended to the staged list by `ios metal-stage-edit`) | meson cross build, `-Dvulkan-drivers=freedreno -Dfreedreno-kmds=darwin`, release. Its 5633 weak flat-namespace imports are bound to the image itself (`macho-weak-self-binds.py`) |
+| `libadreno_metal_bridge.a` | `external/metal2vulkan` 624bab3 + NativeMetal `bridge/patches` 0001-0024 (without 0020) + Droid-VM-UniXNU `patches/metal2vulkan` 0011-0038 + this project's `userland/metal/trace-metal-vulkan-init.patch`, `m2v-spare-command-pools.patch` and `m2v-idle-memory.patch` (appended to the bridge script's list by `ios metal-stage-edit`) + `userland/metal/patches/metal2vulkan/` 0101, 0102 and 0110 (staged as 9xxx and appended after those, the Adreno-generic shader-translation fixes of hakios-arm64e-dada and their switch, off without `oneios-m2v-shader-fix=1`; 0103 staged but in no list; `0104…NEEDS-REBASE` stays out, and the Mesa/nativemetal sets stay out as the wrong tree), behind `bridge/NativeMetalBridge.rs` | Rust 1.98.0, target `arm64e-apple-ios`, std built from `rust-src`, fat LTO. No `Cargo.lock` is pinned upstream: the crates are the newest that fit at build time |
 | `NativeAdrenoMetal` | `external/NativeMetal` b0d6a07 (`NativeAdrenoMetalPlugin.mm`, `NativeBridgeMetalFrontend.mm`), `external/AdrenoPM4`, the bridge | The Rust objects' callback imports go through `RustPacBoundary.c`; their indirect branches through its trampolines (`rust-pac-rewrite.py`) |
 
 The steps are the kernel base's own scripts (`build-turnip-darwin.py`, `build-adreno-metal-bridge.py`,
@@ -1699,6 +1738,28 @@ and refuses to go on if the arm64e code holds an address the file does not name.
 | `CADeviceIsVirtualized::is_virtualized` | `0x1e701bdd9` | `0x1e701fdd9` |
 | `CADeviceIsVirtualized::once` | `0x1e7020780` | `0x1e7024780` |
 | the constant CFString of that query (a diagnostic note) | `0x1e9021680` | `0x1e9025680` |
+
+**iOS 27.2.1 (24B156)** has its own hooks file, `userland/metal/hooks/iPhone18,2-24B156.json` (cache UUID
+`78B55CFF-20F4-3A39-81AF-B6530B7E9789`, read 2026-11-25 from 24B156's SystemOS cryptex with `image apfs-copy`, then
+`oneios-tool sym find`, `sym find --no-index` for the data symbols and `sym dis` of the three functions; no `ipsw`).
+Everything moved, and two of QuartzCore's bool debug options got other numbers (300 options, 24A446 has 293), so the
+hooks file also has `"options"`: `oneios-tool ios metal-stage-edit` rewrites every `_ca_debug_options + N` of the
+plug-in with the build's N and puts the build's constants at the top of the staged plug-in as `#define`s
+(`ONEIOS_CA_RENDER_SERVER_START`, `ONEIOS_CA_DEBUG_OPTIONS`, `ONEIOS_CA_OPTION_<NAME>`) for the OneiOS files appended
+to it (`DisplayWide.inc` uses them; it has no address of its own any more). Built with
+`ONEIOS_METAL_TARGET="iPhone18,2 24B156" userland/metal/build.sh` (output `out/userland-24B156`, or `METAL_OUT`).
+Built and checked on the build laptop 2026-11-25 (the Turnip and plug-in checks PASS); **not run in a guest**.
+
+| What | 24A446 (iPhone18,2) | 24B156 (iPhone18,2) |
+|---|---|---|
+| `_CARenderServerStart` (the anchor) | `0x1846dce88` | `0x1845ce544` |
+| `framebuffer_pixel_format`; its `tbnz w8, #0` (word `0x37000608`) | `0x184461838`; `0x184461928` | `0x18434cff4`; `0x18434d0e4` |
+| `debug_values[21]` (`CA_DISPLAY_EDR_HEADROOM`) | `0x1e7025014` | `0x1edf3e474` |
+| `debug_values[81]` (`CA_FP16_MIN_HEADROOM`) | `0x1e7025104` | `0x1edf3e564` |
+| `_ca_debug_options` (force FP16, EDR mirroring) | `0x1e702516c` (+128, +156) | `0x1edf3e5cc` (+129, +159) |
+| `CADeviceIsVirtualized::is_virtualized` | `0x1e701fdd9` | `0x1edf390c1` |
+| `CADeviceIsVirtualized::once` | `0x1e7024780` | `0x1edf3a908` |
+| the constant CFString of that query | `0x1e9025680` | `0x1e2280290` |
 
 QuartzCore's code is at the same addresses in both caches; its `__DATA_DIRTY` and the CFString are 0x4000 higher in
 the iPhone's. Placed as upstream builds it, the plug-in would have written the headroom, the threshold, the option

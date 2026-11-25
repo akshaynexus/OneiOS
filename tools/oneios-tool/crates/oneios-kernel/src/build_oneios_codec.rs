@@ -6,9 +6,12 @@
 //! (AppleVideoToolboxParavirtualizationDriver), so VideoToolbox encodes HEVC and H.264 through the host's encoder
 //! and CMPhoto writes HEIC (docs/hardware.md 7g; kernel/patches/oneios-hosted/codec/README.md).
 //!
-//!   DroidVMVirtioMedia.c    UniXNU-droidvm's virtio-media transport (external/UniXNU-droidvm/package), unchanged,
-//!                           compiled as its iPadOS 27 board does (Mach universe, -DDROIDVM_DEVICE_DYNAMIC=1):
-//!                           xnuhost's /arm-io/virtio-media-0 and its media-host-pool (runtime/bridges/encoder)
+//!   DroidVMVirtioMedia.c    UniXNU-droidvm's virtio-media transport (external/UniXNU-droidvm/package), staged with
+//!                           the edit of staged/codec_transport.rs (7: the event queue on the device's interrupt, a
+//!                           guard timeout, the transport's counters; oneios-codec-irq=0 keeps the poll), compiled as
+//!                           its iPadOS 27 board does (Mach universe, -DDROIDVM_DEVICE_DYNAMIC=1, -I this folder for
+//!                           OneiOSCodecWait.h): xnuhost's /arm-io/virtio-media-0 and its media-host-pool
+//!                           (runtime/bridges/encoder)
 //!   DroidVMVTHost.cpp       UniXNU-droidvm's session logic (the host half of VideoToolbox's paravirtualized decoder
 //!                           and encoder, played in the guest's kernel over the virtio-media device), staged with
 //!                           the edits of staged/codec.rs (the encoder: the hvcC's profile, tier and level, the
@@ -22,6 +25,7 @@
 //!                           registers the classes, says what attached
 //!
 //! Boot arguments: oneios-codec=0 (nothing of this archive starts), droidvm-media=0 (no transport),
+//! oneios-codec-irq=0 (the transport polls its event queue as the pin does, not on the interrupt),
 //! droidvm-vt-paravirt=1 (publish the service; xnuhost adds it with encoder=auto or encoder=sim; without it the
 //! classes are registered and root can publish later: sysctl kern.droidvm_vt_paravirt=1), oneios-codec-report=0 (no
 //! counters line).
@@ -34,6 +38,7 @@
 use crate::gen::{self, fail, Compile, Ctx};
 use crate::staged::codec::CODEC_HOST;
 use crate::staged::codec_decode::CODEC_DECODER;
+use crate::staged::codec_transport::CODEC_TRANSPORT;
 use anyhow::Result;
 use oneios_common::json::Value;
 use std::path::{Path, PathBuf};
@@ -51,6 +56,13 @@ pub fn staged_text(text: String) -> Result<String> {
         format!("build-oneios-codec: DroidVMVTHost.cpp no longer has exactly one `{}`", gen::first(anchor.trim(), 90))
     };
     gen::replace_once(gen::replace_once(text, CODEC_HOST, gone)?, CODEC_DECODER, gone)
+}
+
+/// DroidVMVirtioMedia.c with the transport's edit (staged/codec_transport.rs: 7).
+pub fn staged_transport(text: String) -> Result<String> {
+    gen::replace_once(text, CODEC_TRANSPORT, |anchor: &str| {
+        format!("build-oneios-codec: DroidVMVirtioMedia.c no longer has exactly one `{}`", gen::first(anchor.trim(), 90))
+    })
 }
 
 /// The same file name, in the archive's folder (its own includes come from the package folder: -I).
@@ -73,8 +85,10 @@ pub fn main() -> Result<()> {
     // OneiOS's picture helpers, which the staged DroidVMVTHost.cpp includes (-I this folder; host-tested by
     // tests/test_picture.c)
     let picture = here.join("OneiOSCodecPicture.h");
+    // the transport's wait policy and line (edit 7; host-tested by tests/test_wait.c)
+    let wait = here.join("OneiOSCodecWait.h");
     gen::need_files(&[ctx.repo.join("drivers/sources.txt"), transport.clone(), host.clone(), paravirt.clone(), start.clone(),
-                      headers[0].clone(), headers[1].clone(), picture.clone(),
+                      headers[0].clone(), headers[1].clone(), picture.clone(), wait.clone(),
                       ctx.records.join("iokit/DEVELOPMENT/IOPlatformExpert.cpo.json"), ctx.records.join("osfmk/DEVELOPMENT/startup.o.json")],
                     |path| format!("build-oneios-codec: {} missing (scripts/setup/get-references.sh UniXNU-droidvm; kernel/fetch.sh)", path.display()))?;
     let out = gen::env("ONEIOS_CODEC_OUT").map(|o| gen::pypath(&o)).unwrap_or_else(|| ctx.tree.join("build/oneios-codec"));
@@ -85,10 +99,14 @@ pub fn main() -> Result<()> {
         ["-I".to_string(), gen::s(&package)].into_iter().chain(extra.iter().map(|e| e.to_string())).collect()
     };
     let (mach, iokit) = (ctx.record("mach")?, ctx.record("iokit")?);
-    let transport_object = compile.object(&mach, &transport, &out.join("DroidVMVirtioMedia.o"), &include(&["-DDROIDVM_DEVICE_DYNAMIC=1"]))?;
-    let start_object = compile.object(&mach, &start, &out.join("OneiOSCodec.o"), &include(&[]))?;
-    let staged = stage_host(&host, &out)?;
     let here_include = gen::s(&here);
+    // the transport staged (edit 7), as DroidVMVTHost.cpp is: the same file name in the archive's folder
+    let staged_media = out.join("DroidVMVirtioMedia.c");
+    gen::write_text(&staged_media, &staged_transport(gen::read_text(&transport)?)?)?;
+    let transport_object = compile.object(&mach, &staged_media, &out.join("DroidVMVirtioMedia.o"),
+                                          &include(&["-DDROIDVM_DEVICE_DYNAMIC=1", "-I", here_include.as_str()]))?;
+    let start_object = compile.object(&mach, &start, &out.join("OneiOSCodec.o"), &include(&["-I", here_include.as_str()]))?;
+    let staged = stage_host(&host, &out)?;
     let host_object = compile.object(&iokit, &staged, &out.join("DroidVMVTHost.o"), &include(&["-I", here_include.as_str()]))?;
     let paravirt_object = compile.object(&iokit, &paravirt, &out.join("DroidVMVTParavirt.o"), &include(&[]))?;
     let late = paravirt_object.with_extension("late.o");
@@ -109,7 +127,7 @@ pub fn main() -> Result<()> {
     }
     // The staged source last, as the audio archive lists its own (the upstream source with the edit list applied).
     let mut list = Value::list();
-    for path in [transport, host, paravirt, headers[0].clone(), headers[1].clone(), picture, start, staged] {
+    for path in [transport, host, paravirt, headers[0].clone(), headers[1].clone(), picture, wait, start, staged_media, staged] {
         list.push(gen::source_entry(ctx.relative(&path).unwrap_or_else(|_| gen::s(&path)), None, &path)?);
     }
     let mut listing = Value::dict();

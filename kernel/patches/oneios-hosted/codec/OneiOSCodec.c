@@ -15,10 +15,16 @@
 // nobody uses the codec): who opened the service, the messages, the encoder sessions and frames, the first failed
 // step, the transport's commands and events, and the lines DroidVMVTHost.cpp keeps of each session (its trace ring:
 // the size and codec of a session, the IOSurface lookups). oneios-codec-report=0 leaves it out.
+//
+// The transport (2026-11-25, the staged DroidVMVirtioMedia.c's edit 7): its event queue on the device's interrupt, or
+// polled with oneios-codec-irq=0 (or no SPI); with each counters line a "transport:" line of its waits since the last
+// one (OneiOSCodecWait.h: the interrupts, the event worker's wakes by the interrupt and by its timer, the commands).
 #include <stdbool.h>
 #include <stdint.h>
 #include <kern/thread.h>
 #include <pexpert/pexpert.h>
+#include <kern/misc_protos.h>
+#include "OneiOSCodecWait.h"
 
 extern void IOSleep(unsigned milliseconds);
 extern int printf(const char *, ...);
@@ -27,6 +33,11 @@ extern int droidvm_vt_paravirt_attach(void);           // DroidVMVTParavirt.cpp
 extern volatile uint32_t droidvm_media_found, droidvm_media_up;
 extern volatile uint64_t droidvm_media_commands, droidvm_media_timeouts, droidvm_media_events[3];
 extern char droidvm_media_status[][192];
+// The staged DroidVMVirtioMedia.c (edit 7): its waits' counters (OneiOSCodecWait.h), and per device NULL (on the
+// interrupt) or why it is polled, and the SPI.
+extern volatile uint64_t oneios_media_counts[ONEIOS_MEDIA_COUNTS];
+extern const char *volatile oneios_media_polled[];
+extern volatile uint32_t oneios_media_spi[];
 extern volatile uint32_t droidvm_vtpv_stage, droidvm_vtpv_opens, droidvm_vtpv_closes, droidvm_vtpv_messages, droidvm_vtpv_refused;
 extern volatile uint32_t droidvm_vthost_sessions, droidvm_vthost_frames_in, droidvm_vthost_frames_out, droidvm_vthost_errors;
 extern volatile uint32_t droidvm_vthost_error_stage, droidvm_vthost_replies, droidvm_vthost_unknown, droidvm_vthost_last_unknown;
@@ -59,6 +70,10 @@ static void oneios_codec_report(void *arg, wait_result_t result) {
     (void)arg; (void)result;
     IOSleep(3000);                                     // the transport's own start-up check of the device is done by now
     printf("ONEIOS CODEC: device 0: %.191s\n", droidvm_media_status[0]);
+    // The transport's waits (edit 7): what its first line counts from.
+    uint64_t waits_last[ONEIOS_MEDIA_COUNTS] = {0};
+    uint64_t commands_last = 0;
+    uint32_t periods = 0;
     uint64_t last = 0;
     uint32_t traced = 0, shown = 0;
     uint32_t decoded_last[8] = {0};
@@ -66,6 +81,7 @@ static void oneios_codec_report(void *arg, wait_result_t result) {
     uint32_t count_last = 0;
     for (;;) {
         IOSleep(30000);
+        ++periods;
         const uint64_t moved = (uint64_t)droidvm_vtpv_opens + droidvm_vtpv_closes + droidvm_vtpv_messages + droidvm_vthost_errors +
                                droidvm_vthost_frames_out + droidvm_media_timeouts;
         if (moved == last) continue;
@@ -108,6 +124,19 @@ static void oneios_codec_report(void *arg, wait_result_t result) {
                droidvm_vthost_sessions, droidvm_vthost_frames_in, droidvm_vthost_frames_out,
                droidvm_vthost_errors, droidvm_vthost_error_stage, droidvm_vthost_error_value,
                droidvm_media_commands, droidvm_media_timeouts, droidvm_media_events[0], droidvm_media_events[1], droidvm_media_events[2]);
+        // The transport's waits since the last line (edit 7; a line of its own, as the pictures'): on the interrupt the
+        // event worker wakes by it and rarely by its guard; polled, by its timer, about 1000 times a second while a
+        // session streams.
+        uint64_t waits[ONEIOS_MEDIA_COUNTS];
+        for (int i = 0; i < ONEIOS_MEDIA_COUNTS; ++i) waits[i] = oneios_media_counts[i];
+        const uint64_t commands = droidvm_media_commands;
+        char transport[256];
+        oneios_media_line(transport, sizeof transport, oneios_media_polled[0], oneios_media_spi[0], periods * 30, waits,
+                          waits_last, commands - commands_last);
+        printf("ONEIOS CODEC: %s\n", transport);
+        for (int i = 0; i < ONEIOS_MEDIA_COUNTS; ++i) waits_last[i] = waits[i];
+        commands_last = commands;
+        periods = 0;
         // The pictures copied for the device by their samples (2026-11-23; a line of its own: the counters line is long
         // enough that the console cuts its end), once one was.
         if (oneios_codec_pictures[0] || oneios_codec_pictures[1] || oneios_codec_pictures[2])

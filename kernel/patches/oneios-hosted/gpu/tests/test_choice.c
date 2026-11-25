@@ -5,6 +5,7 @@
 // an AMDGPU capset never gives the Adreno accelerator.
 #include "../OneiOSGpuChoice.h"
 #include <stdio.h>
+#include <string.h>
 
 static int failures;
 #define CHECK(cond)                                                              \
@@ -90,6 +91,22 @@ int main(void)
     CHECK(!oneios_gpu_discovery_key("IOClass"));
     CHECK(!oneios_gpu_discovery_key(0));
 
+    // OpenGL ES on the A56 (oneios-gpu-amd-gl): the bundle name, and what the CPU-composition processes still see.
+    CHECK(!strcmp(oneios_gpu_gles_bundle_for(ONEIOS_ACCEL_RADEON, 1), "OneiOSRadeonGL"));
+    CHECK(!strcmp(oneios_gpu_gles_bundle_for(ONEIOS_ACCEL_RADEON, 0), "AppleMetalGLRenderer"));
+    CHECK(!strcmp(oneios_gpu_gles_bundle_for(ONEIOS_ACCEL_RADEON, -1), "AppleMetalGLRenderer"));   // default: off
+    CHECK(!strcmp(oneios_gpu_gles_bundle_for(ONEIOS_ACCEL_ADRENO, 1), "AppleMetalGLRenderer"));   // never the Adreno's
+    CHECK(!strcmp(oneios_gpu_gles_bundle_for(ONEIOS_ACCEL_NONE, 1), "AppleMetalGLRenderer"));
+    for (int gl = -1; gl <= 1; ++gl) {
+        CHECK(oneios_gpu_cpu_hides("MetalPluginName", gl));
+        CHECK(oneios_gpu_cpu_hides("MetalPluginClassName", gl));
+        CHECK(oneios_gpu_cpu_hides("IOGLESMetalBundleName", gl));
+        CHECK(oneios_gpu_cpu_hides("IOGLESDefaultUseMetal", gl));
+        CHECK(oneios_gpu_cpu_hides("IOGLESBundleName", gl) == (gl <= 0));   // seen only with GL
+        CHECK(!oneios_gpu_cpu_hides("IOClass", gl) && !oneios_gpu_cpu_hides("IOGLESBundleNameX", gl));
+        CHECK(!oneios_gpu_cpu_hides(0, gl));
+    }
+
     // The A56 accelerator's open types.
     CHECK(oneios_gpu_radeon_open_allowed(0x4149));
     CHECK(oneios_gpu_radeon_open_allowed(0x41476800));   // a progress marker
@@ -104,6 +121,6 @@ int main(void)
         fprintf(stderr, "test_choice: %d failed\n", failures);
         return 1;
     }
-    printf("test_choice: the accelerator's choice, the CPU list, the discovery keys and the open types\n");
+    printf("test_choice: the accelerator's choice, the CPU list, the discovery keys, OpenGL ES (oneios-gpu-amd-gl) and the open types\n");
     return 0;
 }

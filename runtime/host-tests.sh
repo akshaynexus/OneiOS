@@ -26,7 +26,9 @@
 #             guest Mesa: its patches apply to Mesa cecc0e9, Mesa builds for Linux with radeonsi and the amdgpu virtio
 #             context, and the Darwin vdrm backend against a fake of the kernel's user client); then
 #             userland/metal-amd/air/host-test.sh (Jesvi-iOS's AIR frontend and air_metal on Mesa cecc0e9, driven through
-#             air_metal.h on softpipe; docs/a56-gpu.md sections 3 and 4)
+#             air_metal.h on softpipe; docs/a56-gpu.md sections 3 and 4); then userland/metal-amd/gl/host-test.sh (the
+#             A56's OpenGL ES for CoreAnimation, OneiOSRadeonGL: Mesa's GLES on softpipe driven through EAGL's GLI entries and
+#             the 1036-slot dispatch table, over stand-in IOSurfaces in place and copied; docs/a56-gpu.md section 4a)
 #   links     runtime/package/elf-check-test.sh, when the NDK is there (on a Mac: on the Mac, after the container): the
 #             link rule of Android shared objects (-z defs) and runtime/package/elf-check.sh, on a library linked without
 #             it (must fail) and on a stage of runtime/build.sh
@@ -106,11 +108,12 @@ suite() {
   # METAL_AMD=1: the A56's guest Mesa and its Metal layer (Mesa builds of several minutes each and about 1.7 GB in
   # out/metal-amd, so not by default; they need external/mesa-droidvm). The guest Mesa test is Linux only.
   if [ "${METAL_AMD:-0}" != 1 ]; then
-    results+=("metal-amd: skipped (runs only with METAL_AMD=1: userland/metal-amd/host-test.sh, userland/metal-amd/air/host-test.sh)")
+    results+=("metal-amd: skipped (runs only with METAL_AMD=1: userland/metal-amd/host-test.sh, userland/metal-amd/air/host-test.sh, userland/metal-amd/gl/host-test.sh)")
   else
     if [ "$(uname -s)" = Linux ]; then part metal-amd sh userland/metal-amd/host-test.sh
     else results+=("metal-amd: skipped (Linux only: it builds Mesa for Linux)"); fi
     part metal-amd-air sh userland/metal-amd/air/host-test.sh
+    part metal-amd-gl sh userland/metal-amd/gl/host-test.sh
   fi
   if ndk_ok; then
     part links runtime/package/elf-check-test.sh

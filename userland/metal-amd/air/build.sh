@@ -15,6 +15,7 @@
 #        against out/ios16-tbd, and the bundle out/metal-amd/OneiOSRadeonMetal.bundle (Info.plist, OneiOSRadeonMetal,
 #        libOneiOSRadeonAir.dylib from MESA_BUILD, default out/metal-amd/mesa-ios; oneios-target "iPhone10,3 20F66"),
 #        then its gpuaddon out/metal-amd/OneiOSRadeonMetal.gpuaddon, and out/metal-amd/metal_caps (Jesvi's probe)
+#        (with out/metal-amd/gl/OneiOSRadeonGL.bundle beside the plug-in when the OpenGL ES hook made it: docs/a56-gpu.md 4a)
 #   userland/metal-amd/air/build.sh addon                  the gpuaddon alone
 #
 # Settings (environment): METAL_AMD_OUT (default out/metal-amd), IOS_TBD (default /.../out/ios16-tbd of the main
@@ -186,11 +187,16 @@ plugin() {
 }
 
 addon() {
-  local bundle=$OUT/OneiOSRadeonMetal.bundle
+  local bundle=$OUT/OneiOSRadeonMetal.bundle gl=$OUT/gl/OneiOSRadeonGL.bundle
   [ -f "$bundle/OneiOSRadeonMetal" ] || { echo "metal-amd: no $bundle: build.sh plugin first" >&2; exit 1; }
   . "$ROOT/scripts/lib/oneios-tool.sh"
   oneios_tool "$ROOT"
-  "$ONEIOS_TOOL" ios gpuaddon "$bundle" "$OUT/OneiOSRadeonMetal.gpuaddon"
+  if [ -f "$gl/OneiOSRadeonGL" ]; then
+    # the A56's OpenGL ES beside it (userland/metal-amd/gl, the guest Mesa stage's hook): xnuhost then turns GL on
+    "$ONEIOS_TOOL" ios gpuaddon "$bundle" "$OUT/OneiOSRadeonMetal.gpuaddon" --gl "$gl"
+  else
+    "$ONEIOS_TOOL" ios gpuaddon "$bundle" "$OUT/OneiOSRadeonMetal.gpuaddon"
+  fi
 }
 
 case "${1:-}" in

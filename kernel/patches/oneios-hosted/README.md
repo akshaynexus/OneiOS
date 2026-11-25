@@ -661,6 +661,26 @@ whole number of 240-frame periods: a period read, zeroed or written up to 208 fr
 zero time stamp only every 245760 frames) and reports the speaker engine's timing (`ONEIOS AUDIO: speaker engine:`).
 `drivers/audio/README.md`, `docs/hardware.md` section 6 "Latency end to end".
 
+Since 2026-11-24 (fix-audio-late) every engine thread (speaker, mic, Actuator) is a time-constraint thread of the
+guest's scheduler (period and constraint 5 ms, computation 2.5 ms) and waits for its period with
+`TIMEOUT_URGENCY_SYS_CRITICAL` (no timer slop), behind the boot-arg `oneios-audio-rt` (default 1; 0: kernel priority
+81 and `clock_delay_until`, as before). Before, a kernel thread at 81 waited behind the VM's pageout and compressor
+threads (91) and the high thread calls (93), and `clock_delay_until`'s timer had the kernel tier's slop (up to 1 ms,
+more at a user idle level): on the phone (2026-11-24 01:17, kernel e79886d9) the speaker took its periods 1.4-1.6 ms
+late on average and up to 98 ms late while `VM_pageout_scan` used 14.7 s of CPU in those 30 s. The late counts are
+also split: the counter line's `late` no longer counts the Actuator's periods (its `periods` never did), and a new
+line `ONEIOS AUDIO: late periods: ...` counts the speaker's late periods by size, those the HAL had written only in
+part, the Actuator's, and the realtime policy's result. Built: `xnu.macho` `6d40f8e0`, `kernel.kc` `853068df`
+(`HOSTED_OUT=audiolate`, audit 0 failures, stubs 666 good); not booted. `docs/hardware.md` section 6, "Late periods".
+
+Since 2026-11-25 (fix-audio-curve) the speaker's volume control reports -36..0 dB over its 128 steps and the engine
+applies UniXNU-sheng's curve (c8f92b2 `hal/ShengAudioPlugIn.c`, BSD-2-Clause-Patent), -36 x (1 - step/128)^2 dB, to the
+step iOS sets (a third of iOS's volume about -16 dB, half -9 dB), behind the boot-arg `oneios-audio-curve` (default 1;
+0: linear over -64..0 dB, as before, where half of iOS's volume was about -32 dB and the phone of 2026-11-24 played at
+`-29.0 dB` at step 70). `OneiOSAudio.c`'s report has a `speaker volume N of 128 (-X.Y dB applied ...)` line after a
+change. Built with `HOSTED_OUT=audiovol` (docs/switches.md "Tests"); not booted. `docs/hardware.md` section 6, "The
+volume curve".
+
 ### The Actuator device (media, 2026-11-12)
 
 The archive also stages a third IOAudio2Device into `DroidVMAudio.cpp`: UID `Actuator` (VirtualAudio's
@@ -675,7 +695,8 @@ stereo). `drivers/haptics` publishes `/product/haptics closed-loop` only when th
 No numbered patch: an archive (`oneios-tool kernel gen codec`, hooked into `kernel/build-hosted.sh` after `audio/`)
 whose start, `oneios_codec_start` (`codec/OneiOSCodec.c`), is the last call of `oneios_drivers_start` (weak in
 `drivers/bridge/OneiOSBridge.c`). It holds UniXNU-droidvm's virtio-media transport (`DroidVMVirtioMedia.c`,
-unchanged, `-DDROIDVM_DEVICE_DYNAMIC=1`), its `AppleVideoToolboxParavirtualizationDriver` and user client
+`-DDROIDVM_DEVICE_DYNAMIC=1`; since 2026-11-25 staged with edit 7, its event queue on the device's interrupt with a
+guard, `oneios-codec-irq=0` the poll: `codec/README.md` "The transport on the interrupt"), its `AppleVideoToolboxParavirtualizationDriver` and user client
 (`DroidVMVTParavirt.cpp`, unchanged; its static initializer out of `__mod_init_func`, as the audio archive's:
 `droidvm_vt_paravirt_attach` runs it in its own module load), and the sessions behind it (`DroidVMVTHost.cpp`, staged
 with five edits, `codec/README.md`: the hvcC's profile, tier and level bytes taken from the SPS without its emulation
@@ -2246,6 +2267,11 @@ ONEIOS_CRYPTO=original`, 184 patches, 367 s): `xnu.macho` `7ecd6622`, releasable
 the lines of 0098 and 0100 are in it (`strings`). **Not booted** (no phone boot yet; no qemu boot: the owner's rule of
 2026-11-24). Watch in the first boot: `oneios-kill` lines naming the posters' killer and reason (FrontBoard's scene
 watchdog, RunningBoard's, or launchd's), which decides the next fix.
+
+Merged with fix/audio-late (`oneios-audio-rt`, the audio archive) and built again from the merged tree (`HOSTED_OUT=disallow
+ONEIOS_CRYPTO=original`, 184 patches, releasable): `xnu.macho` `0f51c0e3`; `out/kernel/24A446-merged/kernel.kc` `af1321f7`
+(`.hashes` `ef107ec1`), audit 0 failures, stubs-check 666 good 0 bad; `kernel/tests/host.sh` 11 of 11. Not booted.
+
 ## 0101-unmap-fanout.patch (fix/unmap-fanout, 2026-11-24)
 
 **Why.** The phone, 2026-11-24 01:17-01:22 (kernel.kc `e79886d9`, xnuhost `35f74348`, takeover mode;
@@ -2431,6 +2457,14 @@ it: the fault, the rule, the sandbox, the lines).
       SpringBoard and the rest of Jesvi-iOS's "core renderers"), in `copyProperty` and in `serializeProperties`;
     - one line for each of the first 32 DRM contexts.
   - The staged edits are `staged/gpu.rs` `GPU`, `GPU3D` and `ACCELERATOR`.
+  - **OpenGL ES** (the GL stage, 2026-11-25; docs/a56-gpu.md 4a and 5.3): with `oneios-gpu-amd-gl=1` (xnuhost adds it
+    when the gpuaddon carries `OneiOSRadeonGL.bundle`) the A56's accelerator names `IOGLESBundleName` `OneiOSRadeonGL`
+    for every process (`oneios_gpu_gles_bundle`, staged into `DroidVMGpu.cpp`'s `setProperty`; `AppleMetalGLRenderer`
+    as before otherwise), and the `oneios-gpu-amd-cpu` processes see it: only the four Metal keys stay hidden
+    (`OneiOSGpuChoice.h` `oneios_gpu_cpu_hides`), and `serializeProperties` removes each key by the same rule as
+    `copyProperty`. Tested: `test_choice.c` (the bundle name for every kind and value, what the CPU-composition
+    processes see), `cargo test --test golden` (15 of 15). Not built into a kernel here: **the A56 release kernel needs a
+    rebuild** on top of release-kernel-a56 0888d97 with this archive.
 - **0108** (kern_exec.c, kern_descrip.c: 0031's and 0039's code):
   - 0039's list file is named after the published `MetalPluginName` (the archive's `oneios_gpu_metal_plugin`, weak;
     `NativeAdrenoMetal` without it).

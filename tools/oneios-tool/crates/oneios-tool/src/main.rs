@@ -85,6 +85,14 @@ enum Tool {
         #[command(subcommand)]
         command: oneios_ios::Command,
     },
+    /// xnuhost's switch catalog (docs/switches.md) for the OneOS app's Switches screen; --json, --runtime DIR
+    /// (README "switches")
+    Switches(oneios_conf::SwitchesCli),
+    /// An image's xnuhost.conf: show, check, set, unset, write, restore (README "conf")
+    Conf {
+        #[command(subcommand)]
+        command: oneios_conf::Command,
+    },
 }
 
 /// `oneios-tool [--jobs N] [--nice N] TOOL ...`: the two options every command that runs alone takes, before the
@@ -136,6 +144,11 @@ fn main() {
     if args.get(1).map(String::as_str) == Some("image") && args.get(2).map(String::as_str) == Some("tweaks") {
         std::process::exit(oneios_tweaks::run(&args[3..]));
     }
+    // `image a56-gpu-place` (oneios-imagebuild a56gpu): the Galaxy A56's GPU plug-ins for a staged iOS 16.5 set, for the
+    // app's root script at Update the kernel (docs/a56-gpu.md 6)
+    if args.get(1).map(String::as_str) == Some("image") && args.get(2).map(String::as_str) == Some("a56-gpu-place") {
+        std::process::exit(oneios_imagebuild::a56gpu::place_cmd(&args[3..]));
+    }
     // `image build` (oneios-imagebuild: build.sh's steps in one process) is not one of imagetool.py's commands,
     // whose command line `image` keeps as it was.
     if args.get(1).map(String::as_str) == Some("image") && args.get(2).map(String::as_str) == Some("build") {
@@ -159,6 +172,8 @@ fn main() {
             Tool::Debug { command } => oneios_testkit::main(command),
             Tool::Json { command } => oneios_json::main(command),
             Tool::Ios { command } => oneios_ios::main(command),
+            Tool::Switches(cli) => oneios_conf::switches_main(cli),
+            Tool::Conf { command } => oneios_conf::main(command),
         },
         Err(e) if !e.use_stderr() => {
             let _ = e.print();

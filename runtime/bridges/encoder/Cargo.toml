@@ -47,6 +47,19 @@ path = "tests/hung_helper.rs"
 name = "decoder"
 path = "tests/decoder.rs"
 
+# The device's interrupt as the staged DroidVMVirtioMedia.c (edit 7, 2026-11-25) takes it: the command queue raises
+# nothing, the event queue raises the SPI, oneios-codec-irq=0 keeps it down. A binary of its own: the SPI recorder is per
+# process and every encctl Guest is on SPI 40.
+[[test]]
+name = "interrupt"
+path = "tests/interrupt.rs"
+
+# The worker waits for an encoder's units (2026-11-25): its wake-ups over a 2 s stream through a backend that wakes it,
+# one that cannot (the old 1 ms looks), and the helper process.
+[[test]]
+name = "wakes"
+path = "tests/wakes.rs"
+
 # MediaCodec's numbers and AMediaCodecBufferInfo's layout against the NDK's headers.
 [[test]]
 name = "headers"

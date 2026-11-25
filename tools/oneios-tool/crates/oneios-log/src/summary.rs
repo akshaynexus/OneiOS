@@ -73,7 +73,8 @@ pub const PARTS: &[Part] = &[
     Part { name: "wifi", host: &["wifi:"], guest: &[], raw: &[] },
     Part { name: "audio", host: &["audio:"], guest: &[], raw: &["oneios-audio:"] },
     Part { name: "camera", host: &["camera:"], guest: &[], raw: &["oneios-camera:"] },
-    Part { name: "encoder", host: &["encoder:"], guest: &["ONEIOS CODEC:"], raw: &["oneios-encoder:"] },
+    // the media device's: the encoder's lines, the decoder's (2026-11-24) and its worker's wake-ups (`media: 30 s`, 2026-11-25)
+    Part { name: "encoder", host: &["encoder:", "decoder:", "media:"], guest: &["ONEIOS CODEC:"], raw: &["oneios-encoder:"] },
     Part { name: "usb", host: &["usb:"], guest: &[], raw: &[] },
     Part { name: "return", host: &["stopping:", "return:", "exit ", "the guest asked for a restart", "the guest restarted"], guest: &[], raw: &[] },
     Part { name: "ios launchd", host: &[], guest: &["com.apple.xpc.launchd|"], raw: &[] },
@@ -389,7 +390,20 @@ pub fn report(log: &Log, window: Window, all: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::problem;
+    use super::{part_of, problem, PARTS};
+    use crate::parse::{Rec, Src};
+
+    #[test]
+    fn the_media_devices_lines_are_the_encoders() {
+        for text in [
+            "encoder: session 3: HEVC 1920x1080 on mediacodec-helper: 8-bit",
+            "decoder: session 4: VP9 1920x1080 on mediacodec-helper",
+            "media: 30 s: worker woken 924: by data (commands, kicks, results, coded units) 903, by the timeout 21; 1 ms looks 0",
+        ] {
+            let r = Rec { line: 1, time: None, src: Src::Host('I'), text: text.into(), appended: false, head_cut: false, tail_cut: false };
+            assert_eq!(part_of(&r).map(|p| PARTS[p].name), Some("encoder"), "{text}");
+        }
+    }
 
     #[test]
     fn problems_and_zero_counts() {
@@ -402,6 +416,8 @@ mod tests {
             "oneios-gpu-kinds: MercuryPosterEx own task 19 (8 MiB); made +21 gone +3",
             "memory: the guest's RAM is held: 5632 MiB prefaulted in 3009 ms, locked (mlock: the host cannot swap it)",
             "memory: fixed RAM: held and locked; prefaulted 5632 of 5632 MiB, give-back refused 0 calls; since the last line: host swap-ins +171",
+            "media: 30 s: worker woken 924: by data (commands, kicks, results, coded units) 903, by the timeout 21; 1 ms looks 0",
+            "decoder: 60 s: decoded H.264 0, HEVC 0, VP9 1790, AV1 0 of 1791 fed; decode time avg 6.1 ms, max 19 ms; dropped 0; sessions 1, opens refused 0 (mediacodec-helper)",
         ] {
             assert!(!problem(line), "{line}");
         }

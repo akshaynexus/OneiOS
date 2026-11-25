@@ -23,6 +23,7 @@ mod matcher;
 mod merge_reviewed;
 mod native_input;
 mod prelink_xml;
+mod port;
 mod port_fixture;
 mod pyset;
 mod record;
@@ -77,6 +78,8 @@ pub enum Command {
     StubsCheck { kc: String },
     /// unmapped.py: name the original kernel function behind an "unmapped kernel function" panic
     Unmapped(unmapped::Args),
+    /// Carry records of one kernelcache (24A446) over to another build of the same XNU branch (24B156), checked against its bytes
+    Port(port::Args),
     /// port-fixture.py: carry XnuPrelink's reviewed function identities of the iPad kernelcache over to this one
     PortFixture(port_fixture::Args),
     /// lead/between.py: the original and the native functions between two paired ones, side by side
@@ -156,6 +159,7 @@ pub fn main(command: Command) -> i32 {
             Err(e) => return bare(Err(e)),
         },
         Command::Unmapped(args) => return bare(unmapped::run(args)),
+        Command::Port(args) => return bare(port::run(args)),
         Command::PortFixture(args) => return bare(port_fixture::run(args)),
         Command::LeadBetween(args) => return bare(lead_between::run(args)),
         Command::LeadImports(args) => return bare(lead_imports::run(args)),

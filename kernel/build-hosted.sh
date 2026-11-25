@@ -1,8 +1,12 @@
-#!/bin/bash
+# (made again when stale, or when a link of it is broken: the layout was written from a worktree that is gone)
+  [ -x "$TOOLCHAIN/unixnu/CommandLineTools/usr/bin/xnu-host-cc" ] && [ -x "$TOOLCHAIN/unixnu/CommandLineTools/usr/bin/ld" ] &&
+    [ "$TOOLCHAIN/unixnu" -nt "$ROOT/kernel/linux/clang-wrapper" ] || "$ROOT/kernel/linux/unixnu-layout.sh"#!/bin/bash
 # Build the hosted OneiOS XNU: the kernel of kernel/build-linux.sh plus the hosted machine layer
 # (kernel/patches/oneios-hosted), which runs as a Linux process under xnuhost instead of at EL1.
 #   scripts/bg.sh kernel-hosted env HOSTED_OUT=<name> kernel/build-hosted.sh
 #   XNU_FILESET_REFERENCE=1 ...  also the RELEASE reference of the prelink -> out/kernel/current-hosted*/reference.macho
+#   ONEIOS_OS_PROFILE=ios-27.2.1-24B156 ...  the kernel for iOS 27.2.1 (default ios-27.0.1-24A446): the board archives
+#             bind that build's original classes (<Class>-<build>-v54.json; kernel/prelink/README.md "Another build")
 # Linux (x86_64 or arm64): the host's clang and xnu-linux-toolchain (kernel/linux/), as kernel/build-linux.sh.
 # macOS: Xcode's clang and iphoneos SDK, as kernel/build-macos.sh (Xcode of pins.sh; ALLOW_XCODE=1 accepts another,
 # XCODE_APP=... another place). Same series, archives and output on both.
@@ -34,7 +38,9 @@ T0=$(date +%s)
 if [ "$HOST" = Linux ]; then
   TOOLCHAIN=${XNU_LINUX_PREFIX:-$ROOT/out/toolchain}
   "$ROOT/kernel/linux/setup-toolchain.sh"
-  [ -x "$TOOLCHAIN/unixnu/CommandLineTools/usr/bin/xnu-host-cc" ] && [ "$TOOLCHAIN/unixnu" -nt "$ROOT/kernel/linux/clang-wrapper" ] || "$ROOT/kernel/linux/unixnu-layout.sh"
+  # made again when stale, or when its ld link is broken (a layout written from a worktree that is gone, 2026-11-25)
+  [ -x "$TOOLCHAIN/unixnu/CommandLineTools/usr/bin/xnu-host-cc" ] && [ -x "$TOOLCHAIN/unixnu/CommandLineTools/usr/bin/ld" ] &&
+    [ "$TOOLCHAIN/unixnu" -nt "$ROOT/kernel/linux/clang-wrapper" ] || "$ROOT/kernel/linux/unixnu-layout.sh"
 else
   xcode_setup build-hosted
 fi
@@ -49,6 +55,10 @@ DEVICE=$ROOT/out/hosted-device$SUFFIX
 export ONEIOS_REPO=$ROOT
 rm -rf "$DEVICE"; mkdir -p "$DEVICE"
 git -C "$ROOT" archive HEAD kernel/device | tar -x -C "$DEVICE" --strip-components=2
+# The OS profile of this build (ONEIOS_OS_PROFILE, kernel/lib/stage.sh; the committed board.toml names 24A446's):
+# UniXNU's driver builds that profile, and the board archives take the original classes' records of its build.
+sed_i "s#^os_profile = \".*\"#os_profile = \"$OS_PROFILE\"#" "$DEVICE/board.toml"
+grep -q "^os_profile = \"$OS_PROFILE\"$" "$DEVICE/board.toml" || { echo "build-hosted: could not set os_profile in $DEVICE/board.toml" >&2; exit 1; }
 cp "$ROOT/kernel/device/configs/oneios_hosted_defconfig" "$DEVICE/configs/"
 sed_i "s#^\.\./\.\./\.\./\.\./external/#$ROOT/external/#" "$DEVICE/patches/xnu-12377/series"
 # oneios-tool (kernel/lib/stage.sh: built when missing or stale, on PATH for UniXNU's driver) makes this build's two

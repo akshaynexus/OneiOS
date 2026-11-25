@@ -249,7 +249,7 @@ pub fn main() -> Result<()> {
     let ctx = Ctx::new("build-oneios-gpu", "run through the kernel build")?;
     let here = ctx.repo.join("kernel/patches/oneios-hosted/gpu");
     let places = Places { package: ctx.repo.join("external/UniXNU-droidvm/package"), adreno: ctx.repo.join("external/NativeAdreno"),
-                          classes: here.join("IOAcceleratorES-24A446-v54.json"), // kernel/prelink/classes.py's record of the class
+                          classes: ctx.layout(&here, "IOAcceleratorES")?, // `prelink classes` record of the class, for this build
                           accelerator_abi: ctx.repo.join("external/NativeMetal/OriginalAcceleratorABI.h"), here };
     let sources = [places.here.join("OneiOSGpu.cpp"), places.package.join("DroidVMVirtioGpu.cpp"), places.package.join("DroidVMVirtioGpu3D.cpp")];
     let mut needed = vec![ctx.repo.join("drivers/sources.txt"), places.adreno.join("DroidVMVirtgpuABI.h"),
@@ -319,7 +319,7 @@ pub fn main() -> Result<()> {
     }
     gen::write_objects(&ctx, &out, Some("iokit"), &listed)?;
     let pieces = if link {
-        format!("linked ({CLASS} bound at its 24A446 iPhone18,2 addresses)")
+        format!("linked ({CLASS} bound at its {} iPhone18,2 addresses)", ctx.build)
     } else if compiled {
         "compiled, not linked".to_string()
     } else {

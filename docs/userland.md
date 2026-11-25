@@ -55,7 +55,11 @@ Output in `OUT` (the hook puts it in the image set's `overlay/userland/`):
 
 The build is not root, so owners are recorded, not set; the hook writes them to `$ONEIOS_OWNERS`.
 A second run over the same trees changes nothing. A preference file that is not a property list stops the
-run instead of being written over. A root that is not iOS 27.0.1 is refused (`--any-version`), except iOS 16.5
+run instead of being written over. A root of a build the device profile lists in `[builds]` (`userland/config/device-iphone18,2.toml`:
+`"24A446" = "27.0.1"`, `"24B156" = "27.2.1"`, 2026-11-25) with that ProductVersion is taken as the profile's ("kept",
+a line that says which); [device] version stays the first one's. Its IPSW device tree for v54ap differs from 24A446's
+in four values none of which this profile states [F: `xnuloader-inspect adt` of both]; no 24B156 root has been read
+here (its OS volume was not fetched) [U]. Any other root that is not iOS 27.0.1 is refused (`--any-version`), except iOS 16.5
 (20F66), the Galaxy A56's userland (docs/a56.md, 2026-11-23): its tweaks apply with a line that says so, and its
 `xnuhost.conf` carries the 16.5 boot arguments (the 16.5 shims, `oneios-gpu-metal=0`, and since 2026-11-23
 `oneios-mac-exec-skip=mediaserverd,TVRemoteConnectionService`, kernel 0073), the keybagd fixup (only for 20F66's own
@@ -199,7 +203,7 @@ xnuhost ... --set scale=2                              # one run, over the image
 | `identity.expect` on the Data seed: `main-screen-scale`, `main-screen-width`, `main-screen-height` | roottweak | `oneios-mg` in the guest |
 | `overlay/userland/xnuhost.conf` `scale=N` | roottweak | xnuhost |
 | `/chosen display-scale`, `/product artwork-scale-factor`, `/chosen/xnuhost display-*`, boot argument `offline-legacy-unit-scale=N` | xnuhost (`docs/booter.md` 2.8) | MobileGestalt, the framebuffer driver |
-| `/chosen text-fixups` (scale 3, build 24A446) | xnuhost | the kernel, for QuartzCore |
+| `/chosen text-fixups` (scale 3, build 24A446 or 24B156) | xnuhost | the kernel, for QuartzCore |
 
 Width and height are not a setting: xnuhost takes them from the panel, and the profile's `[display]` (1440x3120,
 120 Hz) is what it finds on this phone. An image built before this change has `main-screen-width=1320` in its
@@ -219,7 +223,7 @@ not been rebuilt.
   mode's native-scale field when that is more; else 2 for a mode taller than 1080 pixels and 1 otherwise.
   `display-scale` is not read. This framebuffer's modes carry no preferred scale, so **the unchanged answer is
   2**. For 3, xnuhost adds two fixups (`mov w9, #2` -> `#3` at 0x40b17a8; `mov w8, #1; cinc` -> `mov w8, #3;
-  nop` at 0x40b17bc). Which of the two paths this guest takes ([U]: the byte tested is a global set once, taken
+  nop` at 0x40b17bc). iOS 27.2.1 (24B156) has the same function, the same 32 instructions, at 0x3f9d6f4 (found by its bytes, one match in .01, and checked by its selector, entry 11 of the same method list): its two fixups are at 0x3f9d744 and 0x3f9d758 with the same bytes (`runtime/xnuhost/src/config.rs` `SCALE_FIXUPS_3X`, per build; a build not there gets none). Which of the two paths this guest takes ([U]: the byte tested is a global set once, taken
   to be "virtual device") does not matter, both are changed.
 - The refresh rate: the framebuffer's refresh attributes and `IOMFBDisplayRefresh` (minimum interval 1/120 s,
   maximum 1/24 s), as a ProMotion panel reports them (`kernel/patches/oneios-hosted/display/README.md`). No
@@ -330,7 +334,7 @@ Both scales:
 
 Only at 3:
 
-- It depends on the two text fixups, which exist for build 24A446 only and have not been seen applied. Without
+- It depends on the two text fixups, which exist for builds 24A446 and 24B156 only and have not been seen applied. Without
   them QuartzCore runs the display at 2.
 - The least risk to layouts: iPhone assets, fonts and metrics are all made for 3; only the point size is new.
 
@@ -489,6 +493,50 @@ image; no tool places this bundle in the 20F66 image, and the kernel mounts the 
 A56 bundle in its lines (`oneios-gpu-addon: .../OneiOSRadeonMetal.bundle/Info.plist ...: visible`, the dyld lines of
 `OneiOSRadeon*` files, the clients file named after the published plug-in; a56-gpu.md section 5). `oneios-tool ios gpuaddon` already keeps its name
 (`addons/OneiOSRadeonMetal.bundle/...`, `addons/OneiOSRadeonMetal.publish`).
+
+### 7.4 The Galaxy A56's OpenGL ES (`userland/metal-amd/gl`, iOS 16.5)
+
+`OneiOSRadeonGL.bundle` is NegroniGL of the owner's iOSPlus10 (MIT; `userland/metal-amd/gl/NOTICE` lists every file
+taken and changed), ported to 20F66 and to the A56. It is Mesa's GLES frontend over the A56's radeonsi (the same K3
+screen as the Metal layer, compiled in), built by the guest Mesa stage's hook `userland/metal-amd/gl/build.sh`
+([building.md](building.md) section 9). Its purpose: backboardd's CoreAnimation composites on the GPU through its
+OpenGL ES renderer ([a56-gpu.md](a56-gpu.md) section 4a).
+
+The bundle holds:
+- `Info.plist` (`CFBundleExecutable` OneiOSRadeonGL, `com.oneios.radeongl`, MinimumOSVersion 16.5);
+- `OneiOSRadeonGL`, an MH_BUNDLE, arm64, iOS 16.5. It exports libGFXShared's 129 GLD names, the 18 GLI names
+  OpenGLES's `eagl_init` binds, `gliTerminateLibrary` and `oneios_gl_probe`;
+- `oneios-target` (`iPhone10,3 20F66`).
+
+How iOS finds it:
+1. libGFXShared reads the accelerator's `IOGLESBundleName` (`OneiOSRadeonGL` with the kernel's `oneios-gpu-amd-gl=1`,
+   which xnuhost adds when the gpuaddon carries the bundle).
+2. It loads `/System/Library/Extensions/OneiOSRadeonGL.bundle/OneiOSRadeonGL` (hosted 0031's union of the gpuaddon's
+   `addons/`).
+3. The bundle points OpenGLES's GLI table at itself (20F66's addresses, checked before they are written).
+4. Every EAGLContext of that process is then Mesa's.
+
+Which processes get it (the bundle's gate, once per process):
+- every process, unless `OneiOSRadeonGL.clients` beside the bundle (`*`, `NAME`, `-NAME`) says otherwise, or
+  `OneiOSRadeonGL.bundle/off` exists (every process closed);
+- the screen is radeonsi. Where radeonsi does not open, softpipe (the CPU) stands in for every process but backboardd
+  (CoreImage needs a context, [gpu.md](gpu.md) 5.2), and backboardd keeps CoreAnimation's CPU renderer;
+- `oneios-gl-softpipe=1` in the boot arguments gives backboardd softpipe too (a test of the EAGL road), and `=0` gives
+  no process softpipe;
+- backboardd runs a preflight (a triangle and an IOSurface drawn and read back) before it is handed a context.
+A closed gate gives the process nil EAGLContexts, as before the bundle.
+
+Its log:
+- os_log subsystem `com.oneios.radeongl` (`oneios-tool phone pull-log`), records `SEV CAT message`;
+- in `xnuhost.log`, `oneios-gpu-text: PROCESS[PID] RG ...` rows (hosted 0039) for its errors and the first lines of the
+  gate, the screen, the contexts, the drawables and the first frame;
+- the rate once at the 600th frame, then every 3600th (`GLI 600 frames, N a second since the first; copies: ...`).
+
+The lasting tool `oneios-gl-probe` (built beside the bundle, `$METAL_AMD_OUT/gl/oneios-gl-probe`) loads the bundle in a
+shell and prints one PASS/FAIL line: the screen, a triangle, an IOSurface round trip.
+
+**Placed by** `oneios-tool ios gpuaddon OneiOSRadeonMetal.bundle OUT --gl OneiOSRadeonGL.bundle` (and
+`userland/metal-amd/air/build.sh addon` when the GL bundle is built). The image itself is not changed.
 
 ## 8. What launchd, backboardd and SpringBoard need
 

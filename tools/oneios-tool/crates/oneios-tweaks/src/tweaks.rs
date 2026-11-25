@@ -170,6 +170,14 @@ fn version(cx: &mut Context) -> Result<()> {
     let have = plist.get("ProductVersion");
     let want = str_value(&cx.dev("device", "version"));
     let name = py(plist.get("ProductName"));
+    // A build the device profile lists ([builds]: build -> ProductVersion, e.g. 24B156 27.2.1 beside the default
+    // 24A446 27.0.1) with its own version: this profile's, kept.
+    let listed = cx.device.get("builds").and_then(|b| b.get(&cx.build)).map(str_value);
+    if listed.is_some() && listed.as_deref() == have.and_then(P::as_str) && have.and_then(P::as_str) != Some(want.as_str()) {
+        let note = format!("{name} {} ({}), a build the device profile lists", py(have), cx.build);
+        cx.say("kept", "version", &note, None);
+        return Ok(());
+    }
     // 20F66 (iOS 16.5): the Galaxy A56's userland (docs/a56.md, profiles/ios-16.5-a56.toml), the one other build these
     // tweaks know (apply.rs writes its xnuhost.conf): applied with this profile, as --any-version would, and said so
     let known_16 = cx.build == "20F66" && have.and_then(P::as_str) == Some("16.5");
@@ -842,7 +850,13 @@ fn kernel_features(cx: &mut Context) -> Result<()> {
     ];
     let list = Value::List(features.iter().map(|(n, u, w)| dict(vec![("name", (*n).into()), ("unixnu", (*u).into()), ("what", (*w).into())])).collect());
     cx.contract.set("kernel_features", list);
-    let note = "-[CADisplayMode preferredScale] (QuartzCore, read in 24A446's dyld_shared_cache_arm64e.01 at 0x40b1758; the cache is the one the iPad has) returns the mode's own preferred scale when it has one; else, in a virtual device, 2 or the mode's native scale field if that is more; else 2 for a mode taller than 1080 pixels and 1 otherwise. /chosen display-scale is not read there. So @2x is what it answers unchanged, and for @3x xnuhost adds two text fixups (runtime/xnuhost/src/config.rs scale_fixups) that make both answers 3. Not verified in a running guest: no frame of SpringBoard's has been rendered yet.";
+    // Where the function is in this build's cache (runtime/xnuhost/src/config.rs SCALE_FIXUPS_3X): 24A446's text is
+    // kept as it was; 24B156 has the same function at another offset.
+    let at = match cx.build.as_str() {
+        "24B156" => "-[CADisplayMode preferredScale] (QuartzCore, read in 24B156's dyld_shared_cache_arm64e.01 at 0x3f9d6f4: the same code as 24A446's at 0x40b1758)",
+        _ => "-[CADisplayMode preferredScale] (QuartzCore, read in 24A446's dyld_shared_cache_arm64e.01 at 0x40b1758; the cache is the one the iPad has)",
+    };
+    let note = format!("{at} returns the mode's own preferred scale when it has one; else, in a virtual device, 2 or the mode's native scale field if that is more; else 2 for a mode taller than 1080 pixels and 1 otherwise. /chosen display-scale is not read there. So @2x is what it answers unchanged, and for @3x xnuhost adds two text fixups (runtime/xnuhost/src/config.rs scale_fixups) that make both answers 3. Not verified in a running guest: no frame of SpringBoard's has been rendered yet.");
     match cx.contract.get_mut("display") {
         Some(d @ Value::Dict(_)) => d.set("scale_note", note),
         _ => bail!("kernel-features: no display in the contract (identity runs first)"),

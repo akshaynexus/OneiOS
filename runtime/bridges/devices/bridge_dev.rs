@@ -260,6 +260,8 @@ impl BridgeDevice {
                     let why =
                         if p.source == OB_POWER_FRAMEBUFFER { "the framebuffer's power request" } else { "the guest" };
                     b.display(p.on != 0, Some(why));
+                    // the sensor hub's streams stop while iOS's display is off (runtime/bridges/sensors)
+                    crate::sensors::display(p.on != 0);
                 }
             }
             OB_BRIGHT_QUERY => {

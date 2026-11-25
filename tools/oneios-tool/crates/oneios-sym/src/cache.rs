@@ -92,6 +92,48 @@ pub struct Cache {
     /// (address, path) of every image.
     pub images: Vec<(u64, String)>,
     symbols_file: Option<Map>,
+    /// The subcache files the header names that are not in the folder (a partial copy: `apfs-copy` of only the
+    /// files a question needs, tools/oneios-tool/README.md "sym"). Empty for a whole cache.
+    pub missing: Vec<String>,
+}
+
+/// The subcache file names the main file's header lists, in its order (the main file not included).
+fn subcache_names(main: &[u8], main_name: &str, what: &Path) -> Result<Vec<String>> {
+    let bad = || anyhow!("{}: the header is cut", what.display());
+    let sub_off = u32_at(main, 0x188).ok_or_else(bad)? as usize;
+    let sub_count = u32_at(main, 0x18C).ok_or_else(bad)? as usize;
+    let mut names = Vec::with_capacity(sub_count);
+    for i in 0..sub_count {
+        let entry = main.get(sub_off + 56 * i..sub_off + 56 * (i + 1)).ok_or_else(bad)?;
+        names.push(format!("{main_name}{}", String::from_utf8_lossy(cstr_at(&entry[24..], 0))));
+    }
+    Ok(names)
+}
+
+/// The index folder's name: the cache's UUID in hex; for a partial copy, `<uuid>.partial-<8 hex digits>` (FNV-1a of
+/// the missing files' names), so that an index of a partial copy is never taken for the whole cache's, nor for a
+/// copy with other files.
+fn index_name_of(uuid: &[u8; 16], missing: &[String]) -> String {
+    let name = oneios_common::hex(uuid);
+    if missing.is_empty() {
+        return name;
+    }
+    let mut h: u32 = 0x811c_9dc5;
+    for b in missing.iter().flat_map(|m| m.bytes().chain([0])) {
+        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
+    }
+    format!("{name}.partial-{h:08x}")
+}
+
+/// The index folder's name of the cache in `dir`, read from the main file's header and the folder's files only:
+/// the UUID in hex, or `<uuid>.partial-XXXXXXXX` when subcache files are missing ([`Cache::missing`]).
+pub fn index_name(dir: &Path) -> Result<String> {
+    let uuid = read_uuid(dir)?;
+    let main_name = main_name(dir);
+    let path = dir.join(main_name);
+    let main = Map::open(&path)?;
+    let missing: Vec<String> = subcache_names(&main, main_name, &path)?.into_iter().filter(|n| !dir.join(n).exists()).collect();
+    Ok(index_name_of(&uuid, &missing))
 }
 
 impl Cache {
@@ -108,17 +150,11 @@ impl Cache {
         let base = u64_at(&main, 0xE0).ok_or_else(bad)?;
         let size = u64_at(&main, 0xE8).ok_or_else(bad)?;
         let max_slide = u64_at(&main, 0xF0).ok_or_else(bad)?;
-        let sub_off = u32_at(&main, 0x188).ok_or_else(bad)? as usize;
-        let sub_count = u32_at(&main, 0x18C).ok_or_else(bad)? as usize;
         let img_off = u32_at(&main, 0x1C0).ok_or_else(bad)? as usize;
         let img_count = u32_at(&main, 0x1C4).ok_or_else(bad)? as usize;
 
         let mut names = vec![main_name.to_string()];
-        for i in 0..sub_count {
-            let entry = main.get(sub_off + 56 * i..sub_off + 56 * (i + 1)).ok_or_else(bad)?;
-            let suffix = String::from_utf8_lossy(cstr_at(&entry[24..], 0)).into_owned();
-            names.push(format!("{main_name}{suffix}"));
-        }
+        names.extend(subcache_names(&main, main_name, &main_path)?);
         let mut images = Vec::with_capacity(img_count);
         for i in 0..img_count {
             let at = img_off + 32 * i;
@@ -127,11 +163,22 @@ impl Cache {
             images.push((addr, String::from_utf8_lossy(cstr_at(&main, path_off)).into_owned()));
         }
         let mut files = vec![main];
+        let mut missing = Vec::new();
         for name in &names[1..] {
-            files.push(Map::open(dir.join(name))?);
+            let path = dir.join(name);
+            if path.exists() {
+                files.push(Map::open(path)?);
+            } else {
+                // A partial copy (only the subcaches a question needs): no mappings, its images are left out.
+                missing.push(name.clone());
+                files.push(Map::empty());
+            }
         }
         let mut maps = Vec::new();
         for (index, file) in files.iter().enumerate() {
+            if missing.contains(&names[index]) {
+                continue;
+            }
             let cut = || anyhow!("{}: the mappings are cut", names[index]);
             let off = u32_at(file, 0x10).ok_or_else(cut)? as usize;
             let count = u32_at(file, 0x14).ok_or_else(cut)? as usize;
@@ -150,7 +197,12 @@ impl Cache {
         maps.sort_by_key(|m| m.addr);
         let symbols_path = dir.join(format!("{main_name}.symbols"));
         let symbols_file = if symbols_path.exists() { Some(Map::open(&symbols_path)?) } else { None };
-        Ok(Cache { dir: dir.to_path_buf(), main_name, files, file_names: names, uuid, base, size, max_slide, maps, images, symbols_file })
+        Ok(Cache { dir: dir.to_path_buf(), main_name, files, file_names: names, uuid, base, size, max_slide, maps, images, symbols_file, missing })
+    }
+
+    /// The name of this cache's index folder ([`index_name`]).
+    pub fn index_name(&self) -> String {
+        index_name_of(&self.uuid, &self.missing)
     }
 
     /// dsc.py's `where`: the last mapping that starts at or below `va`, when `va` is inside it.
@@ -222,6 +274,9 @@ impl Cache {
             .into_par_iter()
             .map(|index| {
                 let mut out = Vec::new();
+                if !self.missing.is_empty() && self.read(self.images[index].0, 32).is_none_or(|h| h.len() < 32) {
+                    return Ok(out); // a partial copy: this image's header is in a subcache that is not here
+                }
                 for (cmd, data) in self.commands(self.images[index].0)? {
                     if cmd == 0x19 && data.len() >= 40 && cstr_at(&data[8..24], 0) == b"__TEXT" {
                         let vmaddr = u64_at(data, 24).unwrap_or(0);

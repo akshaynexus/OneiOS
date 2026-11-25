@@ -32,6 +32,11 @@
 //   oneios-gpu-amd-cpu=a,... the processes that keep CPU composition on the A56's accelerator (its discovery keys read
 //                            as absent there). Not given: ONEIOS_GPU_AMD_CPU_DEFAULT (backboardd, SpringBoard, ...);
 //                            empty: none.
+//   oneios-gpu-amd-gl=1      (a56-gpu GL stage, 2026-11-24; xnuhost adds it when the gpuaddon carries OneiOSRadeonGL.bundle)
+//                            on the A56's accelerator: IOGLESBundleName OneiOSRadeonGL (the A56's OpenGL ES) for every
+//                            process, and the oneios-gpu-amd-cpu processes see it (only Metal's keys stay hidden), so
+//                            CoreAnimation's render server composites on OpenGL ES. Not given or 0: AppleMetalGLRenderer
+//                            and all five keys hidden, as before.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
@@ -120,6 +125,7 @@ extern "C" void oneios_gpu_plugin_client_list(char *out, size_t size)
 // oneios-gpu-metal / droidvm-gpu-metal when given.
 namespace {
 char gCpuList[256];   // the RADEON accelerator's CPU-composition processes (oneios-gpu-amd-cpu)
+int gGl = -1;          // oneios-gpu-amd-gl (-1 not given)
 }
 extern "C" {
 volatile uint32_t oneios_gpu_accelerator, oneios_gpu_accelerator_why, oneios_gpu_accelerator_decided;
@@ -138,6 +144,8 @@ static uint32_t acceleratorKind(void)
     const unsigned kind = oneios_gpu_accelerator_choice(oneios_gpu3d_state, oneios_gpu3d_context_type, metal, amd, &why);
     if (kind == ONEIOS_ACCEL_RADEON && !PE_parse_boot_argn("oneios-gpu-amd-cpu", gCpuList, int(sizeof gCpuList - 1)))
         strlcpy(gCpuList, ONEIOS_GPU_AMD_CPU_DEFAULT, sizeof gCpuList);
+    value = 0;
+    if (kind == ONEIOS_ACCEL_RADEON && PE_parse_boot_argn("oneios-gpu-amd-gl", &value, sizeof value)) gGl = value != 0;
     oneios_gpu_accelerator = kind;
     oneios_gpu_accelerator_why = why;
     oneios_gpu_accelerator_decided = 1;
@@ -158,6 +166,7 @@ int proc_selfpid(void);
 void proc_selfname(char *, int);
 const char *oneios_gpu_metal_plugin(void);
 const char *oneios_gpu_metal_class(void);
+const char *oneios_gpu_gles_bundle(void);
 void oneios_gpu_accelerator_properties(IOService *accelerator);
 bool oneios_gpu_open_refused(uint32_t type);
 bool oneios_gpu_discovery_hidden(const char *key);
@@ -169,6 +178,9 @@ static bool radeon(void) {return oneios_gpu_accelerator_decided && oneios_gpu_ac
 // (0031's union shows the Data seed's folder there) and makes the device with [[class alloc] initWithAcceleratorPort:].
 const char *oneios_gpu_metal_plugin(void) {return radeon() ? "OneiOSRadeonMetal" : "NativeAdrenoMetal";}
 const char *oneios_gpu_metal_class(void) {return radeon() ? "OneiOSRadeonMetalDevice" : "NativeAdrenoMetalDevice";}
+// IOGLESBundleName (OneiOSGpuChoice.h oneios_gpu_gles_bundle_for): OneiOSRadeonGL on the A56's accelerator with
+// oneios-gpu-amd-gl=1, else AppleMetalGLRenderer as before.
+const char *oneios_gpu_gles_bundle(void) {return oneios_gpu_gles_bundle_for(radeon() ? ONEIOS_ACCEL_RADEON : ONEIOS_ACCEL_ADRENO, gGl);}
 // One property more on the A56's, for the plug-in and for ioreg: the host's DRM driver.
 void oneios_gpu_accelerator_properties(IOService *accelerator)
 {
@@ -208,13 +220,15 @@ bool oneios_gpu_discovery_hidden_here(void)
 bool oneios_gpu_discovery_hidden(const char *key)
 {
     char name[33];
-    if (!radeon() || !oneios_gpu_discovery_key(key) || !cpuProcess(name)) return false;
+    if (!radeon() || !oneios_gpu_cpu_hides(key, gGl) || !cpuProcess(name)) return false;
     static volatile SInt32 seen[32];
     const int pid = proc_selfpid();
     for (auto &slot : seen) {
         if (slot == pid) break;
         if (!slot && OSCompareAndSwap(0, UInt32(pid), reinterpret_cast<volatile UInt32 *>(&slot))) {
-            IOLog("oneios-gpu-amd: %s[%d] keeps CPU composition: %s hidden (oneios-gpu-amd-cpu)\n", name, pid, key);
+            IOLog("oneios-gpu-amd: %s[%d] kept off the Metal plug-in: %s hidden (oneios-gpu-amd-cpu); %s\n", name, pid, key,
+                  gGl > 0 ? "OpenGL ES " ONEIOS_GPU_AMD_GLES_BUNDLE " seen (oneios-gpu-amd-gl=1): GPU composition"
+                          : "no GL either: CPU composition");
             break;
         }
     }
@@ -1197,8 +1211,9 @@ void oneios_adreno_start(void)
     oneios_adreno_stage = 2;
     if (radeon())
         IOLog("oneios-gpu-amd: the A56 accelerator: AGXAccelerator, MetalPluginName %s, MetalPluginClassName %s, open type %#x alone "
-              "(DRM context type %u); CPU composition kept by %s\n", oneios_gpu_metal_plugin(), oneios_gpu_metal_class(),
-              DROIDVM_VIRTGPU_OPEN_TYPE, oneios_gpu3d_context_type, gCpuList[0] ? gCpuList : "(none)");
+              "(DRM context type %u); IOGLESBundleName %s; kept off Metal: %s%s\n", oneios_gpu_metal_plugin(),
+              oneios_gpu_metal_class(), DROIDVM_VIRTGPU_OPEN_TYPE, oneios_gpu3d_context_type, oneios_gpu_gles_bundle(),
+              gCpuList[0] ? gCpuList : "(none)", gGl > 0 ? " (on OpenGL ES, oneios-gpu-amd-gl=1)" : " (CPU composition)");
     sheng_gpu_power_probe();
     uint32_t test = 0;
     PE_parse_boot_argn("oneios-adreno-selftest", &test, sizeof test);

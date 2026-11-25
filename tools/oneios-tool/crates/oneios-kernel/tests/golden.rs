@@ -148,6 +148,35 @@ fn the_codec_edit_writes_its_frozen_text_and_fits_the_pinned_source() {
 }
 
 #[test]
+fn the_transport_edit_fits_the_pinned_source() {
+    // fix/codec-irq, 2026-11-25 (edit 7, staged/codec_transport.rs): DroidVMVirtioMedia.c's event queue on the device's
+    // interrupt. On the real file where external/ has it; applied twice it fails (each anchor is gone).
+    let source = repo().join("external/UniXNU-droidvm/package/DroidVMVirtioMedia.c");
+    if !source.exists() {
+        eprintln!("external/UniXNU-droidvm is not here: the transport's edit was not checked");
+        return;
+    }
+    let staged = build_oneios_codec::staged_transport(std::fs::read_to_string(&source).unwrap()).unwrap();
+    assert!(build_oneios_codec::staged_transport(staged.clone()).is_err());
+    for text in ["#include \"OneiOSCodecWait.h\"", "static void media_interrupt(void *context) {",
+                 "static bool reap_events(struct media_device *d) {", "if (sink) sink(context, copy, sizeof copy);",
+                 "attach = armcpu_spi_attach(d->interrupt_id, false, media_interrupt, d, NULL, NULL);",
+                 "if (d->irq) *(volatile uint16_t *)(media_rings[device][MEDIA_EVENTQ] + 1024) = 0;",
+                 "oneios_media_wait_ms(polled, fast), NSEC_PER_MSEC);",
+                 "oneios_media_count_wake(oneios_media_counts, woke == THREAD_TIMED_OUT, any);",
+                 "PE_parse_boot_argn(\"oneios-codec-irq\", &media_irq_enabled, sizeof(media_irq_enabled));",
+                 "SecureDTGetProperty(node, \"droidvm,intid\", &value, &size) == kSuccess ||"] {
+        assert_eq!(staged.matches(text).count(), 1, "{text}");
+    }
+    // the pin's poll is gone: no IOSleep in the event worker, no reap inside a command's wait (it holds the lock)
+    assert!(!staged.contains("IOSleep(fast ? 1 : 50);") && !staged.contains("        reap_events(d);\n        IOSleep(1);"));
+    // both queues start NO_INTERRUPT; only the event queue's flag is cleared, once the SPI is attached
+    let at = |text: &str| staged.find(text).unwrap_or_else(|| panic!("{text}"));
+    assert!(at("= 1;   // VIRTQ_AVAIL_F_NO_INTERRUPT: we poll") < at("if (d->irq) *(volatile uint16_t *)"));
+    assert!(at("static bool media_pending;") < at("static void media_interrupt(") && at("static void media_interrupt(") < at("static const char *bring_up("));
+}
+
+#[test]
 fn the_display_edits_fit_the_pinned_sources() {
     // The edit lists against the real upstream files, where external/ has them (a checkout without the references
     // skips this; the kernel build applies the same lists and stops on a missing anchor).
@@ -162,6 +191,13 @@ fn the_display_edits_fit_the_pinned_sources() {
     let staged = build_oneios_display::staged_scanout(std::fs::read_to_string(&scanout).unwrap()).unwrap();
     assert_eq!(staged.matches("scanoutFormat(r)").count(), 3);                  // CREATE_2D and the two SET_SCANOUT_BLOBs
     assert!(!staged.contains("r.width, r.height, 2, 0,") && staged.contains("format == 2 ? OneiOSHalf : 0};"));
+    // fix/s24-fps-heat-camera: the slowest refresh rate reported, in NativeMobileDisplay's display (where external/ has it).
+    let legacy = repo().join("external/NativeMobileDisplay/NativeLegacyDisplay.cpp");
+    if legacy.exists() {
+        let staged = build_oneios_display::staged_legacy(std::fs::read_to_string(&legacy).unwrap()).unwrap();
+        assert_eq!(staged.matches("sheng-vsync-min").count(), 1);
+        assert!(staged.contains("words[2]=longest;words[3]=longestTime;"));
+    }
 }
 
 #[test]
@@ -191,6 +227,51 @@ fn the_pen_edits_fit_the_pinned_source() {
     assert!(staged.ends_with("if(device)device->setPenOnly();return device;}\n"));
     // Applied twice, the anchors are gone: the generator stops.
     assert!(build_oneios_hid::staged_hid_pen(staged).is_err());
+}
+
+#[test]
+fn the_motion_edits_fit_the_pinned_sources() {
+    // sensors-als, 2026-11-25: the motion sensors' edits (staged/hid_motion.rs) on the real DroidVMVirtioInput.c (after the
+    // phone's own edits), DroidVMMotionHid.inc and NativeHidInput.cpp (after hid.rs and hid_pen.rs), where external/ has them.
+    let package = repo().join("external/UniXNU-droidvm/package");
+    let native = repo().join("external/NativeHidInput/NativeHidInput.cpp");
+    if !package.join("DroidVMMotionHid.inc").exists() || !native.exists() {
+        eprintln!("external/UniXNU-droidvm or external/NativeHidInput is not here: the motion edits were not checked");
+        return;
+    }
+    let read = |path: PathBuf| std::fs::read_to_string(path).unwrap();
+    // The transport: the magnetometer's axes kept, published inside the frame's seqlock, each frame counted and the devices woken.
+    let transport = build_oneios_hid::staged_motion_transport(
+        build_oneios_hid::staged_transport(read(package.join("DroidVMVirtioInput.c")), "", "").unwrap()).unwrap();
+    assert!(transport.contains("e->code >= 0x10 && e->code <= 0x12) {\n        oneios_motion_mag_raw[e->code - 0x10] = e->value;"));
+    let publish = transport.find("static void motion_publish(").unwrap();
+    let body = &transport[publish..publish + transport[publish..].find("\n}\n").unwrap()];
+    let (copied, closed, kicked) = (body.find("oneios_motion_mag[i] = oneios_motion_mag_raw[i]").unwrap(),
+                                    body.rfind("droidvm_motion.seq = droidvm_motion.seq + 1;").unwrap(), body.find("oneios_motion_kick();").unwrap());
+    assert!(copied < closed && closed < kicked, "the magnetometer is published inside the seqlock, the devices woken after it");
+    assert!(build_oneios_hid::staged_motion_transport(transport).is_err());   // applied twice: the anchors are gone
+    // The motion devices: a unit of its own, the compass, ticks driven by the frames (a 1 s guard), the reports counted.
+    let motion = build_oneios_hid::staged_motion_hid(read(package.join("DroidVMMotionHid.inc"))).unwrap();
+    assert!(motion.starts_with("// SPDX-License-Identifier: BSD-2-Clause-Patent\n") && motion.contains("#include <IOKit/hid/IOHIDDevice.h>"));
+    assert!(motion.contains("DROIDVM_MOTION_ORIENTATION, DROIDVM_MOTION_COMPASS };"));
+    assert!(motion.contains("static const unsigned char compass[] = DROIDVM_MOTION_VECTOR(0x0a, 0x83, 0x85);"));
+    assert!(motion.contains("? (int64_t)raw[i] * 1000 / 16"));
+    assert!(motion.contains("        source->setTimeoutMS(1000);\n") && !motion.contains("        source->setTimeoutMS(10);\n"));
+    assert!(motion.contains("if (kind < 4) oneios_motion_timers[kind] = timer;"));
+    assert!(motion.contains("oneios_motion_reports[self->kind] = oneios_motion_reports[self->kind] + 1;"));
+    assert!(motion.trim_end().ends_with("if (timer) timer->setTimeoutUS(1);\n    }\n}"));
+    assert!(build_oneios_hid::staged_motion_hid(motion).is_err());
+    // NativeHidInput's slot table exported for the light sensor's wrapper, inside its pointer-authentication branch.
+    let hid = build_oneios_hid::staged_hid_slots(
+        build_oneios_hid::staged_hid_pen(build_oneios_hid::staged_hid(read(native)).unwrap()).unwrap()).unwrap();
+    let export = hid.find("extern \"C\" const uint16_t *oneios_hid_driver_slots(unsigned *count)").unwrap();
+    assert!(hid[..export].rfind("#if __has_feature(ptrauth_calls)").unwrap() > hid[..export].rfind("#else").unwrap_or(0));
+    assert_eq!(hid.matches("oneios_hid_driver_slots(unsigned").count(), 1);
+    // What the archive must define for the new parts.
+    for name in ["_oneios_motion_kick", "__GLOBAL__sub_I_DroidVMMotionHid.cpp", "__GLOBAL__sub_I_DroidVMSensorProcessor.cpp",
+                 "_droidvm_motion_register", "_oneios_hid_driver_slots", "_oneios_als_spu_wrap", "_oneios_als_spu_wrapped"] {
+        assert!(build_oneios_hid::REQUIRED.contains(&name), "{name}");
+    }
 }
 
 #[test]
@@ -312,9 +393,13 @@ fn the_gpu_edits_fit_the_pinned_sources() {
     let gpu = build_oneios_gpu::staged_text(std::fs::read_to_string(package.join("DroidVMGpu.cpp")).unwrap()).unwrap();
     assert!(gpu.contains("accelerator->setProperty(\"MetalPluginName\", oneios_gpu_metal_plugin());"));
     assert!(!gpu.contains("\"NativeAdrenoMetal\""));
+    // the GL stage (2026-11-24): OpenGL ES's bundle asked of OneiOSAdreno.cpp too (OneiOSRadeonGL with oneios-gpu-amd-gl=1)
+    assert!(gpu.contains("accelerator->setProperty(\"IOGLESBundleName\", oneios_gpu_gles_bundle());"));
+    assert!(!gpu.contains("\"AppleMetalGLRenderer\""));
     let gpu3d = build_oneios_gpu::staged_3d_text(std::fs::read_to_string(package.join("DroidVMVirtioGpu3D.cpp")).unwrap()).unwrap();
     assert_eq!(gpu3d.matches("oneios_gpu_context_made(context, in.capset_id)").count(), 1);
     let staged = build_oneios_gpu::staged_accelerator_text(std::fs::read_to_string(&accelerator).unwrap()).unwrap();
-    assert_eq!(staged.matches("oneios_gpu_discovery_hidden(").count(), 4);   // its declaration and the three copyProperty
+    // its declaration, the three copyProperty and serializeProperties' loop (one rule for both reads since the GL stage)
+    assert_eq!(staged.matches("oneios_gpu_discovery_hidden(").count(), 5);
     assert!(staged.contains("if(oneios_gpu_open_refused(type))return kIOReturnUnsupported;"));
 }

@@ -102,3 +102,15 @@ DeviceClassNumber = "1"
 "main-screen-height" = "3120"
 "main-screen-scale" = "3"
 ArtworkDeviceSubType = "2868"
+
+[builds]
+# The builds of iOS this profile is for, each with its ProductVersion (SystemVersion.plist): the version tweak takes
+# a root of one of them as this profile's, without --any-version. [device] version stays the first one's (the default
+# profile, profiles/ios-27.0.1-iPhone18,2.toml). 24B156 (27.2.1, profiles/ios-27.2.1-iPhone18,2.toml, 2026-11-25):
+# its IPSW device tree for v54ap differs from 24A446's in four values only (`xnuloader-inspect adt` of both
+# out/kernel-inputs/*/devicetree.bin: the time stamp and tag, baseband imeisv 0xd -> 0xe, defaults
+# kern.memstat_reaper_mb 0x927 -> 0x99c, and /product has-virtualization gone): none is a value of this file or of the
+# loader's /product. [U] whether everything else this file says holds on 24B156: no 24B156 root has been read here
+# (its OS volume was not fetched) and none has booted.
+"24A446" = "27.0.1"
+"24B156" = "27.2.1"

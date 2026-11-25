@@ -1,0 +1,19 @@
+# oneios-switches: xnuhost's switches (docs/switches.md) and every key of xnuhost.conf, with each value's rule: the one
+# list xnuhost's switches line and oneios-tool's `switches` and `conf` commands are made from (the OneOS app's Switches
+# screen reads that). No dependency, no I/O: xnuhost (runtime/) and oneios-tool (tools/oneios-tool, a path dependency)
+# both build it, on Linux, Android and macOS. Its fields are written out, not taken from runtime/'s workspace, because
+# oneios-tool's workspace builds it too.
+[package]
+name = "oneios-switches"
+description = "xnuhost's switches and xnuhost.conf's keys: one list for xnuhost and oneios-tool"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.85"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true

@@ -11,7 +11,7 @@
 # return (the restore line, no session, a return that hangs); the session's own commands (session-cmds.sh:
 # display-restart with --lib and --dex, touch status and wake, backlight status and set, each refused without a
 # session, and the return after them); `phone wifi p2p|wonder` (wifi.sh: the stand-in wifictl, the refused arguments, the
-# report and its summary, the streamed lines, --save); `procs`, the process list with CPU and RAM on a made-up /proc (procs.sh);
+# report and its summary, the streamed lines, --save); `phone qrtr` (qrtr.sh: the staged or pushed sensorctl, the verdict, --binary removed after, a closed QRTR); `procs`, the process list with CPU and RAM on a made-up /proc (procs.sh);
 # the bridges' hardware backends, samsung and treble (hw-backend.sh); pull-data (the copy is the phone's file, sparse;
 # a size that does not match; --ioslog, and `ioslog health` without SOURCE on a stage, as on the phone itself); sparse-write; `phone addon` (the boot addon, its CDHashes in owner-trust.json, --remove). The session check's command is the phone's, byte for byte, and a pid
 # that is not an xnuhost's is no session. Every case ends the stand-in session it left (end_case), and at the
@@ -227,6 +227,8 @@ end_case
 
 # ---- phone wifi p2p and wonder: the staged runtime's wifictl on a stand-in phone of its own (tests/phone/wifi.sh)
 . "$HERE/wifi.sh"; wifi_checks
+# ---- phone qrtr: the staged or pushed sensorctl on a stand-in phone of its own (tests/phone/qrtr.sh)
+. "$HERE/qrtr.sh"; qrtr_checks
 # ---- the process list with CPU and RAM, read only (tests/phone/procs.sh, a phone of its own with a made-up /proc)
 . "$HERE/procs.sh"; procs_checks
 

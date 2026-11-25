@@ -1,0 +1,90 @@
+OneiOS's OpenGL ES for the Galaxy A56 (OneiOSRadeonGL.bundle), userland/metal-amd/gl
+=====================================================================================
+
+Most of this folder is a port of NegroniGL, the OpenGL ES driver of the owner's own iOS 16 port iOSPlus10
+(akshaynexus/iOSPlus10, userland/negronigl, read at origin/main 146e889: "Merge pull request #1 from
+akshaynexus/ios26-prep"). It is under the MIT licence of that repository:
+
+MIT License
+
+Copyright (c) 2026 iOSPlus10 contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+NegroniGL names its own sources in its files: ios-sailfish's tools/sweetgl (design), HackiOS's userland/src/eagl.c
+(oosexgang/hackios-xnu-userland, MIT, Copyright (c) 2025-2026 the HakiOS authors: the EAGL method list, the slot
+table, surface_to_texture and the full-precision defines). Those notes are kept in the files.
+
+Taken from NegroniGL (iOSPlus10 path -> here), and what changed:
+
+  negronigl.h                -> oneios_gl.h          the internal interfaces; drm/ and the gpu-policy gone; per-surface
+                                                     copies (struct ngl_surf), the renderbuffer and rectangle shadows,
+                                                     the plain draw's program, the 0x38e/0x399 pending bind added
+  negronigl.c                -> gl_core.c            the screen: freedreno over its msm emulation -> radeonsi through
+                                                     oneios_radeonsi_screen_create (K3), softpipe as the stand-in of
+                                                     every process but backboardd; the gate reads the bundle's own files
+                                                     and the boot arguments (no /var/db lists, no gpu-policy); the EAGL
+                                                     shim's constructor and preflight-in-a-constructor gone; the probe
+  sw_winsys.c                -> sw_winsys.c          as there (its log line has a category)
+  surface.c                  -> surface.c            the kernel's IOSurface import (RedwoodGPU's) gone: on a GPU screen
+                                                     every IOSurface is a resource of ours, uploaded when its seed moves
+                                                     and written back after draws into it; inverted surfaces (rows
+                                                     turned over, Jesvi-iOS's way, below); plane_copy as there
+  eagl.c (its GLI slots)     -> gl_hand.c            the hand-written slots; the Objective-C EAGLContext shim and the
+                                                     IOSurface wrap guard not taken (the bundle is reached by
+                                                     IOGLESBundleName alone); added: UseProgram, UniformMatrix4fv, Clear,
+                                                     Finish, DeleteRenderbuffers, the APPLE fences, the plain draw, the
+                                                     rectangle textures' defaults (LINEAR, CLAMP_TO_EDGE: NegroniGL's left
+                                                     a rectangle texture incomplete, sampling black)
+  shaders.c                  -> shaders.c            as there (switches renamed ONEIOS_GL_*)
+  view.c                     -> view.c               the flush writes the copied surfaces back (NegroniGL's kernel fences
+                                                     and RedwoodWaitsForGPU gone); the frame and present lines
+  log.c                      -> log.c                os_log com.oneios.radeongl and the A56 kernel's text rows (the Metal
+                                                     plug-in's m2m.h channel) instead of /dev/console
+  gli-slots.txt              -> gli-slots.txt        as there (409 slots; its header names its HackiOS source)
+  gen-gli.py                 -> gen-gli.sh           rewritten in POSIX sh + awk (no Python in this tree); the same rules,
+                                                     more hand-written slots
+  plugin/gld-names.txt       -> plugin/gld-names.txt as there; checked against 20F66's libGFXShared (the same 129 names)
+  plugin/gen-gld.py          -> plugin/gen-gld.sh    rewritten in POSIX sh + awk; the export list adds oneios_gl_probe
+  plugin/gld.h, gld.c        -> plugin/gld.h, gld.c  driver ID 0x5200; the app gate -> gl_core.c's ngl_gate; the
+                                                     accelerator handed to gldInitializeLibrary carries the log rows
+  plugin/gli_table.c         -> plugin/gli_table.c   20H392's addresses and code words -> 20F66's (iOS 16.5, iPhone10,3)
+  plugin/gli_context.c       -> plugin/gli_context.c ngl_gli_new (the host test makes contexts with it too); 0x399 with
+                                                     invert binds the surface again turned over; the copies let go
+  plugin/gli_view.c          -> plugin/gli_view.c    as there
+  plugin/Info.plist          -> plugin/Info.plist    the names (OneiOSRadeonGL, com.oneios.radeongl), MinimumOSVersion 16.5
+  meson.build                -> meson.build          a target of Mesa cecc0e9 (libgl-xlib's linking), radeonsi compiled in
+                                                     with K3's source, the host test
+  mesa-patches/0001          -> patches/mesa/5101    the hook, placed where the guest Mesa stage's and the Metal layer's
+                                                     patches do not touch
+  tools/ngl_test.c           -> tests/oneios_gl_probe.c   rewritten as the bundle's probe tool
+
+Not taken: drm/ (NegroniGL's libdrm and msm over RedwoodGPU; the A56's GPU is reached by the guest Mesa stage's Darwin
+vdrm), the gpu-policy, the EAGL shim's dylib and backboardd's re-signed load command (ios-spes's road).
+
+From Jesvi-iOS (jesvi-eulah/Jesvi-iOS a13e406, MIT outside xnu/, Copyright (c) 2025-2026 the HakiOS authors; its
+notice is in userland/metal-amd/NOTICE): the draw CoreAnimation makes with no program (userland/src/eagl.c
+plain_draw_begin: its plain_vertex/plain_fragment shaders, the attribute layout and the matrix taken from CA's last
+glUniformMatrix4fv) in gl_hand.c, and the inverted surfaces' rows turned over (its surface uploads and read backs) in
+surface.c. Its findings on 20F66 are cited where they are used (CoreAnimation's EAGLServer::renderer() and
+CAMetalContextCreate, docs/devices/x1slte/display.md). Its other CoreAnimation fixes (the home indicator's table, the
+vibrant and masking colour matrices, the shadow blur, the downsample, the variable blur, the census) are not ported.
+
+Ours: tests/oneios_gl_test.c, host/ (stand-ins of IOSurface and CoreFoundation for the Linux host test, written from
+the calls' documented meaning; nothing of Apple's), build.sh, host-test.sh, and the files' OneiOS changes above.

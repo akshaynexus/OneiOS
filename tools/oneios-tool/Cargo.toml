@@ -38,6 +38,9 @@ oneios-tweaks = { path = "crates/oneios-tweaks" }
 oneios-imagebuild = { path = "crates/oneios-imagebuild" }
 oneios-json = { path = "crates/oneios-json" }
 oneios-ios = { path = "crates/oneios-ios" }
+oneios-conf = { path = "crates/oneios-conf" }
+# xnuhost's switch catalog (runtime/switches, a member of runtime/'s workspace): one list for xnuhost and `switches`/`conf`
+oneios-switches = { path = "../../runtime/switches" }
 
 [profile.release]
 opt-level = 3

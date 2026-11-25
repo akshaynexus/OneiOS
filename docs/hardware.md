@@ -33,6 +33,7 @@ for Android, and the kernel-side drivers compile and link-check against the kern
 | Audio | `DroidVMVirtioSnd.c` + `DroidVMAudio.cpp`: the hosted kernel's audio archive since 2026-11-12 (before: not built, no device in iOS) | `devices/virtio_snd.rs`, `audio/aaudio_helper.rs` (`oneios-audio`) | helper run on the phone beside One UI (plays and records, 0 underruns, about 130 ms); host-tested against a fake AAudio; in sessions iOS's I/O thread failed for large buffers (system sounds 3 s late or lost): hosted 0052, not yet run; no volume (audiomxd threw at every volume set: no hardware volume control on the Speaker) and the host at One UI's media volume: the control and the host at full scale, 2026-11-22, not yet on the phone (section 6, "Volume") |
 | Camera | `drivers/camera`: the `oneios,camera` transport, `/dev/oneios-camera`; `userland/camera`: the capture plug-in (`H9ISPCaptureDeviceCreate`) | `runtime/bridges/camera`: helper `oneios-camera` (provider HAL in a session, Camera2 NDK with One UI), ring, device, `camctl` | host and kernel sides built and host-tested; in iOS (2026-11-22) the plug-in makes its device, CMCapture made no source (no `/product unique-model`: fixed with the camera nodes, not run yet, section 7); one phone run (2026-11-11): cameraserver lists 4 cameras and opens one for a root client, no frame arrived (no binder threads in the process: fixed, the fix not yet run on the phone); the HAL back end never run (section 7) |
 | Backlight and light sensor | `drivers/brightness`: the backlight service (port of iOSPlus10's `AppleARMBacklight`), the light readings; the HID light sensor device, built into the hosted kernel's HID archive | `runtime/bridges/brightness`: the backlight sysfs node, `als_rear` by evdev, `brightctl` | both built; host tested; in a PC boot the HID device starts and Apple's `AppleUSBALSService` attaches to it; on the phone backboardd finds the service; the slider reached no request because CoreBrightness ran VMBLControl (fixed 2026-11-12 in backboardd through the Metal plug-in, not yet run; section 7a) |
+| Motion sensors and the front light (2026-11-25; on by default since the merge into main: xnuhost `sensors=auto`, `sensors=off` turns it off; the motion half was off in v0.1.30: its kernel class `AppleSPUHIDDevice` clashed with `com.apple.driver.AppleSPU`'s and v0.1.29 panicked at kernel start on the S24 Ultra; on again on fix/motion-spu-clash, where `prelink roots` leaves AppleSPU and the kexts that link it out of both collections and xnuhost gives the motion device only to a collection without it; the front light sensor stays either way) | the HID archive: UniXNU-droidvm's `AppleSPUHIDDevice`s (accelerometer, gyroscope, orientation) and a compass (`oneios-motion=MASK`); the light sensor as an iPhone's SPU ALS (`oneios-als-spu=1`) | `runtime/bridges/sensors`: the sensor hub (SSC) over QRTR (QMI 400, ported from ios-redfin), xnuhost's motion device `/arm-io/input-N`; `sensorctl`, `oneios-tool phone qrtr` | host-tested and built. On the S24 Ultra (v0.1.29, 2026-11-25 05:05) the hub answered a root process (`sensors: on: ssc (sensors=auto): service 400 ...`, `sensors: streaming: accelerometer, gyroscope, magnetometer, light`), then the kernel panicked on the AppleSPU clash; the fix (fix/motion-spu-clash) is not booted (section 7i) |
 | Battery | `drivers/battery`: an `IOPMPowerSource` powerd reads | `runtime/bridges/battery`: Android's `power_supply` nodes, polled, changes sent over the bridge channel; `batteryctl` | both built; host tested with a fake sysfs; one phone session (2026-11-12 23:45, on the charger): published, and a "plugged in" sound before the lock screen (the startup chime: section 7c) |
 | Thermal | `drivers/thermal`: `OneiOSThermal` (the readings and the level in the registry); `userland/helpers/oneios-thermal` sets iOS's `com.apple.system.thermalpressurelevel` from it | `runtime/bridges/thermal`: the thermal zones, Samsung's thermistors, the battery's sensors; a level on iOS's scale; xnuhost's CPU step when hot; `thermalctl` | host built and tested; the bridge and `thermalctl` run on the phone (2026-11-12); the step, the driver and the helper not yet run; an idle session's heat traced to the guest's idle cache flush (xnuhost's `setway-skip`: -40% CPU) (section 7d) |
 | Hardware backends (2026-11-15) | - | `runtime/bridges/hw`, `hal`: `hw-backend=samsung\|treble` (default samsung, unchanged), per bridge `hw-backend-<bridge>`; treble = the AIDL HALs through servicemanager, evdev by capabilities, standard sysfs classes by named paths | treble done for the backlight, battery, thermal sensors and vibrator (host and stand-in phone tests, both backends); touch and keys share one capability lookup; the light sensor, Wi-Fi, Bluetooth, display next; not run on a phone (section 7e, the audit table) |
@@ -2195,8 +2196,9 @@ What ButtonResolver needs to get ready [V: ButtonResolver, Haptics.framework and
   (`UpdateSSHBAsset`).
 - `-[BRInterfaceAOP playState:forSpeed:error:]` is scalar method 2 with three scalars in; the configuration goes in
   with `IORegistryEntrySetCFProperty` on the service.
-- Apple's `AppleSPUHapticsAudioDriver` is in the kernelcache (the string is in `kernelcache.macho` and in our
-  `kernel.kc`), but it belongs to the always-on processor's kexts, which have no hardware to match here: neither
+- Apple's `AppleSPUHapticsAudioDriver` is in the kernelcache (the string is in `kernelcache.macho`; in our `kernel.kc`
+  until 2026-11-25, when `prelink roots` left com.apple.driver.AppleSPU out: section 7, "Motion"), but it belongs to the
+  always-on processor's kexts, which have no hardware to match here: neither
   service exists, so ButtonResolver is never ready and backboardd's `BKButtonHapticsController` queue waits for good
   (section above). Also read: backboardd's `_BKHIDXXApplyButtonDefinitions` does not wait on this home-button type
   (`not configuring SSHB because we don't have a real home button`); its `_BKHIDXXPlayHaptic` does.
@@ -2483,13 +2485,16 @@ they are the hosted build's audio archive, `oneios-tool kernel gen audio`
 the transport unchanged (`-DDROIDVM_DEVICE_DYNAMIC=1`), `DroidVMAudio.cpp` staged with boot arguments, and
 `OneiOSAudio.c` (the start line and a report every 30 s while the counters move). Kernel log lines:
 `ONEIOS AUDIO: on|off: virtio-snd ... IOAudio2 devices: ...`, `DroidVMAudio: published Speaker=1 Mic=1 ...`,
-`ONEIOS AUDIO: speaker running|idle, ... engine N periods, N late, ...; virtio-snd N tx periods, N dropped ...`.
+`ONEIOS AUDIO: speaker running|idle, ... engine N periods, N late, ...; virtio-snd N tx periods, N dropped ...`
+(the speaker's and the mic's periods, and those of them taken over a period late; until 2026-11-24 `late` also
+counted the Actuator's), and `ONEIOS AUDIO: late periods: ...` ("Late periods" below).
 Boot arguments: `droidvm-snd=0`, `droidvm-audio=0`, `oneios-audio-out-uid=`, `oneios-audio-in-uid=` (default
 Speaker, Mic; `none`: no microphone), `oneios-audio-latency=FRAMES` (the speaker's "output latency", so iOS keeps
 video in step: since 2026-11-15 xnuhost passes the helper's measured latency, its probe before the boot; without it
 the default 720 = 15 ms, the MMAP path's prediction; 6480 = 135 ms before), `oneios-audio-ring=FRAMES` (the
 speaker's ring, default 1920: iOS's I/O buffer is at most 0.375 of it, "Latency end to end" below),
-`oneios-audio-report=0`, `oneios-audio-selftest=SECONDS`
+`oneios-audio-rt=0` (the engines at kernel priority and their wait `clock_delay_until`'s, as before 2026-11-24;
+default 1: "Late periods" below), `oneios-audio-report=0`, `oneios-audio-selftest=SECONDS`
 (1..10: 3 s after the start a 1 kHz sine at -30 dBFS straight into the transport, before iOS's audio server: the
 guest kernel to the speaker without iOS; UniXNU-droidvm's `droidvm-snd-selftest` is a full-scale sawtooth, never with
 a speaker).
@@ -2597,7 +2602,7 @@ yet: the audio test cycle adds it (below).
   periods in order, the linger, a 200 ms start stall followed by silence (the backlog cut as silence, a marker 1 s
   later on time), a guest 40 ms late every 0.5 s (underruns raise the target; it is back at 20 ms 5 s after), the
   latency per stage at six phases of the pulls (below), MMAP not refused (NONE) and MMAP in use anyway (opened again
-  NONE), LOW_LATENCY only with `ONEIOS_AUDIO_PERF=low`, a clean stop when the socket closes: 11,101 checks (most are the guest's sends; timing checks are skipped, each with a line, when a loaded host runs the test late).
+  NONE), LOW_LATENCY only with `ONEIOS_AUDIO_PERF=low`, a clean stop when the socket closes: 11,101 checks (most are the guest's sends; timing checks are skipped, each with a line, when a loaded host runs the test late: since 2026-11-25 "late" also counts a canary thread on a 2 ms absolute schedule, because a host that ran only the helper's own writer late failed `audio_helper` with 1 underrun at a load average of 24 while the fake server and the sends were on time).
   Since 2026-11-15 the fake HAL can also give MMAP exclusive or shared, and the test checks the path choice, the MMAP
   level, the end-to-end figure, the probe and the target's recovery on MMAP (20,213 checks; "Latency end to end"
   below). `devices/test_devices.rs` (the C's `test_bridges.c`) checks
@@ -2932,6 +2937,120 @@ back to index N`; `DroidVMAudio: speaker volume N of 128 (...)` at iOS's start a
 in iOS's log no `Volume Mode is HardwareOnly but physical device does not support HW volume`, `Reconfiguring volume
 curve with dB range {-64, 0}`; on the screen the volume HUD moving with the keys; by ear the level following them,
 up to the phone's full loudness. Back in One UI: the media volume as it was.
+
+### The volume curve: UniXNU-sheng's -36 dB squared (fix-audio-curve, 2026-11-25; built, not booted)
+
+**The fault (owner):** sound is quiet with iOS's volume at a normal level. **The cause [F our logs,
+`out/session-logs/2026-11-24-mac-gpumem/live.log`]:** the host plays at full scale (`oneios-audio: host volume: ...
+set to the maximum for the session`) and the guest attenuates by what iOS sets on the control above: `speaker volume 70
+of 128 (-29.0 dB, gain 2325 of 65536)`, `79 of 128 (-24.5 dB)`, `100 of 128 (-14.0 dB)`. iOS spreads its volume evenly
+over the control's steps: from 79 each volume-up press moved 7-8 steps (79, 86, 94, 101, 108, 115, 128: 3.5-4 dB a
+press), and audiomxd says `Reconfiguring volume curve with dB range {min, max} and transfer function 0`. So with a
+linear -64..0 dB range half of iOS's volume is about -32 dB.
+
+**The fix [F UniXNU-sheng c8f92b2 `hal/ShengAudioPlugIn.c` 204-210, iPadOS 27.0.1 24A446, BSD-2-Clause-Patent]:** sheng's
+audio plug-in had the same quietness on the same build ("a linear -40 dB range still -26 dB (quiet); now it is -16
+dB") and maps the volume s (0..1) to -36 x (1 - s)^2 dB. Here, with `oneios-audio-curve=1` (the default; the staged
+`DroidVMAudio.cpp`, `tools/oneios-tool/crates/oneios-kernel/src/staged/audio.rs` block "fix-audio-curve"):
+
+- the control keeps its 128 even steps (iOS's volume s is step / 128, as the phone showed) and reports -36..0 dB
+  (`start db value` -36, 128 steps of 0.28125 dB: the curve's ends);
+- the speaker engine applies the curve to the step: the gain of step v is 10^(-36 x (1 - v/128)^2 / 20) (a Q16 table,
+  step 0 silent). Step 43 (a third) is -15.9 dB, 64 (half) -9.0 dB, 70 -7.4 dB, 100 -1.7 dB; before, -42.5, -32.0,
+  -29.0 and -14.0 dB.
+- `oneios-audio-curve=0`: -64..0 dB in 0.5 dB steps, applied as reported (before 2026-11-25).
+
+Why not a range map of several ranges shaped like the curve (the plan's first idea): the HAL's scalar and audiomxd's
+curve are fractions of the dB range [I from the IOAudio2 range-map form and audiomxd's "dB range ... transfer function"
+line; not read in 24A446's CoreAudio], so a multi-range map would only move each step's dB, and iOS would still ask for
+an even spread in dB. The reported dB of a step (what an app reading the control's dB sees: linear over -36..0) is not
+the applied one in between the ends; nothing in iOS's speaker route reads it back [I].
+
+**The lasting lines:** each change (the first 16, then every 64th) `DroidVMAudio: speaker volume N of 128 (-X.Y dB, gain
+N of 65536), change N: iOS's volume, applied here (the host plays at full scale; curve sheng: -36 dB x (1 - v/128)^2,
+oneios-audio-curve=1)`, the dB now in tenths; and in `OneiOSAudio.c`'s 30 s report, when the volume changed since the
+last report, where it settled: `ONEIOS AUDIO: speaker volume N of 128 (-X.Y dB applied, gain N of 65536) after N changes
+(N since the last report); curve sheng -36 dB squared (oneios-audio-curve=1)` (a slider's drag is many changes, past
+the 16 change lines).
+
+**Tested:** `cargo test -p oneios-kernel` (`staged::audio::tests::the_volume_curve_is_shengs` recomputes both tables of
+the staged source from the formula; the edit list on the synthetic source against `golden/synthetic/audio.out`), the
+kernel built with it, `runtime/host-tests.sh` (no qemu part) passes (docs/switches.md "Tests": the hashes, the hand-off
+`out/handoff/audiovol-1c3e86a/`). **Not booted.** The phone check: the change line at a third of iOS's
+volume about `-16.x dB` and at half about `-9.0 dB`; iOS's log (`ioslog --proc audiomxd`) `Reconfiguring volume curve
+with dB range {-36, 0}`; by ear the middle of the slider clearly louder than before and the bottom steps still quiet;
+`oneios-audio-curve=0` gives the old `-29.0 dB` at step 70 again.
+
+### Late periods: the engines realtime in the guest, their wait without timer slop (fix-audio-late, 2026-11-24; built and prelinked, not booted)
+
+The fault: iOS's audio late. The phone, 2026-11-24 01:17-01:25 (kernel `e79886d9` = main,
+`out/session-logs/2026-11-24-mac-gpumem/live.log`):
+
+- the guest: `engine 1474 periods, 123 late`, later `5092 periods, 271 late`, with `virtio-snd ... 0 dropped`;
+  `speaker engine: 723 periods, taken late by 1488 us on average (max 55188)`, `751 periods, ... 1364 us ... (max
+  28879)`, `3618 periods, ... 1622 us ... (max 98149); the HAL wrote 216..5680 frames ahead ..., 412 periods tight`;
+- the host helper: 1 then 5 underruns, its target up to 40 ms and never down again (it comes down only when the worst
+  guest period of 20 s was 3 ms inside the lower target), `latency about 40-60 ms; end-to-end 36-49 ms (max 113-141;
+  the guest's period late by 0.7-2.3 ms ...; iOS is told 12 ms)`;
+- 0051's `kernel_task` line in the windows of the worst lateness: `VM_pageout_scan 14706665` us of CPU in 30 s,
+  before it `VM_compressor 3746618`, `VM_compressor 3527132`, `VM_pageout_scan 2081473`, `thread call high #1 815855`;
+  `oneios-cpu: ... (all 800%)`: every vCPU busy; xnuhost's `perf: cpuN ... waited for a host CPU 22-31%`.
+
+What the code shows (the cause):
+
+1. **`late` was not the speaker's.** `droidvm_audio_late` counted every engine's period taken over a period (5 ms)
+   late, the Actuator's too, while `droidvm_audio_periods` counts the speaker's and the mic's only: `engine 0
+   periods, 77 late` at 01:19 were all the Actuator's (1559 periods then), and between 01:21 and 01:23, with the
+   speaker stopped, `late` rose 74 on 3310 Actuator periods (2.2 %). So the 8 % was a mix; the speaker's own share was
+   not printed.
+2. **The engine waited behind the kernel's busy threads.** An engine is a kernel thread (`kernel_thread_start`:
+   BASEPRI_KERNEL, 81, fixed). The VM's pageout and compressor threads run at BASEPRI_VM (91), the high thread calls
+   and `daemon.deferred-dealloc` above that; on a guest at 800 % with `VM_pageout_scan` at half a vCPU the engine's
+   period waited for them (up to 98 ms). [I] Kernel threads also prefer the boot cluster (the Edge clutch's default
+   preferred pset, `sched_clutch.c`, with no CLPC to move it): cpu0's E cluster, whose two vCPUs sit on the host's
+   busiest cores (`cpu0`/`cpu1` waited 30-31 % for a host CPU, the P vCPUs 22-26 %); which vCPU ran the engine is not
+   logged.
+3. **Its wait had timer slop.** `clock_delay_until` waits with `TIMEOUT_URGENCY_SYS_NORMAL`; XNU gives a thread at 80
+   or above the kernel tier's slop (`timer_call_slop`, `arm_timer.c`: an eighth of the wait, at most 1 ms, up to
+   twice that with the user idle level). The engine waits about 5 ms a period: 0.6-1.2 ms late by design, about the
+   measured 1.4-1.6 ms average.
+
+The fix (staged `DroidVMAudio.cpp`, `tools/oneios-tool/crates/oneios-kernel/src/staged/audio.rs`, block
+"fix-audio-late"; boot-arg `oneios-audio-rt`, default 1, `docs/switches.md`):
+
+- each engine thread (speaker, mic, Actuator) asks at its start `THREAD_TIME_CONSTRAINT_POLICY`: period and
+  constraint one period (5 ms), computation 2.5 ms (XNU raises a computation under half the constraint to that). It
+  then runs before every non-realtime thread of the guest, its preemption IPIs are immediate, and the realtime spill
+  rules (0089) apply. The guest's scheduler only: no host thread is realtime (xnuhost's vCPUs stay SCHED_OTHER; the
+  way back's rule holds). XNU's failsafe demotes a realtime thread that runs 1 s without blocking; an engine blocks
+  every period;
+- its wait is `assert_wait_deadline_with_leeway(..., TIMEOUT_URGENCY_SYS_CRITICAL, deadline, 0)`: no slop;
+- `oneios-audio-rt=0`: kernel priority and `clock_delay_until`, exactly as before.
+
+Not done, on purpose: no host thread realtime or at a negative nice (docs/booter.md 2.9); no uclamp for a vCPU that
+runs the engine (the engine's work is a copy and a virtio kick, about 0.1 ms; uclamp sets the core's clock, not the
+wait for it; a vCPU is pinned to its core). The host's wait for a core (`waited for a host CPU`) is the vCPUs' and is
+not changed here.
+
+The lasting lines (logging, no switch):
+
+- `DroidVMAudio: Speaker engine: realtime in the guest (period 5 ms, computation 2.5 ms, constraint 5 ms), its wait
+  without timer slop (oneios-audio-rt=1)` once per device at its first start (or `thread_policy_set refused the time
+  constraint (0x..): kernel priority, ...` at every refusal);
+- the counter line's `late` is the speaker's and the mic's (their `periods`); the Actuator's apart;
+- `ONEIOS AUDIO: late periods: speaker N over 1 ms, N over 5 ms, N over 20 ms of N, N written by the HAL only in
+  part; Actuator N over 5 ms; engine threads realtime N, refused N (oneios-audio-rt=1)` with the counter line, since
+  boot. "Written by the HAL only in part": the HAL's write end was inside the period when the engine took it (iOS's
+  I/O thread late, not the engine: then its rest plays as silence). A phone boot with the fix should show the
+  speaker's `over 5 ms` near 0, the `speaker engine:` line's average under 0.5 ms and its max far under 28 ms, the
+  helper's target back at 10 ms and its `latency about` near 15 ms; if `written by the HAL only in part` grows, the
+  HAL's own thread is late and the speaker's safety offset (240 frames) is the next thing to size.
+
+Tested: the archive built against `HOSTED_OUT=wired`'s tree with the change (`oneios-tool kernel gen audio`,
+`ONEIOS_AUDIO_OUT` elsewhere: no warning; `thread_policy_set`, `assert_wait_deadline_with_leeway`, `thread_block`
+undefined in `DroidVMAudio.late.o`, as the kernel defines them); `cargo test -p oneios-kernel` (the synthetic
+source has the three new anchors; the staged source's hash in `golden/staged.sha256`). Then the kernel: built on the laptop with the whole series (`HOSTED_OUT=audiolate ONEIOS_CRYPTO=original`, 686 s, 182 patches, releasable): `xnu.macho` `6d40f8e0`; prelinked to `out/kernel/24A446-audiolate/kernel.kc` `853068df` (`.hashes` `fa7166ba`), audit 0 failures, stubs-check 666 good 0 bad; `kernel/tests/host.sh` 10 of 10.
+`runtime/host-tests.sh` (2026-11-24, after the rebase on 904809b): workspace, lint, lint-android, port, links and package pass, boot skipped. Not booted (no qemu boot, owner's rule of 2026-11-24; not on the phone yet).
 
 ### No audio at all in v0.1.16: VirtualAudio never started (fix-audio-camera-model, 2026-11-23; built, not on the phone)
 
@@ -3274,7 +3393,7 @@ their streams. The S24 Ultra defaults are unchanged (the nodes follow the camera
 Host test: `runtime/loader/tests/loader.rs` `machine_cameras_and_identity` (no nodes without the device; both, rear only, front only with an
 identity; the identity's own `unique-model` kept unless `camera-model=` names one; `camera-model=V54AP` and its other identity; the identity hash).
 
-### The stream that never started (S24 local backport of e84a46e; not built or booted here)
+### The stream that never started (fix/s24-fps-heat-camera, 2026-11-25; built, not on the phone)
 
 In the gpumem session of 2026-11-24 (`docs/s24-fps-heat-camera.md`) the Camera app opened and the preview stayed
 black: `camera#0 q0` moved only at the device's creation, so the graph never called the stream's Start. Its Metal
@@ -3287,6 +3406,12 @@ compile deadline on a phone with every core at its top clock. What changed:
   (CoreMedia's notification center, the stream as the object), as H10ISP's does; ported from Jesvi-iOS
   `userland/src/camera_device.c` `post()` (a13e406, MIT), where BWFigVideoCaptureDevice waited for StreamStopped and
   every stop otherwise timed out. Switch `oneios-camera-notify=0`.
+- A crash of cameracaptured in the Metal plug-in's reflection (`nmb_compute_pipeline_reflection`, SIGSEGV at 0): a
+  compute pipeline rebuilt with its unset function constants zero freed its function before the reflection read it
+  (CCPortrait's kernels in cameracaptured's precompilation, every boot on Droid-VM). Ported from Droid-VM/NativeMetal
+  3c46b5e (MIT) as a frontend edit (docs/gpu.md "What the camera needs"); no switch (a crash fix). Proof: no
+  cameracaptured crash report naming `nmb_compute_pipeline_reflection`, no `oneios-kill` exit of cameracaptured with the
+  Camera app open.
 - Checked, no change needed: the names the plug-in takes (`VideoOutputConfigurations`, `VideoOutputsEnabled`,
   `VideoOutputHandlers`, `PixelBufferHandler`, `BufferPool`, the outputs `PrimaryScaler`, `SecondaryScaler`,
   `StillImage`) are in 24A446's CMCaptureCore as they were in iOS 16 (`oneios-tool sym cstr`); iOS 27 adds outputs
@@ -3332,7 +3457,8 @@ Details and the phone test: `runtime/bridges/brightness/README.md`, `drivers/bri
   `REL_X` infrared, `REL_RX` UV, `REL_RY` clear (each the gain-normalised average + 1), `ABS_Y/Z/RX` the gains
   (`stk_sec_report`). `/sys/class/sensors/als_rear/` has `als_ir`, `als_clear`, `als_uv`, `als_raw_data`. No lux in
   this mode; the scale to lux is not calibrated [U].
-- The front light sensor is on the sensor hub (SSC), reachable only through the sensors HAL: not used.
+- The front light sensor is on the sensor hub (SSC): read over QRTR by `runtime/bridges/sensors` with `sensors=auto|ssc`
+  (section 7i; on by default since 2026-11-25 with `sensors=auto`, not booted); the brightness bridge then takes its readings instead of `als_rear`'s.
 
 ### iOS side (`drivers/brightness`, port of iOSPlus10 `2201-laurel-backlight-panel-power.patch` and `9005-laurel-backlight-calibration.patch`)
 
@@ -3389,7 +3515,8 @@ Details and the phone test: `runtime/bridges/brightness/README.md`, `drivers/bri
 - Light: `OB_BRIGHT_ALS` readings are kept in the kernel. The way to CoreBrightness is a HID device for the
   original `AppleUSBALSService` (AppleHIDALSService is in the collection): `OneiOSALSDevice.cpp`, built into the
   hosted kernel's HID archive against the collection's `IOHIDDevice` layout (section 7b) and started after the
-  touch screen and the buttons.
+  touch screen and the buttons. With `oneios-als-spu=1` (2026-11-25; the kernel's default 0, xnuhost adds 1 when the light comes from the hub, which `sensors=auto` makes the default) it is an iPhone's SPU light
+  sensor instead, for CoreBrightness itself (section 7i).
 
 ### The bridge (`runtime/bridges/brightness`)
 
@@ -4094,7 +4221,10 @@ the stand-in encoder (below).
   session ever closed: the two slots were gone after the guest's start-up check and one encode); ENUM_FMT answered
   nothing; a coded unit larger than the guest's buffer came back as an error at every poll for the session's life.
   The device's worker also polled its backend 50 times a second for ever with nobody using it; it now sleeps until a
-  command with no session open. `runtime/bridges/encoder/README.md` has each.
+  command with no session open. Until 2026-11-25 it still asked an encoder session's backend every millisecond for
+  2 s after each command; now the helper backend's receive thread wakes it with each coded unit (`Session::wakes`;
+  50 ms guard), and `media: 30 s: worker woken N: by data ..., by the timeout N; 1 ms looks N` says its wake-ups
+  (fix/codec-irq, not booted). `runtime/bridges/encoder/README.md` has each.
 - **The stand-in encoder [F]:** for a host with no MediaCodec (the PC). It writes a real stream that decodes to the
   frame it was given: HEVC with every coding unit I_PCM (the frame's samples, raw, at the PCM bit depth that fits the
   guest's buffer, dithered), H.264 as I_PCM or a grey picture. xnuhost runs it in its own process with
@@ -4115,7 +4245,9 @@ the stand-in encoder (below).
 ### The guest side (`kernel/patches/oneios-hosted/codec`)
 
 `oneios-tool kernel gen codec` builds `liboneioscodec.a` between the two kernel passes (`kernel/build-hosted.sh`,
-after `audio`): UniXNU-droidvm's `DroidVMVirtioMedia.c` and `DroidVMVTParavirt.cpp` unchanged, `DroidVMVTHost.cpp`
+after `audio`): UniXNU-droidvm's `DroidVMVTParavirt.cpp` unchanged, `DroidVMVirtioMedia.c` (since 2026-11-25 its event queue on the
+device's interrupt instead of a 1 ms poll, `oneios-codec-irq=0` the poll; `codec/README.md` "The transport on the
+interrupt"), `DroidVMVTHost.cpp`
 with four edits (the hvcC's level, below; iOS 27's tile session, a small HEVC session coded larger and cropped, `jcap`:
 "On the phone, 2026-11-22" below), and `OneiOSCodec.c` (`oneios_codec_start`, which `oneios_drivers_start`
 calls; a weak default in `drivers/bridge/OneiOSBridge.c` stands for a kernel without the archive). The hvcC edit: its
@@ -4358,7 +4490,7 @@ image set's `gpu=` is now taken (it was read and dropped before; no image this t
 
 ```
 host: galaxy-s24-ultra (Galaxy S24 Ultra (SM-S928, SM8650)), matched by ro.product.model=SM-S928B; read: ro.product.model=SM-S928B ro.product.device=e3q ro.board.platform=pineapple ro.soc.model=SM8650 ro.soc.manufacturer=QTI; defaults: none (today's)
-host: galaxy-a56 (Galaxy A56 (SM-A566, Exynos 1580)), matched by ro.product.model=SM-A566E; read: ...; defaults: gpu=auto, panel-fallback=1080x2340@120, width=720, height=1560, scale=2, hz=60, return-graceful-ms=4000, hw-backend-haptics=treble, hw-backend-fallback=1
+host: galaxy-a56 (Galaxy A56 (SM-A566, Exynos 1580)), matched by ro.product.model=SM-A566E; read: ...; defaults: gpu=auto, panel-fallback=1080x2340@120, width=720, height=1560, scale=2, hz=60, return-graceful-ms=4000, astc=0, hw-backend-haptics=treble, hw-backend-fallback=1
 host: galaxy-a56 (...), ...; defaults: gpu=auto not taken (the command line or the image set gives it)
 host: galaxy-s26-ultra (...), matched by ro.product.model=SM-S948B; read: ...; defaults: ONEIOS_BRIGHT_MAX=2300
 host: unknown phone (read: ro.product.model=Pixel 11 Pro ro.product.device=... ...): today's defaults (host-device=NAME forces one of galaxy-s24-ultra, ...)
@@ -4378,6 +4510,75 @@ panel, 1..2300 of 12750 detected, 1..12750 with `none` or the S24's properties, 
 `phone status`'s host line for each phone). 2026-11-23, on the build laptop: every S24 Ultra model number above (SM-S928B, U, U1, W, N, 0; the W with its US vendor model and bootloader) in `test_hw_backend.c` (the C, on main), `host.rs`, `test-verify-host.sh` and `run.sh`; the same day in the Rust (`cargo test -p onebridges host_device`, `test_hw_backend.rs`): those models, the stock SM-S928W, and the S26 Ultra by its codename `m3q` and by its platform `canoe` alone; `cpu::test_cpu::cpu` has the S26 Ultra's SM8850 topology (the C's `test_bridges.c` `test_cpu`). **Not run on a phone**: the first phone start shows the line above; on the
 S24 Ultra it must say `galaxy-s24-ultra ... defaults: none (today's)`.
 
+## 7i. Sensors: motion and the front light, from the sensor hub (fix/sensors-als, 2026-11-25; on by default since the merge into main, `sensors=off` turns it off; not booted)
+
+Details: `runtime/bridges/sensors/README.md` (the host, the route, the HAL fallback), `kernel/patches/oneios-hosted/hid/README.md`
+("Motion sensors", "The SPU light sensor"), `drivers/brightness/README.md` (the light sensor). The research behind it:
+`docs/ports-2026-11-25-hw.md` sections 1 and 2.
+
+### The phone
+
+- The accelerometer, gyroscope, magnetometer, pressure, proximity and the **front** light sensor are on Qualcomm's sensor
+  hub (SSC, the ADSP's sensors PD, its SEE), not on `/dev/input`; Android's sensors HAL reaches the hub over QRTR (QMI
+  service 400) [F `docs/ports-2026-11-25-hw.md` 1, ios-redfin's and iOSPlus10's readings of the SEE protocol]. The rear
+  light sensor `als_rear` (section 7a) gives 0 lux on the S24 [F `docs/TODO.md`].
+- [U] whether a root process beside One UI may open `AF_QIPCRTR` and sees service 400 (SELinux: KernelSU's domain
+  allows most things [I]), and the S24's data type names and light sensors. **`oneios-tool phone qrtr --sensors`** answers
+  all of it, read only (`tools/oneios-tool/README.md`).
+
+### The host (`runtime/bridges/sensors`, xnuhost `motion.rs`; `sensors=auto|ssc`, default auto since 2026-11-25)
+
+- A SEE client ported from ios-redfin (MIT) on Linux's own QRTR: the hub's service 400 found at xnuhost's boot, each
+  sensor's SUID and attributes; the light used is the first whose name does not say "rear" (`sensors-light=N` picks one).
+- The accelerometer and gyroscope at `sensors-hz` (50), the magnetometer at 25 Hz, the light on change; one thread in
+  `poll()`; streams stop while iOS's display is off and at the stop (closing the sockets ends them on the hub).
+- Motion frames go to a third virtio-input device, `/arm-io/input-N` "OneiOS motion sensors" (INPUT_PROP_ACCELEROMETER;
+  the gravity vector 256 per g in iOS's sign, 16 per degree per second, 16 per microtesla); xnuhost adds `oneios-motion=7`
+  (15 with a magnetometer). Only when the kernel collection has no `com.apple.driver.AppleSPU` member (`motion_allowed`,
+  `session/board.rs`; v0.1.30 gave none at all): else `sensors: motion: not given to the guest: KERNEL has
+  com.apple.driver.AppleSPU, ...; prelink it again`, and with one `sensors: motion: the kernel's AppleSPUHIDDevice ...`. Light readings go to the brightness bridge (`Bright::als_feed`, then `OB_BRIGHT_ALS`) in place
+  of `als_rear`; xnuhost adds `oneios-als-spu=1`.
+- No hub (auto): `sensors: off: source old ...`, no motion device, the rear light sensor: the boot of before.
+- [I] about 125 wake-ups a second of the bridge's thread and 50 frames a second to the guest while iOS's display is on,
+  one a minute while it is off.
+
+### iOS (`kernel/patches/oneios-hosted/hid`, `drivers/brightness`)
+
+- Motion (`oneios-motion=MASK`): UniXNU-droidvm's `AppleSPUHIDDevice`s (proven on iPadOS 27 24A446 there: locationd and
+  CoreMotion, backboardd's autorotation) for the accelerometer `{0xff00, 3}`, gyroscope `{0xff00, 9}`, device orientation
+  `{0x20, 0x8a}` and, ours, the compass `{0xff00, 0x0a}`; their SPU command channel `AppleSPUHIDDeviceUserClient`.
+  Apple's `com.apple.driver.AppleSPU` has classes of the same names, and it was in both collections until 2026-11-25:
+  v0.1.29 panicked at kernel start (S24 Ultra, 24B156: "Kext com.apple.driver.AppleSPU class AppleSPUHIDDevice is a
+  duplicate"). The archive's IOHIDEventDriver personality for `{0xff0c, 3}` on Transport SPU (score 100000) wins the
+  match, but does not keep Apple's `AppleSPUGestureDriver` (the same pair and transport) from being tried:
+  `IOService::probeCandidates` loads the kext of every personality that passes `matchPassive`
+  (`IOCatalogue::isModuleLoaded`), whatever its score, before it starts the best one [F xnu-12377 IOService.cpp,
+  IOCatalogue.cpp]. So `prelink roots` leaves AppleSPU out of both collections, with the kexts that link it and
+  would bring it back as a dependency (AppleALSColorSensor, whose `AppleSPUCT7xx` match the SPU light sensor's
+  `{0xff00, 4}`, AppleEmbeddedLightSensor, AOPTouchKext, AppleHIDTransportSCMCommon; `kernel/prelink/README.md`), as
+  UniXNU-droidvm's iPad kernelcache has no AppleSPU [F kernelcache 24A446 and 24B156]. Two guards for a collection
+  prelinked before: xnuhost gives no motion device when the collection has a `com.apple.driver.AppleSPU` member, and
+  the kernel registers no motion class when that kext has an OSKext (`oneios_motion_register`). Its line names whose
+  classes are in use: `oneios-hid: motion: AppleSPUHIDDevice registered below IOHIDDevice, ...; the kernel's classes:
+  com.apple.driver.AppleSPU is not in the collection`.
+- Light (`oneios-als-spu=1`): the light sensor as an iPhone's SPU ALS `{0xff00, 4}` (Transport SPU, Built-In, VendorID
+  0x5ac, `ALSCurveInfo`: Jesvi-iOS's reading of CoreBrightness), its event driver's events turned into ambient light
+  events, and the last reading re-posted within 15 ms of a wake (ios-redfin 1298: CoreBrightness's 250 ms
+  `FirstALSSampleTimeout`). 0: the HID Sensor device for `AppleUSBALSService` of section 7a, as before.
+
+### Proof lines (none seen yet)
+
+- `oneios-tool phone qrtr`: `qrtr: SSC: service 400 version V at node N port P answers: ...`.
+- xnuhost: `sensors: on: ssc ...`, `sensors: streaming: ...`, `sensors: 60 s: accelerometer N, ... light N readings, last N lux`.
+- The kernel: no `class AppleSPUHIDDevice is a duplicate` panic; `oneios-hid: motion: AppleSPUHIDDevice registered below
+  IOHIDDevice, ...; the kernel's classes: com.apple.driver.AppleSPU is not in the collection`,
+  `oneios-hid: motion: AppleSPUHIDDevice accelerometer, gyroscope, orientation, compass published`, its 60 s
+  line, `ONEIOS ALS: SPU ambient light service (0xff00/4) published`, `ONEIOS ALS: IOHIDEventDriver's dispatch wrapped`,
+  `ONEIOS ALS: 60 s: ...`.
+- iOS (`oneios-tool phone pull-log DIR`, `ioslog --proc locationd`, `--proc backboardd`): locationd's `CLIoHidInterface`
+  matching the services, CoreMotion's orientation, CoreBrightness's ALS lines; on the screen an app that rotates, and
+  auto-brightness following a hand over the front sensor.
+
 ## 8. Sources
 
 | What | Repository and commit |
@@ -4389,6 +4590,7 @@ S24 Ultra it must say `galaxy-s24-ultra ... defaults: none (today's)`.
 | Other trees seen, not used: Samsung OSS builds with KernelSU, the Gunyah kernel | `YuzakiKokuban/android_kernel_samsung_sm8650` (7c7f8dd), `Andy312432/android_kernel_samsung_sm8650_gunyah` (bacbd93) |
 | iOS-side ports | iOSPlus10 (local, read-only): `patches/laurel/xnu/2700-laurel-pmi632-haptics.patch`, `2600-laurel-bluetooth-wcn3990.patch`, `docs/laurel_sprout/{haptics,bluetooth,camera,audio}.md` |
 | Guest drivers taken unchanged | UniXNU-droidvm f9121cd (`external/UniXNU-droidvm/package/`), `docs/references.md` |
+| What other ports would fix in the open areas (sensors, auto-brightness, camera, audio, Bluetooth), ranked, with licences, effort and proof lines (2026-11-25, research only: nothing ported then) | [ports-2026-11-25-hw.md](ports-2026-11-25-hw.md): ios-redfin 23019ab4, ios-guacamole 53e6c5e, UniXNU-sheng c8f92b2, UniXNU-droidvm f9121cd, Jesvi-iOS a13e406 |
 | The owner's phone | board notes of 2026-11-10 in `docs/agents.md` (shell and root reads) |
 
 Only single files were fetched from the kernel and device repositories (raw downloads at the pinned commit) and one

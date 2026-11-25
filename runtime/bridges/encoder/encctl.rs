@@ -131,7 +131,7 @@ impl Drop for PoolRam {
 pub struct Guest {
     pub dev: Arc<MediaVirtio>,
     driver: Driver,
-    _rings: GuestRam,
+    rings: GuestRam,
     pool: PoolRam,
     io: GuestRam,
     events: GuestRam,
@@ -179,14 +179,8 @@ impl Guest {
         let rings = GuestRam::new(2 * RING_BYTES as usize);
         let driver =
             Driver::up(dev.clone() as Arc<dyn MmioDevice>, 0, 2, QN, rings.pa(0)).ok_or("the guest's driver")?;
-        let mut g = Guest {
-            dev,
-            driver,
-            _rings: rings,
-            pool,
-            io: GuestRam::new(0x1000),
-            events: GuestRam::new(EVENT_BUFS * 640),
-        };
+        let mut g =
+            Guest { dev, driver, rings, pool, io: GuestRam::new(0x1000), events: GuestRam::new(EVENT_BUFS * 640) };
         for i in 0..EVENT_BUFS {
             let pa = g.events.pa(i * MEDIA_EVENT_BYTES as usize);
             g.driver.post(MEDIA_QUEUE_EVENT, &[(pa, MEDIA_EVENT_BYTES, true)]);
@@ -308,6 +302,12 @@ impl Guest {
 
     pub fn stats(&self) -> Stats {
         media_device::stats(&self.dev)
+    }
+
+    /// Sets or clears VIRTQ_AVAIL_F_NO_INTERRUPT on `queue`'s avail ring, as the staged DroidVMVirtioMedia.c does (edit 7,
+    /// 2026-11-25: the command queue always, the event queue unless it waits on the interrupt).
+    pub fn set_no_interrupt(&self, queue: u32, on: bool) {
+        self.rings.set_u16(queue as usize * RING_BYTES as usize + 0x1000, u16::from(on));
     }
 }
 

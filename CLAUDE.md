@@ -28,6 +28,11 @@ kernel. Read first: [README.md](README.md) (status), [docs/architecture.md](docs
 > with a background task and wait for its completion notice; follow a live log with `oneios-tool phone log --follow`
 > under a filter. Never a polling loop, in the foreground or the background.
 
+> **Wait with the Monitor tool, never `tmux wait-for` (2026-11-25).** A long job (release, build, tests) runs in tmux
+> with its output in a log file; follow it with the Monitor tool on `tail -n 0 -F LOG | grep --line-buffered -E
+> "<progress>|<the end line>|error|FAILED"` (every end, the failures too, not only success), and read the log when
+> its end line arrives. No `tmux wait-for` in the foreground or in a background task, no `sleep`.
+
 > **No qemu boots: test on the phone (2026-11-24).** Do not boot the kernel or the runtime under qemu (the 25-minute
 > test-kernel or `--mode bench` boots) to check a change, unless the owner asks for it. Run the fast host tests
 > (`runtime/host-tests.sh`, whose qemu `boot` part now runs only with `QEMU=1`; `kernel/tests/host.sh`, unit tests), build, and hand the files
@@ -72,8 +77,9 @@ not; mark guesses as guesses.
 
 - **Every build and test runs on the build laptop (owner's rule, 2026-11-23):** `ssh akshay@100.76.16.53` (Linux, 20
   cores; checkout `/home/akshay/Documents/GitHub/OneiOS` with `secrets/oneios-debug.keystore` and `inputs/`). Push the
-  work to a branch, `git pull` there, run long jobs in tmux that end with `tmux wait-for -S NAME`, and wait with
-  `ssh ... 'tmux wait-for NAME'` in a background task. Releases are made there (`scripts/release/release.sh`).
+  work to a branch, `git pull` there, run long jobs in tmux with their output in a log that ends with a line such as
+  `EXIT=$?`, and follow that log with the Monitor tool (from the Mac: `ssh ... 'tail -n 0 -F LOG | grep
+  --line-buffered ...'` as the Monitor's command). Releases are made there (`scripts/release/release.sh`).
 - The Mac (`/Users/akshaycm/Documents/GitRepos/OneiOS`) edits, commits and pushes, and drives the phone (adb,
   `oneios-tool phone`); copy back only what the phone needs. Its own build path (Xcode, the NDK, Apple's `container`
   for `runtime/host-tests.sh`) still works, but do not run builds or tests there.

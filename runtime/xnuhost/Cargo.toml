@@ -26,6 +26,7 @@ onecamera.workspace = true
 oneencoder.workspace = true
 oneios-display.workspace = true
 drm2kgsl-sys.workspace = true
+oneios-switches.workspace = true
 
 [lints]
 workspace = true

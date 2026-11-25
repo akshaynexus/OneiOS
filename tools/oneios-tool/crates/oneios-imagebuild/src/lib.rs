@@ -28,6 +28,7 @@
 //! set's files and the lists' new lines. The fetched members in INDIR stay for the next run (they are the
 //! resumable part). Nothing here starts a program.
 
+pub mod a56gpu;
 mod cmd;
 pub mod data;
 
@@ -163,7 +164,9 @@ impl Prelink {
 /// `runtime_metal` and `runtime_camera` are the staged runtime's Metal bundle and capture plug-in folder (its
 /// runtime.json "metal" and "camera", runtime/package.sh's lib/guest/; the phone's `serve make-image` sets them): they
 /// stand in for a `metal_plugin` (`camera_plugin`) not given, when the bundle's `oneios-target` is this image's
-/// `<device> <build>` (`Tweak::for_image`).
+/// `<device> <build>` (`Tweak::for_image`). `runtime_more` are the runtime's other targets (runtime.json "metals" and
+/// "cameras" after the default's: lib/guest/<build>/, iOS 27.2.1's beside 27.0.1's), each a bundle and its capture
+/// plug-in folder; `for_image` takes the one whose target is the image.
 #[derive(Debug, Clone, Default)]
 pub struct Tweak {
     pub helpers: Option<String>,
@@ -175,6 +178,10 @@ pub struct Tweak {
     pub args: Vec<String>,
     pub runtime_metal: Option<String>,
     pub runtime_camera: Option<String>,
+    pub runtime_more: Vec<(String, Option<String>)>,
+    /// The staged runtime's folder when its runtime.json names the Galaxy A56's GPU plug-ins ("metal_a56"; the phone's
+    /// `serve make-image` sets it): an iOS 16.5 set they are for gets them as its kernel.kc.gpuaddon (a56gpu.rs)
+    pub runtime_a56: Option<String>,
 }
 
 impl Tweak {
@@ -200,19 +207,27 @@ impl Tweak {
         if let Some(given) = &t.metal_plugin {
             return (t.clone(), format!("{given} (given)"));
         }
-        let Some(bundle) = t.runtime_metal.clone() else {
+        // the default target's first, then the others (runtime.json "metals"): the first built for this image
+        let mut offered: Vec<(String, Option<String>)> = t.runtime_metal.clone().map(|b| (b, t.runtime_camera.clone())).into_iter().collect();
+        offered.extend(t.runtime_more.iter().cloned());
+        if offered.is_empty() {
             return (t, "none: none given, and the staged runtime carries none (CPU composition)".to_string());
-        };
-        let target = std::fs::read_to_string(Path::new(&bundle).join("oneios-target")).map(|s| s.trim().to_string()).unwrap_or_default();
-        if target != image {
-            let target = if target.is_empty() { "no image (no oneios-target)".to_string() } else { target };
-            return (t, format!("none: the staged runtime's ({bundle}) is for {target}, this image is {image} (CPU composition)"));
         }
-        t.metal_plugin = Some(bundle.clone());
-        if t.camera_plugin.is_none() {
-            t.camera_plugin = t.runtime_camera.clone();
+        let mut seen = Vec::new();
+        for (bundle, camera) in offered {
+            let target = std::fs::read_to_string(Path::new(&bundle).join("oneios-target")).map(|s| s.trim().to_string()).unwrap_or_default();
+            if target != image {
+                let target = if target.is_empty() { "no image (no oneios-target)".to_string() } else { target };
+                seen.push(format!("({bundle}) is for {target}"));
+                continue;
+            }
+            t.metal_plugin = Some(bundle.clone());
+            if t.camera_plugin.is_none() {
+                t.camera_plugin = camera;
+            }
+            return (t, format!("{bundle} (the staged runtime's, for {image})"));
         }
-        (t, format!("{bundle} (the staged runtime's, for {image})"))
+        (t, format!("none: the staged runtime's {}, this image is {image} (CPU composition)", seen.join("; ")))
     }
 }
 
@@ -851,6 +866,22 @@ pub fn build(args: &Args, space: Space) -> R<Built> {
     }
     let said = image_cmd(&margs)?.trim_end().to_string();
     println!("{said}");
+    // The Galaxy A56's GPU plug-ins of the staged runtime (a56gpu.rs): an iOS 16.5 set they are for gets its
+    // kernel.kc.gpuaddon of them and their CDHashes in owner-trust.json (and that entry of manifest.json), before the
+    // verify reads the manifest; the sidecar is not in the manifest, so it is added to the lists below by name.
+    let mut a56_addon: Option<String> = None;
+    if let Some(runtime) = &args.tweak.runtime_a56 {
+        let plugins = a56gpu::runtime_plugins(Path::new(runtime)).map_err(failed)?;
+        match a56gpu::for_set(&set, plugins.as_ref()).map_err(failed)? {
+            Ok(placed) => {
+                a56gpu::write(&placed, &set, false).map_err(failed)?;
+                println!("{}", a56gpu::counts_line(&placed));
+                println!("{}", a56gpu::placed_line(&placed));
+                a56_addon = Some(oneios_image::sha256_of(&format!("{set_s}/{}", a56gpu::ADDON)).map_err(image)?);
+            }
+            Err(why) => println!("@@A56GPU none: {why}"),
+        }
+    }
     between()?;
     let total: u64 = set_files(&set)?.iter().map(|(_, m)| m.len()).sum();
     job::begin("verify", "bytes", total);
@@ -874,6 +905,9 @@ pub fn build(args: &Args, space: Space) -> R<Built> {
     }
     let manifest_sha256 = oneios_image::sha256_of(&format!("{set_s}/manifest.json")).map_err(image)?;
     sums.push(("manifest.json".into(), manifest_sha256.clone()));
+    if let Some(sha) = a56_addon {
+        sums.push((a56gpu::ADDON.into(), sha));
+    }
     sums.sort();
     let on_disk = set_files(&set)?;
     if on_disk.len() != sums.len() {
@@ -1207,7 +1241,20 @@ mod tests {
         // another image (the A56's iOS 16.5): neither
         let (t, said) = runtime.for_image("iPhone15,4", "20F66");
         assert_eq!((t.metal_plugin, t.camera_plugin), (None, None));
-        assert!(said.contains("is for iPhone18,2 24A446, this image is iPhone15,4 20F66"), "{said}");
+        assert!(said.contains(") is for iPhone18,2 24A446, this image is iPhone15,4 20F66"), "{said}");
+        // two targets (runtime.json "metals"): each image takes its own bundle and the capture plug-in beside it
+        let other = dir.join("24B156/NativeAdrenoMetal.bundle");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("oneios-target"), "iPhone18,2 24B156\n").unwrap();
+        let both = Tweak { runtime_more: vec![(other.display().to_string(), Some("CAMERA-B".into()))], ..runtime.clone() };
+        let (t, said) = both.for_image("iPhone18,2", "24B156");
+        assert_eq!((t.metal_plugin.as_deref(), t.camera_plugin.as_deref()), (Some(other.to_str().unwrap()), Some("CAMERA-B")));
+        assert!(said.ends_with("(the staged runtime's, for iPhone18,2 24B156)"), "{said}");
+        let (t, _) = both.for_image("iPhone18,2", "24A446");
+        assert_eq!((t.metal_plugin.as_deref(), t.camera_plugin.as_deref()), (Some(bundle.to_str().unwrap()), Some("CAMERA")));
+        let (t, said) = both.for_image("iPhone18,2", "24C1");
+        assert_eq!(t.metal_plugin, None);
+        assert!(said.contains(") is for iPhone18,2 24A446; (") && said.contains(") is for iPhone18,2 24B156, this image is iPhone18,2 24C1"), "{said}");
         // ONEIOS_ALLOW_NO_METAL=1 on the S24 Ultra's image: none, as the tweaks' preflight takes it
         let (t, said) = Tweak { allow_no_metal: true, ..runtime.clone() }.for_image("iPhone18,2", "24A446");
         assert_eq!((t.metal_plugin, said.as_str()), (None, "none (ONEIOS_ALLOW_NO_METAL=1)"));

@@ -1,0 +1,24 @@
+OneiOS 5101: reach the OneiOSRadeonGL target (src/gallium/targets/oneios-gl, the copy of
+userland/metal-amd/gl that its build.sh makes) when it is there and GLES is built.
+
+The hook sits after the DRI target, not at the end of the file, so that it applies on the
+pinned Mesa alone (the host test, the softpipe-only iOS build) and after the guest Mesa
+stage's 0005 and the Metal layer's 5002, which both add to the end. The target is read after
+every driver (softpipe, radeonsi) it links.
+
+diff --git a/src/gallium/meson.build b/src/gallium/meson.build
+index 67011f5..8a19afd 100644
+--- a/src/gallium/meson.build
++++ b/src/gallium/meson.build
+@@ -232,6 +232,11 @@ if with_dri
+   subdir('frontends/dri')
+   subdir('targets/dri')
+ endif
++# OneiOS (userland/metal-amd/gl, 5101-oneios-gl-target.patch): OneiOSRadeonGL, the Galaxy A56's OpenGL ES for
++# CoreAnimation, where userland/metal-amd/gl/build.sh copied its sources in and GLES is built.
++if with_gles2 and fs.is_dir('targets/oneios-gl')
++  subdir('targets/oneios-gl')
++endif
+ if with_platform_haiku
+   subdir('frontends/hgl')
+ endif

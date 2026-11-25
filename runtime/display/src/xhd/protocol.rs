@@ -13,7 +13,8 @@
 //!          bit 0 (DONE_FAILED): the last could not be copied, and xnuhost goes back to copying frames itself
 //!   options { "XHDO", flags, 0, 0, 0 }  (xnuhost -> helper, after the hello; an older helper ignores it) bit 0
 //!          (OPTION_SERIAL_POST, xnuhost's display-post=serial): the reader reads no further frame until the poster has
-//!          posted the last (the one loop before 2026-11-24, docs/switches.md)
+//!          posted the last (the one loop before 2026-11-24, docs/switches.md); bit 1 (OPTION_PRESENT_AHB, display-present=ahb,
+//!          2026-11-25): the poster posts into write-only buffers on a child of the layer (xhd::present), else the window
 //!
 //! The session's folder is writable by the guest, so nothing from the socket is trusted.
 use super::direct::Direct;
@@ -63,6 +64,8 @@ pub const DONE_FAILED: u32 = 1;
 pub const DONE_UNCHANGED: u32 = 2;
 /// The options' flags: each frame is posted before the next is read (display-post=serial).
 pub const OPTION_SERIAL_POST: u32 = 1;
+/// The options' flags: the frames go in write-only buffers on a child of the layer (display-present=ahb, xhd::present).
+pub const OPTION_PRESENT_AHB: u32 = 2;
 
 /// One message: a magic and four little-endian words (struct xhd_message, 20 bytes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -2,7 +2,7 @@
 # section 10) and exports its path as ONEIOS_TOOL.
 #   ONEIOS_TOOL=PATH set by the caller: that binary, as it is.
 #   Otherwise tools/oneios-tool/target/release/oneios-tool, built first with `cargo build --release` when it is
-#   missing or older than a file of its sources (cargo from PATH or ~/.cargo/bin; Rust 1.88 or newer), always into
+#   missing or older than a file of its sources (with runtime/switches, the switch catalog it builds in; cargo from PATH or ~/.cargo/bin; Rust 1.88 or newer), always into
 #   tools/oneios-tool/target (--target-dir: a caller's CARGO_TARGET_DIR, as runtime/host-tests.sh sets, would put it
 #   elsewhere, and a fresh worktree's package test then failed with "touch: cannot touch .../oneios-tool").
 # shellcheck shell=bash
@@ -13,7 +13,7 @@ oneios_tool() {
     export ONEIOS_TOOL; return 0
   fi
   bin=$dir/target/release/oneios-tool
-  if [ ! -x "$bin" ] || [ -n "$(find "$dir/Cargo.toml" "$dir/Cargo.lock" "$dir/crates" -type f -newer "$bin" -print 2>/dev/null | head -1)" ]; then
+  if [ ! -x "$bin" ] || [ -n "$(find "$dir/Cargo.toml" "$dir/Cargo.lock" "$dir/crates" "$1/runtime/switches" -type f -newer "$bin" -print 2>/dev/null | head -1)" ]; then
     cargo=$(command -v cargo || echo "$HOME/.cargo/bin/cargo")
     [ -x "$cargo" ] || { echo "oneios-tool is not built and there is no cargo: install Rust 1.88 or newer (https://rustup.rs; docs/building.md section 0)" >&2; return 1; }
     echo "oneios-tool: building (cargo build --release --manifest-path tools/oneios-tool/Cargo.toml)" >&2

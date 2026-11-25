@@ -117,6 +117,15 @@ fn settings_and_sizes() {
             && c.set("clusters", "EEPPPPPPP").is_err()
             && c.set("clusters", "EX").is_err()
     );
+    // sensors=: auto by default (2026-11-25); off, ssc; the rate 5..200; the light by index 0..7 or auto
+    let mut s = Config::new();
+    assert!(s.sensors == Sensors::Auto && s.sensors_hz == 50 && s.sensors_light.is_none());
+    assert!(s.set("sensors", "auto").is_ok() && s.sensors == Sensors::Auto && s.set("sensors", "hal").is_err());
+    assert!(s.set("sensors", "ssc").is_ok() && s.sensors == Sensors::Ssc);
+    assert!(s.set("sensors-hz", "100").is_ok() && s.sensors_hz == 100 && s.set("sensors-hz", "4").is_err());
+    assert!(s.set("sensors-hz", "201").is_err() && s.sensors_hz == 100);
+    assert!(s.set("sensors-light", "1").is_ok() && s.sensors_light == Some(1) && s.set("sensors-light", "8").is_err());
+    assert!(s.set("sensors-light", "auto").is_ok() && s.sensors_light.is_none());
     let mut c = Config::new();
     assert!(c.set("pen-mirror", "maybe").is_err() && !c.given("pen-mirror")); // a bad value refused
     assert!(c.set("encoder", "mediacodec").is_err() && !c.given("encoder") && c.encoder == Encoder::Off);
@@ -305,6 +314,12 @@ fn image_set_settings() {
     let c =
         run(&[&img1[..], &["--set", "pen=off", "--set", "pen-rotate=auto", "--set", "pen-mirror=0"]].concat()).unwrap();
     assert!(c.pen == Pen::Off && c.pen_rotate == PenRotate::Auto && !c.pen_mirror);
+    // The image set's sensors=, sensors-hz=, sensors-light= apply; the command line wins.
+    write(&path, &format!("boot-args=-v debug=0x8\nsensors=auto\nsensors-hz=25\nsensors-light=1\n{set_meminfo}\n"));
+    let c = run(&img1).unwrap();
+    assert!(c.sensors == Sensors::Auto && c.sensors_hz == 25 && c.sensors_light == Some(1));
+    let c = run(&[&img1[..], &["--set", "sensors=off", "--set", "sensors-hz=50"]].concat()).unwrap();
+    assert!(c.sensors == Sensors::Off && c.sensors_hz == 50 && c.sensors_light == Some(1));
     // The image set's encoder= applies (until 2026-11-22 it was read, then dropped: encoder=auto in the phone's
     // xnuhost.conf never gave the guest its encoder); the command line wins.
     write(&path, &format!("boot-args=-v debug=0x8\nencoder=auto\n{set_meminfo}\n"));
@@ -1071,6 +1086,33 @@ fn display_mode() {
     scale_fixups(Some("24A447"), 3, &mut c.text_fixups);
     scale_fixups(None, 3, &mut c.text_fixups);
     assert_eq!(c.text_fixups.len_bytes(), 17);
+    // 27.2.1 (24B156): the same two changes at that build's offsets, the same original and new bytes
+    scale_fixups(Some("24B156"), 3, &mut c.text_fixups);
+    let f = c.text_fixups.entries();
+    assert_eq!(
+        f[1..],
+        [
+            "dyld_shared_cache_arm64e.01,3f9d744,49008052,69008052",
+            "dyld_shared_cache_arm64e.01,3f9d758,280080520895889a,680080521f2003d5"
+        ]
+    );
+    one(&mut c.text_fixups);
+    scale_fixups(Some("24B156"), 2, &mut c.text_fixups);
+    assert_eq!(c.text_fixups.len_bytes(), 17);
+    // every build's entries: two, in .01, each a change of whole instructions that keeps the length
+    for (build, fixups) in SCALE_FIXUPS_3X {
+        assert_eq!(fixups.len(), 2, "{build}");
+        for f in fixups.iter() {
+            let p: Vec<&str> = f.split(',').collect();
+            assert!(
+                p.len() == 4
+                    && p[0] == "dyld_shared_cache_arm64e.01"
+                    && p[2].len() == p[3].len()
+                    && p[2].len() % 8 == 0,
+                "{build}: {f}"
+            );
+        }
+    }
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -1221,6 +1263,8 @@ fn host_device() {
     assert!(c.host_line.contains(
         "width=720, height=1560, scale=2, hz=60, return-graceful-ms=4000, astc=0, hw-backend-haptics=treble"
     ));
+    assert!(!c.astc); // the A56 keeps its device tree without ASTC (2026-11-25)
+    assert!(rig.finish(Some(&props), None, Some("astc=1")).unwrap().astc);
     // the frame is one setting: an image set made at the panel's scale (roottweak writes scale=3) gets the frame and @2x;
     // an image set or a command line that gives a width or a height keeps its own frame and scale
     let conf = format!("{image}/xnuhost.conf");
@@ -1528,11 +1572,14 @@ fn the_switches() {
         ("stop-loop", "poll"),
         ("uclamp-rule", "all"),
         ("display-post", "serial"),
+        ("display-present", "window"),
         ("timer-coalesce", "0"),
+        ("astc", "0"),
     ] {
         assert!(c.set(k, v).is_ok(), "{k}={v}");
     }
-    assert!(c.display_post_serial);
+    assert!(c.display_post_serial && !c.display_present_ahb);
+    assert!(Config::default().display_present_ahb, "display-present=ahb by default");
     for (k, v) in [
         ("gpu-blob-entries", "65533"),
         ("gpu-blob-entries", "1024"),
@@ -1546,46 +1593,57 @@ fn the_switches() {
         ("uclamp-rule", "some"),
         ("wifi-buffers", "off"),
         ("display-post", "1"),
+        ("display-present", "1"),
         ("timer-coalesce", "sometimes"),
+        ("astc", "on"),
     ] {
         assert!(c.set(k, v).is_err(), "{k}={v} refused");
     }
     c.boot_args = "-v oneios-wifi-rssi=0 oneios-telemetry-jobs=1 oneios-pool-cut=0 oneios-pressure-big=0 \
                    oneios-disable-allowed=0 oneios-nested-exact=0 oneios-upgrade-flush=1 oneios-fill-fast-fault=0 \
-                   oneios-idle-spares=0 oneios-bo-cache-idle=0 oneios-dont-care=0 oneios-queue-priority=0"
+                   oneios-audio-rt=0 oneios-audio-curve=0 oneios-codec-irq=0 oneios-idle-spares=0 oneios-bo-cache-idle=0 \
+                   oneios-keep-room=0 oneios-dl-full=0 sheng-vsync-min=24 oneios-compile-s=0 oneios-snapshot-astc=1 \
+                   oneios-camera-notify=0 oneios-m2v-shader-fix=0 oneios-dont-care=0 oneios-queue-priority=0"
         .into();
     let line = c.switches_line();
     assert!(line.contains(" wifi-joined-scan=plain ") && line.contains(" gpu-blob-entries=16384 "), "{line}");
-    assert!(line.contains(" decoder=off decoder-codecs=vp9,av1 astc=1 "), "{line}");
-    // Check values by key: adding a switch must not break this assertion merely because it appears
-    // between existing keys in the human-readable summary.
-    for (key, value) in [
-        ("oneios-wifi-rssi", "0"),
-        ("oneios-telemetry-jobs", "1"),
-        ("oneios-pool-cut", "0"),
-        ("oneios-pressure-big", "0"),
-        ("oneios-disable-allowed", "0"),
-        ("oneios-nested-exact", "0"),
-        ("oneios-upgrade-flush", "1"),
-        ("oneios-fill-fast-fault", "0"),
-        ("oneios-idle-spares", "0"),
-        ("oneios-bo-cache-idle", "0"),
-        ("oneios-dont-care", "0"),
-        ("oneios-queue-priority", "0"),
-    ] {
-        assert!(line.contains(&format!(" {key}={value} ")), "{key}={value}: {line}");
-    }
-    assert!(line.contains(" (docs/switches.md); "), "{line}");
     assert!(
-        line.ends_with(
-            "not at the default: stop-loop timer-coalesce uclamp-rule gpu-down gpu-blob-entries wifi-ring-wait wifi-send-wait \
-             wifi-buffers wifi-joined-scan encoder-10bit encoder-warmup display-post decoder decoder-codecs oneios-wifi-rssi \
-             oneios-telemetry-jobs oneios-pool-cut oneios-pressure-big oneios-disable-allowed oneios-nested-exact \
-             oneios-upgrade-flush oneios-fill-fast-fault oneios-idle-spares oneios-bo-cache-idle oneios-dont-care \
-             oneios-queue-priority"
+        line.contains(" display-post=serial display-present=window decoder=off decoder-codecs=vp9,av1 astc=0 "),
+        "{line}"
+    );
+    assert!(
+        line.contains(
+            " oneios-wifi-rssi=0 oneios-telemetry-jobs=1 oneios-pool-cut=0 oneios-pressure-big=0 oneios-disable-allowed=0 \
+             oneios-nested-exact=0 oneios-upgrade-flush=1 oneios-fill-fast-fault=0 oneios-audio-rt=0 oneios-audio-curve=0 \
+             oneios-codec-irq=0 oneios-idle-spares=0 oneios-bo-cache-idle=0 oneios-keep-room=0 oneios-dl-full=0 sheng-vsync-min=24 \
+             oneios-compile-s=0 oneios-snapshot-astc=1 oneios-camera-notify=0 oneios-m2v-shader-fix=0 oneios-dont-care=0 \
+             oneios-queue-priority=0 (docs/switches.md)"
         ),
         "{line}"
     );
+    assert!(
+        line.ends_with(
+            "not at the default: stop-loop timer-coalesce uclamp-rule gpu-down gpu-blob-entries wifi-ring-wait wifi-send-wait \
+             wifi-buffers wifi-joined-scan encoder-10bit encoder-warmup display-post display-present decoder decoder-codecs astc \
+             oneios-wifi-rssi oneios-telemetry-jobs oneios-pool-cut oneios-pressure-big oneios-disable-allowed \
+             oneios-nested-exact oneios-upgrade-flush oneios-fill-fast-fault oneios-audio-rt oneios-audio-curve \
+             oneios-codec-irq oneios-idle-spares oneios-bo-cache-idle oneios-keep-room oneios-dl-full sheng-vsync-min oneios-compile-s \
+             oneios-snapshot-astc oneios-camera-notify oneios-m2v-shader-fix oneios-dont-care oneios-queue-priority"
+        ),
+        "{line}"
+    );
+    // sensors-als (2026-11-25): the hub's switches after decoder-codecs, the guest's two before oneios-wifi-rssi
+    let mut s = Config::default();
+    assert!(s.switches_line().contains(
+        " decoder-codecs=h264,hevc,vp9,av1 astc=1 sensors=auto sensors-hz=50 sensors-light=auto oneios-motion=0 oneios-als-spu=0 oneios-wifi-rssi=1 "
+    ));
+    assert!(s.set("sensors", "ssc").is_ok() && s.set("sensors-light", "1").is_ok());
+    s.boot_args = "oneios-motion=15 oneios-als-spu=1".into();
+    let line = s.switches_line();
+    assert!(line.contains(" sensors=ssc sensors-hz=50 sensors-light=1 oneios-motion=15 oneios-als-spu=1 "), "{line}");
+    assert!(line.ends_with("not at the default: sensors sensors-light oneios-motion oneios-als-spu"), "{line}");
+    // sensors=off, the way to turn the hub off (no socket opened), is not the default
+    assert!(s.set("sensors", "off").is_ok() && s.switches_line().contains(" sensors=off sensors-hz=50 "));
     // takeover-ram (2026-11-23): the takeover's memory steps and option C, in the line after stop-loop and ram-fit-terms.
     let mut m = Config::default();
     assert!(m.switches_line().contains(
@@ -1696,4 +1754,213 @@ fn ios16_fixups_only_for_20f66_once_and_switchable() {
     // the identity: 20 bytes (MobileGestalt's product-id length), a serial the loader's layout takes
     assert_eq!(IOS16_PRODUCT_ID.len(), 20);
     assert!(xnuloader::machine::serial_number_property(IOS16_SERIAL).is_some());
+}
+
+#[test]
+fn ios16_coreimage_fixup_is_left_out_only_with_the_a56_gl_driver() {
+    // the A56's OpenGL ES (docs/a56-gpu.md 4a): the first oneios-gpu-amd-gl= word decides, as PE_parse_boot_argn reads it
+    assert!(amd_gl_on("oneios-gpu-amd=1 oneios-gpu-amd-gl=1"));
+    assert!(!amd_gl_on("oneios-gpu-amd=1"));
+    assert!(!amd_gl_on("oneios-gpu-amd-gl=0 oneios-gpu-amd-gl=1")); // the conf's =0 kept, xnuhost's =1 not added
+    assert!(amd_gl_on("oneios-gpu-amd-gl=1 oneios-gpu-amd-gl=0"));
+    assert!(!amd_gl_on("oneios-gpu-amd-gl=10") && !amd_gl_on("xoneios-gpu-amd-gl=1") && !amd_gl_on(""));
+    // the fixup goes only when xnuhost found the bundle in this boot's gpuaddon AND the guest is told so
+    assert!(ios16_gl_driver(true, "a oneios-gpu-amd=1 oneios-gpu-amd-gl=1"));
+    assert!(!ios16_gl_driver(false, "oneios-gpu-amd-gl=1")); // a hand-written =1 without the bundle
+    assert!(!ios16_gl_driver(true, "oneios-gpu-amd-gl=0")); // the bundle there, turned off in the conf
+    assert!(!ios16_gl_driver(true, ""));
+}
+
+/// The switch catalog (oneios-switches, which oneios-tool's `switches` and `conf` and the OneOS app's Switches screen
+/// read) agrees with this parser: every key the parser takes is in it; a switch's rule takes exactly the values the
+/// parser takes; a key's rule takes none the parser refuses (it may be stricter, or loose for the keys named below);
+/// every conf switch has its value for the line; the catalog's number readers are xh-core's.
+#[test]
+fn the_catalog() {
+    use oneios_switches::{check, Place, KEYS, KEY_PREFIXES, SWITCHES};
+    // every key of `apply`, read from its source
+    let source = include_str!("../config.rs");
+    let start = source.find("    fn apply(&mut self, key: &str, value: &str)").expect("apply");
+    let body = &source[start..start + source[start..].find("\n    }\n").expect("apply's end")];
+    let mut parsed: Vec<&str> = Vec::new();
+    // (the match's own arms: 12 spaces in; an inner match's words, as ram-view's "off", are further in)
+    let arm = |l: &&str| l.starts_with("            \"") && l.contains("=>");
+    for line in body.lines().filter(arm).map(str::trim) {
+        let names = line.split("=>").next().unwrap().split(" if ").next().unwrap();
+        parsed.extend(names.split('|').map(|n| n.trim().trim_matches('"')));
+    }
+    assert!(parsed.len() > 100 && parsed.contains(&"astc") && parsed.contains(&"data-store"), "{parsed:?}");
+    let conf_switches: Vec<&str> = SWITCHES.iter().filter(|s| s.place == Place::Conf).map(|s| s.name).collect();
+    for name in &parsed {
+        assert!(
+            conf_switches.contains(name) || KEYS.iter().any(|k| k.name == *name),
+            "{name}: the parser takes it, the catalog (runtime/switches) does not have it"
+        );
+    }
+    for name in conf_switches.iter().chain(KEYS.iter().map(|k| &k.name)) {
+        assert!(parsed.contains(name), "{name}: in the catalog, not a key of the parser");
+    }
+    assert!(source.contains(&format!("_ if key.starts_with(\"{}\")", KEY_PREFIXES[0])));
+    assert!(Config::default().set("hw-backend", "samsung").is_ok());
+
+    let long = "a".repeat(2000);
+    let samples = |rule: &oneios_switches::Rule| -> Vec<String> {
+        let mut v: Vec<String> = [
+            "",
+            "0",
+            "1",
+            "2",
+            "3",
+            "-1",
+            "+1",
+            " 1",
+            "1 ",
+            "yes",
+            "no",
+            "true",
+            "false",
+            "on",
+            "off",
+            "auto",
+            "keep",
+            "default",
+            "none",
+            "x",
+            "1x",
+            "5",
+            "7",
+            "8",
+            "16384",
+            "65532",
+            "65533",
+            "512M",
+            "1G",
+            "0x10",
+            "08",
+            "4096",
+            "99999999999999999999",
+            "h264",
+            "vp9,av1",
+            "vp9, av1",
+            "h264,h264",
+            "h264,",
+            "netd,media",
+            "netd,netd",
+            "netd, media",
+            "a b",
+            "iPhone18,2",
+            "1T",
+            "1024G",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        v.extend(rule.values.iter().cloned());
+        v.extend(rule.also.iter().cloned());
+        v.push(rule.values.join(","));
+        for n in [rule.min - 1, rule.min, rule.max, rule.max + 1] {
+            v.push(n.to_string());
+        }
+        if rule.max_len > 0 {
+            v.push("a".repeat(rule.max_len - 1));
+            v.push("a".repeat(rule.max_len));
+        }
+        v.push(long.clone());
+        v
+    };
+    // a switch: exactly the parser's values; its default and its value for the line
+    let c = Config::default();
+    for s in SWITCHES.iter().filter(|s| s.place == Place::Conf) {
+        let rule = s.rule();
+        for v in samples(&rule) {
+            assert_eq!(
+                check(&rule, &v).is_ok(),
+                Config::default().set(s.name, &v).is_ok(),
+                "{}={v:?}: the catalog and the parser differ",
+                s.name
+            );
+        }
+        assert_eq!(c.switch_value(s.name).as_deref(), Some(s.default), "{}: the default's value", s.name);
+    }
+    // a key: never a value the parser refuses (these are checked loosely: their rule is the length at most)
+    const LOOSE: [&str; 8] =
+        ["host-device", "panel-fallback", "text-fixup", "camera-model", "clusters", "disk", "disk-rw", "data-store"];
+    for k in KEYS {
+        let rule = k.rule();
+        for v in samples(&rule) {
+            if check(&rule, &v).is_ok() && !LOOSE.contains(&k.name) {
+                assert!(
+                    Config::default().set(k.name, &v).is_ok(),
+                    "{}={v:?}: the catalog takes it, the parser does not",
+                    k.name
+                );
+            }
+        }
+    }
+    assert!(
+        Config::default().set("host-device", "auto").is_ok()
+            && Config::default().set("text-fixup", "a,0,00,00").is_ok()
+    );
+    // a choice is the whole of its type's names
+    let names = |all: Vec<&'static str>| all;
+    for (name, all) in [
+        ("wifi-joined-scan", names(WifiJoinedScan::ALL.iter().map(|v| v.as_str()).collect())),
+        ("encoder-10bit", Encoder10::ALL.iter().map(|v| v.as_str()).collect()),
+        ("decoder", Decoder::ALL.iter().map(|v| v.as_str()).collect()),
+        ("gpu-down", GpuDown::ALL.iter().map(|v| v.as_str()).collect()),
+        ("uclamp-rule", UclampRule::ALL.iter().map(|v| v.as_str()).collect()),
+        ("stop-loop", StopLoop::ALL.iter().map(|v| v.as_str()).collect()),
+        ("session-mode", SessionMode::ALL.iter().map(|v| v.as_str()).collect()),
+        ("sensors", Sensors::ALL.iter().map(|v| v.as_str()).collect()),
+        ("display-format", DisplayFormat::ALL.iter().map(|v| v.as_str()).collect()),
+        ("gpu", Gpu::ALL.iter().map(|v| v.as_str()).collect()),
+        ("gpu-level", GpuLevel::ALL.iter().map(|v| v.as_str()).collect()),
+        ("bluetooth", Bluetooth::ALL.iter().map(|v| v.as_str()).collect()),
+        ("haptics", Haptics::ALL.iter().map(|v| v.as_str()).collect()),
+        ("wifi", Wifi::ALL.iter().map(|v| v.as_str()).collect()),
+        ("pen", Pen::ALL.iter().map(|v| v.as_str()).collect()),
+        ("pen-rotate", PenRotate::ALL.iter().map(|v| v.as_str()).collect()),
+        ("encoder", Encoder::ALL.iter().map(|v| v.as_str()).collect()),
+        ("camera-vm", CameraVm::ALL.iter().map(|v| v.as_str()).collect()),
+    ] {
+        let rule = oneios_switches::switch(name)
+            .map(|s| s.rule())
+            .or_else(|| oneios_switches::key_named(name).map(|k| k.rule()));
+        let mut catalog = rule.expect(name).values;
+        let mut all: Vec<String> = all.iter().map(|s| s.to_string()).collect();
+        catalog.sort();
+        all.sort();
+        assert_eq!(catalog, all, "{name}: the catalog's words and the type's");
+    }
+    // the numbers as xh-core reads them
+    for v in ["0", " -12", "+7", "12 ", "1x", "", "-", "99999999999999999999", "-99999999999999999999", "0x10", "010"] {
+        let xh = xh_core::parse::strtol(v, 10).filter(|(_, rest)| rest.is_empty()).map(|(n, _)| n);
+        assert_eq!(oneios_switches::strtol_whole(v), xh, "strtol {v:?}");
+    }
+    for v in [
+        "0",
+        "1",
+        "512M",
+        "512m",
+        "1G",
+        "4k",
+        "0x10",
+        "0x10K",
+        "0x",
+        "0xz",
+        "010",
+        "08",
+        "0k",
+        "+5",
+        " 5",
+        "-5",
+        "5 ",
+        "1T",
+        "",
+        "18446744073709551615",
+        "18446744073709551616",
+        "17179869184G",
+    ] {
+        assert_eq!(oneios_switches::size(v), parse_size(v), "size {v:?}");
+    }
 }

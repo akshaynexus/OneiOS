@@ -250,16 +250,22 @@ fn a_posted_frame_ends_the_touch_wait() {
     });
 }
 
-/// display-post=serial (docs/switches.md): the helper is sent "options" with OPTION_SERIAL_POST right after the hello;
-/// at the default (apart) nothing comes between the hello and the first flush.
+/// display-post=serial and display-present=ahb (docs/switches.md): the helper is sent "options" right after the hello,
+/// with OPTION_SERIAL_POST and OPTION_PRESENT_AHB as asked. At the defaults (apart, ahb) the options say ahb alone; with
+/// apart and window nothing comes between the hello and the first flush.
 #[test]
 fn the_serial_post_option() {
-    for (case, serial) in [("post-apart", false), ("post-serial", true)] {
+    for (case, serial, ahb) in [("post-apart", false, true), ("post-serial", true, true), ("post-window", false, false)]
+    {
         in_child("the_serial_post_option", case, |dir| {
             let mut c = config(dir, Mode::Takeover, (0, 0, 0), None);
             if serial {
                 c.set("display-post", "serial").unwrap();
             }
+            if !ahb {
+                c.set("display-present", "window").unwrap();
+            }
+            let options = (if serial { OPTION_SERIAL_POST } else { 0 }) | (if ahb { OPTION_PRESENT_AHB } else { 0 });
             let path = dir.join("display.sock");
             let helper = std::thread::spawn(move || {
                 let fd = xhd::connect(&path, 3000, &xhd::no_stop).ok()?;
@@ -274,7 +280,7 @@ fn the_serial_post_option() {
                     let got = dsys::recv_packet(fd.as_fd(), &mut packet, 0).ok()?;
                     let m = Message::parse(&packet[..got.length])?;
                     if m.is(Kind::Options) {
-                        assert_eq!(m.a, OPTION_SERIAL_POST);
+                        assert_eq!(m.a, options);
                     }
                     kinds.push(m.kind()?);
                 }
@@ -282,8 +288,11 @@ fn the_serial_post_option() {
             });
             init(&c).expect("display init");
             let kinds = helper.join().unwrap().expect("the helper's messages");
-            let want =
-                if serial { vec![Kind::Hello, Kind::Options, Kind::Flush] } else { vec![Kind::Hello, Kind::Flush] };
+            let want = if options != 0 {
+                vec![Kind::Hello, Kind::Options, Kind::Flush]
+            } else {
+                vec![Kind::Hello, Kind::Flush]
+            };
             assert_eq!(kinds, want);
         });
     }

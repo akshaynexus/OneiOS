@@ -4,7 +4,7 @@
 # The task stub and the test kernel are bare-metal programs (aarch64-unknown-none): their own workspaces, excluded here.
 [workspace]
 resolver = "2"
-members = ["core", "abi", "loader", "bridges", "bridges/camera", "bridges/encoder", "display", "xnuhost", "xnuhost/drm2kgsl", "package"]
+members = ["core", "abi", "loader", "bridges", "bridges/camera", "bridges/encoder", "display", "switches", "xnuhost", "xnuhost/drm2kgsl", "package"]
 exclude = ["xnuhost/stub", "xnuhost/testkernel"]
 
 [workspace.package]
@@ -23,6 +23,8 @@ onecamera = { path = "bridges/camera" }
 oneencoder = { path = "bridges/encoder" }
 oneios-display = { path = "display" }
 drm2kgsl-sys = { path = "xnuhost/drm2kgsl" }
+# the switches and xnuhost.conf's keys (also a path dependency of tools/oneios-tool)
+oneios-switches = { path = "switches" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

@@ -1,0 +1,1481 @@
+{
+ "kernelcache_sha256": "f6f31ac427bed2cdcf1353a6d84e3c2897354a86b2cc708f0e330a99be9a5939",
+ "addresses": "original kernelcache VAs; \"linked\" = as placed in kernel.kc (original + collection slide 0x1f000000000)",
+ "class": "IOHIDDevice",
+ "bundle": "com.apple.iokit.IOHIDFamily",
+ "size": "0xd0",
+ "meta_class": "0xfffffe000b9d15f0",
+ "meta_class_linked": "0xfffffff00b9d15f0",
+ "parent_meta_class": "0xfffffe000b80af58",
+ "static_initializer_site": "0xfffffe000a10a30c",
+ "get_meta_class": "0xfffffe000a1028e4",
+ "vtable": "0xfffffe000832ae28",
+ "vtable_linked": "0xfffffff00832ae28",
+ "family_text": [
+  "0xfffffe000a0f5150",
+  "0xfffffe000a17230c"
+ ],
+ "constructor": {
+  "original": "0xfffffe000a1028a4",
+  "linked": "0xfffffff00a1028a4",
+  "calls_parent_constructor": "0xfffffe000a17203c"
+ },
+ "base_destructor": {
+  "original": "0xfffffe000a1028dc",
+  "linked": "0xfffffff00a1028dc",
+  "branches_to_parent_destructor": "0xfffffe000a17204c"
+ },
+ "abstract": true,
+ "kernel_targets_repeated": [],
+ "slots": [
+  {
+   "slot": 0,
+   "original": "0xfffffe000a1571d8",
+   "linked": "0xfffffff00a1571d8",
+   "diversity": "0x3771",
+   "family": true
+  },
+  {
+   "slot": 1,
+   "original": "0xfffffe000a1571e0",
+   "linked": "0xfffffff00a1571e0",
+   "diversity": "0x56b7",
+   "family": true
+  },
+  {
+   "slot": 2,
+   "original": "0xfffffe000b2be688",
+   "linked": "0xfffffff00b2be688",
+   "diversity": "0xbaa2",
+   "family": false
+  },
+  {
+   "slot": 3,
+   "original": "0xfffffe000b2be67c",
+   "linked": "0xfffffff00b2be67c",
+   "diversity": "0x3607",
+   "family": false
+  },
+  {
+   "slot": 4,
+   "original": "0xfffffe000b2be64c",
+   "linked": "0xfffffff00b2be64c",
+   "diversity": "0x2e4a",
+   "family": false
+  },
+  {
+   "slot": 5,
+   "original": "0xfffffe000b2be61c",
+   "linked": "0xfffffff00b2be61c",
+   "diversity": "0x3a87",
+   "family": false
+  },
+  {
+   "slot": 6,
+   "original": "0xfffffe000b2be494",
+   "linked": "0xfffffff00b2be494",
+   "diversity": "0x89a9",
+   "family": false
+  },
+  {
+   "slot": 7,
+   "original": "0xfffffe000a1028e4",
+   "linked": "0xfffffff00a1028e4",
+   "diversity": "0xfffc",
+   "family": true
+  },
+  {
+   "slot": 8,
+   "original": "0xfffffe000b2bb330",
+   "linked": "0xfffffff00b2bb330",
+   "diversity": "0xfc74",
+   "family": false
+  },
+  {
+   "slot": 9,
+   "original": "0xfffffe000b2be404",
+   "linked": "0xfffffff00b2be404",
+   "diversity": "0x5635",
+   "family": false
+  },
+  {
+   "slot": 10,
+   "original": "0xfffffe000b2be3d4",
+   "linked": "0xfffffff00b2be3d4",
+   "diversity": "0xbe60",
+   "family": false
+  },
+  {
+   "slot": 11,
+   "original": "0xfffffe000b2be27c",
+   "linked": "0xfffffff00b2be27c",
+   "diversity": "0x32e5",
+   "family": false
+  },
+  {
+   "slot": 12,
+   "original": "0xfffffe000a14cbe0",
+   "linked": "0xfffffff00a14cbe0",
+   "diversity": "0x9209",
+   "family": true
+  },
+  {
+   "slot": 13,
+   "original": "0xfffffe000b2be270",
+   "linked": "0xfffffff00b2be270",
+   "diversity": "0x4a6a",
+   "family": false
+  },
+  {
+   "slot": 14,
+   "original": "0xfffffe000a102a04",
+   "linked": "0xfffffff00a102a04",
+   "diversity": "0xedc5",
+   "family": true
+  },
+  {
+   "slot": 15,
+   "original": "0xfffffe000b338674",
+   "linked": "0xfffffff00b338674",
+   "diversity": "0x5c68",
+   "family": false
+  },
+  {
+   "slot": 16,
+   "original": "0xfffffe000b338494",
+   "linked": "0xfffffff00b338494",
+   "diversity": "0x6a10",
+   "family": false
+  },
+  {
+   "slot": 17,
+   "original": "0xfffffe000b3382b4",
+   "linked": "0xfffffff00b3382b4",
+   "diversity": "0x7a2a",
+   "family": false
+  },
+  {
+   "slot": 18,
+   "original": "0xfffffe000b3381f0",
+   "linked": "0xfffffff00b3381f0",
+   "diversity": "0xaf75",
+   "family": false
+  },
+  {
+   "slot": 19,
+   "original": "0xfffffe000b33812c",
+   "linked": "0xfffffff00b33812c",
+   "diversity": "0x137e",
+   "family": false
+  },
+  {
+   "slot": 20,
+   "original": "0xfffffe000b338010",
+   "linked": "0xfffffff00b338010",
+   "diversity": "0x655",
+   "family": false
+  },
+  {
+   "slot": 21,
+   "original": "0xfffffe000a102978",
+   "linked": "0xfffffff00a102978",
+   "diversity": "0x43aa",
+   "family": true
+  },
+  {
+   "slot": 22,
+   "original": "0xfffffe000b337bb0",
+   "linked": "0xfffffff00b337bb0",
+   "diversity": "0x12e9",
+   "family": false
+  },
+  {
+   "slot": 23,
+   "original": "0xfffffe000a1575f4",
+   "linked": "0xfffffff00a1575f4",
+   "diversity": "0x4578",
+   "family": true
+  },
+  {
+   "slot": 24,
+   "original": "0xfffffe000b3378fc",
+   "linked": "0xfffffff00b3378fc",
+   "diversity": "0x4275",
+   "family": false
+  },
+  {
+   "slot": 25,
+   "original": "0xfffffe000b337874",
+   "linked": "0xfffffff00b337874",
+   "diversity": "0xff53",
+   "family": false
+  },
+  {
+   "slot": 26,
+   "original": "0xfffffe000b3377bc",
+   "linked": "0xfffffff00b3377bc",
+   "diversity": "0x1814",
+   "family": false
+  },
+  {
+   "slot": 27,
+   "original": "0xfffffe000b3376fc",
+   "linked": "0xfffffff00b3376fc",
+   "diversity": "0x122e",
+   "family": false
+  },
+  {
+   "slot": 28,
+   "original": "0xfffffe000b3375e0",
+   "linked": "0xfffffff00b3375e0",
+   "diversity": "0x13f6",
+   "family": false
+  },
+  {
+   "slot": 29,
+   "original": "0xfffffe000b3374c4",
+   "linked": "0xfffffff00b3374c4",
+   "diversity": "0x1d35",
+   "family": false
+  },
+  {
+   "slot": 30,
+   "original": "0xfffffe000b3373c4",
+   "linked": "0xfffffff00b3373c4",
+   "diversity": "0xacb1",
+   "family": false
+  },
+  {
+   "slot": 31,
+   "original": "0xfffffe000b337348",
+   "linked": "0xfffffff00b337348",
+   "diversity": "0x7eb0",
+   "family": false
+  },
+  {
+   "slot": 32,
+   "original": "0xfffffe000b3372cc",
+   "linked": "0xfffffff00b3372cc",
+   "diversity": "0x1262",
+   "family": false
+  },
+  {
+   "slot": 33,
+   "original": "0xfffffe000b3371cc",
+   "linked": "0xfffffff00b3371cc",
+   "diversity": "0x82eb",
+   "family": false
+  },
+  {
+   "slot": 34,
+   "original": "0xfffffe000b33714c",
+   "linked": "0xfffffff00b33714c",
+   "diversity": "0x164e",
+   "family": false
+  },
+  {
+   "slot": 35,
+   "original": "0xfffffe000b3370cc",
+   "linked": "0xfffffff00b3370cc",
+   "diversity": "0x37a5",
+   "family": false
+  },
+  {
+   "slot": 36,
+   "original": "0xfffffe000b336eec",
+   "linked": "0xfffffff00b336eec",
+   "diversity": "0xb659",
+   "family": false
+  },
+  {
+   "slot": 37,
+   "original": "0xfffffe000b336d0c",
+   "linked": "0xfffffff00b336d0c",
+   "diversity": "0x6c51",
+   "family": false
+  },
+  {
+   "slot": 38,
+   "original": "0xfffffe000b336b2c",
+   "linked": "0xfffffff00b336b2c",
+   "diversity": "0xa20f",
+   "family": false
+  },
+  {
+   "slot": 39,
+   "original": "0xfffffe000b336a04",
+   "linked": "0xfffffff00b336a04",
+   "diversity": "0xb3b6",
+   "family": false
+  },
+  {
+   "slot": 40,
+   "original": "0xfffffe000b3368dc",
+   "linked": "0xfffffff00b3368dc",
+   "diversity": "0x6bcb",
+   "family": false
+  },
+  {
+   "slot": 41,
+   "original": "0xfffffe000b3367b4",
+   "linked": "0xfffffff00b3367b4",
+   "diversity": "0x5a20",
+   "family": false
+  },
+  {
+   "slot": 42,
+   "original": "0xfffffe000b336634",
+   "linked": "0xfffffff00b336634",
+   "diversity": "0x5062",
+   "family": false
+  },
+  {
+   "slot": 43,
+   "original": "0xfffffe000b34e630",
+   "linked": "0xfffffff00b34e630",
+   "diversity": "0xd7",
+   "family": false
+  },
+  {
+   "slot": 44,
+   "original": "0xfffffe000b3364d8",
+   "linked": "0xfffffff00b3364d8",
+   "diversity": "0x7c85",
+   "family": false
+  },
+  {
+   "slot": 45,
+   "original": "0xfffffe000b3362c0",
+   "linked": "0xfffffff00b3362c0",
+   "diversity": "0x8a26",
+   "family": false
+  },
+  {
+   "slot": 46,
+   "original": "0xfffffe000b336108",
+   "linked": "0xfffffff00b336108",
+   "diversity": "0x3539",
+   "family": false
+  },
+  {
+   "slot": 47,
+   "original": "0xfffffe000b3360a8",
+   "linked": "0xfffffff00b3360a8",
+   "diversity": "0x688b",
+   "family": false
+  },
+  {
+   "slot": 48,
+   "original": "0xfffffe000b335e90",
+   "linked": "0xfffffff00b335e90",
+   "diversity": "0x1e60",
+   "family": false
+  },
+  {
+   "slot": 49,
+   "original": "0xfffffe000b335cd8",
+   "linked": "0xfffffff00b335cd8",
+   "diversity": "0x1955",
+   "family": false
+  },
+  {
+   "slot": 50,
+   "original": "0xfffffe000b335c78",
+   "linked": "0xfffffff00b335c78",
+   "diversity": "0x689",
+   "family": false
+  },
+  {
+   "slot": 51,
+   "original": "0xfffffe000b335aa0",
+   "linked": "0xfffffff00b335aa0",
+   "diversity": "0xc256",
+   "family": false
+  },
+  {
+   "slot": 52,
+   "original": "0xfffffe000b3358c8",
+   "linked": "0xfffffff00b3358c8",
+   "diversity": "0xa383",
+   "family": false
+  },
+  {
+   "slot": 53,
+   "original": "0xfffffe000b3356d0",
+   "linked": "0xfffffff00b3356d0",
+   "diversity": "0xf021",
+   "family": false
+  },
+  {
+   "slot": 54,
+   "original": "0xfffffe000b335518",
+   "linked": "0xfffffff00b335518",
+   "diversity": "0x1f0a",
+   "family": false
+  },
+  {
+   "slot": 55,
+   "original": "0xfffffe000b3350ec",
+   "linked": "0xfffffff00b3350ec",
+   "diversity": "0xb4bb",
+   "family": false
+  },
+  {
+   "slot": 56,
+   "original": "0xfffffe000b334f30",
+   "linked": "0xfffffff00b334f30",
+   "diversity": "0x8ffc",
+   "family": false
+  },
+  {
+   "slot": 57,
+   "original": "0xfffffe000b334d98",
+   "linked": "0xfffffff00b334d98",
+   "diversity": "0xb5b9",
+   "family": false
+  },
+  {
+   "slot": 58,
+   "original": "0xfffffe000b334bdc",
+   "linked": "0xfffffff00b334bdc",
+   "diversity": "0x8764",
+   "family": false
+  },
+  {
+   "slot": 59,
+   "original": "0xfffffe000b334ad0",
+   "linked": "0xfffffff00b334ad0",
+   "diversity": "0x5d96",
+   "family": false
+  },
+  {
+   "slot": 60,
+   "original": "0xfffffe000b333fa0",
+   "linked": "0xfffffff00b333fa0",
+   "diversity": "0x80d9",
+   "family": false
+  },
+  {
+   "slot": 61,
+   "original": "0xfffffe000b333e7c",
+   "linked": "0xfffffff00b333e7c",
+   "diversity": "0xc9c",
+   "family": false
+  },
+  {
+   "slot": 62,
+   "original": "0xfffffe000b333d5c",
+   "linked": "0xfffffff00b333d5c",
+   "diversity": "0x5d0a",
+   "family": false
+  },
+  {
+   "slot": 63,
+   "original": "0xfffffe000b333b60",
+   "linked": "0xfffffff00b333b60",
+   "diversity": "0xcbcc",
+   "family": false
+  },
+  {
+   "slot": 64,
+   "original": "0xfffffe000b333a80",
+   "linked": "0xfffffff00b333a80",
+   "diversity": "0x617d",
+   "family": false
+  },
+  {
+   "slot": 65,
+   "original": "0xfffffe000b333984",
+   "linked": "0xfffffff00b333984",
+   "diversity": "0x848a",
+   "family": false
+  },
+  {
+   "slot": 66,
+   "original": "0xfffffe000b3338dc",
+   "linked": "0xfffffff00b3338dc",
+   "diversity": "0x2312",
+   "family": false
+  },
+  {
+   "slot": 67,
+   "original": "0xfffffe000b333850",
+   "linked": "0xfffffff00b333850",
+   "diversity": "0x3540",
+   "family": false
+  },
+  {
+   "slot": 68,
+   "original": "0xfffffe000b33377c",
+   "linked": "0xfffffff00b33377c",
+   "diversity": "0xc257",
+   "family": false
+  },
+  {
+   "slot": 69,
+   "original": "0xfffffe000b3336dc",
+   "linked": "0xfffffff00b3336dc",
+   "diversity": "0x3025",
+   "family": false
+  },
+  {
+   "slot": 70,
+   "original": "0xfffffe000b333634",
+   "linked": "0xfffffff00b333634",
+   "diversity": "0x9fc2",
+   "family": false
+  },
+  {
+   "slot": 71,
+   "original": "0xfffffe000b332d28",
+   "linked": "0xfffffff00b332d28",
+   "diversity": "0x5038",
+   "family": false
+  },
+  {
+   "slot": 72,
+   "original": "0xfffffe000b332be8",
+   "linked": "0xfffffff00b332be8",
+   "diversity": "0xc666",
+   "family": false
+  },
+  {
+   "slot": 73,
+   "original": "0xfffffe000b33242c",
+   "linked": "0xfffffff00b33242c",
+   "diversity": "0x6cc3",
+   "family": false
+  },
+  {
+   "slot": 74,
+   "original": "0xfffffe000b34e580",
+   "linked": "0xfffffff00b34e580",
+   "diversity": "0x550c",
+   "family": false
+  },
+  {
+   "slot": 75,
+   "original": "0xfffffe000b34e4dc",
+   "linked": "0xfffffff00b34e4dc",
+   "diversity": "0xa19a",
+   "family": false
+  },
+  {
+   "slot": 76,
+   "original": "0xfffffe000a105278",
+   "linked": "0xfffffff00a105278",
+   "diversity": "0xa51b",
+   "family": true
+  },
+  {
+   "slot": 77,
+   "original": "0xfffffe000a1058a4",
+   "linked": "0xfffffff00a1058a4",
+   "diversity": "0x4577",
+   "family": true
+  },
+  {
+   "slot": 78,
+   "original": "0xfffffe000b3769ac",
+   "linked": "0xfffffff00b3769ac",
+   "diversity": "0x573c",
+   "family": false
+  },
+  {
+   "slot": 79,
+   "original": "0xfffffe000b378090",
+   "linked": "0xfffffff00b378090",
+   "diversity": "0x1a4e",
+   "family": false
+  },
+  {
+   "slot": 80,
+   "original": "0xfffffe000b34e168",
+   "linked": "0xfffffff00b34e168",
+   "diversity": "0x6c3d",
+   "family": false
+  },
+  {
+   "slot": 81,
+   "original": "0xfffffe000a104f04",
+   "linked": "0xfffffff00a104f04",
+   "diversity": "0xb049",
+   "family": true
+  },
+  {
+   "slot": 82,
+   "original": "0xfffffe000a104f14",
+   "linked": "0xfffffff00a104f14",
+   "diversity": "0xc4b2",
+   "family": true
+  },
+  {
+   "slot": 83,
+   "original": "0xfffffe000b34dbd8",
+   "linked": "0xfffffff00b34dbd8",
+   "diversity": "0xc90d",
+   "family": false
+  },
+  {
+   "slot": 84,
+   "original": "0xfffffe000b346de0",
+   "linked": "0xfffffff00b346de0",
+   "diversity": "0x7d59",
+   "family": false
+  },
+  {
+   "slot": 85,
+   "original": "0xfffffe000b346dd8",
+   "linked": "0xfffffff00b346dd8",
+   "diversity": "0x4897",
+   "family": false
+  },
+  {
+   "slot": 86,
+   "original": "0xfffffe000a102e00",
+   "linked": "0xfffffff00a102e00",
+   "diversity": "0x3c68",
+   "family": true
+  },
+  {
+   "slot": 87,
+   "original": "0xfffffe000a104f24",
+   "linked": "0xfffffff00a104f24",
+   "diversity": "0xb085",
+   "family": true
+  },
+  {
+   "slot": 88,
+   "original": "0xfffffe000b346b40",
+   "linked": "0xfffffff00b346b40",
+   "diversity": "0x4529",
+   "family": false
+  },
+  {
+   "slot": 89,
+   "original": "0xfffffe000b346914",
+   "linked": "0xfffffff00b346914",
+   "diversity": "0x639f",
+   "family": false
+  },
+  {
+   "slot": 90,
+   "original": "0xfffffe000b34686c",
+   "linked": "0xfffffff00b34686c",
+   "diversity": "0xccfb",
+   "family": false
+  },
+  {
+   "slot": 91,
+   "original": "0xfffffe000a1573b0",
+   "linked": "0xfffffff00a1573b0",
+   "diversity": "0x55eb",
+   "family": true
+  },
+  {
+   "slot": 92,
+   "original": "0xfffffe000a1073e0",
+   "linked": "0xfffffff00a1073e0",
+   "diversity": "0xe933",
+   "family": true
+  },
+  {
+   "slot": 93,
+   "original": "0xfffffe000a107588",
+   "linked": "0xfffffff00a107588",
+   "diversity": "0xaec3",
+   "family": true
+  },
+  {
+   "slot": 94,
+   "original": "0xfffffe000b345748",
+   "linked": "0xfffffff00b345748",
+   "diversity": "0x5ec5",
+   "family": false
+  },
+  {
+   "slot": 95,
+   "original": "0xfffffe000b345210",
+   "linked": "0xfffffff00b345210",
+   "diversity": "0x5219",
+   "family": false
+  },
+  {
+   "slot": 96,
+   "original": "0xfffffe000b344d2c",
+   "linked": "0xfffffff00b344d2c",
+   "diversity": "0xc6b2",
+   "family": false
+  },
+  {
+   "slot": 97,
+   "original": "0xfffffe000b344af0",
+   "linked": "0xfffffff00b344af0",
+   "diversity": "0x8a43",
+   "family": false
+  },
+  {
+   "slot": 98,
+   "original": "0xfffffe000b344a48",
+   "linked": "0xfffffff00b344a48",
+   "diversity": "0x4a20",
+   "family": false
+  },
+  {
+   "slot": 99,
+   "original": "0xfffffe000b344a38",
+   "linked": "0xfffffff00b344a38",
+   "diversity": "0xd9f2",
+   "family": false
+  },
+  {
+   "slot": 100,
+   "original": "0xfffffe000b3449b4",
+   "linked": "0xfffffff00b3449b4",
+   "diversity": "0x981a",
+   "family": false
+  },
+  {
+   "slot": 101,
+   "original": "0xfffffe000a105944",
+   "linked": "0xfffffff00a105944",
+   "diversity": "0xa27f",
+   "family": true
+  },
+  {
+   "slot": 102,
+   "original": "0xfffffe000b344974",
+   "linked": "0xfffffff00b344974",
+   "diversity": "0xc4f9",
+   "family": false
+  },
+  {
+   "slot": 103,
+   "original": "0xfffffe000b3448ec",
+   "linked": "0xfffffff00b3448ec",
+   "diversity": "0x6b87",
+   "family": false
+  },
+  {
+   "slot": 104,
+   "original": "0xfffffe000b344680",
+   "linked": "0xfffffff00b344680",
+   "diversity": "0x60a1",
+   "family": false
+  },
+  {
+   "slot": 105,
+   "original": "0xfffffe000b344594",
+   "linked": "0xfffffff00b344594",
+   "diversity": "0x7e78",
+   "family": false
+  },
+  {
+   "slot": 106,
+   "original": "0xfffffe000b3444a8",
+   "linked": "0xfffffff00b3444a8",
+   "diversity": "0x36aa",
+   "family": false
+  },
+  {
+   "slot": 107,
+   "original": "0xfffffe000b344328",
+   "linked": "0xfffffff00b344328",
+   "diversity": "0x86ef",
+   "family": false
+  },
+  {
+   "slot": 108,
+   "original": "0xfffffe000b343e8c",
+   "linked": "0xfffffff00b343e8c",
+   "diversity": "0x9be9",
+   "family": false
+  },
+  {
+   "slot": 109,
+   "original": "0xfffffe000b33e8b8",
+   "linked": "0xfffffff00b33e8b8",
+   "diversity": "0x7318",
+   "family": false
+  },
+  {
+   "slot": 110,
+   "original": "0xfffffe000b33e834",
+   "linked": "0xfffffff00b33e834",
+   "diversity": "0x93b7",
+   "family": false
+  },
+  {
+   "slot": 111,
+   "original": "0xfffffe000b33e7c0",
+   "linked": "0xfffffff00b33e7c0",
+   "diversity": "0x638e",
+   "family": false
+  },
+  {
+   "slot": 112,
+   "original": "0xfffffe000b33e784",
+   "linked": "0xfffffff00b33e784",
+   "diversity": "0x61a6",
+   "family": false
+  },
+  {
+   "slot": 113,
+   "original": "0xfffffe000b33e62c",
+   "linked": "0xfffffff00b33e62c",
+   "diversity": "0x9175",
+   "family": false
+  },
+  {
+   "slot": 114,
+   "original": "0xfffffe000b33e5f0",
+   "linked": "0xfffffff00b33e5f0",
+   "diversity": "0x136b",
+   "family": false
+  },
+  {
+   "slot": 115,
+   "original": "0xfffffe000b33e5b4",
+   "linked": "0xfffffff00b33e5b4",
+   "diversity": "0xdb58",
+   "family": false
+  },
+  {
+   "slot": 116,
+   "original": "0xfffffe000b33e138",
+   "linked": "0xfffffff00b33e138",
+   "diversity": "0x4a31",
+   "family": false
+  },
+  {
+   "slot": 117,
+   "original": "0xfffffe000b33dae0",
+   "linked": "0xfffffff00b33dae0",
+   "diversity": "0x988",
+   "family": false
+  },
+  {
+   "slot": 118,
+   "original": "0xfffffe000b33da10",
+   "linked": "0xfffffff00b33da10",
+   "diversity": "0x5393",
+   "family": false
+  },
+  {
+   "slot": 119,
+   "original": "0xfffffe000b33da04",
+   "linked": "0xfffffff00b33da04",
+   "diversity": "0xabe0",
+   "family": false
+  },
+  {
+   "slot": 120,
+   "original": "0xfffffe000b33d944",
+   "linked": "0xfffffff00b33d944",
+   "diversity": "0xad9",
+   "family": false
+  },
+  {
+   "slot": 121,
+   "original": "0xfffffe000b33d868",
+   "linked": "0xfffffff00b33d868",
+   "diversity": "0x6c99",
+   "family": false
+  },
+  {
+   "slot": 122,
+   "original": "0xfffffe000b33d7e8",
+   "linked": "0xfffffff00b33d7e8",
+   "diversity": "0xd52d",
+   "family": false
+  },
+  {
+   "slot": 123,
+   "original": "0xfffffe000b33d75c",
+   "linked": "0xfffffff00b33d75c",
+   "diversity": "0xe213",
+   "family": false
+  },
+  {
+   "slot": 124,
+   "original": "0xfffffe000b33d724",
+   "linked": "0xfffffff00b33d724",
+   "diversity": "0x308f",
+   "family": false
+  },
+  {
+   "slot": 125,
+   "original": "0xfffffe000b33d600",
+   "linked": "0xfffffff00b33d600",
+   "diversity": "0xd78d",
+   "family": false
+  },
+  {
+   "slot": 126,
+   "original": "0xfffffe000b33d510",
+   "linked": "0xfffffff00b33d510",
+   "diversity": "0x3a1d",
+   "family": false
+  },
+  {
+   "slot": 127,
+   "original": "0xfffffe000b33d408",
+   "linked": "0xfffffff00b33d408",
+   "diversity": "0xa390",
+   "family": false
+  },
+  {
+   "slot": 128,
+   "original": "0xfffffe000b33d348",
+   "linked": "0xfffffff00b33d348",
+   "diversity": "0x240b",
+   "family": false
+  },
+  {
+   "slot": 129,
+   "original": "0xfffffe000b33d288",
+   "linked": "0xfffffff00b33d288",
+   "diversity": "0x1b89",
+   "family": false
+  },
+  {
+   "slot": 130,
+   "original": "0xfffffe000b33ceac",
+   "linked": "0xfffffff00b33ceac",
+   "diversity": "0x8d3c",
+   "family": false
+  },
+  {
+   "slot": 131,
+   "original": "0xfffffe000b33ce9c",
+   "linked": "0xfffffff00b33ce9c",
+   "diversity": "0x2652",
+   "family": false
+  },
+  {
+   "slot": 132,
+   "original": "0xfffffe000a107a44",
+   "linked": "0xfffffff00a107a44",
+   "diversity": "0x7f14",
+   "family": true
+  },
+  {
+   "slot": 133,
+   "original": "0xfffffe000b33ca60",
+   "linked": "0xfffffff00b33ca60",
+   "diversity": "0x759",
+   "family": false
+  },
+  {
+   "slot": 134,
+   "original": "0xfffffe000b33c984",
+   "linked": "0xfffffff00b33c984",
+   "diversity": "0x63c4",
+   "family": false
+  },
+  {
+   "slot": 135,
+   "original": "0xfffffe000b33bf50",
+   "linked": "0xfffffff00b33bf50",
+   "diversity": "0x800f",
+   "family": false
+  },
+  {
+   "slot": 136,
+   "original": "0xfffffe000b33bf14",
+   "linked": "0xfffffff00b33bf14",
+   "diversity": "0x9cc2",
+   "family": false
+  },
+  {
+   "slot": 137,
+   "original": "0xfffffe000b33bed8",
+   "linked": "0xfffffff00b33bed8",
+   "diversity": "0x2ac",
+   "family": false
+  },
+  {
+   "slot": 138,
+   "original": "0xfffffe000b33baf0",
+   "linked": "0xfffffff00b33baf0",
+   "diversity": "0x785f",
+   "family": false
+  },
+  {
+   "slot": 139,
+   "original": "0xfffffe000b33bae0",
+   "linked": "0xfffffff00b33bae0",
+   "diversity": "0xcc6b",
+   "family": false
+  },
+  {
+   "slot": 140,
+   "original": "0xfffffe000a107604",
+   "linked": "0xfffffff00a107604",
+   "diversity": "0x82cd",
+   "family": true
+  },
+  {
+   "slot": 141,
+   "original": "0xfffffe000b33b74c",
+   "linked": "0xfffffff00b33b74c",
+   "diversity": "0x808e",
+   "family": false
+  },
+  {
+   "slot": 142,
+   "original": "0xfffffe000b33b6cc",
+   "linked": "0xfffffff00b33b6cc",
+   "diversity": "0x37ce",
+   "family": false
+  },
+  {
+   "slot": 143,
+   "original": "0xfffffe000b33b4d8",
+   "linked": "0xfffffff00b33b4d8",
+   "diversity": "0xa4c7",
+   "family": false
+  },
+  {
+   "slot": 144,
+   "original": "0xfffffe000b360864",
+   "linked": "0xfffffff00b360864",
+   "diversity": "0xe8de",
+   "family": false
+  },
+  {
+   "slot": 145,
+   "original": "0xfffffe000b373a34",
+   "linked": "0xfffffff00b373a34",
+   "diversity": "0xa343",
+   "family": false
+  },
+  {
+   "slot": 146,
+   "original": "0xfffffe000b3739f0",
+   "linked": "0xfffffff00b3739f0",
+   "diversity": "0x4bc0",
+   "family": false
+  },
+  {
+   "slot": 147,
+   "original": "0xfffffe000b374b4c",
+   "linked": "0xfffffff00b374b4c",
+   "diversity": "0xf8a6",
+   "family": false
+  },
+  {
+   "slot": 148,
+   "original": "0xfffffe000b375868",
+   "linked": "0xfffffff00b375868",
+   "diversity": "0xac7f",
+   "family": false
+  },
+  {
+   "slot": 149,
+   "original": "0xfffffe000b37676c",
+   "linked": "0xfffffff00b37676c",
+   "diversity": "0x7974",
+   "family": false
+  },
+  {
+   "slot": 150,
+   "original": "0xfffffe000b376a10",
+   "linked": "0xfffffff00b376a10",
+   "diversity": "0xea1b",
+   "family": false
+  },
+  {
+   "slot": 151,
+   "original": "0xfffffe000b376a1c",
+   "linked": "0xfffffff00b376a1c",
+   "diversity": "0x4b35",
+   "family": false
+  },
+  {
+   "slot": 152,
+   "original": "0xfffffe000b373dc8",
+   "linked": "0xfffffff00b373dc8",
+   "diversity": "0x9eb4",
+   "family": false
+  },
+  {
+   "slot": 153,
+   "original": "0xfffffe000b37490c",
+   "linked": "0xfffffff00b37490c",
+   "diversity": "0x595a",
+   "family": false
+  },
+  {
+   "slot": 154,
+   "original": "0xfffffe000b3767d8",
+   "linked": "0xfffffff00b3767d8",
+   "diversity": "0x5b2b",
+   "family": false
+  },
+  {
+   "slot": 155,
+   "original": "0xfffffe000b377ed8",
+   "linked": "0xfffffff00b377ed8",
+   "diversity": "0x699e",
+   "family": false
+  },
+  {
+   "slot": 156,
+   "original": "0xfffffe000b377ee4",
+   "linked": "0xfffffff00b377ee4",
+   "diversity": "0x2b52",
+   "family": false
+  },
+  {
+   "slot": 157,
+   "original": "0xfffffe000b377f64",
+   "linked": "0xfffffff00b377f64",
+   "diversity": "0xf40e",
+   "family": false
+  },
+  {
+   "slot": 158,
+   "original": "0xfffffe000b377ff0",
+   "linked": "0xfffffff00b377ff0",
+   "diversity": "0xddb",
+   "family": false
+  },
+  {
+   "slot": 159,
+   "original": "0xfffffe000b378070",
+   "linked": "0xfffffff00b378070",
+   "diversity": "0xf88",
+   "family": false
+  },
+  {
+   "slot": 160,
+   "original": "0xfffffe000b37807c",
+   "linked": "0xfffffff00b37807c",
+   "diversity": "0x8700",
+   "family": false
+  },
+  {
+   "slot": 161,
+   "original": "0xfffffe000b376aa8",
+   "linked": "0xfffffff00b376aa8",
+   "diversity": "0x36c3",
+   "family": false
+  },
+  {
+   "slot": 162,
+   "original": "0xfffffe000b376ab8",
+   "linked": "0xfffffff00b376ab8",
+   "diversity": "0x58e",
+   "family": false
+  },
+  {
+   "slot": 163,
+   "original": "0xfffffe000b376ac8",
+   "linked": "0xfffffff00b376ac8",
+   "diversity": "0xf16e",
+   "family": false
+  },
+  {
+   "slot": 164,
+   "original": "0xfffffe000b3771c0",
+   "linked": "0xfffffff00b3771c0",
+   "diversity": "0x3a71",
+   "family": false
+  },
+  {
+   "slot": 165,
+   "original": "0xfffffe000b3771d0",
+   "linked": "0xfffffff00b3771d0",
+   "diversity": "0xda1e",
+   "family": false
+  },
+  {
+   "slot": 166,
+   "original": "0xfffffe000b377264",
+   "linked": "0xfffffff00b377264",
+   "diversity": "0x10b6",
+   "family": false
+  },
+  {
+   "slot": 167,
+   "original": "0xfffffe000b378088",
+   "linked": "0xfffffff00b378088",
+   "diversity": "0x8654",
+   "family": false
+  },
+  {
+   "slot": 168,
+   "original": "0xfffffe000a10702c",
+   "linked": "0xfffffff00a10702c",
+   "diversity": "0xfd21",
+   "family": true
+  },
+  {
+   "slot": 169,
+   "original": "0xfffffe000a107038",
+   "linked": "0xfffffff00a107038",
+   "diversity": "0xa730",
+   "family": true
+  },
+  {
+   "slot": 170,
+   "original": "0xfffffe000a105b94",
+   "linked": "0xfffffff00a105b94",
+   "diversity": "0x2b56",
+   "family": true
+  },
+  {
+   "slot": 171,
+   "original": "0xfffffe000a107e44",
+   "linked": "0xfffffff00a107e44",
+   "diversity": "0x6be3",
+   "family": true
+  },
+  {
+   "slot": 172,
+   "original": "0xfffffe000a107e50",
+   "linked": "0xfffffff00a107e50",
+   "diversity": "0x86ed",
+   "family": true
+  },
+  {
+   "slot": 173,
+   "original": "0xfffffe000a107e5c",
+   "linked": "0xfffffff00a107e5c",
+   "diversity": "0x4f55",
+   "family": true
+  },
+  {
+   "slot": 174,
+   "original": "0xfffffe000a107e68",
+   "linked": "0xfffffff00a107e68",
+   "diversity": "0x4897",
+   "family": true
+  },
+  {
+   "slot": 175,
+   "original": "0xfffffe000a107e74",
+   "linked": "0xfffffff00a107e74",
+   "diversity": "0x1c8",
+   "family": true
+  },
+  {
+   "slot": 176,
+   "original": "0xfffffe000a107e80",
+   "linked": "0xfffffff00a107e80",
+   "diversity": "0x6408",
+   "family": true
+  },
+  {
+   "slot": 177,
+   "original": "0xfffffe000a107e8c",
+   "linked": "0xfffffff00a107e8c",
+   "diversity": "0xd333",
+   "family": true
+  },
+  {
+   "slot": 178,
+   "original": "0xfffffe000a15776c",
+   "linked": "0xfffffff00a15776c",
+   "diversity": "0x3fbc",
+   "family": true
+  },
+  {
+   "slot": 179,
+   "original": "0xfffffe000a157804",
+   "linked": "0xfffffff00a157804",
+   "diversity": "0x4e1a",
+   "family": true
+  },
+  {
+   "slot": 180,
+   "original": "0xfffffe000b491dfc",
+   "linked": "0xfffffff00b491dfc",
+   "diversity": "0x3f76",
+   "family": false
+  },
+  {
+   "slot": 181,
+   "original": "0xfffffe000a107e98",
+   "linked": "0xfffffff00a107e98",
+   "diversity": "0xd548",
+   "family": true
+  },
+  {
+   "slot": 182,
+   "original": "0xfffffe000a107f54",
+   "linked": "0xfffffff00a107f54",
+   "diversity": "0x9296",
+   "family": true
+  },
+  {
+   "slot": 183,
+   "original": "0xfffffe000a1080d8",
+   "linked": "0xfffffff00a1080d8",
+   "diversity": "0xad83",
+   "family": true
+  },
+  {
+   "slot": 184,
+   "original": "0xfffffe000a108464",
+   "linked": "0xfffffff00a108464",
+   "diversity": "0x6d62",
+   "family": true
+  },
+  {
+   "slot": 185,
+   "original": "0xfffffe000a10844c",
+   "linked": "0xfffffff00a10844c",
+   "diversity": "0x6941",
+   "family": true
+  },
+  {
+   "slot": 186,
+   "original": "0xfffffe000a10847c",
+   "linked": "0xfffffff00a10847c",
+   "diversity": "0x607",
+   "family": true
+  },
+  {
+   "slot": 187,
+   "original": "0xfffffe000a1085bc",
+   "linked": "0xfffffff00a1085bc",
+   "diversity": "0x3df7",
+   "family": true
+  },
+  {
+   "slot": 188,
+   "original": "0xfffffe000a10871c",
+   "linked": "0xfffffff00a10871c",
+   "diversity": "0xbc2d",
+   "family": true
+  },
+  {
+   "slot": 189,
+   "original": "0xfffffe000a1087e0",
+   "linked": "0xfffffff00a1087e0",
+   "diversity": "0x8d01",
+   "family": true
+  },
+  {
+   "slot": 190,
+   "original": "0xfffffe000a108824",
+   "linked": "0xfffffff00a108824",
+   "diversity": "0x7733",
+   "family": true
+  },
+  {
+   "slot": 191,
+   "original": "0xfffffe000a108864",
+   "linked": "0xfffffff00a108864",
+   "diversity": "0x1079",
+   "family": true
+  },
+  {
+   "slot": 192,
+   "original": "0xfffffe000a108968",
+   "linked": "0xfffffff00a108968",
+   "diversity": "0x54cf",
+   "family": true
+  },
+  {
+   "slot": 193,
+   "original": "0xfffffe000a108974",
+   "linked": "0xfffffff00a108974",
+   "diversity": "0x78ae",
+   "family": true
+  },
+  {
+   "slot": 194,
+   "original": "0xfffffe000a108998",
+   "linked": "0xfffffff00a108998",
+   "diversity": "0xda9e",
+   "family": true
+  },
+  {
+   "slot": 195,
+   "original": "0xfffffe000a1089bc",
+   "linked": "0xfffffff00a1089bc",
+   "diversity": "0x6cc1",
+   "family": true
+  },
+  {
+   "slot": 196,
+   "original": "0xfffffe000a1089c8",
+   "linked": "0xfffffff00a1089c8",
+   "diversity": "0xe70b",
+   "family": true
+  },
+  {
+   "slot": 197,
+   "original": "0xfffffe000a1089d4",
+   "linked": "0xfffffff00a1089d4",
+   "diversity": "0xfc7f",
+   "family": true
+  },
+  {
+   "slot": 198,
+   "original": "0xfffffe000a1091ec",
+   "linked": "0xfffffff00a1091ec",
+   "diversity": "0x2a3a",
+   "family": true
+  },
+  {
+   "slot": 199,
+   "original": "0xfffffe000a1092c0",
+   "linked": "0xfffffff00a1092c0",
+   "diversity": "0xc7e7",
+   "family": true
+  },
+  {
+   "slot": 200,
+   "original": "0xfffffe000a108224",
+   "linked": "0xfffffff00a108224",
+   "diversity": "0xe558",
+   "family": true
+  },
+  {
+   "slot": 201,
+   "original": "0xfffffe000a1093ec",
+   "linked": "0xfffffff00a1093ec",
+   "diversity": "0x1bbd",
+   "family": true
+  },
+  {
+   "slot": 202,
+   "original": "0xfffffe000a1095d0",
+   "linked": "0xfffffff00a1095d0",
+   "diversity": "0xde60",
+   "family": true
+  },
+  {
+   "slot": 203,
+   "original": "0xfffffe000a158128",
+   "linked": "0xfffffff00a158128",
+   "diversity": "0xb2ed",
+   "family": true
+  },
+  {
+   "slot": 204,
+   "original": "0xfffffe000a109734",
+   "linked": "0xfffffff00a109734",
+   "diversity": "0x58a1",
+   "family": true
+  },
+  {
+   "slot": 205,
+   "original": "0xfffffe000a10a01c",
+   "linked": "0xfffffff00a10a01c",
+   "diversity": "0x15ed",
+   "family": true
+  },
+  {
+   "slot": 206,
+   "original": "0xfffffe000a10a028",
+   "linked": "0xfffffff00a10a028",
+   "diversity": "0xb1e1",
+   "family": true
+  }
+ ]
+}

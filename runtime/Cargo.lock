@@ -58,6 +58,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "oneios-switches"
+version = "0.1.0"
+
+[[package]]
 name = "xh-core"
 version = "0.1.0"
 dependencies = [
@@ -74,6 +78,7 @@ dependencies = [
  "onecamera",
  "oneencoder",
  "oneios-display",
+ "oneios-switches",
  "xh-core",
  "xnuhost-abi",
  "xnuloader",

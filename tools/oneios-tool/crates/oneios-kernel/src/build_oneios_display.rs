@@ -307,7 +307,7 @@ pub fn main() -> Result<()> {
     let display = ctx.repo.join("external/NativeMobileDisplay");
     let package = ctx.repo.join("external/UniXNU-droidvm/package");
     let adreno = ctx.repo.join("external/NativeAdreno");
-    let abi_path = here.join("legacy-display-24A446-v54.json");
+    let abi_path = ctx.layout(&here, "legacy-display")?;
     let out = ctx.tree.join("build/native-legacy-display");
     let sources = [display.join("NativeLegacyDisplay.cpp"), display.join("NativeLegacyRequest.h"), display.join("NativeGOPPresenter.cpp"),
                    display.join("NativeGOPWire.h"), display.join("NativeHalfCodes.h"), package.join("LegacyDisplayProbe.cpp"),
@@ -317,6 +317,9 @@ pub fn main() -> Result<()> {
     gen::need_files(&needed, |path| format!("build-oneios-display: {} missing (scripts/setup/get-references.sh NativeMobileDisplay UniXNU-droidvm; \
                                              {} is made by port-legacy-display.py)", path.display(), gen::name(&abi_path)))?;
     let abi = Abi::load(&abi_path)?;
+    // The class as `prelink classes` read it from this build's kernelcache: the record must give its size and vtable. 24B156's
+    // class is 8 bytes larger than 24A446's; a record carried over with the old size would put our fields on its last ones.
+    check_class(&abi.value, &oneios_common::json::load(ctx.layout(&ctx.repo.join("kernel/prelink"), "classes")?)?)?;
     gen::mkdirs(&out)?;
     let record = ctx.record("iokit")?;
     gen::write_text(&out.join("OriginalLegacyFramebufferABI.h"), &header(&abi)?)?;
@@ -379,7 +382,58 @@ pub fn main() -> Result<()> {
     report.set("original_instructions_modified", false);
     gen::write_json(&out.join("build-report.json"), &report, 2)?;
     gen::write_objects(&ctx, &out, Some("iokit"), &sources)?;
-    println!("build-oneios-display: {} ({} objects; {CLASS}: {} owned slots, {} of the kernel, {} original bindings at their 24A446 \
-              iPhone18,2 addresses)", archive.display(), objects.len(), bound.owned.len(), bound.native.len(), bound.bindings.len());
+    println!("build-oneios-display: {} ({} objects; {CLASS}: {} owned slots, {} of the kernel, {} original bindings at their {} \
+              iPhone18,2 addresses)", archive.display(), objects.len(), bound.owned.len(), bound.native.len(), bound.bindings.len(), ctx.build);
     Ok(())
+}
+
+/// The display record against `prelink classes`' record of the same kernelcache (kernel/prelink/classes-<build>-v54.json):
+/// the same kernelcache, instance size, vtable and slot count.
+pub fn check_class(record: &Value, classes: &Value) -> Result<()> {
+    let class = classes.get("classes").and_then(|c| c.get(CLASS)).ok_or_else(|| anyhow!("build-oneios-display: the class record has no {CLASS}"))?;
+    let text = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).map(str::to_string);
+    let pairs = [("kernelcache_sha256", text(record, "kernelcache_sha256"), text(classes, "kernelcache_sha256")),
+                 ("instance_size", text(record, "instance_size"), text(class, "size")),
+                 ("vtable", text(record, "vtable"), text(class, "vtable")),
+                 ("slots", record.get("slots").and_then(Value::as_list).map(|l| l.len().to_string()),
+                  class.get("slots").and_then(Value::as_int).map(|n| n.to_string()))];
+    for (key, ours, theirs) in pairs {
+        if ours.is_none() || ours != theirs {
+            fail!("build-oneios-display: the display record's {key} is {ours:?}, the kernelcache's {CLASS} has {theirs:?} \
+                   (`oneios-tool prelink classes`): read the record again for this build");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod class_check {
+    use oneios_common::json::Value;
+
+    fn record(size: &str) -> Value {
+        oneios_common::json::parse(&format!(r#"{{"kernelcache_sha256":"k","instance_size":"{size}","vtable":"0x10","slots":[1,2]}}"#)).unwrap()
+    }
+
+    #[test]
+    fn a_record_with_another_size_is_refused() {
+        let classes = oneios_common::json::parse(r#"{"kernelcache_sha256":"k","classes":{"IOMobileFramebufferLegacy":{"size":"0x1de0","vtable":"0x10","slots":2}}}"#).unwrap();
+        super::check_class(&record("0x1de0"), &classes).unwrap();
+        let error = super::check_class(&record("0x1dd8"), &classes).unwrap_err().to_string();
+        assert!(error.contains("instance_size"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod committed_records {
+    /// Every build's committed display record agrees with its class record (both read from that build's kernelcache).
+    #[test]
+    fn every_build_agrees_with_its_class_record() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+        for build in ["24A446", "24B156"] {
+            let load = |path: String| oneios_common::json::load(repo.join(path)).unwrap();
+            let record = load(format!("kernel/patches/oneios-hosted/display/legacy-display-{build}-v54.json"));
+            let classes = load(format!("kernel/prelink/classes-{build}-v54.json"));
+            super::check_class(&record, &classes).unwrap_or_else(|e| panic!("{build}: {e}"));
+        }
+    }
 }

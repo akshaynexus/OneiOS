@@ -15,6 +15,11 @@ pub struct Map {
 }
 
 impl Map {
+    /// A map of no bytes (a file that is not there: a subcache left out of a partial copy, oneios-sym).
+    pub fn empty() -> Map {
+        Map { map: None }
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Map> {
         let path = path.as_ref();
         let file = File::open(path).with_context(|| format!("{}", path.display()))?;

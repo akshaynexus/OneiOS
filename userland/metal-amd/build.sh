@@ -26,6 +26,8 @@
 # against the 20F66 stubs). The build directory is set up again when the cross file's inputs change.
 # The Metal layer's hook: after `mesa`, when userland/metal-amd/air/build.sh exists it is run as
 #   userland/metal-amd/air/build.sh MESA_SOURCE_DIR MESA_BUILD_DIR
+# and then the OpenGL ES hook (userland/metal-amd/gl/build.sh MESA_SOURCE_DIR MESA_BUILD_DIR: GLES turned on in this
+# build, OneiOSRadeonGL.bundle with radeonsi through K3 and oneios-gl-probe in $METAL_AMD_OUT/gl; docs/a56-gpu.md 4a).
 #
 # Needs: scripts/setup/ios-toolchain.sh's toolchain (Linux: the SDK from xtool, ld64 in out/ios-toolchain), the 20F66
 # stubs (out/ios16-tbd: docs/building.md section 9), external/mesa-droidvm (scripts/setup/get-references.sh), meson,
@@ -152,6 +154,11 @@ mesa() {
   if [ -x "$HERE/air/build.sh" ]; then
     say "the Metal layer's hook: $HERE/air/build.sh $SRC $BUILD"
     "$HERE/air/build.sh" "$SRC" "$BUILD"
+  fi
+  # OpenGL ES for CoreAnimation (OneiOSRadeonGL, docs/a56-gpu.md 4a): GLES on in this build and the bundle, in $OUT/gl
+  if [ -x "$HERE/gl/build.sh" ]; then
+    say "the OpenGL ES hook: $HERE/gl/build.sh $SRC $BUILD"
+    METAL_AMD_GL_OUT="$OUT/gl" "$HERE/gl/build.sh" "$SRC" "$BUILD"
   fi
 }
 
