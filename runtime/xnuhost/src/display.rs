@@ -850,7 +850,11 @@ fn drm_init() -> Result<Drm, ()> {
             count_encoders: 8,
             ..Default::default()
         };
-        if !kms::call(raw, kms::GETCONNECTOR, &mut conn) || conn.connection != 1 || conn.count_modes == 0 {
+        if !kms::call(raw, kms::GETCONNECTOR, &mut conn)
+            || conn.connection != 1
+            || !config::panel_connector(conn.connector_type)
+            || conn.count_modes == 0
+        {
             continue;
         }
         let n = conn.count_modes.min(32) as usize;

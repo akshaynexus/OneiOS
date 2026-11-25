@@ -508,6 +508,14 @@ impl Policy {
             // Whether it would fit at the governor's clock (a burst's: not its bottom, which a cold frame meets).
             let cost = if self.down_at_bottom { self.at_bottom(gpu_us) } else { self.at_governor(gpu_us) };
             self.easy = if cost <= fit { self.easy + 1 } else { 0 };
+            if !self.down_at_bottom
+                && self.gov_x16 > DOWN_GUESS_X16
+                && (gpu_us as u64 * DOWN_GUESS_X16 as u64 / 16) as u32 <= fit
+            {
+                // A spike at the governor's clock (e.g. during boot) must not lock the GPU at TOP forever:
+                // decay gov_x16 back toward DOWN_GUESS_X16 across fast frames at TOP so the governor is retried.
+                self.gov_x16 = (self.gov_x16 - 1).max(DOWN_GUESS_X16);
+            }
             if self.level == Level::Top && self.easy >= self.down_need {
                 self.level = Level::Governor;
                 self.downs += 1;

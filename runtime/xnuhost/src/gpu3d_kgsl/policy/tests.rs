@@ -780,4 +780,14 @@ fn down_with_a_wide_clock_range() {
     assert_eq!(p.at_governor(2000), 4000);
     p.ratio_x16 = 24;
     assert_eq!(p.at_governor(2000), 3000);
+    // A high gov_x16 spike (e.g. 7.87x during boot) decays across fast frames at TOP so the governor is retried.
+    let mut p = Policy::new(Mode::Deadline);
+    p.ratio_x16 = wide;
+    p.gov_x16 = 126;
+    p.level = Level::Top;
+    for _ in 0..120 {
+        p.frame_done(&Frame { level: Level::Top, cold: false, budget_us: 8333 }, 2000);
+    }
+    assert_eq!(p.gov_x16, DOWN_GUESS_X16);
+    assert!(p.downs > 0, "gov_x16 decayed and allowed stepping down from TOP");
 }
