@@ -78,6 +78,9 @@ struct Knobs {
     mmap_burst: i32,
     mmap_capacity: i32,
     mmap_below: i64,
+    /// An MMAP stream whose reader never takes a frame (the DSP did not start: the S25's HAL now and then); set while
+    /// a run is going and that stream's server stops taking too (what the S25's dead stream did: nothing).
+    dead_mmap: bool,
     /// The audio policy's media index on the speaker (fix-audio-volume).
     media_index: i32,
     media_sets: u32,
@@ -203,7 +206,9 @@ impl FakeStream {
             let now = time::monotonic_s();
             self.fake.late(now - due);
             let pull = i64::from(self.pull);
-            let took = if self.mmap {
+            let took = if self.mmap && self.fake.k().dead_mmap {
+                false // the DSP never started (or stopped): the stream takes nothing
+            } else if self.mmap {
                 // A short buffer is an xrun (the DSP plays what is there, then stale data or silence). Counted in the
                 // client's frames, as AAudio's catch-up keeps them: the read never passes the write.
                 let have = s.written - s.read;
@@ -315,7 +320,7 @@ impl AStream for FakeStream {
     fn timestamp(&self) -> Option<(i64, i64)> {
         let s = self.st();
         let below = self.fake.k().mmap_below;
-        let ok = s.pulls_done > 0 && (!self.mmap || s.read >= below);
+        let ok = s.pulls_done > 0 && !self.fake.k().dead_mmap && (!self.mmap || s.read >= below);
         // MMAP: the HAL and the DSP after the read
         ok.then(|| (if self.mmap { s.read - below } else { s.read }, (s.last_pull * 1e9) as i64))
     }
@@ -362,7 +367,7 @@ impl AStream for FakeStream {
     fn frames_read(&self) -> i64 {
         let s = self.st();
         let mut v = s.read;
-        if self.mmap && s.pulls_done != 0 {
+        if self.mmap && s.pulls_done != 0 && !self.fake.k().dead_mmap {
             let on = ((time::monotonic_s() - s.last_pull) * f64::from(self.rate)) as i64;
             v += on.clamp(0, i64::from(self.pull));
             if v > s.written {
@@ -764,6 +769,7 @@ fn audio_helper() {
             mmap_burst: 192,
             mmap_capacity: 3072,
             mmap_below: 240,
+            dead_mmap: false,
             media_index: 7,
             media_sets: 0,
             media_bad: 0,
@@ -1145,6 +1151,89 @@ fn audio_helper() {
     run.header(AU_STOP, true, 0, 0);
     run.down();
     std::env::remove_var("ONEIOS_AUDIO_TARGET_DECAY_S");
+
+    // 12. An MMAP exclusive stream whose server takes no frames (the S25's HAL: the DSP never started, no timestamp,
+    // every write times out with 0). The probe reopens the speaker as a mixer track before the guest's boot; the
+    // writer's watchdog (three timed-out writes, 600 ms) does the same in the middle of a run. After either, no open
+    // asks for MMAP again.
+    eprintln!("-- an MMAP stream whose server takes no frames: the mixer track instead");
+    k().hal = Hal::MmapExclusive;
+    k().dead_mmap = true;
+    let run = Run::up(&fake, "60");
+    let opens = k().out_opens;
+    run.header(AU_PROBE, true, 0, 0);
+    let mut answer = AuHeader::default();
+    let t0 = time::monotonic_s();
+    while time::monotonic_s() - t0 < 6.0 && answer.kind != AU_LATENCY {
+        let mut wait = libc::pollfd { fd: run.guest.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        // SAFETY: one valid pollfd.
+        if unsafe { libc::poll(&mut wait, 1, 100) } > 0 {
+            let mut b = [0u8; AU_HEADER];
+            // SAFETY: a valid buffer of its length.
+            let got = unsafe { libc::recv(run.guest.as_raw_fd(), b.as_mut_ptr().cast(), b.len(), 0) };
+            answer = if got < AU_HEADER as isize { AuHeader::default() } else { AuHeader::read_from(&b) };
+        }
+    }
+    eprintln!("   probe: {} frames", answer.value);
+    // The mixer track starts on the guest's first period, so the probe's silence has no timestamp: not measured (0).
+    // What this case is about is the reopen.
+    assert!(answer.kind == AU_LATENCY && answer.value == 0);
+    assert_eq!(k().out_opens, opens + 2); // the MMAP stream, then the mixer track
+    assert!(!fake.last_out().mmap && k().mmap_policy_set == POLICY_NEVER);
+    assert_eq!(run.helper.ring().out_path, OutPath::Legacy);
+    run.header(AU_START, true, 2, 48000);
+    p.play(&run, 0.5, 0.0);
+    nap_s(0.1);
+    assert!(run.stats().played > 0); // the guest's sound plays on the mixer track
+    run.header(AU_STOP, true, 0, 0);
+    run.down();
+
+    // A stream that dies in the middle: a working MMAP stream, then its DSP stops taking frames while the guest's
+    // stream is up (no STOP: the guest's stream is kept). The writer notices in about 1 s, the receive loop reopens the
+    // speaker as a mixer track and the next period plays on it without a new START.
+    k().dead_mmap = false;
+    let run = Run::up(&fake, "60");
+    let opens = k().out_opens;
+    run.header(AU_START, true, 2, 48000);
+    p.play(&run, 0.3, 0.0);
+    assert!(fake.last_out().mmap && k().out_opens == opens + 1);
+    let played = run.stats().played;
+    assert!(played > 0);
+    k().dead_mmap = true;
+    let t0 = time::monotonic_s();
+    while time::monotonic_s() - t0 < 3.0 && k().out_opens < opens + 2 {
+        p.play(&run, 0.05, 0.0);
+    }
+    assert!(k().out_opens == opens + 2 && !fake.last_out().mmap);
+    assert_eq!(run.helper.ring().out_path, OutPath::Legacy);
+    assert!(run.helper.ring().playing()); // the guest's stream was not stopped: its periods still play
+    let played = run.stats().played; // the new stream's ring starts its counts again
+    p.play(&run, 0.5, 0.0);
+    nap_s(0.1);
+    assert!(run.stats().played > played);
+    run.header(AU_STOP, true, 0, 0);
+    run.down();
+    k().dead_mmap = false;
+
+    // A stream that is dead from its first write (no probe before it, as a later START after a new open): the write's
+    // 600 ms of timeouts reopen the speaker; the guest's first sound then plays on the mixer track.
+    let run = Run::up(&fake, "60");
+    let opens = k().out_opens;
+    k().dead_mmap = true;
+    run.header(AU_START, true, 2, 48000);
+    let t0 = time::monotonic_s();
+    while time::monotonic_s() - t0 < 3.0 && k().out_opens < opens + 2 {
+        p.play(&run, 0.05, 0.0);
+    }
+    assert!(k().out_opens == opens + 2 && !fake.last_out().mmap);
+    assert_eq!(run.helper.ring().out_path, OutPath::Legacy);
+    assert!(run.helper.ring().playing());
+    p.play(&run, 0.5, 0.0);
+    nap_s(0.1);
+    assert!(run.stats().played > 0);
+    run.header(AU_STOP, true, 0, 0);
+    run.down();
+    k().dead_mmap = false;
     std::env::remove_var("ONEIOS_AUDIO_SYSTEM_SERVER");
     std::env::remove_var("ONEIOS_AUDIO_LINGER_S");
 }

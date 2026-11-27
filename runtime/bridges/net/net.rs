@@ -45,7 +45,7 @@ impl Default for NetConfig {
             host_ip: 0xc0a84d01,  // 192.168.77.1
             guest_ip: 0xc0a84d02, // 192.168.77.2
             netmask: 0xffffff00,
-            dns: [0x08080808, 0x01010101], // replaced by oneios-net.sh's answer when the phone's DNS is known
+            dns: [0x08080808, 0x01010101], // public DNS: the phone's own resolver is netd's and is not read
             lease_s: 86400,
             dhcp: true,
         }

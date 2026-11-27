@@ -105,6 +105,7 @@ suite() {
     part boot runtime/xnuhost/check-arm64.sh smoke check
   else results+=("boot: skipped (no NDK here: the static xnuhost and the test kernel need it)"); fi
   part port sh scripts/port/test-verify-host.sh
+  part net-script sh runtime/bridges/net/test-oneios-net.sh
   # METAL_AMD=1: the A56's guest Mesa and its Metal layer (Mesa builds of several minutes each and about 1.7 GB in
   # out/metal-amd, so not by default; they need external/mesa-droidvm). The guest Mesa test is Linux only.
   if [ "${METAL_AMD:-0}" != 1 ]; then

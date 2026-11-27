@@ -503,6 +503,13 @@ impl ImageSet {
     /// xh_imageset_trustcaches: DarwinBoot's sidecar (u32 count, u32 offsets[count], version 2 modules) from the set's
     /// three IM4P trust caches and, when overlay/userland/owner-trust.json lists CDHashes, one owner module.
     pub fn trustcaches(&self) -> Result<Vec<u8>, Error> {
+        self.trustcaches_trusting(&[])
+    }
+
+    /// [`trustcaches`](Self::trustcaches) with CDHashes beside the image's own: the runtime's boot addon
+    /// (`kernel/gpuaddon`, addon.rs) has code the set's `owner-trust.json` need not name — an image built without the
+    /// plug-in has no such list at all — and this boot's trust cache is the only place that can carry it.
+    pub fn trustcaches_trusting(&self, extra: &[[u8; 20]]) -> Result<Vec<u8>, Error> {
         const NAMES: [&str; 3] = ["trust/static.trustcache", "trust/system.trustcache", "trust/app.trustcache"];
         let mut modules: Vec<Vec<u8>> = Vec::new();
         for (i, name) in NAMES.iter().enumerate() {
@@ -525,58 +532,103 @@ impl ImageSet {
             }
             modules.push(module.to_vec());
         }
-        if let Some(owner) = self.owner_module()? {
+        if let Some(owner) = self.owner_module(extra)? {
             modules.push(owner);
         }
-        let mut out = Vec::new();
-        out.extend_from_slice(&(modules.len() as u32).to_le_bytes());
-        let mut at = 4 + modules.len() * 4;
-        for m in &modules {
-            out.extend_from_slice(&(at as u32).to_le_bytes());
-            at += m.len();
-        }
-        for m in &modules {
-            out.extend_from_slice(m);
-        }
-        if !xnuloader::boot::trustcaches_valid(&out) {
-            return Err("the trust caches do not make a sidecar the loader takes (entries unsorted?)");
-        }
-        Ok(out)
+        pack_trust_modules(modules)
     }
 
     /// The owner module: version 2, a UUID derived from its content, the CDHashes of overlay/userland/owner-trust.json
-    /// sorted, each as a SHA-256 hash (type 2) with no flags. None for a set without the userland overlay or with no
-    /// CDHashes.
-    fn owner_module(&self) -> Result<Option<Vec<u8>>, Error> {
+    /// and of `extra` (the runtime's boot addon) sorted, each as a SHA-256 hash (type 2) with no flags. None for a set
+    /// without the userland overlay and with no CDHashes to add.
+    fn owner_module(&self, extra: &[[u8; 20]]) -> Result<Option<Vec<u8>>, Error> {
         const OWNER: &str = "overlay/userland/owner-trust.json";
-        if self.find(OWNER).is_none() {
-            return Ok(None); // a set without the userland overlay
-        }
-        let json = self.listed(OWNER, 4 << 20)?;
-        let j = Json(&json);
         let mut entries: Vec<[u8; 24]> = Vec::new();
-        for e in j.elements(j.get(Some(0), "cdhashes")) {
-            let mut entry = [0u8; 24];
-            let text = j.str(Some(e), 48);
-            if !text.is_some_and(|t| hex_bytes(&t, &mut entry[..20])) {
-                return Err("owner-trust.json: a CDHash is not 40 hex digits");
+        if self.find(OWNER).is_some() {
+            let json = self.listed(OWNER, 4 << 20)?;
+            let j = Json(&json);
+            for e in j.elements(j.get(Some(0), "cdhashes")) {
+                let mut entry = [0u8; 24];
+                let text = j.str(Some(e), 48);
+                if !text.is_some_and(|t| hex_bytes(&t, &mut entry[..20])) {
+                    return Err("owner-trust.json: a CDHash is not 40 hex digits");
+                }
+                entry[20] = 2;
+                entries.push(entry);
             }
+        }
+        for hash in extra {
+            let mut entry = [0u8; 24];
+            entry[..20].copy_from_slice(hash);
             entry[20] = 2;
             entries.push(entry);
         }
-        if entries.is_empty() {
-            return Ok(None);
-        }
-        entries.sort_by(|a, b| a[..20].cmp(&b[..20]));
-        entries.dedup_by(|a, b| a[..20] == b[..20]);
-        let body: Vec<u8> = entries.concat();
-        let digest = sha256(&body);
-        let mut module = vec![2, 0, 0, 0];
-        module.extend_from_slice(&digest[..16]);
-        module.extend_from_slice(&(entries.len() as u32).to_le_bytes());
-        module.extend_from_slice(&body);
-        Ok(Some(module))
+        Ok(owner_module(entries))
     }
+}
+
+/// A standalone owner module for a runtime add-on, appended to a kernel trust-cache sidecar when the image set's trust
+/// caches are not available. It only trusts the CDHashes explicitly packaged beside that add-on.
+pub fn trustcaches_sidecar_trusting(data: &[u8], extra: &[[u8; 20]]) -> Result<Vec<u8>, Error> {
+    if extra.is_empty() {
+        return Ok(data.to_vec());
+    }
+    if !xnuloader::boot::trustcaches_valid(data) {
+        return Err("the kernel trust-cache sidecar is malformed");
+    }
+    let count = le::u32(data, 0) as usize;
+    if count >= 128 {
+        return Err("the kernel trust-cache sidecar already has the maximum 128 modules");
+    }
+    let mut modules = Vec::with_capacity(count + 1);
+    for i in 0..count {
+        let start = le::u32(data, 4 + i * 4) as usize;
+        let end = if i + 1 < count { le::u32(data, 8 + i * 4) as usize } else { data.len() };
+        modules.push(data[start..end].to_vec());
+    }
+    let entries = extra
+        .iter()
+        .map(|hash| {
+            let mut entry = [0u8; 24];
+            entry[..20].copy_from_slice(hash);
+            entry[20] = 2;
+            entry
+        })
+        .collect();
+    modules.push(owner_module(entries).ok_or("the add-on has no CDHashes to trust")?);
+    pack_trust_modules(modules)
+}
+
+fn owner_module(mut entries: Vec<[u8; 24]>) -> Option<Vec<u8>> {
+    if entries.is_empty() {
+        return None;
+    }
+    entries.sort_by(|a, b| a[..20].cmp(&b[..20]));
+    entries.dedup_by(|a, b| a[..20] == b[..20]);
+    let body: Vec<u8> = entries.concat();
+    let digest = sha256(&body);
+    let mut module = vec![2, 0, 0, 0];
+    module.extend_from_slice(&digest[..16]);
+    module.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    module.extend_from_slice(&body);
+    Some(module)
+}
+
+fn pack_trust_modules(modules: Vec<Vec<u8>>) -> Result<Vec<u8>, Error> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&(modules.len() as u32).to_le_bytes());
+    let mut at = 4 + modules.len() * 4;
+    for module in &modules {
+        out.extend_from_slice(&(at as u32).to_le_bytes());
+        at += module.len();
+    }
+    for module in &modules {
+        out.extend_from_slice(module);
+    }
+    if !xnuloader::boot::trustcaches_valid(&out) {
+        return Err("the trust caches do not make a sidecar the loader takes (entries unsorted?)");
+    }
+    Ok(out)
 }
 
 // ---- chunk verification of a read-only image ----------------------------------------------------------------------

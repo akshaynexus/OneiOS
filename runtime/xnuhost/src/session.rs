@@ -326,7 +326,7 @@ fn session_file(name: &str, content: &str) {
 
 /// A whole file of at most `limit` bytes (None: unreadable, empty or larger). Not xh_core::fs::read_bytes, which cuts
 /// a larger file at its limit: a kernel, a device tree or an identity file cut short must be refused.
-fn read_file(path: &str, limit: usize) -> Option<Vec<u8>> {
+pub(crate) fn read_file(path: &str, limit: usize) -> Option<Vec<u8>> {
     let f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
     if len == 0 || len > limit as u64 {
@@ -598,12 +598,55 @@ fn hostcalls_vector() -> u64 {
     crate::hostcalls::vector().map_or(0, |v| v as *const _ as u64)
 }
 
+fn ro_bind(paths: &[String]) -> i32 {
+    if paths.is_empty() {
+        eprintln!("xnuhost: --ro-bind requires at least one path");
+        return 2;
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        for p in paths {
+            let Ok(cpath) = std::ffi::CString::new(p.as_str()) else {
+                eprintln!("xnuhost: --ro-bind: NUL in path '{p}'");
+                return 2;
+            };
+            // SAFETY: cpath is a valid NUL-terminated C string; fstype and data are NULL for MS_BIND | MS_REMOUNT | MS_RDONLY.
+            let rc = unsafe {
+                libc::mount(
+                    cpath.as_ptr(),
+                    cpath.as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY,
+                    std::ptr::null(),
+                )
+            };
+            if rc != 0 {
+                let err = std::io::Error::last_os_error();
+                eprintln!("xnuhost: --ro-bind {p}: {err}");
+                return 1;
+            }
+        }
+        0
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        let _ = paths;
+        eprintln!("xnuhost: --ro-bind: supported only on Linux/Android");
+        2
+    }
+}
+
 /// The program (main.c's main): the exit code.
 pub fn main() -> i32 {
     let argv: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
     // --prop-wait: the OneOS stop loop's wait on Android's properties (propwait.rs), before anything of a session.
     if argv.get(1).map(String::as_str) == Some("--prop-wait") {
         return crate::propwait::main(&argv[2..]);
+    }
+    // --ro-bind PATH...: remount existing bind mounts read-only via mount(2) directly (BusyBox 1.36 on KernelSU/S25/S26
+    // fails to match single-file bind mounts in /proc/mounts; burugou05-wq/OneiOS e85405f1).
+    if argv.get(1).map(String::as_str) == Some("--ro-bind") {
+        return ro_bind(&argv[2..]);
     }
     #[cfg(all(target_os = "android", target_arch = "aarch64"))]
     {
@@ -705,7 +748,8 @@ pub fn main() -> i32 {
     }
     let Ok(fb) = display::init(&config) else { return EXIT_SETUP };
     s.fb = fb;
-    // The display driver's scale and refresh rate go on the kernel's command line (a value given there stays).
+    // The display driver's scale, refresh rate and fixed-rate flag go on the kernel's command line (a value given
+    // there stays).
     if config::display_boot_args(
         &mut config.boot_args,
         config::BOOT_ARGS_SIZE,

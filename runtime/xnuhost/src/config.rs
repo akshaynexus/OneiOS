@@ -220,8 +220,10 @@ named!(
 );
 named!(
     /// wifi=: auto (the phone's wlan0 for iOS's en0 when the bridges are on), off (no network device), tap (the old
-    /// route: a tap and bin/oneios-net.sh's NAT), sim (a made-up radio with two networks; works with the bridges off).
-    Wifi { Auto = "auto", Off = "off", Tap = "tap", Sim = "sim" }
+    /// route: a tap and bin/oneios-net.sh's NAT), cell (a made-up joined network over that same tap, so iOS's data
+    /// runs on the phone's uplink — mobile data included — with no Wi-Fi; /dev/tun and root), sim (a made-up radio
+    /// with two networks; works with the bridges off).
+    Wifi { Auto = "auto", Off = "off", Tap = "tap", Cell = "cell", Sim = "sim" }
 );
 named!(
     /// pen=: off (the default until a phone session proves it) | auto: the host's pen digitizer (pen.rs's lookup) or
@@ -458,6 +460,8 @@ const GIVEN_KEYS: &[&str] = &[
     "panel-fallback",
     "scale",
     "scale-fixup",
+    "corner-radius",
+    "artwork-subtype",
     "ios16-fixup",
     "display-direct",
     "touch-exclusive",
@@ -505,6 +509,7 @@ const GIVEN_KEYS: &[&str] = &[
     "task-trim",
     "task-trim-idle",
     "timer-coalesce",
+    "thermal-cap",
     "ram-tasks-awake",
     "ram-task-idle-cost",
 ];
@@ -630,6 +635,10 @@ pub struct Config {
     pub scale: u32,
     /// the QuartzCore text fixups a scale of 3 needs (scale_fixups): on by default
     pub scale_fixup: bool,
+    /// corner-radius=N (0..200): /product display-corner-radius in points (0 = say nothing, the default).
+    pub corner_radius: u32,
+    /// artwork-subtype=N (0..10000): /product artwork-device-subtype (0 = from the panel: 2340 on 1080x2340, else 2868).
+    pub artwork_subtype: u32,
     /// the iOS 16.5 (20F66) text fixups (ios16_fixups: CoreImage's OpenGL ES fallback answers no context): on by default
     pub ios16_fixup: bool,
     pub text_fixups: TextFixups,
@@ -741,6 +750,9 @@ pub struct Config {
     pub task_trim_idle: u32,
     /// timer-coalesce (on): a later deadline or a cancel leaves the vCPU's host timer armed (cpu::TIMER_COALESCE)
     pub timer_coalesce: bool,
+    /// thermal-cap= (on by default): at the cell's critical temperature, narrow the vCPUs to fewer host cores.
+    /// Set to 0 to keep every core while still reporting the thermal level to iOS (NoNameBuilder/OneiOS 23cb7469).
+    pub thermal_cap: bool,
     pub selftest: bool,
     /// runtime/bridges devices (network, sound, haptics, Bluetooth, CPU placement); by mode unless given
     pub bridges: bool,
@@ -932,6 +944,8 @@ impl Config {
             panel_fallback: None,
             scale: 3,
             scale_fixup: true,
+            corner_radius: 0,
+            artwork_subtype: 0,
             ios16_fixup: true,
             text_fixups: TextFixups::default(),
             input: true,
@@ -984,6 +998,7 @@ impl Config {
             task_trim: true,
             task_trim_idle: TASK_TRIM_IDLE,
             timer_coalesce: true,
+            thermal_cap: true,
             selftest: false,
             bridges: true,
             clusters: String::new(),
@@ -1117,6 +1132,16 @@ impl Config {
                 self.scale = scale;
             }
             "scale-fixup" => self.scale_fixup = flag(value)?,
+            "corner-radius" => {
+                let radius = parse::atoi(value) as u32;
+                fmt_ok(radius <= 200)?;
+                self.corner_radius = radius;
+            }
+            "artwork-subtype" => {
+                let subtype = parse::atoi(value) as u32;
+                fmt_ok(subtype <= 10000)?;
+                self.artwork_subtype = subtype;
+            }
             "ios16-fixup" => self.ios16_fixup = flag(value)?,
             "text-fixup" => {
                 // FILE,OFFSET,ORIGINAL,REPLACEMENT in hex, as UniXNU's [payload] text_fixups (the kernel checks them again)
@@ -1208,6 +1233,7 @@ impl Config {
             "task-trim" => self.task_trim = flag(value)?,
             "task-trim-idle" => self.task_trim_idle = number(value, 1, 86400)?,
             "timer-coalesce" => self.timer_coalesce = flag(value)?,
+            "thermal-cap" => self.thermal_cap = flag(value)?,
             "ram-tasks-awake" => self.ram_tasks_awake = number(value, 0, 4096)?,
             "ram-task-idle-cost" => self.ram_task_idle_cost = size_below_tib(value)?,
             // hw-backend, hw-backend-<bridge>, hw-backend-fallback (onebridges::hw)
@@ -1457,6 +1483,10 @@ impl Config {
         take!(self, image, "task-trim", task_trim);
         take!(self, image, "task-trim-idle", task_trim_idle);
         take!(self, image, "timer-coalesce", timer_coalesce);
+        take!(self, image, "thermal-cap", thermal_cap);
+        if !self.given("thermal-cap") && !image.given("thermal-cap") && device.given("thermal-cap") {
+            self.thermal_cap = device.thermal_cap;
+        }
         take!(self, image, "cpu-pin", cpu_pin);
         self.hw.merge(&image.hw); // each hw-backend setting: the command line's, else the image set's,
         self.hw.merge(&device.hw); // else the host phone's
@@ -1515,6 +1545,14 @@ impl Config {
             }
         }
         take!(self, image, "scale-fixup", scale_fixup);
+        take!(self, image, "corner-radius", corner_radius);
+        if !self.given("corner-radius") && !image.given("corner-radius") && device.given("corner-radius") {
+            self.corner_radius = device.corner_radius;
+        }
+        take!(self, image, "artwork-subtype", artwork_subtype);
+        if !self.given("artwork-subtype") && !image.given("artwork-subtype") && device.given("artwork-subtype") {
+            self.artwork_subtype = device.artwork_subtype;
+        }
         take!(self, image, "ios16-fixup", ios16_fixup);
         if self.text_fixups.is_empty() {
             self.text_fixups = image.text_fixups.clone();
@@ -1526,6 +1564,16 @@ impl Config {
         // thread), the source storage, the GPU's 3D context, the console in the log.
         if self.boot_args.is_empty() {
             self.boot_args = DEFAULT_BOOT_ARGS.to_owned();
+        }
+        // The host table's boot-args-add comes first (e.g. galaxy-s25's built-in side keys), then the command line's
+        // or image set's; a word boot_args names already is not added again (NoNameBuilder/OneiOS 23b9b85f).
+        if !device.boot_args_add.is_empty()
+            && add_boot_args(&mut self.boot_args, BOOT_ARGS_SIZE, &device.boot_args_add).is_err()
+        {
+            return Err(ConfigError::new(format!(
+                "device boot-args-add does not fit beside the guest boot args ({} bytes at most)",
+                BOOT_ARGS_SIZE - 1
+            )));
         }
         if self.boot_args_add.is_empty() {
             self.boot_args_add = image.boot_args_add.clone();
@@ -1874,7 +1922,10 @@ impl Config {
                     || image.height != 0
                     || (key == "scale" && self.given("scale"))
             }
-            "return-graceful-ms" | "astc" => self.given(key) || image.given(key),
+            "return-graceful-ms" | "astc" | "corner-radius" | "artwork-subtype" | "thermal-cap" => {
+                self.given(key) || image.given(key)
+            }
+            "boot-args-add" => false,
             _ => {
                 let mut one = HwSettings::default();
                 if one.setting(key, value).is_err() {
@@ -1929,8 +1980,21 @@ sched_preemption_disable_debug_mode=0 wdt=-1 native-source-storage=1 vgpu-3d=1 d
 
 /// The keys a host table entry may give as device defaults.
 fn device_key(key: &str) -> bool {
-    matches!(key, "gpu" | "panel-fallback" | "hz" | "width" | "height" | "scale" | "return-graceful-ms" | "astc")
-        || key.starts_with("hw-backend")
+    matches!(
+        key,
+        "gpu"
+            | "panel-fallback"
+            | "corner-radius"
+            | "artwork-subtype"
+            | "boot-args-add"
+            | "thermal-cap"
+            | "hz"
+            | "width"
+            | "height"
+            | "scale"
+            | "return-graceful-ms"
+            | "astc"
+    ) || key.starts_with("hw-backend")
 }
 
 /// `<dir>/<name>` when it is a regular file.
@@ -2110,9 +2174,10 @@ pub fn boot_args_bt_transport(args: &str) -> Option<u32> {
 
 /// xh_display_boot_args: the display's switches the guest needs, unless the command line has them: its UI scale
 /// (offline-legacy-unit-scale, /chosen display-scale), the panel's rate (sheng-vsync: the vsync tick and, above 60 Hz,
-/// the refresh properties), and with a half-float frame (display-format=rgba16f) oneios-display-wide=1, which tells the
-/// guest's display to hand half-float surfaces to the scanout as they are instead of narrowing them to 8 bits. Err with
-/// no room in a C buffer of `size` bytes (what was added before stays).
+/// the refresh properties), one fixed rate above 60 Hz (sheng-vsync-fixed), and with a half-float frame
+/// (display-format=rgba16f) oneios-display-wide=1, which tells the guest's display to hand half-float surfaces to the
+/// scanout as they are instead of narrowing them to 8 bits. Err with no room in a C buffer of `size` bytes (what was
+/// added before stays).
 pub fn display_boot_args(
     args: &mut String,
     size: usize,
@@ -2128,6 +2193,13 @@ pub fn display_boot_args(
     }
     if !has_switch(args, "sheng-vsync") {
         append_arg(args, size, &format!("sheng-vsync={hz}"))?;
+    }
+    // The panel refreshes at one rate; its driver's original maximum refresh interval (1/24 s) is ProMotion's range,
+    // not this panel's. The render server reads the range and lets CoreAnimation pick 30 Hz for an animation inside
+    // it; a fixed rate makes the animation ask for the panel's (docs/gpu.md, "The refresh range"). A given
+    // sheng-vsync-fixed stays (0: the variable range set by sheng-vsync-min, 60..120 by default).
+    if hz > 60 && !has_switch(args, "sheng-vsync-fixed") {
+        append_arg(args, size, "sheng-vsync-fixed=1")?;
     }
     Ok(())
 }

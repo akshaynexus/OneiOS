@@ -54,7 +54,13 @@ pub const TABLE: &[HostDevice] = &[
         devices: &["pa1q"],
         socs: &["SM8750"],
         platforms: &["sun"],
-        config: &["panel-fallback=1080x2340@120"],
+        config: &[
+            "panel-fallback=1080x2340@120",
+            "corner-radius=34",
+            "boot-args-add=oneios-hid-buttons-builtin=1 oneios-button-haptics=1",
+            "hw-backend-thermal=treble",
+            "hw-backend-fallback=1",
+        ],
         env: &["ONEIOS_THERMAL_SOC_TRIPS=1", "ONEIOS_THERMAL_SOC_SAMPLES=3"],
         takeover: false,
     },
@@ -68,6 +74,28 @@ pub const TABLE: &[HostDevice] = &[
         config: &[],
         env: &["ONEIOS_BRIGHT_MAX=2300"],
         takeover: true,
+    },
+    HostDevice {
+        name: "galaxy-s26",
+        label: "Galaxy S26 (SM-S942 / SM-S941 / SC-51G, SM8850)",
+        models: &["SM-S942", "SM-S941", "SC-51G", "SCG36"],
+        devices: &["m1q"],
+        socs: &["SM8850"],
+        platforms: &["canoe"],
+        config: &["panel-fallback=1080x2340@120"],
+        env: &["ONEIOS_BRIGHT_MAX=2300", "ONEIOS_THERMAL_SOC_TRIPS=1", "ONEIOS_THERMAL_SOC_SAMPLES=3"],
+        takeover: false,
+    },
+    HostDevice {
+        name: "galaxy-s26-exynos",
+        label: "Galaxy S26 (SM-S942 / SM-S941, s5e9965)",
+        models: &["SM-S942", "SM-S941"],
+        devices: &["m1s"],
+        socs: &["s5e9965"],
+        platforms: &["s5e9965", "erd9965"],
+        config: &["gpu=2d", "panel-fallback=1080x2340@120"],
+        env: &[],
+        takeover: false,
     },
     HostDevice {
         name: "galaxy-a56",
@@ -147,8 +175,18 @@ fn compatible_has(list: &str, name: &str) -> bool {
 
 /// The entry the facts match, in host_device.rs's order, and the fact that matched it.
 pub fn matched(f: &Facts) -> Option<(&'static HostDevice, String)> {
+    let any_case = |list: &[&str], value: &str| !value.is_empty() && list.iter().any(|s| s.eq_ignore_ascii_case(value));
     if !f.model.is_empty() {
-        if let Some(e) = TABLE.iter().find(|e| e.models.iter().any(|m| f.model.starts_with(m))) {
+        let model_matches = |e: &&HostDevice| e.models.iter().any(|m| f.model.starts_with(m));
+        let hw_agrees = |e: &&HostDevice| {
+            any_case(e.devices, &f.device)
+                || (!f.soc_model.is_empty() && e.socs.iter().any(|s| s.eq_ignore_ascii_case(&f.soc_model)))
+                || (!f.machine.is_empty() && e.socs.iter().any(|s| s.eq_ignore_ascii_case(&f.machine)))
+                || any_case(e.platforms, &f.platform)
+                || (!f.compatible.is_empty()
+                    && e.socs.iter().chain(e.platforms).any(|n| compatible_has(&f.compatible, n)))
+        };
+        if let Some(e) = TABLE.iter().filter(model_matches).find(hw_agrees).or_else(|| TABLE.iter().find(model_matches)) {
             return Some((e, format!("ro.product.model={}", f.model)));
         }
     }
@@ -228,6 +266,10 @@ mod tests {
         // The S26 Ultra by its codename and platform alone (port-sm8850-s26: m3q, canoe [F]), as a ROM that renames it.
         assert_eq!(name(&facts("Galaxy S26 Ultra", "m3q", "", "")), "galaxy-s26-ultra");
         assert_eq!(name(&facts("", "", "canoe", "")), "galaxy-s26-ultra");
+        assert_eq!(name(&facts("SC-51G", "m1q", "canoe", "SM8850")), "galaxy-s26");
+        assert_eq!(name(&facts("SM-S942U", "m1q", "canoe", "SM8850")), "galaxy-s26");
+        assert_eq!(name(&facts("SM-S942B", "m1s", "s5e9965", "s5e9965")), "galaxy-s26-exynos");
+        assert_eq!(name(&facts("", "m1s", "", "")), "galaxy-s26-exynos");
         assert_eq!(name(&facts("SM-A566E", "a56x", "s5e8855", "s5e8855")), "galaxy-a56");
         assert_eq!(name(&facts("", "pa1q", "", "")), "galaxy-s25");
         assert_eq!(name(&facts("SM-S921B", "e1q", "pineapple", "SM8650")), "galaxy-s24-ultra");

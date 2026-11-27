@@ -11,6 +11,12 @@
 //!                                    and gives wlan0 back. It takes the Wi-Fi from One UI while it runs: One UI joins
 //!                                    its network again by itself after it. Not during a session.
 //!   wifictl restore FILE             wlan0's settings back from a session's wifi.state (after a killed xnuhost)
+//!   wifictl chip [start|stop|status]
+//!                                    the Wi-Fi chip's HAL (android.hardware.wifi.IWifi/default), read and changed:
+//!                                    status (default: its version, whether the chip runs, its station interfaces),
+//!                                    start (IWifi.start, then wait for wlan0; for a session that starts with One UI's
+//!                                    Wi-Fi off), stop (IWifi.stop: for every user, One UI's switch starts it again).
+//!                                    Safe beside One UI; a session with no wlan0 does the start itself.
 //!   wifictl p2p [IFACE]              read only: what every radio offers for a peer-to-peer link (AirDrop's AWDL:
 //!                                    docs/hardware.md 4a): each wiphy's interface types and combinations, action
 //!                                    frames, off-channel sends, NAN, Wi-Fi Direct, vendor commands; every interface;
@@ -32,6 +38,7 @@ use onebridges::hal::binder::strerror;
 use onebridges::log::{set_sink, Level, Sink};
 use onebridges::net::{NetBackend, NetConfig};
 use onebridges::proto::wire::Wire;
+use onebridges::wifi::chip;
 use onebridges::wifi::p2p::WONDER_IFNAME;
 use onebridges::wifi::proto::*;
 use onebridges::wifi::supplicant::{security_parse, Supplicant, SUP_SERVICE};
@@ -111,7 +118,8 @@ fn status(args: &[String]) -> i32 {
         Ok(st) => {
             let m = st.mac;
             print!(
-                "supplicant: service {SUP_SERVICE}, station interface {ifname}, address {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}, {} network(s):",
+                "supplicant: service {SUP_SERVICE} (v{}), station interface {ifname}, address {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}, {} network(s):",
+                s.version(),
                 m[0],
                 m[1],
                 m[2],
@@ -506,6 +514,37 @@ fn wonder(args: &[String]) -> i32 {
     i32::from(rc.is_err())
 }
 
+fn chip_cmd(args: &[String]) -> i32 {
+    match args.get(2).map_or("status", String::as_str) {
+        "status" => match chip::status(2000) {
+            Some(st) => {
+                println!("wi-fi: {}", st.text());
+                0
+            }
+            None => 1,
+        },
+        "start" => {
+            // The session's own path: the HAL started, then the wait for the driver's station interface.
+            if !chip::ensure("wlan0", chip::START_MS, || wlan::present("wlan0")) {
+                return 1;
+            }
+            println!("wlan0: {}", if wlan::present("wlan0") { "there" } else { "not there" });
+            0
+        }
+        "stop" => match chip::stop(2000) {
+            Ok(()) => {
+                println!("the chip is stopped (One UI's framework starts it again when its Wi-Fi is on)");
+                0
+            }
+            Err(e) => {
+                println!("  {e}");
+                1
+            }
+        },
+        _ => 2,
+    }
+}
+
 fn main() {
     set_sink(Sink::Custom(Arc::new(|level: Level, line: &str| {
         println!("  {}{line}", if level == Level::Error { "error: " } else { "" })
@@ -513,13 +552,14 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         eprintln!(
-            "usage: wifictl status [IFACE] | scan [SECONDS [IFACE]] | join SSID [PASSPHRASE [SECONDS]] | restore FILE | p2p [IFACE] | wonder [--seconds N] [--freq MHZ] [--country CC] [--station IFACE]"
+            "usage: wifictl status [IFACE] | scan [SECONDS [IFACE]] | join SSID [PASSPHRASE [SECONDS]] | restore FILE | chip [start|stop|status] | p2p [IFACE] | wonder [--seconds N] [--freq MHZ] [--country CC] [--station IFACE]"
         );
         std::process::exit(2);
     }
     let rc = match args[1].as_str() {
         "status" => status(&args),
         "scan" => scan(&args),
+        "chip" => chip_cmd(&args),
         "p2p" => p2p(&args),
         "wonder" => wonder(&args),
         "join" if args.len() > 2 => join(&args),

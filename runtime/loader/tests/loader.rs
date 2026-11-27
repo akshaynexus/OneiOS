@@ -367,6 +367,46 @@ fn machine_cameras_and_identity() {
 }
 
 #[test]
+fn machine_corner_radius() {
+    // The panel's corners in points, as /product display-corner-radius: two little-endian u32s, the radius and 1
+    // (the Galaxy S25: 102 px at the UI scale of 3 is 34). 0 writes nothing (the guest lays out for square corners).
+    let mut m = machine_default();
+    m.display_scale = 3;
+    m.corner_radius = 34;
+    let t = m.tree().unwrap();
+    let pr = t.find("product").unwrap();
+    let v = &pr.get("display-corner-radius").unwrap().value;
+    assert_eq!(v.len(), 8);
+    assert_eq!(u32::from_le_bytes(v[..4].try_into().unwrap()), 34);
+    assert_eq!(u32::from_le_bytes(v[4..].try_into().unwrap()), 1);
+    m.corner_radius = 0;
+    let t = m.tree().unwrap();
+    assert!(t.find("product").unwrap().get("display-corner-radius").is_none());
+}
+
+#[test]
+fn machine_artwork_subtype() {
+    // /product artwork-device-subtype names the artwork and the layout metrics CoreUI, SpringBoard and UIKit look up
+    // by it: the panel's own on the S25 (a 1080x2340 panel at @3x is the iPhone 12/13 mini's 360x780 grid, subtype
+    // 2340), the iPhone18,2's Pro Max (2868) for any other height; artwork-subtype= overrides both.
+    let mut m = machine_default();
+    (m.display_width, m.display_height) = (1080, 2340);
+    let t = m.tree().unwrap();
+    assert_eq!(u32_of(t.find("product").unwrap(), "artwork-device-subtype"), Some(2340));
+    (m.display_width, m.display_height) = (1440, 3120);
+    let t = m.tree().unwrap();
+    assert_eq!(u32_of(t.find("product").unwrap(), "artwork-device-subtype"), Some(2868));
+    m.display_height = 2340;
+    m.artwork_subtype = 2868;
+    let t = m.tree().unwrap();
+    assert_eq!(u32_of(t.find("product").unwrap(), "artwork-device-subtype"), Some(2868));
+    m.display_height = 3120;
+    m.artwork_subtype = 2340;
+    let t = m.tree().unwrap();
+    assert_eq!(u32_of(t.find("product").unwrap(), "artwork-device-subtype"), Some(2340));
+}
+
+#[test]
 fn machine_identity_tree() {
     use DeviceKind::*;
     // identity from a donor tree: model, target-type, board first in compatible, /product filtered

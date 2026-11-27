@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! xnuhost: XNU as a process on Android's Linux kernel (docs/booter.md). One module per part of the machine.
 
+/// The boot addon a runtime package carries (the Metal and capture plug-ins).
+pub mod addon;
 /// Context switches and trap entry.
 pub mod arch;
 /// Disks.

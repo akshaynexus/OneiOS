@@ -192,6 +192,21 @@ fn cpu() {
     assert!(plan.n_e == 1 && plan.n_p == 3 && plan.v[0].kind == E);
     assert!(plan.v[0].host_cpu == 5 && plan.affinity(0) == 0x20); // one lent core; the prime ones stay P
 
+    // Base Galaxy S26 (SC-51G m1q SM8850): cpu0-5 MIDR 0x512f0021, cpu6-7 MIDR 0x513f0021.
+    for i in 0..8 {
+        let prime = i >= 6;
+        let put = |rel: &str, text: &str| tmp.put(&format!("s26m1q/devices/system/cpu/cpu{i}/{rel}"), text);
+        put("cpu_capacity", if prime { "1024\n" } else { "741\n" });
+        put("cpufreq/cpuinfo_max_freq", if prime { "4742400\n" } else { "3628800\n" });
+        put("cpufreq/cpuinfo_min_freq", if prime { "768000\n" } else { "384000\n" });
+        put("cpufreq/related_cpus", if prime { "6 7\n" } else { "0 1 2 3 4 5\n" });
+        put("regs/identification/midr_el1", if prime { "0x00000000513f0021\n" } else { "0x00000000512f0021\n" });
+    }
+    let t = Topology::read(&tmp.at("s26m1q")).unwrap();
+    assert!(t.ncpu() == 8 && t.n_e == 0 && t.n_p == 8 && t.cpu[0].implementer == 0x51 && t.cpu[6].implementer == 0x51);
+    let plan = CpuPlan::make(&t, 8, false).unwrap();
+    assert!(plan.n_e == 2 && plan.n_p == 6 && plan.v[0].host_cpu == 4 && plan.v[1].host_cpu == 5);
+
     // A host with one kind of core: all P.
     for i in 0..4 {
         tmp.put(&format!("flat/devices/system/cpu/cpu{i}/cpu_capacity"), "1024\n");

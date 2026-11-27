@@ -48,7 +48,7 @@ fn host_device() {
     // hw-backend*), its environment ones only
     // variables a bridge reads. The S24 Ultra's entry holds nothing: its behaviour is today's.
     let t = host_table();
-    assert!(t.len() == 5 && t[0].name == "galaxy-s24-ultra");
+    assert!(t.len() == 7 && t[0].name == "galaxy-s24-ultra");
     for (i, e) in t.iter().enumerate() {
         assert!(!e.name.is_empty() && !e.label.is_empty() && !e.models.is_empty());
         assert!(std::ptr::eq(host_find(e.name).unwrap(), e));
@@ -57,7 +57,18 @@ fn host_device() {
             let key = c.split('=').next().unwrap_or("");
             let device_key = matches!(
                 key,
-                "gpu" | "panel-fallback" | "hz" | "width" | "height" | "scale" | "return-graceful-ms" | "astc"
+                "gpu"
+                    | "panel-fallback"
+                    | "corner-radius"
+                    | "artwork-subtype"
+                    | "boot-args-add"
+                    | "thermal-cap"
+                    | "hz"
+                    | "width"
+                    | "height"
+                    | "scale"
+                    | "return-graceful-ms"
+                    | "astc"
             );
             assert!(device_key || key.starts_with("hw-backend"), "{c}");
         }
@@ -71,8 +82,11 @@ fn host_device() {
         }
     }
     assert!(t[0].config.is_empty() && t[0].env.is_empty());
-    assert!(std::ptr::eq(host_find("GALAXY-A56").unwrap(), &t[4]) && host_find("pixel").is_none());
-    assert_eq!(host_names(), "galaxy-s24-ultra, galaxy-s25-ultra, galaxy-s25, galaxy-s26-ultra, galaxy-a56");
+    assert!(std::ptr::eq(host_find("GALAXY-A56").unwrap(), &t[6]) && host_find("pixel").is_none());
+    assert_eq!(
+        host_names(),
+        "galaxy-s24-ultra, galaxy-s25-ultra, galaxy-s25, galaxy-s26-ultra, galaxy-s26, galaxy-s26-exynos, galaxy-a56"
+    );
 
     // Each known phone by its model (the phone gates' properties).
     let p = phone(&tmp, "s24u", "SM-S928B", "e3q", "pineapple", "SM8650", "QTI");
@@ -101,6 +115,9 @@ fn host_device() {
         ("s25u", "SM-S938B", "pa3q", "sun", "SM8750", "QTI", "galaxy-s25-ultra"),
         ("s25", "SM-S931B", "pa1q", "sun", "SM8750", "QTI", "galaxy-s25"),
         ("s26u", "SM-S948B", "", "", "SM8850", "QTI", "galaxy-s26-ultra"),
+        ("s26-sc51g", "SC-51G", "m1q", "canoe", "SM8850", "QTI", "galaxy-s26"),
+        ("s26-snap", "SM-S942B", "m1q", "canoe", "SM8850", "QTI", "galaxy-s26"),
+        ("s26-exynos", "SM-S942B", "m1s", "s5e9965", "s5e9965", "Samsung", "galaxy-s26-exynos"),
         ("a56", "SM-A566E", "a56x", "s5e8855", "s5e8855", "Samsung", "galaxy-a56"),
     ] {
         let p = phone(&tmp, name, model, device, platform, soc, maker);
@@ -150,7 +167,7 @@ fn host_device() {
     // Forced and off: a name wins over what the phone says; none reads nothing; a bad name is refused.
     let p = phone(&tmp, "s24u", "SM-S928B", "e3q", "pineapple", "SM8650", "QTI");
     let (e, f, why) = host_choose("galaxy-a56", &p, &empty).unwrap();
-    assert!(e == Some(&t[4]) && why == "host-device=galaxy-a56 (forced)" && f.model == "SM-S928B");
+    assert!(e == Some(&t[6]) && why == "host-device=galaxy-a56 (forced)" && f.model == "SM-S928B");
     let (e, f, why) = host_choose("none", &p, &empty).unwrap();
     assert!(e.is_none() && why == "host-device=none: detection off" && !f.props);
     assert!(host_choose("pixel", &p, &empty).unwrap_err().contains("host-device=pixel is not a known phone"));

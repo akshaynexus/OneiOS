@@ -460,6 +460,11 @@ fn interface(ifname: &str) -> Option<(u32, [u8; 6])> {
     (index != 0 && parts.len() == 6).then(|| (index, parts.try_into().expect("6 bytes")))
 }
 
+/// The interface exists (its index and address readable): the chip's HAL starts the one that does not.
+pub fn present(ifname: &str) -> bool {
+    interface(ifname).is_some()
+}
+
 /// The interface and nl80211, with their failure logged (C: wlan_new).
 fn open_interface(ifname: &str) -> Option<(String, u32, [u8; 6], Nl80211, OwnedFd)> {
     let name: String = if ifname.is_empty() { "wlan0".into() } else { ifname.chars().take(15).collect() };
@@ -1260,6 +1265,24 @@ fn pipe() -> Result<(OwnedFd, OwnedFd), i32> {
 /// which the guest's en0 must use. None: no such interface or no access: iOS gets no Wi-Fi (logged).
 pub fn prepare(ifname: &str, session_dir: Option<&str>) -> Option<(NetOpen, [u8; 6])> {
     if lock(&THE_WLAN).is_some() {
+        return None; // one session has it: its chip, started or adopted, is that session's
+    }
+    let prepared = prepare_wlan(ifname, session_dir);
+    if prepared.is_none() {
+        // A chip this attempt started (and no session uses) goes down again: no half-taken radio.
+        super::chip::give_back();
+    }
+    prepared
+}
+
+fn prepare_wlan(ifname: &str, session_dir: Option<&str>) -> Option<(NetOpen, [u8; 6])> {
+    // One UI's Wi-Fi off at the switch: its chip is stopped and init never started the Wi-Fi stack, so wlan0 is not
+    // there. The HAL can start it, as One UI's framework would (docs/hardware.md section 3, "Wi-Fi off in One UI").
+    let name: String = if ifname.is_empty() { "wlan0".into() } else { ifname.chars().take(15).collect() };
+    if interface(&name).is_none() && !super::chip::ensure(&name, super::chip::START_MS, || interface(&name).is_some()) {
+        br_error!(
+            "wifi: off: no {name} (One UI's Wi-Fi was off at the switch, and the chip did not start): iOS gets no Wi-Fi"
+        );
         return None;
     }
     let (ifname, ifindex, mac, nl, events) = open_interface(ifname)?;
@@ -1343,7 +1366,14 @@ pub fn prepare(ifname: &str, session_dir: Option<&str>) -> Option<(NetOpen, [u8;
 
 /// The stop: the network left, the supplicant as it was found, wlan0's settings back.
 pub fn close() {
-    let Some(s) = lock(&THE_WLAN).take() else { return };
+    if let Some(s) = lock(&THE_WLAN).take() {
+        close_session(s);
+    }
+    // One UI's Wi-Fi off: the chip this session started goes down again, as its switch had it.
+    super::chip::give_back();
+}
+
+fn close_session(s: Session) {
     let w = &s.wlan;
     if !s.threads.is_empty() {
         w.running.store(false, Ordering::Release);

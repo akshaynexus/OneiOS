@@ -17,6 +17,36 @@ booted on a phone at the time of the port.
 | `d157b43` "Shader-Fixes" (leusernamealadeen) | Applied the Adreno shader fixes `userland/metal/patches/metal2vulkan` 0101 and 0102 in the Metal bridge in every build | Applied behind a switch, on by default since the merge into main (2026-11-25): `0110-shader-fix-switch.patch`, `userland/metal/ShaderFix.inc`, boot argument `oneios-m2v-shader-fix=0` turns it off (docs/switches.md) |
 | `79cf4fb`, `d5018d0` (leusernamealadeen) | `.github/workflows/release.yml` downloads the pinned kernel from akshaynexus/OneiOS, so a fork's CI finds it | As a fallback: this repository's release of the tag first, akshaynexus/OneiOS when a fork has none (docs/releases.md) |
 | `076c1a3`, `56e1430` (leusernamealadeen, orumanayurpanjayat-ux) | A Metal build job in CI, then removed again; `METAL_LICENSES_DIR` in `runtime/package.sh` | Not ported: the job is gone in the fork too, and nothing here would set `METAL_LICENSES_DIR` |
+| `be130197`, `23d30821`, `29600c17`, `10849627`, `8bcb43df`, `ded595d0`, `2d3dc620`, `62a87e78` (leusernamealadeen; ported 2026-11-27, not booted) | `kernel/build-hosted.sh` header fix (also fixed independently by `MRDinar/OneiOS-A56x` `12032ee9`), Bash 3.2 empty-array fix & SDK stub fallback & `.gpuaddon.cdhashes` in `userland/metal/build.sh` / `metal.rs` / `metal-plugin.yml`, runtime boot-addon fallback (`addon.rs`, `imageset.rs`, `session/board.rs`, `runtime/package.sh`), and `sheng-vsync-fixed=1` in `staged/display.rs` | Ported onto `main` (`port/fork-survey-2026-11-27`) |
+
+## burugou05-wq/OneiOS
+
+Author: **burugou05-wq**. Ported 2026-11-27 (`port/fork-survey-2026-11-27`), host-tested, not booted on a phone here.
+
+| Fork commit | What it did | Here |
+|---|---|---|
+| `e85405f1` "feat(s26): support Galaxy S26 base models, KernelSU --ro-bind, and README" | Galaxy S26 base models (`galaxy-s26` SM8850 `m1q` / `SC-51G` and `galaxy-s26-exynos` `m1s` / `s5e9965`), shared-model disambiguation, host profiles, `verify-host.sh`, SC-51G Oryon CPU test, `docs/s26.md`, and `xnuhost --ro-bind` direct `mount(2)` remount helper for KernelSU BusyBox 1.36 | `runtime/xnuhost/src/session.rs`, `runtime/bridges/hw/host_device.rs`, `tools/oneios-tool/crates/oneios-phone/src/host.rs`, `profiles/host-galaxy-s26-*.toml`, `scripts/port/verify-host.sh`, `docs/s26.md` |
+
+## NoNameBuilder/OneiOS
+
+Author: **NoNameBuilder**. Ported 2026-11-27 (`port/fork-survey-2026-11-27`), host-tested, not booted on a phone here.
+
+| Fork commit | What it did | Here |
+|---|---|---|
+| `08c64e13`, `3c4f5976` | Reopen speaker as a legacy mixer track when an MMAP stream stalls (takes no frames during probe or playback) | `runtime/bridges/audio/aaudio_helper.rs`, `test_audio_helper.rs`, `runtime/xnuhost/src/session/bridges.rs` |
+| `5abb28ff`, `0d0ba1f4`, `2c7ca0ef` | Read `ISupplicant.getInterfaceVersion` (v3 on S25), start/restore `IWifi/default` when One UI Wi-Fi was off (`wifi/chip.rs`), opt-in `wifi=cell` over tap + selector-safe `oneios-net.sh` (`test-oneios-net.sh`) | `runtime/bridges/wifi/`, `runtime/bridges/net/`, `runtime/xnuhost/src/config.rs`, `runtime/host-tests.sh` |
+| `120df342`, `2a021be7`, `23b9b85f`, `9bed1282`, `9da51441`, `23cb7469`, `d1406034` | `/product display-corner-radius`, panel-derived `artwork-device-subtype` (2340 on 1080x2340), `galaxy-s25` built-in side keys & treble thermal SKIN row, thermal open-line `case_from`, opt-in `thermal-cap=0` (default kept `1` on `main`) | `runtime/loader/src/machine.rs`, `runtime/bridges/thermal/session.rs`, `runtime/bridges/hw/host_device.rs`, `runtime/xnuhost/src/config.rs`, `tools/oneios-tool/crates/oneios-phone/src/host.rs` |
+| `3f0443fc`, `bc753278`, `7fd9bd72`, `47d370ad`, `6c945aa5` | `roottweak` writes `pen=auto` for non-20F66 images; `kb.rs` scans both XnuPrelink fixture folders; `virtio_gpu` `lanes` test posts all chains before one kick; Metal build Bash 3.2 & SDK stub fixes | `tools/oneios-tool/crates/oneios-tweaks/`, `oneios-phone/src/kb.rs`, `runtime/xnuhost/src/virtio_gpu/tests.rs`, `userland/metal/build.sh` |
+
+## YMGPwcca/OneiOS
+
+Author: **Nguyễn Tuấn Nghĩa (YMGPwcca)**. Ported 2026-11-27 (`port/fork-survey-2026-11-27`), rewritten into the Rust runtime, host-tested, not booted on a phone here.
+
+| Fork commit | What it did | Here |
+|---|---|---|
+| `9e5a9933` "fix(xnuhost): publish deferred map ACK on the actual futex word" | Publish `XS_HOST_OPS_ACK` on `XsTrapPage.to_host` and pass observed `event` to `FUTEX_WAIT`, fixing a lost-wakeup race that could stall a vCPU up to 200 ms holding the task lock | `runtime/abi/src/stub.rs`, `runtime/xnuhost/stub/src/main.rs`, `runtime/xnuhost/src/task.rs` |
+| `bb950679` "perf(xnuhost): skip acknowledged empty service flushes" | Return early in `order_as()` when `first == 0 && ops.is_empty()` instead of waking the service thread for a 0-op flush | `runtime/xnuhost/src/task.rs` |
+| `257f7ee7` "perf(xnuhost): avoid redundant host timer disarms" | Skip redundant `timer_settime(0)` when `timer_host_at == 0` (host timer already disarmed) | `runtime/xnuhost/src/cpu.rs` |
 
 ## Other ports (not forks of this repository)
 
@@ -45,6 +75,7 @@ The Galaxy S25 Ultra fork (branch `s25-ultra-sm8750`). Author: **YumikoHayamato*
 | Fork commit | What it did | Here |
 |---|---|---|
 | `cdb297bbf` "native path, step 6" (the display part) | With `ONEIOS_DISPLAY_PRESENT=ahb` the display helper posts its frames in three write-only AHardwareBuffers (`CPU_WRITE_RARELY`) on a child of its layer with ASurfaceTransaction, each filled with the damage since it was last filled, at most two in flight, refilled after its release fence; the window path kept when anything is missing. Measured on the S25: 85% of the helper's time had been the CPU caches' maintenance of the window's whole buffer at each lock and post; 60 frames a second at 49.5% of a core became 114 at 17.1% | Rewritten in Rust on the run loop's `Layer` (`runtime/display/src/xhd/present.rs`, the NDK half in `src/jni.rs`), behind xnuhost's `display-present=ahb` (default) through the `options` message (docs/switches.md); the child made from the layer's window rather than by the Java half; host tests `test_present_*`. Their copy-loop floor (`ONEIOS_DISPLAY_UCLAMP_MIN`), the frame-time line, `displayctl pool` and the PL030 kernel patch of the same commit are not ported (a VM's path) |
+| `b4619f8b` "buttons: the power key reaches iOS at once (LockKeyDelay 0)" (ported 2026-11-27, not booted) | Publishes `LockKeyDelay = 0` in the buttons event service's `HIDEventServiceProperties` so backboardd's `IOHIDKeyboardFilter` does not hold power key-down for 150 ms (`oneios-hid-lock-key-delay=N` overrides) | `kernel/patches/oneios-hosted/hid/OneiOSHidInput.cpp`, `kernel/patches/oneios-hosted/hid/README.md` |
 
 ## Other ports' code taken file by file
 

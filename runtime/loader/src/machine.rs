@@ -198,6 +198,15 @@ pub struct Machine {
     pub display_height: u32,
     pub display_scale: u32,
     pub display_hz: u32,
+    /// The panel's rounded corners in points (0 = say nothing): /product display-corner-radius, two little-endian
+    /// u32s, the radius and 1 (24A446's V54 tree has 62 and 1 on the 62-point Pro Max). iOS insets the status bar and
+    /// masks the screen by it; without it the guest lays out for square corners and the phone's own corner cut clips
+    /// the picture (the Galaxy S25's is 34: its stock ROM's framework overlay says rounded_corner_radius_top and
+    /// _bottom = 34 dp, 102 px at the UI scale of 3).
+    pub corner_radius: u32,
+    /// /product artwork-device-subtype (0 = from the panel): 2340 on a 1080x2340 panel (at @3x that is the iPhone
+    /// 12/13 mini's 360x780-point grid), else 2868 (the iPhone18,2's Pro Max set).
+    pub artwork_subtype: u32,
     /// The cameras iOS is told about (CAMERA_*; 0 = none), used only with an "oneios,camera" device: /arm-io/isp
     /// camera-rear and camera-front (MobileGestalt's rear-facing-camera, front-facing-camera and still-camera, which
     /// SpringBoard shows Camera.app by), an empty /product/camera (video-camera), and /product unique-model
@@ -282,6 +291,8 @@ impl Default for Machine {
             display_height: 0,
             display_scale: 0,
             display_hz: 0,
+            corner_radius: 0,
+            artwork_subtype: 0,
             cameras: 0,
             unique_model: None,
             product_id: None,
@@ -758,7 +769,17 @@ impl Machine {
             // the display's (sRGB unless display_gamut says so: the helper tags the frames sRGB), and the GPU
             // fallbacks lose APPLE2 and MTL2,2 as with an identity unless astc (set_featuresets).
             product.put_str("artwork-device-idiom", "phone");
-            product.put_u32("artwork-device-subtype", 2868);
+            // The subtype names the artwork and the layout metrics: the panel's own (2340 for a 1080x2340 panel, the
+            // iPhone 12/13 mini's grid) unless the host says otherwise; 2868 (the iPhone18,2's Pro Max) for every
+            // other panel, as before.
+            let subtype = if self.artwork_subtype != 0 {
+                self.artwork_subtype
+            } else if (self.display_width, self.display_height) == (1080, 2340) {
+                2340
+            } else {
+                2868
+            };
+            product.put_u32("artwork-device-subtype", subtype);
             product.put_str("artwork-display-gamut", self.display_gamut.as_deref().unwrap_or("sRGB"));
             product.put_str("artwork-dynamic-displaymode", "0");
             product.put_str("graphics-featureset-class", "APPLE10");
@@ -769,10 +790,20 @@ impl Machine {
                 self.astc,
             );
         }
-        // The artwork scale follows the UI scale (the identity tree's is the iPhone panel's 3). The artwork subtype
-        // stays the identity's (2868 for iPhone18,2): it names a set of assets, and no set exists for another height.
+        // The artwork scale follows the UI scale (the identity tree's is the iPhone panel's 3). The artwork subtype is
+        // the identity's own, or (no identity) the panel's: 2340 on a 1080x2340 panel (the iPhone 12/13 mini's grid),
+        // else 2868 (the iPhone18,2's). docs/userland.md, "The artwork answers".
         if self.display_scale != 0 {
             product.put_u32("artwork-scale-factor", self.display_scale);
+        }
+        // The panel's corners, in points: two little-endian u32s (the radius, then 1, as the V54 tree has 62 and 1 on
+        // the Pro Max). iOS insets the status bar and masks the screen by it; an identity tree's own value stays
+        // unless corner-radius= was given (xnuhost's config.corner_radius, the host phone's row).
+        if self.corner_radius != 0 {
+            let mut v = [0u8; 8];
+            v[..4].copy_from_slice(&self.corner_radius.to_le_bytes());
+            v[4..].copy_from_slice(&1u32.to_le_bytes());
+            product.put("display-corner-radius", v);
         }
         product.put_str("model", "oneios,xnuhost");
         // The cameras (with the camera device only, so a host without one keeps the tree it had). 24A446's

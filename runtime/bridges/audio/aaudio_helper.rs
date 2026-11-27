@@ -60,6 +60,16 @@
 //!      a normal mixer track (libaudioclient takes FAST off a synchronous native writer; what LOW_LATENCY still sends
 //!      is AUDIO_OUTPUT_FLAG_RAW). ONEIOS_AUDIO_PERF=none: performance mode NONE (the path before 2026-11-15).
 //!
+//! A stream whose server takes no frames: on the S25's HAL an MMAP exclusive stream sometimes never leaves STARTING (no
+//! timestamp, every blocking write times out with 0, the DSP never reads: sessions 3, 4 and 5), and the writer would
+//! drop every guest period for as long as the track lingered. Two places notice and reopen the speaker on 3, once for
+//! the helper's run (mmap_dead below): the probe, when the writer says the stream is dead or after 1.5 s with no read
+//! (before the guest's boot, so iOS's first sound already finds the mixer track; the boot costs about a second more),
+//! and the writer, when three writes in a
+//! row take nothing (600 ms: the stream never started, so AAudio holds nothing) or AAudio holds frames the server has
+//! not read for 1 s (it stopped; the receive loop closes the stream and opens the mixer track while the guest's stream
+//! stays up: a gap of the ring's fill). The fallback is logged; after it no open asks for MMAP again.
+//!
 //! And a guard: every thread of the process is checked after each start and every 10 s, and one found SCHED_FIFO or
 //! SCHED_RR is set back to SCHED_OTHER (logged).
 //!
@@ -70,7 +80,9 @@
 //! presented).
 //!
 //! The probe (AU_PROBE, xnuhost before the boot): the speaker stream opened in silence, its latency measured and sent
-//! back, so the kernel publishes the host's measured latency as the device's output latency.
+//! back, so the kernel publishes the host's measured latency as the device's output latency. A stream that takes no
+//! frame (the writer's 600 ms, or the probe's 1.5 s) is reopened on 3 (above); a mixer track's silence is not measured
+//! (0: the guest's first period starts it).
 //!
 //!
 //! Log lines: "oneios-audio: ..." on stderr (xnuhost's log): each stream's open (its mode), the server's pulls once they
@@ -408,6 +420,10 @@ pub struct Ring {
     pub out_path: OutPath,
     /// its reader (the DSP, AAudio's endpoint) takes frames all the time
     pub continuous: bool,
+    /// The writer saw the server take nothing (600 ms of timed-out writes, or a second with AAudio's frames unread) on
+    /// a stream that is not the legacy track: the receive loop reopens the speaker on the legacy path (once, mmap_dead
+    /// on the Helper).
+    dead: bool,
 }
 
 impl Ring {
@@ -431,7 +447,13 @@ impl Ring {
             target_max_ms: 80,
             out_path: OutPath::Legacy,
             continuous: false,
+            dead: false,
         }
+    }
+
+    /// the ring's level and the writer's target, for the reports and the tests
+    pub fn playing(&self) -> bool {
+        self.guest_on
     }
 
     /// One guest period has come in: its lateness against the guest's schedule (the earliest arrival of the last one
@@ -485,6 +507,7 @@ impl Ring {
     fn restart(&mut self) {
         self.guest_on = true;
         self.generation += 1;
+        self.dead = false;
         self.stats = OutStats::default();
         self.clock = GuestClock::default();
     }
@@ -544,6 +567,8 @@ pub struct Helper {
     in_thread: Mutex<Option<JoinHandle<()>>>,
     /// AAudio_setMMapPolicy(NEVER) worked
     mmap_refused: AtomicBool,
+    /// a stream's server took no frames (no timestamp, 600 ms of timed-out writes): no open asks for MMAP again
+    mmap_dead: AtomicBool,
     /// the output latency iOS was told (AU_TOLD; 0: not known)
     told_frames: AtomicU32,
     host_volume: Mutex<HostVolume>,
@@ -654,6 +679,7 @@ impl Helper {
             out_thread: Mutex::new(None),
             in_thread: Mutex::new(None),
             mmap_refused: AtomicBool::new(false),
+            mmap_dead: AtomicBool::new(false),
             told_frames: AtomicU32::new(0),
             host_volume: Mutex::new(HostVolume::default()),
             idle_since: Mutex::new(0.0),
@@ -844,7 +870,9 @@ impl Helper {
         let mut path = OutPath::Legacy;
         let mut why = String::new();
         let mut asked;
-        if s.perf_mode == PERF_LOW_LATENCY && s.mmap_want != MmapWant::Off {
+        if self.mmap_dead.load(Ordering::Relaxed) {
+            why = "an earlier MMAP stream's server took no frames".to_owned();
+        } else if s.perf_mode == PERF_LOW_LATENCY && s.mmap_want != MmapWant::Off {
             // Without AAudio_setMMapPolicy the system's aaudio.mmap_policy decides (2, AUTO, on the phone).
             let _ = self.mmap_policy(POLICY_AUTO);
             self.mmap_refused.store(false, Ordering::Relaxed);
@@ -880,8 +908,10 @@ impl Helper {
                 return (stream, asked, why);
             }
         } else {
-            why = if s.perf_mode == PERF_LOW_LATENCY { "ONEIOS_AUDIO_MMAP=off" } else { "ONEIOS_AUDIO_PERF=none" }
-                .to_owned();
+            if why.is_empty() {
+                why = if s.perf_mode == PERF_LOW_LATENCY { "ONEIOS_AUDIO_MMAP=off" } else { "ONEIOS_AUDIO_PERF=none" }
+                    .to_owned();
+            }
         }
         self.mmap_off();
         asked = if self.mmap_refused.load(Ordering::Relaxed) { s.perf_mode } else { PERF_NONE };
@@ -1072,6 +1102,12 @@ impl Helper {
         let mut phase = false;
         let mut xruns_seen = d.stream.xrun_count();
         let mut reported = d.started();
+        // The server's read and when it last moved: a stream AAudio holds frames for and that does not take them for a
+        // second is dead (an MMAP stream whose DSP never started, or stopped), and the receive loop replaces it.
+        let mut read_seen = d.stream.frames_read();
+        let mut read_moved = time::monotonic_s();
+        // writes in a row the server took nothing of (200 ms each): its DSP never started
+        let mut idle = 0u32;
         self.boost_writer();
         let mut fitted = {
             let mut r = self.ring();
@@ -1084,6 +1120,23 @@ impl Helper {
             let queued = (d.stream.frames_written() - read).max(0);
             let xruns = d.stream.xrun_count();
             let now = time::monotonic_s();
+            // Its DSP never started (no timestamp; this phone's HAL does it now and then) or stopped: AAudio holds
+            // frames and takes none for a second. The receive loop reopens the speaker on the legacy path, once.
+            if read != read_seen {
+                read_seen = read;
+                read_moved = now;
+            } else if queued > 0 && now - read_moved >= 1.0 {
+                let mut r = self.ring();
+                if r.out_path != OutPath::Legacy {
+                    r.dead = true;
+                    drop(r);
+                    eprintln!(
+                        "oneios-audio: speaker: the server took no frames in 1 s: the speaker is reopened as a mixer \
+                         track"
+                    );
+                    break;
+                }
+            }
             let (mut take, mut length) = (0u32, CHUNK);
             let (mut play, mut cut) = (false, false);
             let mut r = self.ring();
@@ -1324,7 +1377,28 @@ impl Helper {
                         std::thread::sleep(Duration::from_millis(50));
                         break;
                     }
-                    done += n as u32; // 0: the server took nothing for 200 ms (a stall): again
+                    if n == 0 {
+                        // The server took nothing for 200 ms. Three in a row (600 ms) on a stream that is not the mixer
+                        // track: its DSP never started (no timestamp; this phone's HAL does it on some MMAP exclusive
+                        // opens) and no write will go in; AAudio holds nothing, so the read alone cannot tell. The
+                        // receive loop reopens the speaker on the legacy path, once.
+                        idle += 1;
+                        if idle >= 3 {
+                            let mut r = self.ring();
+                            if r.out_path != OutPath::Legacy {
+                                r.dead = true;
+                                drop(r);
+                                eprintln!(
+                                    "oneios-audio: speaker: the server took nothing in 600 ms: the speaker is reopened \
+                                     as a mixer track"
+                                );
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                    idle = 0;
+                    done += n as u32;
                     d.frames.fetch_add(n as u64, Ordering::Relaxed);
                 }
             }
@@ -1332,6 +1406,9 @@ impl Helper {
                 reported = time::monotonic_s();
                 self.out_report("running");
                 demote_realtime();
+            }
+            if self.ring().dead {
+                break; // the receive loop reopens the speaker (restart_speaker)
             }
         }
     }
@@ -1519,58 +1596,107 @@ impl Helper {
         self.ring_more.notify_one();
     }
 
+    /// The writer saw the server take no frames for 1 s (its DSP never started, or stopped): the speaker closed and
+    /// opened again on the legacy path (mmap_dead), the guest's stream kept (guest_on, which stop_dir clears: put back
+    /// after). 0 or start_dir's errno.
+    fn restart_speaker(self: &Arc<Helper>) -> i32 {
+        let Some(d) = self.dir(true) else { return 0 };
+        let (rate, channels) = (d.stream.sample_rate().max(0) as u32, d.channels);
+        let guest_on = self.ring().guest_on;
+        self.mmap_dead.store(true, Ordering::Relaxed);
+        self.stop_dir(true);
+        let rc = self.start_dir(true, rate, channels);
+        if rc != 0 {
+            return rc;
+        }
+        self.ring().guest_on = guest_on; // the guest's stream is up: its next period plays on the new track
+        if !guest_on {
+            *locked(&self.idle_since) = time::monotonic_s();
+        }
+        0
+    }
+
     /// AU_PROBE (xnuhost, before the guest boots): the speaker's stream opened now and kept in silence (it lingers, so
     /// iOS's first sound finds it open), and its latency for a guest period: what AAudio holds below its read (the
     /// median of 10 looks once the server reads and gives a timestamp, up to 1.5 s for that: a mixer track's start
     /// stall is about 200 ms) plus the level the writer holds when a period comes in (the target; on a mixer also half
     /// a pull). Frames (0: not measured).
     fn probe(self: &Arc<Helper>) -> u32 {
-        if self.dir(true).is_none() {
-            if self.start_dir(true, RATE, 2) != 0 {
-                eprintln!("oneios-audio: probe: the speaker did not open");
+        // Two tries: the stream on the configured path, then (when its server took no frame) one on the legacy path.
+        // The answer must come well within xnuhost's 2 s (session/bridges.rs): a dead stream is given up as soon as
+        // the writer says so (its 600 ms of timed-out writes or a second with AAudio's frames unread), and the legacy
+        // path is not waited on at all (its silence never reaches AudioFlinger's start threshold without the guest).
+        for attempt in 0..2 {
+            if self.dir(true).is_none() {
+                if self.start_dir(true, RATE, 2) != 0 {
+                    eprintln!("oneios-audio: probe: the speaker did not open");
+                    return 0;
+                }
+                self.ring().guest_on = false; // silence until the guest's START, then the linger
+                *locked(&self.idle_since) = time::monotonic_s();
+            }
+            let Some(d) = self.dir(true) else { return 0 };
+            if attempt != 0 {
+                eprintln!(
+                    "oneios-audio: probe: not measured on the mixer track (it starts on the guest's first period)"
+                );
                 return 0;
             }
-            self.ring().guest_on = false; // silence until the guest's START, then the linger
-            *locked(&self.idle_since) = time::monotonic_s();
-        }
-        let Some(d) = self.dir(true) else { return 0 };
-        let mut samples = Vec::with_capacity(10);
-        for _ in 0..150 {
-            if samples.len() >= 10 {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-            if d.stream.frames_read() > 0 {
-                if let Some(below) = d.below_read() {
-                    samples.push(below);
+            let mut samples = Vec::with_capacity(10);
+            for _ in 0..150 {
+                if samples.len() >= 10 || self.ring().dead {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+                if d.stream.frames_read() > 0 {
+                    if let Some(below) = d.below_read() {
+                        samples.push(below);
+                    }
                 }
             }
-        }
-        if samples.is_empty() {
-            eprintln!("oneios-audio: probe: no timestamp from the speaker's stream in 1.5 s: not measured");
-            return 0;
-        }
-        samples.sort_unstable();
-        let median = samples[samples.len() / 2] as u32;
-        let (level, path) = {
-            let r = self.ring();
-            let extra = match r.out_path {
-                OutPath::MmapShared => d.burst,
-                _ if r.continuous => 0,
-                _ => (if r.pulls.size != 0 { r.pulls.size } else { d.burst }) / 2,
+            if samples.is_empty() || self.ring().dead {
+                let path = self.ring().out_path;
+                if path != OutPath::Legacy {
+                    // The server never took a frame: the MMAP stream's DSP did not start (this phone's HAL does it
+                    // now and then). The writer would then wait 200 ms per write forever and drop every guest period:
+                    // the legacy mixer track instead.
+                    self.mmap_dead.store(true, Ordering::Relaxed);
+                    eprintln!(
+                        "oneios-audio: probe: the server took no frames on {}: reopened as a mixer track",
+                        path_name(path)
+                    );
+                    self.stop_dir(true);
+                    continue;
+                }
+                eprintln!(
+                    "oneios-audio: probe: no timestamp from the speaker's stream in 1.5 s: not measured (a mixer \
+                     track starts on the guest's first period)"
+                );
+                return 0;
+            }
+            samples.sort_unstable();
+            let median = samples[samples.len() / 2] as u32;
+            let (level, path) = {
+                let r = self.ring();
+                let extra = match r.out_path {
+                    OutPath::MmapShared => d.burst,
+                    _ if r.continuous => 0,
+                    _ => (if r.pulls.size != 0 { r.pulls.size } else { d.burst }) / 2,
+                };
+                (r.target + extra, r.out_path)
             };
-            (r.target + extra, r.out_path)
-        };
-        let frames = median + level;
-        eprintln!(
-            "oneios-audio: probe: speaker latency {frames} frames ({} ms) on {}: {} ms below AAudio's read + {} ms of level \
-             when a period comes in",
-            frames_ms(frames),
-            path_name(path),
-            frames_ms(median),
-            frames_ms(level)
-        );
-        frames
+            let frames = median + level;
+            eprintln!(
+                "oneios-audio: probe: speaker latency {frames} frames ({} ms) on {}: {} ms below AAudio's read + {} ms \
+                 of level when a period comes in",
+                frames_ms(frames),
+                path_name(path),
+                frames_ms(median),
+                frames_ms(level)
+            );
+            return frames;
+        }
+        0
     }
 
     /// The receive loop until xnuhost closes its end: 0.
@@ -1605,6 +1731,13 @@ impl Helper {
         );
         let mut packet = vec![0u8; AU_HEADER + AU_MAX_FRAMES as usize * 4];
         loop {
+            if self.ring().dead {
+                let rc = self.restart_speaker();
+                if rc != 0 {
+                    self.report(true, rc);
+                }
+                continue;
+            }
             let mut wait = libc::pollfd { fd: self.sock.as_raw_fd(), events: libc::POLLIN, revents: 0 };
             // SAFETY: one valid pollfd.
             if unsafe { libc::poll(&mut wait, 1, 1000) } == 0 {

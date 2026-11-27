@@ -102,6 +102,14 @@ impl Station {
         &*self.radio
     }
 
+    /// The radio is associated before the guest asks: the station's first message reports the link up with `bss`, as
+    /// if the join had happened (the tap's made-up network, `wifi=cell`; docs/hardware.md 3.4b).
+    pub fn assume_joined(&self, bss: Bss) {
+        let mut i = self.lock();
+        i.joined = true;
+        i.current = bss;
+    }
+
     fn send(&self, kind: u16, parts: &[&[u8]]) {
         // to the guest: its own address passes its receive filter
         if let Some(f) = frame(&self.mac, &OW_ADDRESS, kind, parts) {

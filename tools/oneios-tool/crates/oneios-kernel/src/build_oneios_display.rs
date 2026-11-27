@@ -283,7 +283,8 @@ pub fn staged_text(text: String) -> Result<String> {
     gen::replace_once(text, DISPLAY, |anchor| format!("build-oneios-display: LegacyDisplayProbe.cpp no longer has exactly one {}", anchor.trim()))
 }
 
-/// NativeLegacyDisplay.cpp with the lines of staged/display.rs's LEGACY: the slowest refresh rate reported (sheng-vsync-min).
+/// NativeLegacyDisplay.cpp with staged/display.rs's LEGACY refresh policy: the slowest reported rate and optional fixed
+/// rate for animation pacing (sheng-vsync-min, sheng-vsync-fixed).
 pub fn staged_legacy(text: String) -> Result<String> {
     gen::replace_once(text, LEGACY, |anchor| format!("build-oneios-display: NativeLegacyDisplay.cpp no longer has exactly one {}", anchor.trim()))
 }

@@ -1,0 +1,28 @@
+# Host profile: Samsung Galaxy S26 (Samsung Exynos 2600 / s5e9965)
+# Standard bar model (m1s), SM-S942* / SM-S941* global Exynos variants.
+# No physical m1s unit captured yet [S] — defaults to FHD+ 1080x2340@120 and
+# software 2D display (Xclipse 960 uses amdgpu rather than Qualcomm KGSL).
+
+[host]
+name = "galaxy-s26-exynos"
+label = "Galaxy S26 (SM-S942 / SM-S941, s5e9965)"
+models = ["SM-S942", "SM-S941"]
+devices = ["m1s"]
+socs = ["s5e9965"]
+platforms = ["s5e9965", "erd9965"]
+takeover = false
+
+[panel]
+fallback = "1080x2340@120"
+
+[cpu]
+# Exynos 2600 10-core cluster spreads over pin_mask when clusters > XNU mask.
+topology = "exynos-10core"
+
+[memory]
+ram = "auto"
+
+[gpu]
+# [S] No Qualcomm /dev/kgsl-3d0 on Exynos; force virtio-gpu 2D fallback until
+# Xclipse/amdgpu Vulkan/virgl path is verified on hardware.
+backend = "2d"

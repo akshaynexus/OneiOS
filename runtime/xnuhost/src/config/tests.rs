@@ -237,6 +237,7 @@ fn command_line_and_image_set() {
     assert!(!c.bridges && c.encoder == Encoder::Auto);
     assert_eq!(run(&["--image", &image, "--set", "wifi=off"]).unwrap().wifi, Wifi::Off);
     assert_eq!(run(&["--image", &image, "--set", "wifi=sim"]).unwrap().wifi, Wifi::Sim);
+    assert_eq!(run(&["--image", &image, "--set", "wifi=cell"]).unwrap().wifi, Wifi::Cell);
     // refused
     assert!(args(&mut Config::new(), &["--image", &image, "--set", "wifi=nat"]).is_err());
     assert!(args(&mut Config::new(), &["--image", &image, "--bluetooth", "usb"]).is_err());
@@ -944,24 +945,24 @@ fn boot_argument_helpers() {
                                                                                         // the display driver's switches on the kernel's command line: added once, a given value stays
     let mut a = "-v debug=0x8".to_owned();
     assert!(display_boot_args(&mut a, 128, 3, 120, DisplayFormat::Bgrx8).is_ok());
-    assert_eq!(a, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120");
+    assert_eq!(a, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120 sheng-vsync-fixed=1");
     assert!(display_boot_args(&mut a, 128, 2, 60, DisplayFormat::Bgrx8).is_ok());
-    assert_eq!(a, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120");
+    assert_eq!(a, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120 sheng-vsync-fixed=1");
     let mut a = "sheng-vsync=90 not-sheng-vsync=1".to_owned();
     assert!(display_boot_args(&mut a, 128, 2, 120, DisplayFormat::Bgrx8).is_ok());
-    assert_eq!(a, "sheng-vsync=90 not-sheng-vsync=1 offline-legacy-unit-scale=2");
+    assert_eq!(a, "sheng-vsync=90 not-sheng-vsync=1 offline-legacy-unit-scale=2 sheng-vsync-fixed=1");
     let mut a = String::new();
     assert!(display_boot_args(&mut a, 128, 2, 120, DisplayFormat::Bgrx8).is_ok());
-    assert_eq!(a, "offline-legacy-unit-scale=2 sheng-vsync=120");
+    assert_eq!(a, "offline-legacy-unit-scale=2 sheng-vsync=120 sheng-vsync-fixed=1");
     assert!(display_boot_args(&mut a, 44, 2, 120, DisplayFormat::Bgrx8).is_ok());
     assert_eq!(display_boot_args(&mut String::new(), 40, 2, 120, DisplayFormat::Bgrx8), Err(NoRoom)); // no room
                                                                                                       // a half-float frame: the guest is told to hand its half-float surfaces over as they are; a given value stays
     let mut a = String::new();
     assert!(display_boot_args(&mut a, 128, 3, 120, DisplayFormat::Rgba16f).is_ok());
-    assert_eq!(a, "oneios-display-wide=1 offline-legacy-unit-scale=3 sheng-vsync=120");
+    assert_eq!(a, "oneios-display-wide=1 offline-legacy-unit-scale=3 sheng-vsync=120 sheng-vsync-fixed=1");
     let mut a = "oneios-display-wide=0".to_owned();
     assert!(display_boot_args(&mut a, 128, 3, 120, DisplayFormat::Rgba16f).is_ok());
-    assert_eq!(a, "oneios-display-wide=0 offline-legacy-unit-scale=3 sheng-vsync=120");
+    assert_eq!(a, "oneios-display-wide=0 offline-legacy-unit-scale=3 sheng-vsync=120 sheng-vsync-fixed=1");
 }
 
 #[test]
@@ -986,6 +987,22 @@ fn display_mode() {
     let bench_hidl = ["--image", image.as_str(), "--mode", "bench", "--bluetooth", "hidl"];
     let mut c = run(&bench_hidl).unwrap();
     assert!(c.scale == 3 && c.hz == 0 && c.scale_fixup);
+    assert_eq!(c.corner_radius, 0);
+    let mut r = c.clone();
+    assert!(r.set("corner-radius", "34").is_ok() && r.corner_radius == 34);
+    assert!(r.set("corner-radius", "0").is_ok() && r.corner_radius == 0);
+    assert!(r.set("corner-radius", "201").is_err() && r.set("corner-radius", "-1").is_err());
+    assert_eq!(c.artwork_subtype, 0);
+    let mut r = c.clone();
+    assert!(r.set("artwork-subtype", "2340").is_ok() && r.artwork_subtype == 2340);
+    assert!(r.set("artwork-subtype", "2868").is_ok() && r.artwork_subtype == 2868);
+    assert!(r.set("artwork-subtype", "0").is_ok() && r.artwork_subtype == 0);
+    assert!(r.set("artwork-subtype", "10001").is_err() && r.set("artwork-subtype", "-1").is_err());
+    assert!(c.thermal_cap, "thermal-cap defaults on (S24 Ultra unchanged)");
+    let mut r = c.clone();
+    assert!(r.set("thermal-cap", "0").is_ok() && !r.thermal_cap);
+    assert!(r.set("thermal-cap", "1").is_ok() && r.thermal_cap);
+    assert!(r.set("thermal-cap", "sometimes").is_err());
     assert_eq!(c.display_mode(None), pm(1440, 3120, 120)); // nothing readable: the S24 Ultra's
     assert_eq!(c.display_mode(Some(&pm(1260, 2800, 144))), pm(1260, 2800, 144)); // another panel: its own
     assert_eq!(c.display_mode(Some(&pm(1260, 2800, 0))).hz, 120); // a mode without a rate
@@ -1217,12 +1234,15 @@ fn host_device() {
     assert!(c.host_line.contains("; defaults: ONEIOS_THERMAL_SOC_TRIPS=1, ONEIOS_THERMAL_SOC_SAMPLES=3"));
     assert!(std::env::var_os("ONEIOS_THERMAL_SOC_TRIPS").is_none());
     assert_eq!(host_clear(c), off);
-    // The S25: its 1080x2340 panel as the fallback mode only (a panel that is read still wins); nothing else changes.
+    // The S25: 1080x2340 panel fallback, corner-radius=34, built-in side keys, treble thermal SKIN with fallback.
     let props = host_props(&dir, "s25", "SM-S931B", "SM8750");
     let c = rig.finish(Some(&props), None, None).unwrap();
     assert!(c.host == find("galaxy-s25") && c.panel_fallback == Some(PanelMode { width: 1080, height: 2340, hz: 120 }));
+    assert_eq!(c.corner_radius, 34);
+    assert!(c.boot_args.contains("oneios-hid-buttons-builtin=1") && c.boot_args.contains("oneios-button-haptics=1"));
+    assert!(c.hw.choose(Bridge::Thermal, Backend::Unset).0 == Backend::Treble && c.hw.fallback_allowed());
     assert!(c.host_line.contains(
-        "; defaults: panel-fallback=1080x2340@120, ONEIOS_THERMAL_SOC_TRIPS=1, ONEIOS_THERMAL_SOC_SAMPLES=3"
+        "; defaults: panel-fallback=1080x2340@120, corner-radius=34, boot-args-add=oneios-hid-buttons-builtin=1 oneios-button-haptics=1, hw-backend-thermal=treble, hw-backend-fallback=1, ONEIOS_THERMAL_SOC_TRIPS=1, ONEIOS_THERMAL_SOC_SAMPLES=3"
     ));
     let read_panel = PanelMode { width: 1440, height: 3120, hz: 120 };
     assert!(c.display_mode(Some(&read_panel)).width == 1440 && c.display_mode(None).width == 1080);
@@ -1232,6 +1252,9 @@ fn host_device() {
     );
     let mut c = host_clear(c);
     c.panel_fallback = None;
+    c.corner_radius = 0;
+    c.boot_args = off.boot_args.clone();
+    c.hw = HwSettings::default();
     assert_eq!(c, off);
     // The S26 Ultra: its brightness cap is an environment default (the session sets it); the config is today's.
     let props = host_props(&dir, "s26u", "SM-S948B", "SM8850");
@@ -1239,6 +1262,18 @@ fn host_device() {
     assert!(c.host == find("galaxy-s26-ultra") && c.host_line.contains("matched by ro.product.model=SM-S948B"));
     assert!(c.host_line.contains("; defaults: ONEIOS_BRIGHT_MAX=2300"));
     assert_eq!(host_clear(c), off);
+    // The base S26 (Snapdragon m1q / SC-51G and Exynos m1s / s5e9965; burugou05-wq/OneiOS e85405f1).
+    let props = host_props(&dir, "s26", "SC-51G", "SM8850");
+    let c = rig.finish(Some(&props), None, None).unwrap();
+    assert!(c.host == find("galaxy-s26") && c.panel_fallback == Some(PanelMode { width: 1080, height: 2340, hz: 120 }));
+    assert!(c.host_line.contains("; defaults: panel-fallback=1080x2340@120, ONEIOS_BRIGHT_MAX=2300, ONEIOS_THERMAL_SOC_TRIPS=1, ONEIOS_THERMAL_SOC_SAMPLES=3"));
+    let props = host_props(&dir, "s26e", "SM-S942B", "s5e9965");
+    let c = rig.finish(Some(&props), None, None).unwrap();
+    assert!(
+        c.host == find("galaxy-s26-exynos")
+            && c.gpu == Gpu::TwoD
+            && c.panel_fallback == Some(PanelMode { width: 1080, height: 2340, hz: 120 })
+    );
     // The A56: gpu=auto (its amdgpu renderer when the gpuaddon has the plug-in and the self-test passes, else 2D;
     // gpu=2d before 2026-11-24), under the command line and the image set.
     let props = host_props(&dir, "a56", "SM-A566E", "s5e8855");
@@ -1606,7 +1641,7 @@ fn the_switches() {
     c.boot_args = "-v oneios-wifi-rssi=0 oneios-telemetry-jobs=1 oneios-pool-cut=0 oneios-pressure-big=0 \
                    oneios-disable-allowed=0 oneios-nested-exact=0 oneios-upgrade-flush=1 oneios-fill-fast-fault=0 \
                    oneios-audio-rt=0 oneios-audio-curve=0 oneios-codec-irq=0 oneios-idle-spares=0 oneios-bo-cache-idle=0 \
-                   oneios-keep-room=0 oneios-dl-full=0 sheng-vsync-min=24 oneios-compile-s=0 oneios-snapshot-astc=1 \
+                   oneios-keep-room=0 oneios-dl-full=0 sheng-vsync-min=24 sheng-vsync-fixed=0 oneios-compile-s=0 oneios-snapshot-astc=1 \
                    oneios-camera-notify=0 oneios-m2v-shader-fix=0 oneios-dont-care=0 oneios-queue-priority=0"
         .into();
     let line = c.switches_line();
@@ -1619,7 +1654,7 @@ fn the_switches() {
         line.contains(
             " oneios-wifi-rssi=0 oneios-telemetry-jobs=1 oneios-pool-cut=0 oneios-pressure-big=0 oneios-disable-allowed=0 \
              oneios-nested-exact=0 oneios-upgrade-flush=1 oneios-fill-fast-fault=0 oneios-audio-rt=0 oneios-audio-curve=0 \
-             oneios-codec-irq=0 oneios-idle-spares=0 oneios-bo-cache-idle=0 oneios-keep-room=0 oneios-dl-full=0 sheng-vsync-min=24 \
+             oneios-codec-irq=0 oneios-idle-spares=0 oneios-bo-cache-idle=0 oneios-keep-room=0 oneios-dl-full=0 sheng-vsync-min=24 sheng-vsync-fixed=0 \
              oneios-compile-s=0 oneios-snapshot-astc=1 oneios-camera-notify=0 oneios-m2v-shader-fix=0 oneios-dont-care=0 \
              oneios-queue-priority=0 (docs/switches.md)"
         ),
@@ -1631,7 +1666,7 @@ fn the_switches() {
              wifi-buffers wifi-joined-scan encoder-10bit encoder-warmup display-post display-present decoder decoder-codecs astc \
              oneios-wifi-rssi oneios-telemetry-jobs oneios-pool-cut oneios-pressure-big oneios-disable-allowed \
              oneios-nested-exact oneios-upgrade-flush oneios-fill-fast-fault oneios-audio-rt oneios-audio-curve \
-             oneios-codec-irq oneios-idle-spares oneios-bo-cache-idle oneios-keep-room oneios-dl-full sheng-vsync-min oneios-compile-s \
+             oneios-codec-irq oneios-idle-spares oneios-bo-cache-idle oneios-keep-room oneios-dl-full sheng-vsync-min sheng-vsync-fixed oneios-compile-s \
              oneios-snapshot-astc oneios-camera-notify oneios-m2v-shader-fix oneios-dont-care oneios-queue-priority"
         ),
         "{line}"

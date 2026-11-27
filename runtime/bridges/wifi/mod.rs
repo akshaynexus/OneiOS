@@ -6,12 +6,15 @@
 //!   wonder      `wifictl wonder`: a session on Wonder's raw 802.11 path beside wlan0, its AWDL frames counted
 //!   wlan        the back end on the phone: AF_PACKET on wlan0, nl80211 for scans and the link, wlan0's host state
 //!               kept and given back
+//!   chip        the Wi-Fi chip's HAL: starting it when One UI's Wi-Fi was off at the switch (no wlan0 otherwise)
 //!   traffic     the frames and bytes each way, the drops and why, one line a minute (no C original)
 //!   uplink      the guest's frames that find wlan0's send buffer full wait for POLLOUT, in order (no C original)
 //!   supplicant  joins: the vendor's wpa_supplicant through its AIDL service (crate::hal::aidl)
 //!   sim         a made-up radio for a boot with no phone (wifi=sim)
 //! C: wifi/wifi.h and the files of the same names.
 
+pub mod cell; // the phone's uplink as a made-up station (wifi=cell; no C original)
+pub mod chip; // wifi/chip.c
 pub mod frames; // wifi/frames.c
 pub mod nl; // the netlink attribute loops of frames.c, p2p.c, wonder.c, wlan.c
 pub mod p2p; // wifi/p2p.c

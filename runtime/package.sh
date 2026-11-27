@@ -35,7 +35,8 @@
 # (ONEIOS_TOOL_ANDROID=PATH names a phone oneios-tool built elsewhere; CARGO_TARGET_DIR is honoured).
 # Env: ANDROID_NDK_ROOT (default $HOME/Android/Sdk/ndk/28.2.13676358, on macOS $HOME/Library/Android/sdk/ndk/...;
 #      the revision is checked; runtime/build.sh gets it as NDK unless NDK is set), ANDROID_API (35),
-#      KERNEL_DIR, OUT_DIR (out/release; a relative one is taken from the current folder), SOURCE_DATE_EPOCH (default: the commit time),
+#      KERNEL_DIR, ONEIOS_GPUADDON (ios addon output plus .cdhashes, packed as kernel/gpuaddon),
+#      OUT_DIR (out/release; a relative one is taken from the current folder), SOURCE_DATE_EPOCH (default: the commit time),
 #      KERNEL_MORE_DIRS (step 3a), METAL_DIR, CAMERA_DIR, REQUIRE_METAL (step 3b; neither given: no lib/guest/), METAL_AMD_DIR,
 #      REQUIRE_METAL_AMD (3c), METAL_MORE_DIRS (step 3d),
 #      PACKAGE_EXTRA_DIR (a folder copied into the package as it is; used by the tests).
@@ -201,6 +202,35 @@ for d in ${KERNEL_MORE_DIRS:-}; do
   chmod 0644 "$STAGE/kernel/$build"/*
   echo "package: kernel for $build $(sed -n 's/.*"build_id": *"\([^"]*\)".*/\1/p' "$STAGE/kernel/$build/xnu.macho.build.json") (kernel/$build/)"
 done
+
+# 3a. The runtime's boot addon (Metal and capture plug-ins) alongside the default kernel. The image's own sidecar wins;
+# when absent, xnuhost can load this copy and add its CDHashes to the boot trust cache without rebuilding the image.
+if [ -n "${ONEIOS_GPUADDON:-}" ]; then
+  addon=$ONEIOS_GPUADDON
+  [ "$HAVE_KERNEL" = 1 ] ||
+    { echo "package: ONEIOS_GPUADDON needs a kernel in the package (kernel/gpuaddon is its sidecar)" >&2; exit 1; }
+  [ -f "$addon" ] && [ -f "$addon.cdhashes" ] ||
+    { echo "package: $addon and $addon.cdhashes (the pair oneios-tool ios addon writes) are needed" >&2; exit 1; }
+  [ "$(head -c 8 "$addon")" = NGPUADD2 ] ||
+    { echo "package: $addon is not a boot addon (NGPUADD2): make one with oneios-tool ios addon" >&2; exit 1; }
+  addon_bytes=$(wc -c < "$addon" | tr -d ' ')
+  [ "$addon_bytes" -le $((64 << 20)) ] ||
+    { echo "package: $addon is $addon_bytes bytes, over xnuhost's 64 MiB limit for the boot addon" >&2; exit 1; }
+  addon_hashes=0
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*) continue ;; esac
+    word=${line%%[[:space:]]*}
+    [ "${#word}" = 40 ] && [ -z "$(printf '%s' "$word" | tr -d '0123456789abcdefABCDEF')" ] ||
+      { echo "package: $addon.cdhashes: ${line%% *} is not a 40-digit CDHash" >&2; exit 1; }
+    addon_hashes=$((addon_hashes + 1))
+  done < "$addon.cdhashes"
+  [ "$addon_hashes" -gt 0 ] ||
+    { echo "package: $addon.cdhashes lists no CDHash: the plug-in's code would not be trusted" >&2; exit 1; }
+  cp "$addon" "$STAGE/kernel/gpuaddon"
+  cp "$addon.cdhashes" "$STAGE/kernel/gpuaddon.cdhashes"
+  chmod 0644 "$STAGE/kernel/gpuaddon" "$STAGE/kernel/gpuaddon.cdhashes"
+  echo "package: boot addon $addon_bytes bytes, $addon_hashes CDHashes (kernel/gpuaddon)"
+fi
 
 # 3b. The guest's own plug-ins, when given: METAL_DIR (userland/metal/build.sh's output folder: NativeAdrenoMetal.bundle
 # and NativeAdrenoMetal.build.json) and CAMERA_DIR (userland/camera/build.sh's: H9ISP.mediacapture), as lib/guest/.

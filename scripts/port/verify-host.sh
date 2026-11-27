@@ -26,8 +26,15 @@ case "$MODEL" in
   SM-S938*) HOST=s25-ultra WANT_DEVICE=pa3q WANT_SOC=SM8750 ;;
   SM-S931*) HOST=s25 WANT_DEVICE=pa1q WANT_SOC=SM8750 ;;
   SM-S948*) HOST=s26-ultra WANT_DEVICE=m3q WANT_SOC=SM8850 ;;
+  SM-S942*|SM-S941*)
+    case "$DEVICE:$SOC" in
+      m1s:*|*:s5e9965) HOST=s26-exynos WANT_DEVICE=m1s WANT_SOC=s5e9965 ;;
+      *) HOST=s26 WANT_DEVICE=m1q WANT_SOC=SM8850 ;;
+    esac
+    ;;
+  SC-51G*|SCG36*) HOST=s26 WANT_DEVICE=m1q WANT_SOC=SM8850 ;;
   SM-A566*) HOST=a56 WANT_DEVICE=a56x WANT_SOC=s5e8855 ;;
-  *) echo "verify-host: unsupported model (need SM-S928, SM-S938, SM-S931, SM-S948 or SM-A566)" >&2; exit 2 ;;
+  *) echo "verify-host: unsupported model (need SM-S928, SM-S938, SM-S931, SM-S948, SM-S942/SM-S941/SC-51G/SCG36 or SM-A566)" >&2; exit 2 ;;
 esac
 [ "$SOC" = "$WANT_SOC" ] || { echo "verify-host: $MODEL but soc=$SOC (expected $WANT_SOC)" >&2; exit 2; }
 [ "$DEVICE" = "$WANT_DEVICE" ] || { echo "verify-host: $WANT_SOC but device=$DEVICE (expected $WANT_DEVICE)" >&2; exit 2; }

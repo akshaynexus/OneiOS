@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! The vendor's wpa_supplicant as the Wi-Fi bridge's station (docs/hardware.md section 3): its stable AIDL service
-//! android.hardware.wifi.supplicant.ISupplicant/default, version 2 (the frozen interface with the hash
-//! 5e5c6d9e5565999f73fa7f797f5b94616174745b), over /dev/binder with [`crate::hal::aidl`]. The bridge is its only
-//! client in a session, as One UI's framework is otherwise.
+//! android.hardware.wifi.supplicant.ISupplicant/default, over /dev/binder with [`crate::hal::aidl`]. The S24 Ultra's
+//! image serves the frozen interface version 2 (the hash 5e5c6d9e5565999f73fa7f797f5b94616174745b); the base S25's
+//! serves version 3. Version 3 appended its methods and callbacks after version 2's and moved none of them, so the
+//! codes used here are the same on both. The bridge is its only client in a session, as One UI's framework is otherwise.
 //!
 //! What it does on the phone, as One UI's framework does: finds the service, takes the station interface of wlan0
 //! (adds it when the supplicant came up with none: it is a lazy service that ends when its client dies and starts on
@@ -26,10 +27,13 @@ pub const SUP_ISUPPLICANT: &str = "android.hardware.wifi.supplicant.ISupplicant"
 pub const SUP_STA_IFACE: &str = "android.hardware.wifi.supplicant.ISupplicantStaIface";
 pub const SUP_STA_NETWORK: &str = "android.hardware.wifi.supplicant.ISupplicantStaNetwork";
 pub const SUP_STA_CALLBACK: &str = "android.hardware.wifi.supplicant.ISupplicantStaIfaceCallback";
+/// The callback object's version: 2, the lowest common (the S24 Ultra's image serves 2, the base S25's 3; version 3
+/// added callbacks after version 2's, and the service calls only the ones a callback of this version has).
 pub const SUP_VERSION: i32 = 2;
 pub const SUP_HASH: &str = "5e5c6d9e5565999f73fa7f797f5b94616174745b";
 
-// Transaction codes: the place of each method in the frozen version 2 .aidl files (the first is 1).
+// Transaction codes: the place of each method in the frozen version 2 .aidl files (the first is 1). Version 3's
+// methods come after these, so these codes are version 3's too (the base S25's image).
 pub const SM_GET_SERVICE: u32 = 1; // IServiceManager.getService
 pub const SUP_ADD_STA_INTERFACE: u32 = 2;
 pub const SUP_GET_DEBUG_LEVEL: u32 = 3;
@@ -593,6 +597,7 @@ pub struct Supplicant {
     shared: Arc<Shared>,
     ifname: String,
     service: Option<u32>, // handles
+    service_version: i32, // its getInterfaceVersion: 2 (S24 Ultra) or 3 (base S25)
     iface: Option<u32>,
     network: Option<u32>,
     added_iface: bool,
@@ -624,6 +629,7 @@ impl Supplicant {
             shared,
             ifname: name,
             service: None,
+            service_version: 0,
             iface: None,
             network: None,
             added_iface: false,
@@ -635,6 +641,12 @@ impl Supplicant {
 
     fn look_only(&self) -> bool {
         self.shared.events.is_none()
+    }
+
+    /// The service's reported interface version (0: it did not answer): 2 on the S24 Ultra's image, 3 on the base
+    /// S25's, whose methods used here are version 2's.
+    pub fn version(&self) -> i32 {
+        self.service_version
     }
 
     /// A call whose failure is logged with `what` (None: not logged).
@@ -688,6 +700,18 @@ impl Supplicant {
         })?;
         self.service = Some(service);
         let _ = self.conn.watch(service, DEATH_COOKIE);
+        // Its frozen interface version, kept for `wifictl status` and the log: 2 on the S24 Ultra's image, 3 on the
+        // base S25's. Every code used below is a version 2 one, and version 3 moved none of them.
+        self.service_version = self
+            .conn
+            .call(service, aidl::GET_VERSION, &Parcel::with_token(SUP_ISUPPLICANT), aidl::take_i32)
+            .unwrap_or(0);
+        if self.service_version > SUP_VERSION {
+            br_info!(
+                "wifi: supplicant: ISupplicant v{}: using the v2 calls (v3 appended its methods, so the codes are its too)",
+                self.service_version
+            );
+        }
         let mut iface = self.call_handle(service, SUP_GET_STA_INTERFACE, &parcel_string(SUP_ISUPPLICANT, &self.ifname));
         if iface.is_err() && !self.look_only() {
             // No station interface of that name: the supplicant started without its client (One UI's framework adds it).

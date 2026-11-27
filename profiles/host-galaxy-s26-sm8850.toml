@@ -1,0 +1,51 @@
+# Host profile: Samsung Galaxy S26 (Qualcomm Snapdragon 8 Elite Gen 2 / SM8850)
+# Standard bar model (m1q), measured on SC-51G (docomo SM-S942D) and mapped for
+# SM-S942* / SM-S941* / SC-51G / SCG36 Snapdragon variants.
+# See docs/s26.md and docs/hardware.md.
+
+[host]
+name = "galaxy-s26"
+label = "Galaxy S26 (SM-S942 / SM-S941 / SC-51G, SM8850)"
+models = ["SM-S942", "SM-S941", "SC-51G", "SCG36"]
+devices = ["m1q"]
+socs = ["SM8850"]
+platforms = ["canoe"]
+takeover = false
+
+[panel]
+# [F] adb shell wm size / dumpsys display on SC-51G:
+#   Physical size: 1080x2340, Physical density: 480 (Override density: 450)
+#   supportedModes: 1080x2340@120.00001 and @60.000004
+#   mMaxLuminance: 1275.0 cd/m^2
+fallback = "1080x2340@120"
+bright_max_nits = 2300
+
+[cpu]
+# [F] /sys/devices/system/cpu on SC-51G (8 Oryon cores, implementer 0x51):
+#   cpu0-5: capacity 741, MIDR 0x512f0021, 384000..3628800 kHz
+#   cpu6-7: capacity 1024, MIDR 0x513f0021, 768000..4742400 kHz (boost >= 4512000)
+# topology.rs lends the two slowest cap=741 cores (cpu4, cpu5) as E vCPUs,
+# keeping 6 P vCPUs (cpu0-3, cpu6-7) + 2 E vCPUs.
+topology = "oryon-8core-6p2e"
+
+[memory]
+# [F] /proc/meminfo on SC-51G: MemTotal 11351104 kB (~10.83 GiB usable / 12 GB LPDDR5X)
+# /dev/udmabuf present (crw-rw-rw-).
+ram = "auto"
+
+[gpu]
+# [F] /dev/kgsl-3d0 + /dev/dri/card0 + /dev/dri/renderD128 present (Adreno 840)
+backend = "auto"
+
+[thermal]
+# [F] /sys/class/thermal on SC-51G:
+#   cpu-0-*, cpu-1-*, gpuss-*: passive 105000..114000, hot 125000
+#   ddr: passive 100000, hot 125000
+#   cpu-hw-trip-0 / cpu-hw-trip-1: constant 105000 (excluded by thermal bridge)
+soc_trips = 1
+soc_samples = 3
+
+[env]
+ONEIOS_BRIGHT_MAX = "2300"
+ONEIOS_THERMAL_SOC_TRIPS = "1"
+ONEIOS_THERMAL_SOC_SAMPLES = "3"

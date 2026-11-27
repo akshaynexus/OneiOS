@@ -214,6 +214,28 @@ fn test_thermal(v: &Values, log: &Capture) {
         t.close();
     }
     drop(fake);
+    // A HAL that leaves SKIN out (Samsung's may): the case comes from the files, and the open line says which
+    // answered (2026-11-25: the S25's lrp read about 10 C under the back glass).
+    v.put("thermal", "0 cpu-0-0 48.5\n1 gpu 55.0\n2 battery 30.4\n");
+    v.put("files-root/sys/class/power_supply/battery/lrp", "470\n");
+    v.put("files-root/sys/class/power_supply/battery/temp", "455\n");
+    let fake2 = Fake::start(&v.0);
+    let o2 = thermal::Options {
+        backend: Backend::Treble,
+        root: Some(v.0.join("files-root").display().to_string()),
+        poll_ms: 50,
+        load_ms: 3_600_000,
+        ..thermal::Options::default()
+    };
+    log.clear();
+    let t = Thermal::open(&o2);
+    check!(t.is_some());
+    check!(log.has("(version 2), 3 temperatures; case 47.0 C (lrp)"));
+    if let Some(t) = t {
+        check!(t.get().raw.skin == 470);
+        t.close();
+    }
+    drop(fake2);
     v.remove("thermal");
     let _fake = Fake::start(&v.0);
     log.clear();

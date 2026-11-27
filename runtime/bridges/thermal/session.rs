@@ -35,6 +35,9 @@ pub struct Options {
     pub binder: Option<String>,
     /// The environment's limits and ONEIOS_THERMAL_CAP are read (C: options NULL)
     pub environment: bool,
+    /// The critical cell step is off whatever the environment says (xnuhost's `thermal-cap=0`, the default): the
+    /// level still goes to iOS, the CPU keeps every core. See [`cap_for`].
+    pub cap_off: bool,
 }
 
 impl Options {
@@ -100,6 +103,9 @@ struct Run {
     /// The last clocks sample (the "thermal: N s clocks:" line, with the load line).
     clocks: Clocks,
     hal_failed: bool,
+    /// Where the case came from in the treble backend: "SKIN" from the HAL, or "lrp"/"ap thermistor"/"unknown" when
+    /// the HAL left SKIN out and the files answered (the open line says which).
+    case_from: &'static str,
 }
 
 struct Shared {
@@ -141,8 +147,27 @@ impl Shared {
     fn sensors_read(&self, run: &mut Run) -> Raw {
         let Source::Hal(h) = &self.source else { return self.sensors.read() };
         match hal_read(h) {
-            Ok((raw, _)) => {
+            Ok((mut raw, _)) => {
                 run.hal_failed = false;
+                // The HAL does not always report every type: Samsung's may leave SKIN out. Keep the case and battery
+                // rules by reading the files for what the HAL left unknown (in this mode the sensors hold no zones,
+                // so this reads the board thermistor, the battery and lrp). The open line says which answered.
+                let files = self.sensors.read();
+                run.case_from = if raw.skin != UNKNOWN {
+                    "SKIN"
+                } else if files.skin == UNKNOWN {
+                    "unknown"
+                } else if files.lrp != UNKNOWN {
+                    "lrp"
+                } else {
+                    "ap thermistor"
+                };
+                if raw.skin == UNKNOWN {
+                    raw.skin = files.skin;
+                }
+                if raw.battery == UNKNOWN {
+                    raw.battery = files.battery;
+                }
                 raw
             }
             Err(rc) => {
@@ -154,6 +179,7 @@ impl Shared {
                     );
                 }
                 run.hal_failed = true;
+                run.case_from = "unknown";
                 from_hal(&[])
             }
         }
@@ -283,7 +309,7 @@ impl Thermal {
                 l
             }
         };
-        let cap_off = o.environment && std::env::var("ONEIOS_THERMAL_CAP").is_ok_and(|v| v == "0");
+        let cap_off = o.cap_off || (o.environment && std::env::var("ONEIOS_THERMAL_CAP").is_ok_and(|v| v == "0"));
         let poll_ms = if o.poll_ms != 0 { o.poll_ms } else { POLL_MS };
         let load_ms = if o.load_ms != 0 { o.load_ms } else { LOAD_MS };
         let load = HostLoad::read(&sensors.root);
@@ -317,14 +343,18 @@ impl Thermal {
         };
         let t = Thermal { shared, thread: Some(thread) };
         let s = &t.shared;
-        let level = level_name(lock(&s.run).now.level);
+        let (level, case_from) = {
+            let run = lock(&s.run);
+            (level_name(run.now.level), run.case_from)
+        };
         let zone = if raw.soc_zone.is_empty() { "-" } else { &raw.soc_zone };
-        let cap_note = if cap_off { "; ONEIOS_THERMAL_CAP=0: xnuhost does not hold itself back" } else { "" };
+        let cap_note =
+            if cap_off { "; thermal-cap=0 (ONEIOS_THERMAL_CAP=0): xnuhost does not hold itself back" } else { "" };
         let (skin, soc, battery) = (deci_text(raw.skin), deci_text(raw.soc), deci_text(raw.battery));
         match &s.source {
             Source::Hal(h) => br_info!(
-                "thermal: on: the thermal HAL {} (version {}), {hal_temps} temperatures; case {skin} (SKIN), SoC {soc} \
-                 ({zone}), battery {battery}; {level}; read every {poll_ms} ms{cap_note}",
+                "thermal: on: the thermal HAL {} (version {}), {hal_temps} temperatures; case {skin} ({case_from}), SoC \
+                 {soc} ({zone}), battery {battery}; {level}; read every {poll_ms} ms{cap_note}",
                 hal::THERMAL_INSTANCE,
                 h.version()
             ),
@@ -400,6 +430,7 @@ fn empty_run() -> Run {
         load: HostLoad::default(),
         clocks: Clocks::default(),
         hal_failed: false,
+        case_from: "unknown",
     }
 }
 

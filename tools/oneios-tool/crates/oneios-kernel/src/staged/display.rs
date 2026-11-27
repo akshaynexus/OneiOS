@@ -86,19 +86,21 @@ pub const SCANOUT: &[(&str, &str)] = &[
 /// reports to the render server. Above 60 Hz the family's longest refresh interval stays 1/24 s, a 24-120 Hz range,
 /// and Core Animation then ran light animations at 60, 40 or 30 Hz (UniXNU-zizhan's reading of its own frames,
 /// `docs/progress/2026-11-01-120hz-and-cadence.md`). `sheng-vsync-min=HZ` (OneiOSDisplay.cpp's default 60; 24 or 0:
-/// the family's 1/24 s, as before) makes the longest interval 1/HZ s. `sheng-vsync-fixed=1` still wins. The kernel's
-/// log says the range once: `oneios-display: refresh range MIN..MAX Hz`.
+/// the family's 1/24 s, as before) makes the longest interval 1/HZ s. `sheng-vsync-fixed=1` forces the panel's
+/// `1/hz` interval at both ends, preventing CoreAnimation from selecting a lower animation rate. The kernel's log says
+/// the range once: `oneios-display: refresh range MIN..MAX Hz`.
 pub const LEGACY: &[(&str, &str)] = &[
     ("        if(fixed || locked==1){words[2]=interval;words[3]=machTime;}\n",
-     concat!("        if(fixed || locked==1){words[2]=interval;words[3]=machTime;}\n",
+     concat!("        unsigned oneiosFixed=0;PE_parse_boot_argn(\"sheng-vsync-fixed\",&oneiosFixed,sizeof(oneiosFixed));\n",
+             "        if(fixed || locked==1 || oneiosFixed==1){words[2]=interval;words[3]=machTime;}\n",
              "        unsigned least=0;PE_parse_boot_argn(\"sheng-vsync-min\",&least,sizeof(least));\n",
-             "        if(!fixed && locked!=1 && least>24 && least<hz) {   // OneiOS: the slowest rate reported, 1/least s\n",
+             "        if(!fixed && locked!=1 && oneiosFixed!=1 && least>24 && least<hz) {   // OneiOS: the slowest rate reported, 1/least s\n",
              "            const uint64_t longest=(1ull<<32)/least;\n",
              "            uint64_t longestTime=0;nanoseconds_to_absolutetime(longest*1000000000ull>>32,&longestTime);\n",
              "            words[2]=longest;words[3]=longestTime;\n",
              "        }\n",
              "        static bool oneiosRangeSaid;\n",
              "        if(!oneiosRangeSaid){oneiosRangeSaid=true;\n",
-             "            IOLog(\"oneios-display: refresh range %u..%u Hz%s\\n\",(fixed || locked==1)?hz:(least>24 && least<hz)?least:24u,hz,\n",
-             "                  (fixed || locked==1)?\" (fixed)\":\"\");}\n")),
+             "            IOLog(\"oneios-display: refresh range %u..%u Hz%s\\n\",(fixed || locked==1 || oneiosFixed==1)?hz:(least>24 && least<hz)?least:24u,hz,\n",
+             "                  (fixed || locked==1 || oneiosFixed==1)?\" (fixed)\":\"\");}\n")),
 ];

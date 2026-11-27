@@ -396,7 +396,10 @@ fn audio_latency_arg(config: &mut Config, audio: &dyn AudioBackend) {
         logi!("audio: ONEIOS_AUDIO_PROBE=0: the kernel's default output latency");
         return;
     }
-    let frames = match audio.probe_latency(2000) {
+    // 3 s: on a dead MMAP stream the helper gives up as soon as its writer has counted 600 ms of timeouts (about a
+    // second), and its fallback opens a mixer track without waiting on that track (the probe's 1.5 s are only spent on
+    // a stream that reads but gives no timestamp). The old 2 s left too little room for the fallback's open.
+    let frames = match audio.probe_latency(3000) {
         Ok(f) if f > 0 => f,
         Ok(_) => {
             logi!(
@@ -629,7 +632,11 @@ impl Bridges {
             crate::input::set_power_key(Some(power_key_pressed)); // the touch IC is woken at each press
         }
         self.battery = Battery::open(&battery::Options::from_env()).map(Arc::new);
-        self.thermal = Thermal::open(&thermal::Options::from_env()).map(Arc::new);
+        let mut topts = thermal::Options::from_env();
+        if !config.thermal_cap {
+            topts.cap_off = true;
+        }
+        self.thermal = Thermal::open(&topts).map(Arc::new);
         if let Some(t) = &self.thermal {
             t.on_cap(Some(Arc::new(thermal_step)));
         }
@@ -694,6 +701,15 @@ impl Bridges {
             Wifi::Tap => {
                 if net_device(slots, &net, Net::tap_opener()) {
                     self.net_up = net_script(&config.runtime, "up"); // address, forwarding and NAT; undone at stop
+                }
+            }
+            Wifi::Cell => {
+                // The phone's uplink as a made-up, already-joined network with no 802.11 (wifi::cell): iOS's
+                // configd leases an address from the bridge and its frames go to the tap and oneios-net.sh's NAT,
+                // so data works over mobile data when there is no Wi-Fi.
+                let open = onebridges::wifi::cell::prepare(net.guest_mac);
+                if net_device(slots, &net, open) {
+                    self.net_up = net_script(&config.runtime, "up");
                 }
             }
             Wifi::Auto => {

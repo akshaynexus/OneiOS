@@ -4,7 +4,8 @@
 //! (the context manager) and android.hardware.wifi.supplicant.ISupplicant/default with one station interface and its
 //! networks, and calls back as wpa_supplicant's AIDL service does: the descriptor and the interface version of the
 //! callback asked for inside registerCallback (a call back into the client before its call is answered), the state
-//! changes one-way.
+//! changes one-way. The service reports interface version 3, as the base S25's image does; the client's version 2
+//! codes are version 3's (version 3 appended its methods and callbacks after version 2's).
 //!
 //! Scenarios: a service that is not registered at first (a lazy service: the lookup is tried again); no station
 //! interface (added, and removed at the close); One UI's networks removed; a WPA2 join that completes, with what the
@@ -18,6 +19,10 @@ mod common;
 
 use onebridges::hal::aidl::{self, Connection, Object, Parcel, Reader};
 use onebridges::hal::binderfs::{self, Entered};
+use onebridges::wifi::chip::{
+    self, CHIP_CREATE_STA_IFACE, CHIP_GET_STA_IFACE_NAMES, WIFI_GET_CHIP, WIFI_ICHIP, WIFI_IS_STARTED, WIFI_IWIFI,
+    WIFI_SERVICE, WIFI_START, WIFI_STA_IFACE, WIFI_STOP,
+};
 use onebridges::wifi::proto::*;
 use onebridges::wifi::supplicant::*;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -27,6 +32,9 @@ use std::time::Duration;
 const OBJ_MANAGER: u64 = 0;
 const OBJ_SUPPLICANT: u64 = 1;
 const OBJ_IFACE: u64 = 2;
+const OBJ_WIFI: u64 = 3;
+const OBJ_WIFI_CHIP: u64 = 4;
+const OBJ_WIFI_STA: u64 = 5;
 const OBJ_NETWORK: u64 = 0x100;
 
 struct Fake {
@@ -38,6 +46,10 @@ struct Fake {
     next_network: i32, // 0 and 1 are "One UI's"
     present: [bool; 16],
     ssid: String,
+    wifi_lookups: u32,
+    wifi_version: i32, // what the Wi-Fi HAL's getInterfaceVersion answers
+    wifi_started: bool,
+    wifi_iface: bool, // the chip has a station interface (getStaIfaceNames; createStaIface makes one)
 }
 
 static FAKE: OnceLock<Connection> = OnceLock::new();
@@ -160,6 +172,19 @@ fn fake_incoming(object: u64, code: u32, r: &mut Reader<'_>) -> Result<Parcel, i
         let name = if code == SM_GET_SERVICE && r.token(SUP_MANAGER) { r.string(95) } else { None };
         let name = name.ok_or(aidl::UNKNOWN_TRANSACTION)?;
         reply.put_ok();
+        // The Wi-Fi HAL: a lazy service too (null on the first lookup, as init starts it).
+        if name == WIFI_SERVICE {
+            let lookups = with(|s| {
+                s.wifi_lookups += 1;
+                s.wifi_lookups
+            });
+            if lookups <= 1 {
+                reply.put_null_binder();
+            } else {
+                reply.put_local(OBJ_WIFI);
+            }
+            return Ok(reply);
+        }
         let lookups = with(|s| {
             s.lookups += 1;
             s.lookups
@@ -171,11 +196,84 @@ fn fake_incoming(object: u64, code: u32, r: &mut Reader<'_>) -> Result<Parcel, i
         }
         return Ok(reply);
     }
+    if object == OBJ_WIFI {
+        if !r.token(WIFI_IWIFI) {
+            return Err(aidl::BAD_TYPE);
+        }
+        match code {
+            aidl::GET_VERSION => {
+                reply.put_ok();
+                reply.put_i32(with(|s| s.wifi_version));
+            }
+            WIFI_IS_STARTED => {
+                reply.put_ok();
+                reply.put_i32(i32::from(with(|s| s.wifi_started)));
+            }
+            WIFI_START => {
+                scheck!(!with(|s| s.wifi_started));
+                with(|s| s.wifi_started = true);
+                note("start");
+                reply.put_ok();
+            }
+            WIFI_STOP => {
+                scheck!(with(|s| s.wifi_started));
+                with(|s| s.wifi_started = false);
+                note("stop");
+                reply.put_ok();
+            }
+            WIFI_GET_CHIP => {
+                let id = r.i32();
+                scheck!(id == 0);
+                note("getChip 0");
+                reply.put_ok();
+                reply.put_local(OBJ_WIFI_CHIP);
+            }
+            _ => return Err(aidl::UNKNOWN_TRANSACTION),
+        }
+        return Ok(reply);
+    }
+    if object == OBJ_WIFI_CHIP {
+        if !r.token(WIFI_ICHIP) {
+            return Err(aidl::BAD_TYPE);
+        }
+        match code {
+            CHIP_GET_STA_IFACE_NAMES => {
+                let iface = with(|s| s.wifi_iface);
+                reply.put_ok();
+                reply.put_i32(i32::from(iface));
+                if iface {
+                    reply.put_str("wlan0");
+                }
+            }
+            CHIP_CREATE_STA_IFACE => {
+                scheck!(!with(|s| s.wifi_iface));
+                with(|s| s.wifi_iface = true);
+                note("createStaIface");
+                reply.put_ok();
+                reply.put_local(OBJ_WIFI_STA);
+            }
+            _ => return Err(aidl::UNKNOWN_TRANSACTION),
+        }
+        return Ok(reply);
+    }
+    if object == OBJ_WIFI_STA {
+        if !r.token(WIFI_STA_IFACE) {
+            return Err(aidl::BAD_TYPE);
+        }
+        // Every method of the station interface: the client here holds none (it created one only to let go of it).
+        return Err(aidl::UNKNOWN_TRANSACTION);
+    }
     if object == OBJ_SUPPLICANT {
         if !r.token(SUP_ISUPPLICANT) {
             return Err(aidl::BAD_TYPE);
         }
         match code {
+            aidl::GET_VERSION => {
+                // The base S25's image serves version 3; the calls the client makes are version 2's and v3 kept them.
+                reply.put_ok();
+                reply.put_i32(3);
+                return Ok(reply);
+            }
             SUP_GET_STA_INTERFACE | SUP_ADD_STA_INTERFACE => {
                 let text = r.string(95);
                 scheck!(text.as_deref() == Some("wlan0"));
@@ -335,7 +433,7 @@ fn fake_incoming(object: u64, code: u32, r: &mut Reader<'_>) -> Result<Parcel, i
     Err(aidl::UNKNOWN_TRANSACTION)
 }
 
-fn run_fake(log: i32, with_iface: bool) {
+fn run_fake(log: i32, with_iface: bool, wifi: (i32, bool, bool)) {
     let mut present = [false; 16];
     present[0] = true;
     present[1] = true;
@@ -348,6 +446,10 @@ fn run_fake(log: i32, with_iface: bool) {
         next_network: 2,
         present,
         ssid: String::new(),
+        wifi_lookups: 0,
+        wifi_version: wifi.0,
+        wifi_started: wifi.1,
+        wifi_iface: wifi.2,
     });
     let c = Connection::open(
         None,
@@ -402,13 +504,18 @@ impl Events {
 }
 
 fn start_fake(with_iface: bool) -> (libc::pid_t, i32) {
+    start_fake_wifi(with_iface, (1, true, true))
+}
+
+/// A fake whose Wi-Fi HAL is (version, started, has a station interface).
+fn start_fake_wifi(with_iface: bool, wifi: (i32, bool, bool)) -> (libc::pid_t, i32) {
     let mut fds = [0; 2];
     // SAFETY: pipe writes two fds.
     assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
     let pid = common::fork(move || {
         // SAFETY: the read end is the parent's.
         unsafe { libc::close(fds[0]) };
-        run_fake(fds[1], with_iface);
+        run_fake(fds[1], with_iface, wifi);
     });
     // SAFETY: the write end is the child's.
     unsafe { libc::close(fds[1]) };
@@ -459,6 +566,7 @@ fn main() {
         stop_fake(pid, log);
         std::process::exit(common::finish("aidl binder"));
     };
+    check!(s.version() == 3); // the base S25's service; the client still uses the v2 codes
     let mut ies = [0u8; 64];
     ies[..28].copy_from_slice(&[
         0, 4, b'h', b'o', b'm', b'e', 48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f,
@@ -533,6 +641,7 @@ fn main() {
     let (pid, log) = start_fake(true);
     let look = Supplicant::open("wlan0", 3000, None);
     check!(look.is_some());
+    check!(look.as_ref().is_some_and(|look| look.version() == 3));
     if let Some(look) = look {
         let st = look.status(8);
         check!(st.is_ok_and(|st| st.networks == [0, 1]));
@@ -562,5 +671,61 @@ fn main() {
         check!(s.leave() == Err(-libc::ENODEV));
         check!(s.join(&j, Some(&ies[..28])).is_err()); // no service manager any more
     }
+
+    // 4. The Wi-Fi chip's HAL (docs/hardware.md section 3, "Wi-Fi off in One UI at the switch"): a lazy service, a
+    // stopped chip, and no station interface. The start comes first; the first wait sees no wlan0, the chip has no
+    // interface to offer, one is created, and the third look finds it.
+    {
+        let (pid, log) = start_fake_wifi(true, (1, false, false));
+        let looks = std::sync::atomic::AtomicUsize::new(0);
+        let started = chip::ensure("wlan0", 300, || looks.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 4);
+        check!(started);
+        let st = chip::status(0);
+        check!(st
+            .as_ref()
+            .is_some_and(|st| st.version == 1 && st.started && st.interfaces == vec!["wlan0".to_owned()]));
+        if let Some(st) = &st {
+            check!(st.text() == "IWifi v1: started, station interface(s): wlan0");
+        }
+        chip::give_back();
+        std::thread::sleep(Duration::from_millis(100));
+        let text = stop_fake(pid, log);
+        // The start, the chip's names (none), the chip again for the interface created, the status's own look, and
+        // the return's stop.
+        let want = "start\ngetChip 0\ngetChip 0\ncreateStaIface\ngetChip 0\nstop\n";
+        check!(text == want);
+        if text != want {
+            println!("  the fake's log:\n{text}");
+        }
+    }
+
+    // 5. One UI's own Wi-Fi was on: the chip is already started, wlan0 is there, so nothing is started or stopped (a
+    // newer interface version is accepted: its v1 methods come first).
+    {
+        let (pid, log) = start_fake_wifi(true, (2, true, true));
+        check!(chip::ensure("wlan0", 300, || true));
+        chip::give_back();
+        std::thread::sleep(Duration::from_millis(100));
+        let text = stop_fake(pid, log);
+        check!(text.is_empty());
+        if !text.is_empty() {
+            println!("  the fake's log:\n{text}");
+        }
+    }
+
+    // 6. Started, wlan0 not there, and the chip has a station interface of another name: no second one is created, and
+    // the session says so instead of taking the wrong interface.
+    {
+        let (pid, log) = start_fake_wifi(true, (1, true, true));
+        check!(!chip::ensure("wlan1", 300, || false));
+        chip::give_back();
+        std::thread::sleep(Duration::from_millis(100));
+        let text = stop_fake(pid, log);
+        check!(text == "getChip 0\n");
+        if text != "getChip 0\n" {
+            println!("  the fake's log:\n{text}");
+        }
+    }
+
     std::process::exit(common::finish("aidl binder"));
 }

@@ -49,8 +49,9 @@ Only the sensors differ: the levels, the hysteresis, xnuhost's step and the load
 - **treble**: the thermal HAL `android.hardware.thermal.IThermal/default` by name from servicemanager (`hal/`),
   one `getTemperatures()` (code 3 of the frozen `IThermal.aidl`) per reading. `thermal::from_hal`: cpu and gpu the
   hottest of their `TemperatureType`, soc the hottest of CPU, GPU and SOC (its name in `soc_zone`), battery, and the
-  case = the hottest SKIN (the HAL's own skin sensor, where samsung takes Samsung's `lrp`). ddr, xo, ap and lrp are
-  unknown. Values below -40 C or above 200 C (an off sensor) are skipped.
+  case = the hottest SKIN (the HAL's own skin sensor, where samsung takes Samsung's `lrp`). A type the HAL leaves out
+  keeps the files' reading for skin (`lrp`/`ap`) and battery, and the open line says which answered (`(lrp)` or
+  `(ap thermistor)` in place of `(SKIN)`). ddr, xo, ap and lrp are unknown. Values below -40 C or above 200 C (an off sensor) are skipped.
 - Not registered, or no temperature at the open: `hw: thermal: treble: missing: ...; the bridge stays off`, or the
   files with `hw-backend-fallback=1`. A HAL that stops answering: one line, the readings unknown until it answers
   (each reading then counts as a missing file does).

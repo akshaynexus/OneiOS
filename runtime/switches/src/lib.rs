@@ -530,8 +530,18 @@ pub const SWITCHES: &[Switch] = &[
             arg("sheng-vsync-min", Kind::Int { min: 24, max: 120 }, "60", Some("24")),
             "Display",
             "Lowest refresh rate (Hz)",
-            "Above 60 Hz the display reports a 60..120 Hz range, so light animations are not dropped to 24-40 Hz. 24 \
-             (or 0): the 24..120 range, as before.",
+            "With sheng-vsync-fixed=0, 60 reports a 60..120 Hz range and 24 (or 0) restores 24..120 Hz. The fixed-rate \
+             default above 60 Hz overrides this range unless explicitly set to 0.",
+        )
+    },
+    Switch {
+        auto: Some("xnuhost adds 1 above 60 Hz unless the boot arguments name sheng-vsync-fixed"),
+        ..text(
+            arg("sheng-vsync-fixed", BOOL, "1", Some("0")),
+            "Display",
+            "Keep animations at panel rate",
+            "1: above 60 Hz, report one fixed panel rate so CoreAnimation cannot select 30 Hz from the 24..120 Hz range. \
+             0: keep the variable range for an A/B comparison.",
         )
     },
     Switch {
@@ -664,6 +674,8 @@ pub const KEYS: &[Key] = &[
     key("panel-fallback", Kind::Text { max_len: 0 }),
     key("scale", Kind::Choice(&["2", "3"])),
     flag("scale-fixup"),
+    int("corner-radius", 0, 200),
+    int("artwork-subtype", 0, 10000),
     flag("ios16-fixup"),
     Key { many: true, ..key("text-fixup", Kind::Text { max_len: 160 }) },
     flag("input"),
@@ -681,7 +693,7 @@ pub const KEYS: &[Key] = &[
     key("camera-model", Kind::Text { max_len: 16 }),
     flag("bridges"),
     key("clusters", Kind::Text { max_len: 9 }),
-    key("wifi", Kind::Choice(&["auto", "off", "tap", "sim"])),
+    key("wifi", Kind::Choice(&["auto", "off", "tap", "cell", "sim"])),
     key("bluetooth", Kind::Choice(&["auto", "virtual", "hidl", "sim"])),
     key("haptics", Kind::Choice(&["auto", "off", "sim"])),
     flag("haptics-native-impacts"),
@@ -694,6 +706,7 @@ pub const KEYS: &[Key] = &[
     Key { also: &["2"], ..flag("cpu-pin") },
     flag("map-defer"),
     int("task-trim-idle", 1, 86400),
+    flag("thermal-cap"),
     int("ram-tasks-awake", 0, 4096),
     sized("ram-task-idle-cost"),
     key("host-device", Kind::Text { max_len: 32 }),
