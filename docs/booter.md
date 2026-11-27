@@ -1830,13 +1830,31 @@ The `blk.rs` flush counts and times count every `fdatasync`, whichever side (vCP
   `/product artwork-device-subtype` stays the identity's (2868). The Data seed's `identity.expect` holds the
   scale the image was built with; a `--set scale=` that differs from the image's makes `oneios-mg` report it.
 - **`drm`.** Direct KMS: DRM master on `/dev/dri/card0`, the connected panel's largest mode (then the fastest, then
-  the preferred one; up to 256 modes read, since the kernel copies none of a list that does not fit), two dumb
-  buffers, a legacy `SETCRTC`, then each flush copies its damage (and the frame before's) into the back buffer and
-  `PAGE_FLIP`s it with `DRM_MODE_PAGE_FLIP_EVENT`. The next flush first waits for that flip's event (at most 34 ms;
-  a later one is counted as late). An EBUSY is waited for and tried again. Only a flip the driver refuses for good
-  steps down, once and logged: to a `SETCRTC` a frame (a whole commit, which a command-mode panel needs [I]), then to
-  one buffer with `DIRTYFB`. `display: 10 s: KMS N frames by page flip|mode set|DIRTYFB, M flips later than 34 ms`
-  every 10 s while frames come. For a session in which surfaceflinger and the composer are stopped
+  the preferred one; up to 256 modes read, since the kernel copies none of a list that does not fit), three dumb
+  buffers (two if the driver refuses the third), a legacy `SETCRTC`, then each frame is written into a buffer that is
+  neither on the panel nor the target of the flip in flight and `PAGE_FLIP`ped with `DRM_MODE_PAGE_FLIP_EVENT` at
+  once when no flip is in flight; otherwise it waits as *ready*, and the flip thread (`xh-drm-flip`, asleep in
+  `poll(2)` on the DRM descriptor; it alone reads the events) flips it when the event comes. A frame written while
+  one is ready replaces it (a mailbox: that one is never shown). Each buffer copies the frame's damage plus whatever
+  it missed while the others were written (`display.rs` `Chain`). A B,G,R,X/A blob scanout's frame is handed to the
+  copy thread (`xh-drm-copy`; `display::post`, as a direct display helper is handed one): the GPU device's command
+  lane holds the flush's answer and goes on with the next commands (the render server's submissions) while the thread
+  copies the rows from the guest's pages straight into the buffer and answers. A half-float scanout and the 2D device
+  are copied on the lane, also straight into the buffer (`display::scanout_write`). One copy a frame either way, and
+  the flush never waits for a vblank. The copy's line is the one the lane printed: `display: 10 s: flushes N, copy
+  mean X us max Y us (Z MiB)`. With two buffers a frame waits for the flip before it, as before. A flip with
+  no event within 34 ms is counted as late and taken as done; an EBUSY (a commit of the driver's own, which sends no
+  event) leaves the frame ready and the flip thread flips it after those 34 ms. Only a flip the driver refuses for
+  good steps down, once and logged: to a `SETCRTC` a frame (a whole commit, which a command-mode panel needs [I]),
+  then to one buffer with `DIRTYFB`. `display: KMS WxH@HZ on connector C, crtc K (N buffers: ...)` at the start, and
+  `display: 10 s: KMS N frames by page flip|mode set|DIRTYFB, A flipped by the flip thread at a later vblank, R
+  replaced before their flip, W copies waited for a buffer, M flips later than 34 ms` every 10 s while frames come.
+  Until 2026-11-28 the flush copied the guest's rows into xnuhost's frame, then the frame into the back buffer, and
+  first waited for the flip before it, all on the GPU device's command lane under its lock: the render server's
+  next submissions, queued behind the flush, waited for two 17.9 MB copies and up to a vblank (v0.1.40 session of
+  2026-11-27: "flush -> the next frame's first GPU submission" 16.8 ms at the median, 23-34 frames a second on the
+  120 Hz panel). Host-tested (`cargo test -p xnuhost --lib`: `display::tests::kms_chain_*`, `kms_copy_frame_rect`,
+  the KMS case of `virtio_gpu::tests::three_d`), not yet booted. For a session in which surfaceflinger and the composer are stopped
   (`session-mode=takeover`, `display=drm`). Until 2026-11-27 the first EBUSY (two flushes inside one vblank) turned
   flipping off for good and left only `DIRTYFB` into the scanned buffer; and `config::Config::finish_with` dropped
   `display=` (and `display-present=`, and `touch-exclusive=0` in takeover) read from the image's `xnuhost.conf` /

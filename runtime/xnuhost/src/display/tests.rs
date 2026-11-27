@@ -342,3 +342,99 @@ fn kms_flip_event_is_found() {
     assert!(!kms::flip_completed(&[0u8; 4]));
     assert!(!kms::flip_completed(&event(0x01, 0))); // a zero length ends the walk instead of looping
 }
+
+/// The KMS buffers (2026-11-28): a frame is written into a buffer neither on the panel nor the target of the flip in
+/// flight, flipped at once when no flip is in flight, else kept as ready for the flip thread, and a newer frame
+/// written while one is ready replaces it; the first copy into each buffer is the whole frame, then each copies its
+/// damage plus what it missed.
+#[test]
+fn kms_chain_never_waits_with_three_buffers() {
+    let full = (0, 0, 1440, 3120);
+    let mut c = Chain::new(3, 1440, 3120);
+    // frame 1: no flip in flight, written into a buffer that is not the panel's (0), flipped at once
+    c.damage(full);
+    let (b1, r) = c.begin().unwrap();
+    assert_ne!(b1, 0);
+    assert_eq!(r, full);
+    assert_eq!(c.written(b1), Some(b1));
+    c.flipped(b1, 0);
+    // frame 2 while that flip is in flight: the third buffer, kept as ready
+    c.damage((0, 100, 1440, 50));
+    let (b2, r) = c.begin().unwrap();
+    assert!(b2 != 0 && b2 != b1);
+    assert_eq!(r, full); // never written: all of it
+    assert_eq!(c.written(b2), None);
+    assert_eq!(c.ready, Some(b2));
+    // frame 3, the flip still in flight: the ready frame is written over (never shown), not waited for
+    c.damage((0, 200, 1440, 10));
+    let (b3, r) = c.begin().unwrap();
+    assert_eq!(b3, b2);
+    assert_eq!(r, (0, 200, 1440, 10)); // what changed since b2 was written
+    assert_eq!(c.replaced, 1);
+    assert_eq!(c.written(b3), None);
+    // the flip's event: b1 is on the panel, b3 is flipped next
+    assert_eq!(c.flip_done(), Some(b3));
+    assert_eq!(c.front, b1);
+    c.flipped(b3, 10);
+    // frame 4: the only free buffer is 0, which missed everything since the start
+    c.damage((10, 10, 20, 20));
+    let (b4, r) = c.begin().unwrap();
+    assert_eq!(b4, 0);
+    assert_eq!(r, full);
+    // b1 (now the panel's) missed frames 2-4's damage: written next once free
+    assert_eq!(c.stale[b1], rect_union(rect_union((0, 100, 1440, 50), (0, 200, 1440, 10)), (10, 10, 20, 20)));
+}
+
+/// With two buffers a frame waits while the flip is in flight (begin gives none) and gets the other buffer once it
+/// completed; an EBUSY (a commit of the driver's own, no event) keeps the panel's buffer and the frame waits as ready;
+/// a flip past FLIP_WAIT_MS is overdue.
+#[test]
+fn kms_chain_two_buffers_and_busy() {
+    let mut c = Chain::new(2, 100, 100);
+    c.damage((0, 0, 100, 100));
+    let (b, _) = c.begin().unwrap();
+    assert_eq!(b, 1);
+    assert_eq!(c.written(b), Some(1));
+    c.flipped(1, 1_000);
+    c.damage((0, 0, 5, 5));
+    assert!(c.begin().is_none());
+    assert!(!c.overdue(1_000 + FLIP_WAIT_MS as i64 * 1000 - 1));
+    assert!(c.overdue(1_000 + FLIP_WAIT_MS as i64 * 1000));
+    assert_eq!(c.flip_done(), None);
+    assert_eq!(c.front, 1);
+    let (b, r) = c.begin().unwrap();
+    assert_eq!((b, r), (0, (0, 0, 100, 100)));
+    // EBUSY: the panel keeps 1, 0 waits as ready, and is the one flipped once the commit is taken as done
+    c.busy(0, 5_000);
+    assert_eq!(c.pending, Some(1));
+    assert_eq!(c.flip_done(), Some(0));
+    assert_eq!(c.front, 1);
+    // a copy that failed leaves its buffer holding nothing of the frame
+    c.failed(0, (0, 0, 100, 100));
+    assert_eq!(c.stale[0], (0, 0, 100, 100));
+}
+
+/// xnuhost's frame into a buffer's view: B,G,R,X rows as they are, only the rectangle, clipped to the frame.
+#[test]
+fn kms_copy_frame_rect() {
+    let (w, h) = (8u32, 4u32);
+    let mut src: Vec<u8> = (0..w * h * 4).map(|i| i as u8).collect();
+    let mut dst = vec![0u8; (16 * h) as usize * 4]; // a wider stride, as a dumb buffer's pitch
+                                                    // SAFETY: both buffers live to the end of the test.
+    let (s, t) = unsafe {
+        (
+            Frame::new(NonNull::new(src.as_mut_ptr()).unwrap(), src.len(), w, h, w * 4, pixels::BGRX8),
+            Frame::new(NonNull::new(dst.as_mut_ptr()).unwrap(), dst.len(), w, h, 16 * 4, pixels::BGRX8),
+        )
+    };
+    assert!(copy_frame(&s, &t, (2, 1, 3, 2)));
+    for row in 0..h as usize {
+        for x in 0..w as usize {
+            let want = if (1..3).contains(&row) && (2..5).contains(&x) { src[row * 32 + x * 4] } else { 0 };
+            assert_eq!(dst[row * 64 + x * 4], want, "row {} x {}", row, x);
+        }
+    }
+    // a rectangle past the frame is clipped, not a panic
+    assert!(copy_frame(&s, &t, (6, 3, 100, 100)));
+    assert_eq!(dst[3 * 64 + 7 * 4], src[3 * 32 + 7 * 4]);
+}

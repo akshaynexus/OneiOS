@@ -35,7 +35,7 @@
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 use xh_core::bytes::le;
 
 use oneios_display::sys::{self as dsys, Errno, Map};
@@ -180,7 +180,8 @@ struct DrmBuf {
 /// refused for good (never for EBUSY: a flip still in flight is waited for).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Present {
-    /// PAGE_FLIP of the back buffer with DRM_MODE_PAGE_FLIP_EVENT; the next frame waits for the event.
+    /// PAGE_FLIP of a written buffer with DRM_MODE_PAGE_FLIP_EVENT; the flip thread (drm_events_main) reads the event
+    /// and flips the buffer written meanwhile, if any.
     Flip,
     /// SETCRTC of the back buffer: a whole (blocking) commit a frame. A command-mode panel (the S24 Ultra's) is sent a
     /// frame only by a commit [I]: writes into the scanned buffer alone do not reach it.
@@ -189,25 +190,171 @@ enum Present {
     Dirty,
 }
 
-/// The DRM back end's double-buffered dumb buffers and mode.
+/// A rectangle (x, y, w, h); w or h 0: none.
+type Rect = (u32, u32, u32, u32);
+
+/// The smallest rectangle holding both.
+fn rect_union(a: Rect, b: Rect) -> Rect {
+    if a.2 == 0 || a.3 == 0 {
+        return b;
+    }
+    if b.2 == 0 || b.3 == 0 {
+        return a;
+    }
+    let (x, y) = (a.0.min(b.0), a.1.min(b.1));
+    let (x2, y2) = ((a.0 + a.2).max(b.0 + b.2), (a.1 + a.3).max(b.1 + b.3));
+    (x, y, x2 - x, y2 - y)
+}
+
+/// Dumb buffers the DRM back end makes: one on the panel, one a flip in flight goes to, and one the next frame is
+/// written into meanwhile. With two (the third refused) a frame waits for the flip in flight, as before 2026-11-28.
+const DRM_BUFFERS: usize = 3;
+
+/// Which dumb buffer is where (2026-11-28). Until then each flush waited, on the GPU device's command lane and under
+/// its lock, for the vblank of the flip before it (up to 8.3 ms at 120 Hz), then copied the frame into the back buffer:
+/// the render server's next submissions, queued behind the flush on the same virtqueue, waited for both (session of
+/// 2026-11-27, v0.1.40: "flush -> the next frame's first GPU submission" 16.8 ms at the median, 23-34 frames a second
+/// on a 120 Hz panel). Now a frame is written into a buffer that is neither on the panel nor the target of the flip in
+/// flight; it is flipped at once when no flip is in flight, else it waits as `ready` and the flip thread flips it when
+/// the event comes. A frame written while one is already ready replaces it (that one is never shown: a mailbox).
+///
+/// `stale[b]`: what of buffer b is older than the frame (the union of the damage since b was last written), so a
+/// frame copies its damage plus whatever the buffer missed while the others were written.
+#[derive(Debug)]
+struct Chain {
+    n: usize,
+    front: usize,
+    /// the buffer a flip in flight shows (front itself: a commit of the driver's own, whose EBUSY gave no event)
+    pending: Option<usize>,
+    pending_since_us: i64,
+    ready: Option<usize>,
+    stale: [Rect; DRM_BUFFERS],
+    /// ready frames written over before they were flipped, for the 10 s line
+    replaced: u64,
+}
+
+impl Chain {
+    fn new(n: usize, w: u32, h: u32) -> Chain {
+        let n = n.clamp(1, DRM_BUFFERS);
+        Chain {
+            n,
+            front: 0,
+            pending: None,
+            pending_since_us: 0,
+            ready: None,
+            stale: [(0, 0, w, h); DRM_BUFFERS],
+            replaced: 0,
+        }
+    }
+
+    /// A frame changed `r`: every buffer misses it until it is written.
+    fn damage(&mut self, r: Rect) {
+        for s in self.stale.iter_mut().take(self.n) {
+            *s = rect_union(*s, r);
+        }
+    }
+
+    /// The buffer to write the frame into and the rectangle to copy into it (then counted as written); None: every
+    /// buffer is on the panel or the target of the flip in flight (two buffers), the flip's event frees one.
+    fn begin(&mut self) -> Option<(usize, Rect)> {
+        let free = |b: &usize| *b != self.front && Some(*b) != self.pending;
+        let b = (0..self.n).filter(free).find(|b| Some(*b) != self.ready).or(self.ready.filter(free))?;
+        if self.ready == Some(b) {
+            self.ready = None;
+            self.replaced += 1;
+        }
+        let r = std::mem::take(&mut self.stale[b]);
+        Some((b, r))
+    }
+
+    /// The copy into b failed: it holds nothing of the frame.
+    fn failed(&mut self, b: usize, full: Rect) {
+        self.stale[b] = full;
+    }
+
+    /// Buffer b is written: Some(b) when it is to be flipped now (no flip in flight), None when it waits for the flip
+    /// in flight (the flip thread flips it).
+    fn written(&mut self, b: usize) -> Option<usize> {
+        if self.pending.is_none() {
+            return Some(b);
+        }
+        if self.ready.is_some_and(|r| r != b) {
+            self.replaced += 1;
+        }
+        self.ready = Some(b);
+        None
+    }
+
+    /// A PAGE_FLIP to b was queued.
+    fn flipped(&mut self, b: usize, now_us: i64) {
+        self.pending = Some(b);
+        self.pending_since_us = now_us;
+    }
+
+    /// The flip to b was refused with EBUSY (a commit of the driver's own still in flight, which sends no event): b
+    /// waits as ready, and the flip thread takes the commit as done after FLIP_WAIT_MS.
+    fn busy(&mut self, b: usize, now_us: i64) {
+        self.pending = Some(self.front);
+        self.pending_since_us = now_us;
+        self.ready = Some(b);
+    }
+
+    /// The flip in flight completed (its event, or FLIP_WAIT_MS passed): its buffer is on the panel. Returns the ready
+    /// buffer to flip next.
+    fn flip_done(&mut self) -> Option<usize> {
+        if let Some(p) = self.pending.take() {
+            self.front = p;
+        }
+        self.ready.take()
+    }
+
+    /// Whether the flip in flight has waited FLIP_WAIT_MS or more.
+    fn overdue(&self, now_us: i64) -> bool {
+        self.pending.is_some() && now_us - self.pending_since_us >= FLIP_WAIT_MS as i64 * 1000
+    }
+}
+
+/// The DRM back end's dumb buffers and mode.
 struct Drm {
     fd: OwnedFd,
     crtc: u32,
     connector: u32,
     mode: kms::ModeInfo,
-    bufs: [DrmBuf; 2],
-    front: usize,
+    bufs: Vec<DrmBuf>,
+    chain: Chain,
     present: Present,
-    /// A PAGE_FLIP whose completion event has not been read yet.
-    flip_pending: bool,
-    prev_dirty: (u32, u32, u32, u32),
     w: u32,
     h: u32,
     stride: u32,
-    /// Frames put on the panel, and flips that were not done within FLIP_WAIT_MS (both for the 10 s line).
+    /// Frames put on the panel, flips that were not done within FLIP_WAIT_MS, frames flipped by the flip thread at
+    /// the vblank after their copy, and the frames whose copy waited for a buffer (all for the 10 s line).
     shown: u64,
     late: u64,
+    flipped_later: u64,
+    waited: u64,
     last_note_us: i64,
+}
+
+impl Drm {
+    /// Buffer b as a frame of the guest frame's size (`f`'s width and height) and B,G,R,X pixels, centred where the
+    /// mode is larger; None when the frame does not fit the mode.
+    fn view(&self, f: &Frame, b: usize) -> Option<Frame> {
+        if f.width > self.w || f.height > self.h || b >= self.bufs.len() {
+            return None;
+        }
+        let (ox, oy) = ((self.w - f.width) / 2, (self.h - f.height) / 2);
+        let off = oy as usize * self.stride as usize + ox as usize * 4;
+        let len = self.stride as usize * self.h as usize - off;
+        // SAFETY: the dumb buffer is mapped for the process's life (stride * h bytes); off lies inside it.
+        let p = NonNull::new(unsafe { self.bufs[b].map.add(off) })?;
+        // SAFETY: as above; writers are serialized by Display::drm_write and write only a buffer the chain gave them.
+        Some(unsafe { Frame::new(p, len, f.width, f.height, self.stride, pixels::BGRX8) })
+    }
+
+    /// The whole guest frame, as a rectangle.
+    fn full(&self, f: &Frame) -> Rect {
+        (0, 0, f.width.min(self.w), f.height.min(self.h))
+    }
 }
 
 // SAFETY: the dumb buffer's mapping is used under the display's drm lock only.
@@ -227,6 +374,15 @@ struct Display {
     /// display-present=ahb: the helper posts into write-only buffers on a child of its layer (docs/switches.md)
     present_ahb: bool,
     drm: Option<Mutex<Drm>>,
+    /// signalled by the flip thread when a flip completed (a frame with two buffers waits for it)
+    drm_flipped: Condvar,
+    /// the frames' writers, one at a time (the GPU device's lanes, the console)
+    drm_write: Mutex<()>,
+    /// wakes the flip thread to arm its FLIP_WAIT_MS deadline for a commit that sends no event (EBUSY)
+    drm_wake: Option<OwnedFd>,
+    /// the frame posted for the DRM copy thread (drm_post), and its wake-up
+    drm_job: Mutex<Option<DrmJob>>,
+    drm_job_posted: Condvar,
     client: Mutex<Client>,
 }
 
@@ -338,6 +494,9 @@ pub fn set_ram(fd: RawFd, phys: u64, size: u64) {
 /// Whether a helper that copies frames from guest RAM itself is connected and has the RAM.
 pub fn direct() -> bool {
     DISPLAY.get().is_some_and(|d| {
+        if d.drm.is_some() {
+            return true; // the DRM copy thread (drm_post)
+        }
         let c = client(d);
         d.backend == DisplayBackend::Shm && c.fd.is_some() && c.direct && c.memory
     })
@@ -358,6 +517,13 @@ pub fn post(
     done: &Done,
 ) -> bool {
     let Some(d) = DISPLAY.get() else { return false };
+    if d.drm.is_some() {
+        let posted = drm_post(d, entries, offset, stride, (width, height), rect, seq, done);
+        if posted {
+            crate::input::frame_shown();
+        }
+        return posted;
+    }
     let mut over = Taken::new();
     let posted = post_locked(d, &mut client(d), entries, offset, stride, width, height, rect, seq, done, &mut over);
     over.answer();
@@ -934,9 +1100,11 @@ fn drm_init() -> Result<Drm, ()> {
         if crtc == 0 {
             continue;
         }
-        let mut bufs = Vec::with_capacity(2);
+        let mut bufs = Vec::with_capacity(DRM_BUFFERS);
         let mut pitch = 0u32;
-        for _ in 0..2 {
+        for k in 0..DRM_BUFFERS {
+            // Two are needed; a third the driver refuses leaves two (each frame then waits for the flip before it).
+            let spare = k >= 2;
             let mut dumb = kms::CreateDumb {
                 width: mode.hdisplay as u32,
                 height: mode.vdisplay as u32,
@@ -944,7 +1112,10 @@ fn drm_init() -> Result<Drm, ()> {
                 ..Default::default()
             };
             if !kms::call(raw, kms::CREATE_DUMB, &mut dumb) {
-                loge!("display: dumb buffer: {}", std::io::Error::last_os_error());
+                loge!("display: dumb buffer {}: {}", k, std::io::Error::last_os_error());
+                if spare {
+                    break;
+                }
                 return Err(());
             }
             let mut fb = kms::FbCmd {
@@ -958,7 +1129,10 @@ fn drm_init() -> Result<Drm, ()> {
             };
             let mut map = kms::MapDumb { handle: dumb.handle, ..Default::default() };
             if !kms::call(raw, kms::ADDFB, &mut fb) || !kms::call(raw, kms::MAP_DUMB, &mut map) {
-                loge!("display: framebuffer: {}", std::io::Error::last_os_error());
+                loge!("display: framebuffer {}: {}", k, std::io::Error::last_os_error());
+                if spare {
+                    break;
+                }
                 return Err(());
             }
             // SAFETY: maps the dumb buffer the kernel just made, at the offset it gave.
@@ -973,6 +1147,9 @@ fn drm_init() -> Result<Drm, ()> {
                 )
             };
             if p == libc::MAP_FAILED {
+                if spare {
+                    break;
+                }
                 return Err(());
             }
             // SAFETY: the mapping just made, dumb.size bytes.
@@ -980,10 +1157,9 @@ fn drm_init() -> Result<Drm, ()> {
             pitch = dumb.pitch;
             bufs.push(DrmBuf { fb: fb.fb_id, map: p as *mut u8 });
         }
-        let Ok([b0, b1]) = <[DrmBuf; 2]>::try_from(bufs) else { return Err(()) };
         let mut set = kms::Crtc {
             crtc_id: crtc,
-            fb_id: b0.fb,
+            fb_id: bufs[0].fb,
             set_connectors_ptr: connector as *const u32 as u64,
             count_connectors: 1,
             mode,
@@ -995,28 +1171,35 @@ fn drm_init() -> Result<Drm, ()> {
             return Err(());
         }
         logi!(
-            "display: KMS {}x{}@{} on connector {}, crtc {} (double-buffered)",
+            "display: KMS {}x{}@{} on connector {}, crtc {} ({} buffers: {})",
             mode.hdisplay,
             mode.vdisplay,
             mode.vrefresh,
             connector,
-            crtc
+            crtc,
+            bufs.len(),
+            if bufs.len() > 2 {
+                "a frame is copied while the flip before it waits for its vblank"
+            } else {
+                "a frame waits for the flip before it"
+            }
         );
+        let (w, h) = (mode.hdisplay as u32, mode.vdisplay as u32);
         return Ok(Drm {
             fd,
             crtc,
             connector: *connector,
             mode,
-            bufs: [b0, b1],
-            front: 0,
+            chain: Chain::new(bufs.len(), w, h),
+            bufs,
             present: Present::Flip,
-            flip_pending: false,
-            prev_dirty: (0, 0, mode.hdisplay as u32, mode.vdisplay as u32),
-            w: mode.hdisplay as u32,
-            h: mode.vdisplay as u32,
+            w,
+            h,
             stride: pitch,
             shown: 0,
             late: 0,
+            flipped_later: 0,
+            waited: 0,
             last_note_us: now_us(),
         });
     }
@@ -1024,62 +1207,39 @@ fn drm_init() -> Result<Drm, ()> {
     Err(())
 }
 
-/// How long a frame waits for the flip before it (two frames at 60 Hz; a flip later than that is counted as late and
-/// taken as done).
+/// How long a flip may take before it is taken as done (two frames at 60 Hz; such a flip is counted as late).
 const FLIP_WAIT_MS: i32 = 34;
 
-/// Waits for the flip in flight to complete (its event read from the descriptor), at most FLIP_WAIT_MS.
-fn drm_wait_flip(drm: &mut Drm) {
-    let started = now_us();
-    while drm.flip_pending {
-        let left = FLIP_WAIT_MS - ((now_us() - started) / 1000) as i32;
-        if left <= 0 {
-            drm.late += 1;
-            drm.flip_pending = false; // a lost event must not stop the display: the next flip says EBUSY if it is not
-            break;
-        }
-        let mut p = libc::pollfd { fd: drm.fd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
-        // SAFETY: one pollfd of ours.
-        let n = unsafe { libc::poll(&mut p, 1, left) };
-        if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
-            continue;
-        }
-        if n <= 0 {
-            continue; // timed out: the loop's deadline decides
-        }
-        let mut buf = [0u8; 1024];
-        // SAFETY: reads into the buffer, at most its length.
-        let got = unsafe { libc::read(drm.fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
-        if got > 0 && kms::flip_completed(&buf[..got as usize]) {
-            drm.flip_pending = false;
-        }
-    }
+fn lock_drm(m: &Mutex<Drm>) -> MutexGuard<'_, Drm> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Puts `target` on the panel the way `drm.present` says; steps down (once, logged) when the driver refuses it.
-/// True when the buffer is shown (or will be at the next vblank).
-fn drm_present(drm: &mut Drm, target: usize) -> bool {
+/// Puts buffer `b` on the panel the way `drm.present` says; steps down (once, logged) when the driver refuses it for
+/// good. With the drm lock held; never waits for a vblank (a flip's event is the flip thread's).
+fn drm_show(d: &Display, drm: &mut Drm, b: usize) {
     let raw = drm.fd.as_raw_fd();
-    let fb = drm.bufs[target].fb;
+    let fb = drm.bufs[b].fb;
     if drm.present == Present::Flip {
-        for attempt in 0..2 {
-            let mut flip =
-                kms::PageFlip { crtc_id: drm.crtc, fb_id: fb, flags: kms::PAGE_FLIP_EVENT, ..Default::default() };
-            if kms::call(raw, kms::PAGE_FLIP, &mut flip) {
-                drm.flip_pending = true;
-                return true;
-            }
-            let e = std::io::Error::last_os_error();
-            if e.raw_os_error() == Some(libc::EBUSY) && attempt == 0 {
-                // A flip still in flight (one this code did not wait for, or the modeset's own commit): wait, again.
-                drm.flip_pending = true;
-                drm_wait_flip(drm);
-                continue;
-            }
-            loge!("display: KMS page flip refused ({}): a mode set (SETCRTC) a frame from now on", e);
-            drm.present = Present::SetCrtc;
-            break;
+        let mut flip =
+            kms::PageFlip { crtc_id: drm.crtc, fb_id: fb, flags: kms::PAGE_FLIP_EVENT, ..Default::default() };
+        if kms::call(raw, kms::PAGE_FLIP, &mut flip) {
+            drm.chain.flipped(b, now_us());
+            return;
         }
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() == Some(libc::EBUSY) {
+            // A commit in flight that sends this descriptor no event (the mode set's own): b waits as ready, and the
+            // flip thread, woken to arm its deadline, takes the commit as done after FLIP_WAIT_MS and flips b.
+            drm.chain.busy(b, now_us());
+            if let Some(w) = d.drm_wake.as_ref() {
+                let one = 1u64;
+                // SAFETY: writes 8 bytes of ours to our eventfd.
+                unsafe { libc::write(w.as_raw_fd(), (&one as *const u64).cast(), 8) };
+            }
+            return;
+        }
+        loge!("display: KMS page flip refused ({}): a mode set (SETCRTC) a frame from now on", e);
+        drm.present = Present::SetCrtc;
     }
     if drm.present == Present::SetCrtc {
         let mut set = kms::Crtc {
@@ -1092,99 +1252,288 @@ fn drm_present(drm: &mut Drm, target: usize) -> bool {
             ..Default::default()
         };
         if kms::call(raw, kms::SETCRTC, &mut set) {
-            return true;
+            drm.chain.front = b; // a whole commit: b is on the panel when it returns
+            return;
         }
         loge!(
             "display: KMS mode set a frame refused ({}): one buffer written in place with DIRTYFB from now on",
             std::io::Error::last_os_error()
         );
         drm.present = Present::Dirty;
-        // the panel scans drm.front: the caller copies the whole frame into it next time
-    }
-    false
-}
-
-/// Copies the frame's rectangle (x, y, w, h) into dumb buffer `target`, centred where the mode is larger.
-fn drm_copy(d: &Display, drm: &Drm, target: usize, (x, y, w, h): (u32, u32, u32, u32)) {
-    let buf = &drm.bufs[target];
-    let f = &d.frame;
-    let ox = if drm.w > f.width { (drm.w - f.width) / 2 } else { 0 };
-    let oy = if drm.h > f.height { (drm.h - f.height) / 2 } else { 0 };
-    let (x, y) = (x.min(f.width), y.min(f.height));
-    let (w, h) = (w.min(f.width - x), h.min(f.height - y));
-    let width = if x + ox >= drm.w { 0 } else { w.min(drm.w - x - ox) };
-    let mut row = y;
-    while row < y + h && row + oy < drm.h && width != 0 {
-        // SAFETY: both rows lie inside their buffers (the clipping above); the frame is mapped for the process's life.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                f.as_ptr().add(row as usize * f.stride as usize + x as usize * 4),
-                buf.map.add((row + oy) as usize * drm.stride as usize + (x + ox) as usize * 4),
-                width as usize * 4,
-            )
-        };
-        row += 1;
+        // The panel scans the front buffer from now on, written in place: all of it is older than the frame.
+        let (front, full) = (drm.chain.front, drm.full(&d.frame));
+        drm.chain.failed(front, full);
     }
 }
 
-fn drm_flush(d: &Display, drm: &mut Drm, x: u32, y: u32, w: u32, h: u32) {
-    // The back buffer is written only once the flip to it before has completed: writing a buffer the panel still
-    // scans tears, and a second PAGE_FLIP before the first's vblank is refused (EBUSY). Until 2026-11-27 the code
-    // asked for no event and waited for nothing, so the first EBUSY (two flushes inside one vblank: the boot console's
-    // ticks, the guest's first frames) turned flipping off for good and left only DIRTYFB, written into the buffer the
-    // panel showed. A command-mode panel (the S24 Ultra's) is sent a frame only by a commit, and DIRTYFB makes none
-    // on a driver without a dirty hook [I: a guess for Qualcomm's SDE, not checked on the phone]: the panel kept the
-    // zeroed first buffer, black while iOS ran (the owner's display=drm boots, reported 2026-11-27).
-    if drm.flip_pending {
-        drm_wait_flip(drm);
-    }
-    let now = (x, y, w, h);
-    if drm.present == Present::Dirty {
-        let front = drm.front;
-        drm_copy(d, drm, front, now);
-        drm_dirty(d, drm, front, now);
-    } else {
-        // The back buffer is a frame behind: this frame's damage and the frame before's.
-        let (px, py, pw, ph) = drm.prev_dirty;
-        let union = if pw > 0 && ph > 0 {
-            let (nx, ny) = (x.min(px), y.min(py));
-            let (nx2, ny2) = ((x + w).max(px + pw), (y + h).max(py + ph));
-            (nx, ny, nx2 - nx, ny2 - ny)
-        } else {
-            now
-        };
-        let target = 1 - drm.front;
-        drm_copy(d, drm, target, union);
-        if drm_present(drm, target) {
-            drm.front = target;
-            drm.prev_dirty = now;
-        } else {
-            // Stepped down to one buffer: the whole frame into the one the panel scans.
-            let front = drm.front;
-            let all = (0, 0, d.frame.width, d.frame.height);
-            drm_copy(d, drm, front, all);
-            drm_dirty(d, drm, front, all);
+/// A flip in flight past FLIP_WAIT_MS (its event lost) is taken as done; the frame that waited for it is dropped (a
+/// newer one is being written). With the drm lock held.
+fn drm_take_overdue(drm: &mut Drm) {
+    if drm.chain.overdue(now_us()) {
+        drm.late += 1;
+        if drm.chain.flip_done().is_some() {
+            drm.chain.replaced += 1;
         }
     }
+}
+
+/// The rectangle clipped to the frame.
+fn clip_to(f: &Frame, (x, y, w, h): Rect) -> Rect {
+    let (x, y) = (x.min(f.width), y.min(f.height));
+    (x, y, w.min(f.width - x), h.min(f.height - y))
+}
+
+/// Writes a frame into the panel's next buffer with `write(view, rect)` and puts it on the panel. `rect` is what of that
+/// buffer is older than the frame (this frame's `damage` and whatever it missed while the other buffers were written),
+/// in the frame's coordinates; `view` is the buffer as a frame of the guest frame's size. False: the copy failed.
+fn drm_frame(d: &Display, m: &Mutex<Drm>, damage: Rect, write: &mut dyn FnMut(&Frame, Rect) -> bool) -> bool {
+    let _writer = d.drm_write.lock().unwrap_or_else(|e| e.into_inner());
+    let mut drm = lock_drm(m);
+    drm.chain.damage(damage);
+    if drm.present == Present::Dirty {
+        let front = drm.chain.front;
+        let r = clip_to(&d.frame, std::mem::take(&mut drm.chain.stale[front]));
+        let Some(view) = drm.view(&d.frame, front) else { return false };
+        let ok = write(&view, r);
+        if ok {
+            drm_dirty(d, &drm, front, r);
+            drm_note(&mut drm);
+        } else {
+            let full = drm.full(&d.frame);
+            drm.chain.failed(front, full);
+        }
+        return ok;
+    }
+    drm_take_overdue(&mut drm);
+    let mut waited = false;
+    let (b, r) = loop {
+        if let Some(x) = drm.chain.begin() {
+            break x;
+        }
+        // Two buffers: one on the panel, the other the target of the flip in flight; its event frees one.
+        waited = true;
+        let left = FLIP_WAIT_MS as i64 * 1000 - (now_us() - drm.chain.pending_since_us);
+        if left <= 0 || drm.chain.pending.is_none() {
+            drm.late += 1;
+            drm.chain.flip_done();
+            continue;
+        }
+        drm = d
+            .drm_flipped
+            .wait_timeout(drm, std::time::Duration::from_micros(left as u64))
+            .unwrap_or_else(|e| e.into_inner())
+            .0;
+    };
+    drm.waited += waited as u64;
+    let Some(view) = drm.view(&d.frame, b) else { return false };
+    drop(drm);
+    // The copy runs without the lock: the flip thread flips the frame before this one meanwhile.
+    let ok = write(&view, clip_to(&d.frame, r));
+    let mut drm = lock_drm(m);
+    if !ok {
+        let full = drm.full(&d.frame);
+        drm.chain.failed(b, full);
+        return false;
+    }
+    drm_take_overdue(&mut drm);
+    if let Some(b) = drm.chain.written(b) {
+        drm_show(d, &mut drm, b);
+    }
+    drm_note(&mut drm);
+    true
+}
+
+/// A frame shown; the 10 s line.
+fn drm_note(drm: &mut Drm) {
     drm.shown += 1;
     let t = now_us();
     if t - drm.last_note_us >= 10_000_000 {
         logi!(
-            "display: 10 s: KMS {} frames by {}, {} flips later than {} ms",
+            "display: 10 s: KMS {} frames by {}, {} flipped by the flip thread at a later vblank, {} replaced before \
+             their flip, {} copies waited for a buffer, {} flips later than {} ms",
             drm.shown,
             match drm.present {
                 Present::Flip => "page flip",
                 Present::SetCrtc => "mode set",
                 Present::Dirty => "DIRTYFB",
             },
+            drm.flipped_later,
+            drm.chain.replaced,
+            drm.waited,
             drm.late,
             FLIP_WAIT_MS
         );
-        (drm.shown, drm.late, drm.last_note_us) = (0, 0, t);
+        (drm.shown, drm.late, drm.flipped_later, drm.waited, drm.chain.replaced, drm.last_note_us) = (0, 0, 0, 0, 0, t);
     }
 }
 
-/// DIRTYFB of the rectangle of buffer `target` (the frame's coordinates, centred as drm_copy places them).
+/// The flip thread: reads the flip events from the DRM descriptor (it alone reads them) and flips the frame written
+/// while the flip before it was in flight. Sleeps in poll(2) on the descriptor (and on drm_wake, which arms the
+/// FLIP_WAIT_MS deadline of a commit that sends no event); it never wakes on a timer while no flip is in flight.
+fn drm_events_main() {
+    let Some(d) = DISPLAY.get() else { return };
+    let Some(m) = d.drm.as_ref() else { return };
+    let fd = lock_drm(m).fd.as_raw_fd();
+    let wake = d.drm_wake.as_ref().map_or(-1, |w| w.as_raw_fd());
+    loop {
+        let timeout = {
+            let drm = lock_drm(m);
+            if drm.chain.pending.is_some() && drm.present == Present::Flip {
+                let left = FLIP_WAIT_MS as i64 * 1000 - (now_us() - drm.chain.pending_since_us);
+                ((left + 999) / 1000).clamp(0, FLIP_WAIT_MS as i64) as i32
+            } else {
+                -1
+            }
+        };
+        let mut p = [
+            libc::pollfd { fd, events: libc::POLLIN, revents: 0 },
+            libc::pollfd { fd: wake, events: libc::POLLIN, revents: 0 },
+        ];
+        // SAFETY: our pollfds (a negative fd is ignored by poll).
+        let n = unsafe { libc::poll(p.as_mut_ptr(), 2, timeout) };
+        if n < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            loge!(
+                "display: the flip thread's poll: {}; flips wait for the next frame from now on",
+                std::io::Error::last_os_error()
+            );
+            return;
+        }
+        if p[0].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            loge!("display: the DRM descriptor reports an error ({:#x}): the flip thread ends", p[0].revents);
+            return;
+        }
+        if p[1].revents & libc::POLLIN != 0 {
+            let mut v = 0u64;
+            // SAFETY: reads 8 bytes into ours from our eventfd.
+            unsafe { libc::read(wake, (&mut v as *mut u64).cast(), 8) };
+        }
+        let mut done = false;
+        if p[0].revents & libc::POLLIN != 0 {
+            let mut buf = [0u8; 1024];
+            // SAFETY: reads into the buffer, at most its length.
+            let got = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+            done = got > 0 && kms::flip_completed(&buf[..got as usize]);
+        }
+        let mut drm = lock_drm(m);
+        if !done && drm.chain.overdue(now_us()) {
+            drm.late += 1;
+            done = true;
+        }
+        if done && drm.chain.pending.is_some() {
+            if let Some(next) = drm.chain.flip_done() {
+                drm.flipped_later += 1;
+                drm_show(d, &mut drm, next);
+            }
+            d.drm_flipped.notify_all();
+        }
+    }
+}
+
+/// Rows of the frame's rectangle `r` from `src` (xnuhost's frame: B,G,R,X 8-bit or half floats) into `dst` (a
+/// buffer's view, B,G,R,X 8-bit), at the same coordinates.
+fn copy_frame(src: &Frame, dst: &Frame, (x, y, w, h): Rect) -> bool {
+    let (x, y, w, h) = clip_to(dst, clip_to(src, (x, y, w, h)));
+    // SAFETY: both frames are mapped for the process's life; the rows below lie inside them (clipped above).
+    let (from, to) = unsafe {
+        (std::slice::from_raw_parts(src.as_ptr(), src.len), std::slice::from_raw_parts_mut(dst.as_ptr(), dst.len))
+    };
+    for row in y..y + h {
+        let s = row as usize * src.stride as usize + x as usize * src.bpp as usize;
+        let t = row as usize * dst.stride as usize + x as usize * 4;
+        let n = w as usize;
+        if src.format == pixels::RGBA16F {
+            pixels::rgba16f_to_8(&mut to[t..t + n * 4], &from[s..s + n * 8], false);
+        } else {
+            to[t..t + n * 4].copy_from_slice(&from[s..s + n * 4]);
+        }
+    }
+    true
+}
+
+/// drm: a frame of the guest's, written by `write(view, rect)` straight into the panel's next buffer (B,G,R,X 8-bit,
+/// `view` of the guest frame's size; `rect`: what to copy, `damage` and what that buffer missed) and put on the panel.
+/// Some(whether the copy went); None: not the DRM back end, or the frame does not fit its mode, and the caller copies
+/// into xnuhost's frame and calls flush. One copy a frame (until 2026-11-28 two: into xnuhost's frame, then into the
+/// buffer).
+pub fn scanout_write(damage: Rect, write: &mut dyn FnMut(&Frame, Rect) -> bool) -> Option<bool> {
+    let d = DISPLAY.get()?;
+    let m = d.drm.as_ref()?;
+    lock_drm(m).view(&d.frame, 0)?;
+    crate::input::frame_shown(); // input.rs's touch-to-frame measurement
+    Some(drm_frame(d, m, damage, write))
+}
+
+/// A blob scanout's frame for the DRM copy thread: the guest's segments (rows of `stride` bytes from byte `offset`, the
+/// scanout `size`), the changed rectangle, and the answer that releases the guest's flush.
+struct DrmJob {
+    entries: Vec<Entry>,
+    offset: u64,
+    stride: u32,
+    size: (u32, u32),
+    rect: Rect,
+    seq: u64,
+    done: Done,
+}
+
+/// drm: hands a B,G,R,X/A blob scanout's frame to the copy thread (2026-11-28), as a direct display helper is handed
+/// one: the GPU device's command lane holds the flush's answer and goes on with the next commands (the render server's
+/// submissions) while the thread copies the rows from the guest's pages into the panel's next buffer and answers
+/// `done(seq)`. Until then the lane copied the frame itself, under the device's lock, and every command behind the
+/// flush waited for it. A frame posted while the one before is not taken yet replaces it, its damage kept (the newer
+/// seq answers both). False: a segment is not guest RAM, the caller copies the frame.
+#[allow(clippy::too_many_arguments)]
+fn drm_post(
+    d: &Display,
+    entries: &[Entry],
+    offset: u64,
+    stride: u32,
+    size: (u32, u32),
+    [x, y, w, h]: [u32; 4],
+    seq: u64,
+    done: &Done,
+) -> bool {
+    if entries.iter().any(|e| xh_core::hooks::ram(e.addr, e.length as u64).is_none()) {
+        return false;
+    }
+    let mut job = d.drm_job.lock().unwrap_or_else(|e| e.into_inner());
+    let rect = job.as_ref().map_or((x, y, w, h), |old| rect_union(old.rect, (x, y, w, h)));
+    *job = Some(DrmJob { entries: entries.to_vec(), offset, stride, size, rect, seq, done: done.clone() });
+    d.drm_job_posted.notify_one();
+    true
+}
+
+/// The DRM copy thread: takes the posted frame (asleep on drm_job_posted while there is none), copies it into the
+/// panel's next buffer and puts that on the panel (drm_frame), answers the guest's flush. The copy's 10 s line is the
+/// GPU device's own (`display: 10 s: flushes N, copy mean X us max Y us (Z MiB)`).
+fn drm_copy_main() {
+    let Some(d) = DISPLAY.get() else { return };
+    let Some(m) = d.drm.as_ref() else { return };
+    let mut note = crate::virtio_gpu::FlushNote::default();
+    loop {
+        let job = {
+            let mut q = d.drm_job.lock().unwrap_or_else(|e| e.into_inner());
+            loop {
+                if let Some(j) = q.take() {
+                    break j;
+                }
+                q = d.drm_job_posted.wait(q).unwrap_or_else(|e| e.into_inner());
+            }
+        };
+        let t0 = now_us();
+        let mut bytes = 0u64;
+        drm_frame(d, m, job.rect, &mut |view, (x, y, w, h)| {
+            bytes = w as u64 * h as u64 * 4;
+            crate::virtio_gpu::blob_rows_bgrx(&job.entries, job.offset, job.stride, job.size, [x, y, w, h], view)
+        });
+        note.note((now_us() - t0) as u64, bytes);
+        (job.done)(job.seq);
+    }
+}
+
+/// DIRTYFB of the rectangle of buffer `target` (the frame's coordinates, centred as Drm::view places them).
 fn drm_dirty(d: &Display, drm: &Drm, target: usize, (x, y, w, h): (u32, u32, u32, u32)) {
     let f = &d.frame;
     let ox = if drm.w > f.width { (drm.w - f.width) / 2 } else { 0 };
@@ -1293,7 +1642,17 @@ pub fn init(c: &Config) -> Result<(u32, u32, u32), Failed> {
         direct_enabled: c.display_direct,
         serial_post: c.display_post_serial,
         present_ahb: c.display_present_ahb,
+        drm_wake: drm.as_ref().and_then(|_| {
+            // SAFETY: a new eventfd of ours, owned from here on.
+            let fd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
+            // SAFETY: fd is open and ours alone.
+            (fd >= 0).then(|| unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd) })
+        }),
         drm: drm.map(Mutex::new),
+        drm_flipped: Condvar::new(),
+        drm_write: Mutex::new(()),
+        drm_job: Mutex::new(None),
+        drm_job_posted: Condvar::new(),
         client: Mutex::new(Client {
             fd: None,
             gen: 0,
@@ -1312,6 +1671,14 @@ pub fn init(c: &Config) -> Result<(u32, u32, u32), Failed> {
         return Err(Failed);
     }
     let d = DISPLAY.get().unwrap();
+    if d.drm.is_some() {
+        for (name, main) in [("xh-drm-flip", drm_events_main as fn()), ("xh-drm-copy", drm_copy_main)] {
+            if std::thread::Builder::new().name(name.into()).spawn(main).is_err() {
+                loge!("display: thread {}: {}", name, std::io::Error::last_os_error());
+                return Err(Failed);
+            }
+        }
+    }
     if backend == DisplayBackend::Shm {
         if let Some(fd) = first_client.take() {
             helper_attach(d, fd, first_flags);
@@ -1375,8 +1742,9 @@ static DROPPED: AtomicU32 = AtomicU32::new(0);
 pub fn flush(x: u32, y: u32, w: u32, h: u32) {
     crate::input::frame_shown(); // input.rs's touch-to-frame measurement
     let Some(d) = DISPLAY.get() else { return };
-    if let Some(drm) = d.drm.as_ref() {
-        drm_flush(d, &mut drm.lock().unwrap_or_else(|e| e.into_inner()), x, y, w, h);
+    if let Some(m) = d.drm.as_ref() {
+        let frame = d.frame;
+        drm_frame(d, m, (x, y, w, h), &mut |view, r| copy_frame(&frame, view, r));
     }
     if d.backend != DisplayBackend::Shm {
         return;

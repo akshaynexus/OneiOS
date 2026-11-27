@@ -39,6 +39,10 @@ struct FakeState {
     post_rect: [u32; 4],
     post_seq: u64,
     post_done: Option<Done>,
+    /// the DRM back end's next buffer (16 pixels a row), when the display has one: scanout_write writes it
+    kms: Option<Box<[u8]>>,
+    kms_damage: [u32; 4],
+    kms_writes: u32,
 }
 
 #[derive(Default)]
@@ -76,6 +80,20 @@ impl Board for FakeBoard {
     }
     fn direct(&self) -> bool {
         self.st().direct
+    }
+    fn scanout_write(&self, damage: [u32; 4], write: &mut dyn FnMut(&Frame, [u32; 4]) -> bool) -> Option<bool> {
+        let view = {
+            let mut s = self.st();
+            let f = s.frame?;
+            let buf = s.kms.as_mut()?;
+            // SAFETY: the buffer is kept in the fake for the test's life.
+            let view =
+                unsafe { Frame::new(NonNull::new(buf.as_mut_ptr()).unwrap(), buf.len(), f.width, f.height, 64, BGRX8) };
+            (s.kms_damage, s.kms_writes) = (damage, s.kms_writes + 1);
+            view
+        };
+        // a buffer that was never written: all of the frame (display.rs's Chain says what it missed)
+        Some(write(&view, [0, 0, view.width, view.height]))
     }
     fn post(
         &self,
@@ -860,6 +878,48 @@ fn three_d() {
             && board.pixels()[3 * 32 + 3 * 4] == 33
     );
     (board.st().direct, board.st().refuse) = (false, false);
+    {
+        // The DRM back end (2026-11-28): the rows go from the guest's pages straight into the panel's buffer, xnuhost's
+        // frame is not written and flush is not called (one copy a frame).
+        board.st().kms = Some(vec![0u8; 64 * 4].into_boxed_slice());
+        board.pixels().fill(0);
+        let flushes = board.st().flushes;
+        g.clear();
+        for (i, v) in [(0, 0x104), (6, 1), (7, 2), (8, 3), (9, 2), (10, 20)] {
+            g.cmd(i, v); // flush (1,2) 3x2
+        }
+        assert!(g.g(12, 0, 24) == 1 && g.resp(0) == 0x1100);
+        let s = board.st();
+        assert!(s.kms_writes == 1 && s.kms_damage == [1, 2, 3, 2] && s.flushes == flushes);
+        let k = s.kms.as_ref().unwrap();
+        for row in 0..4usize {
+            for x in 0..8usize {
+                assert_eq!(k[row * 64 + x * 4], (row * 10 + x) as u8, "row {} x {}", row, x);
+                // B = the guest's index
+            }
+            assert_eq!(k[row * 64 + 8 * 4], 0); // past the frame's width: untouched
+        }
+        drop(s);
+        assert!(board.pixels().iter().all(|&b| b == 0));
+        board.st().kms = None;
+        // display.rs's DRM copy thread copies a posted frame with blob_rows_bgrx: the same rows, clipped to the scanout
+        // and to the buffer
+        let mut buf = vec![0u8; 64 * 4];
+        // SAFETY: buf lives to the end of the block.
+        let view = unsafe { Frame::new(NonNull::new(buf.as_mut_ptr()).unwrap(), buf.len(), 8, 4, 64, BGRX8) };
+        let seg = [Entry { addr: g.pa(0x40000), length: 0x1000, pad: 0 }];
+        assert!(blob_rows_bgrx(&seg, 0, 40, (8, 4), [1, 1, 100, 100], &view));
+        assert!(buf[64 + 4] == 11 && buf[3 * 64 + 7 * 4] == 37 && buf[4] == 0 && buf[64] == 0);
+        // a blob shorter than the scanout's rows: refused, nothing read past it
+        assert!(!blob_rows_bgrx(
+            &[Entry { addr: g.pa(0x40000), length: 64, pad: 0 }],
+            0,
+            40,
+            (8, 4),
+            [0, 0, 8, 4],
+            &view
+        ));
+    }
     {
         // Half floats (display-format=rgba16f, oneios-display-wide=1): a 'RGhA' scanout's rows go to a half-float
         // display as they are, and a B,G,R,X one is decoded to linear light; onto the 8-bit display half floats are

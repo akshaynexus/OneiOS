@@ -266,6 +266,12 @@ pub trait Board: Send + Sync {
     fn frame(&self) -> Option<Frame>;
     /// The rectangle changed (already copied into the frame).
     fn flush(&self, x: u32, y: u32, w: u32, h: u32);
+    /// The DRM back end: `write(view, rect)` copies the frame's rectangle straight into the panel's next buffer (`view`:
+    /// B,G,R,X 8-bit, the frame's size), which is then put on the panel (display.rs scanout_write). Some(whether the
+    /// copy went); None: no such buffer, the caller copies into the frame and calls flush.
+    fn scanout_write(&self, _damage: [u32; 4], _write: &mut dyn FnMut(&Frame, [u32; 4]) -> bool) -> Option<bool> {
+        None
+    }
     /// Whether a helper that copies frames from guest RAM itself is connected and has the RAM.
     fn direct(&self) -> bool;
     /// Hands the helper a frame (display.rs post); false: not posted, the caller copies it.
@@ -300,6 +306,10 @@ impl Board for Machine {
     }
     fn direct(&self) -> bool {
         crate::display::direct()
+    }
+    fn scanout_write(&self, damage: [u32; 4], write: &mut dyn FnMut(&Frame, [u32; 4]) -> bool) -> Option<bool> {
+        let [x, y, w, h] = damage;
+        crate::display::scanout_write((x, y, w, h), &mut |view, (x, y, w, h)| write(view, [x, y, w, h]))
     }
     fn post(
         &self,
@@ -369,14 +379,61 @@ struct Post {
     seq: u64,
 }
 
-/// The copy of each scanout flush, one log line per 10 s while frames come.
+/// The copy of each scanout flush, one log line per 10 s while frames come: `display: 10 s: flushes N, copy mean X us
+/// max Y us (Z MiB)` (also display.rs's DRM copy thread's, the same line).
 #[derive(Default)]
-struct FlushNote {
+pub(crate) struct FlushNote {
     since: u64,
     n: u64,
     sum: u64,
     max: u64,
     total: u64,
+}
+
+impl FlushNote {
+    /// One copy of `bytes` that took `took` us.
+    pub(crate) fn note(&mut self, took: u64, bytes: u64) {
+        let now = time::monotonic_ns() / 1000;
+        if self.since == 0 {
+            self.since = now;
+        }
+        self.n += 1;
+        self.sum += took;
+        self.total += bytes;
+        self.max = self.max.max(took);
+        if now - self.since >= 10_000_000 {
+            logi!(
+                "display: {} s: flushes {}, copy mean {} us max {} us ({} MiB)",
+                (now - self.since) / 1_000_000,
+                self.n,
+                self.sum / self.n,
+                self.max,
+                self.total >> 20
+            );
+            *self = FlushNote { since: now, ..FlushNote::default() };
+        }
+    }
+}
+
+/// A B,G,R,X/A blob scanout's rectangle `r` (x, y, w, h) from the guest's pages (`entries`; rows of `stride` bytes
+/// from byte `offset`; the scanout `width` x `height`) into `dst` (B,G,R,X 8-bit) at the same coordinates, clipped to
+/// both. For display.rs's DRM copy thread. False: a segment is not guest RAM, or the blob is shorter than the rows.
+pub(crate) fn blob_rows_bgrx(
+    entries: &[Entry],
+    offset: u64,
+    stride: u32,
+    (width, height): (u32, u32),
+    r: [u32; 4],
+    dst: &Frame,
+) -> bool {
+    let Ok(offset) = u32::try_from(offset) else { return false };
+    let scan = Scan { width, height, format: FMT_BGRX, stride, offset };
+    let rect = Rect { x: r[0], y: r[1], w: r[2], h: r[3] };
+    let (w, h) = rect.clip(width.min(dst.width), height.min(dst.height));
+    if w == 0 || h == 0 {
+        return true;
+    }
+    Gpu::rows_into(&scan, entries, &Rect { x: rect.x, y: rect.y, w, h }, dst, BGRX8) == RESP_OK_NODATA
 }
 
 /// What the command lanes share (C: everything `cmd` guards).
@@ -524,26 +581,7 @@ impl Core {
     /// us max Y us (Z MiB)`. The device's one thread does it, so the guest's next commands (a frame's submissions, its
     /// blobs) wait behind it.
     fn flush_note(&mut self, took: u64, bytes: u64) {
-        let now = time::monotonic_ns() / 1000;
-        let f = &mut self.flush_note;
-        if f.since == 0 {
-            f.since = now;
-        }
-        f.n += 1;
-        f.sum += took;
-        f.total += bytes;
-        f.max = f.max.max(took);
-        if now - f.since >= 10_000_000 {
-            logi!(
-                "display: {} s: flushes {}, copy mean {} us max {} us ({} MiB)",
-                (now - f.since) / 1_000_000,
-                f.n,
-                f.sum / f.n,
-                f.max,
-                f.total >> 20
-            );
-            *f = FlushNote { since: now, ..FlushNote::default() };
-        }
+        self.flush_note.note(took, bytes);
     }
 }
 
@@ -682,19 +720,54 @@ impl Gpu {
             self.frame_shown(c, entries, true);
             return RESP_OK_NODATA;
         }
-        // Rows straight from the guest's pages into the display's buffer, the blob's segments walked once for the whole
-        // rectangle: rows lie at rising offsets. (Each row used to be read into a buffer of its own, the segment list
-        // searched from its start for every row: 3120 rows of a 1440x3120 frame over about 1100 segments of 16 KiB
-        // pages.) A half-float scanout is 8 bytes a pixel in the guest; the display's pixels are d.format's.
-        let mut status = RESP_OK_NODATA;
         let t0 = time::monotonic_ns() / 1000;
-        let (gbpp, dformat) = (format_bpp(c.scan.format) as u64, self.display_format());
+        let gbpp = format_bpp(c.scan.format) as u64;
+        // The DRM back end: the rows go straight into the panel's next buffer (one copy a frame, not two: until
+        // 2026-11-28 into xnuhost's frame, then from it into the buffer, and the flush waited for the flip before it).
+        // The rectangle copied is the damage plus what that buffer missed; clipped to the scanout.
+        let scan = c.scan;
+        let mut copied = 0u64;
+        let mut status = RESP_OK_NODATA;
+        let drm = self.board.scanout_write([rect.x, rect.y, w, hgt], &mut |view, [x, y, rw, rh]| {
+            let r = Rect { x, y, w: rw, h: rh };
+            let (rw, rh) = r.clip(scan.width.min(view.width), scan.height.min(view.height));
+            if rw == 0 || rh == 0 {
+                return true;
+            }
+            copied = rw as u64 * rh as u64 * gbpp;
+            status = Gpu::rows_into(&scan, entries, &Rect { x, y, w: rw, h: rh }, view, BGRX8);
+            status == RESP_OK_NODATA
+        });
+        if drm.is_some() {
+            c.flush_note(time::monotonic_ns() / 1000 - t0, copied);
+            if status == RESP_OK_NODATA {
+                self.frame_shown(c, entries, true); // xnuhost's frame was not written: the guest's pages say
+            }
+            return status;
+        }
+        let status = Gpu::rows_into(&c.scan, entries, &clipped, d, self.display_format());
+        c.flush_note(time::monotonic_ns() / 1000 - t0, w as u64 * hgt as u64 * gbpp);
+        if status == RESP_OK_NODATA {
+            self.frame_shown(c, entries, false); // first: session/ready before the helper is told of the frame
+            self.board.flush(rect.x, rect.y, w, hgt);
+        }
+        status
+    }
+
+    /// The rows of a blob scanout's rectangle `rect` (inside the scanout and `d`) from the guest's pages into `d`, in
+    /// `dformat`, the blob's segments walked once for the whole rectangle: rows lie at rising offsets. (Each row used to
+    /// be read into a buffer of its own, the segment list searched from its start for every row: 3120 rows of a
+    /// 1440x3120 frame over about 1100 segments of 16 KiB pages.) A half-float scanout is 8 bytes a pixel in the guest.
+    fn rows_into(scan: &Scan, entries: &[Entry], rect: &Rect, d: &Frame, dformat: u32) -> u32 {
+        let (w, hgt) = (rect.w, rect.h);
+        let gbpp = format_bpp(scan.format) as u64;
         let dbpp = pixels::bpp(dformat) as usize;
-        // SAFETY: the device's lanes (one at a time, under `core`) are the frame's only writer.
+        // SAFETY: the device's lanes (one at a time, under `core`) are the frame's only writer; a DRM buffer's view is
+        // written only by the writer display.rs gave it to.
         let px = unsafe { d.bytes_mut() };
         let (mut seg, mut seg_start) = (0usize, 0u64); // the blob offset at which entries[seg] begins
-        'rows: for y in 0..hgt {
-            let mut at = c.scan.offset as u64 + (rect.y + y) as u64 * c.scan.stride as u64 + rect.x as u64 * gbpp;
+        for y in 0..hgt {
+            let mut at = scan.offset as u64 + (rect.y + y) as u64 * scan.stride as u64 + rect.x as u64 * gbpp;
             let mut left = w as u64 * gbpp;
             let mut to = (rect.y + y) as usize * d.stride as usize + rect.x as usize * dbpp;
             let mut carry = [0u8; 8]; // a pixel split between two segments
@@ -708,14 +781,12 @@ impl Gpu {
                     seg += 1;
                 }
                 if seg >= entries.len() {
-                    status = RESP_ERR_INVALID_PARAMETER;
-                    break 'rows;
+                    return RESP_ERR_INVALID_PARAMETER;
                 }
                 let inside = at - seg_start;
                 let n = (entries[seg].length as u64 - inside).min(left);
                 let Some(from) = guest(entries[seg].addr + inside, n).filter(|_| n & 3 == 0) else {
-                    status = RESP_ERR_INVALID_PARAMETER;
-                    break 'rows;
+                    return RESP_ERR_INVALID_PARAMETER;
                 };
                 let mut off = 0usize;
                 if have != 0 {
@@ -723,14 +794,14 @@ impl Gpu {
                     carry[have..have + off].copy_from_slice(&from[..off]);
                     have += off;
                     if have == gbpp as usize {
-                        convert_to(&mut px[to..], dformat, &carry, c.scan.format, 1);
+                        convert_to(&mut px[to..], dformat, &carry, scan.format, 1);
                         to += dbpp;
                         have = 0;
                     }
                 }
                 let whole = (n as usize - off) / gbpp as usize;
                 let rest = n as usize - off - whole * gbpp as usize;
-                convert_to(&mut px[to..], dformat, &from[off..], c.scan.format, whole);
+                convert_to(&mut px[to..], dformat, &from[off..], scan.format, whole);
                 to += whole * dbpp;
                 if rest != 0 {
                     let from_rest = off + whole * gbpp as usize;
@@ -741,12 +812,7 @@ impl Gpu {
                 left -= n;
             }
         }
-        c.flush_note(time::monotonic_ns() / 1000 - t0, w as u64 * hgt as u64 * gbpp);
-        if status == RESP_OK_NODATA {
-            self.frame_shown(c, entries, false); // first: session/ready before the helper is told of the frame
-            self.board.flush(rect.x, rect.y, w, hgt);
-        }
-        status
+        RESP_OK_NODATA
     }
 
     // ---- fences ----------------------------------------------------------------------------------------------------
