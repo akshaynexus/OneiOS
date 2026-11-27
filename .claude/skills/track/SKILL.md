@@ -22,30 +22,34 @@ and what is broken, each with a detail and a source. Args: `OWNER/REPO DEVICE-SL
 - **Ask the maintainer when unsure**, and before you change a state that the maintainer set by hand (the detail says
   "(OneiOS maintainer, ...)" or "owner").
 - No Apple files and no screenshots with personal data in `media-upload`.
-- **Ask before every image or video** (`media-upload`, `--photo`): show the file and the caption, post on a yes only,
-  whatever the update setting is.
+- **Ask before every image or video upload** (`media-upload`, `--photo`, or `update` with files): show the file(s) and
+  the caption or text, post on a yes only, whatever the update setting is.
 - **Ask once how updates should go** (the setup below) and follow the answer: `auto` (update and report), `ask` (show
-  the exact changes first; the default) or `off` (only list what could change); the same for release posts. Kept per
-  repo and phone in `~/.config/iosonand/agent-prefs.json` (never committed):
+  the exact changes first; the default) or `off` (only list what could change); the same for release updates (`update
+  SLUG --text "..."`). Kept per repo and phone in `~/.config/iosonand/agent-prefs.json` (never committed):
   `{"akshaynexus/OneiOS s24-ultra": {"updates": "ask", "posts": "ask", "asked": "DATE"}}`. No entry: ask first.
 
-The generic version of this skill, for any port and any agent (to give to iOSOnAnd and to forks):
-`skills/iosonand/SKILL.md`.
+The generic version of this skill, for any port and any agent (canonical copy served at
+`https://hackios.appaiproxy.com/SKILL.md`): `skills/iosonand/SKILL.md`.
 
 ## First time: sign in and claim
 
 ```sh
-d=$(mktemp -d) && cd "$d"
-curl -fsSLo cli.mjs https://hackios.appaiproxy.com/cli.mjs && shasum -a 256 cli.mjs   # then read it
+mkdir -p ~/.local/share/iosonand
+curl -fsSLo ~/.local/share/iosonand/cli.mjs https://hackios.appaiproxy.com/cli.mjs
+sha256sum ~/.local/share/iosonand/cli.mjs             # then read it
 export TRACKER_URL=https://hackios.appaiproxy.com
-node cli.mjs login                                  # gist proof (needs gh, logged in)
-node cli.mjs repo-claim OWNER/REPO --device SLUG    # approved at once when GitHub shows you as the owner
+node ~/.local/share/iosonand/cli.mjs login            # gist proof (needs gh, logged in)
+node ~/.local/share/iosonand/cli.mjs repo-claim OWNER/REPO --device SLUG  # approved at once for your own repo
 ```
 
-If `repo-claim` prints a verification code: write the code alone to `.iosonand-verify` on the repo's default branch,
-commit it with a pathspec, push, run `node cli.mjs repo-verify <claim id>`, then delete the file in a second commit.
-A phone the tracker does not list: `node cli.mjs repo-add OWNER/REPO --device SLUG` (an admin adds new devices;
-`node cli.mjs claim-add SLUG --note "..."` asks for one).
+If `repo-claim` prints a verification code (for a GitHub organization repo you belong to): never commit it to `main`;
+write the code alone to `.iosonand-verify` on a throwaway orphan `iosonand-verify` branch (`git switch --orphan
+iosonand-verify`, commit, `git push origin iosonand-verify`, `git switch -`), run `node cli.mjs repo-verify <claim id>`,
+then delete the branch (`git push origin --delete iosonand-verify && git branch -D iosonand-verify`).
+A phone the tracker does not list yet: look it up with `node cli.mjs catalog "<name or codename>"`, then
+`node cli.mjs repo-add OWNER/REPO --new-device "Phone name" --model <codename> --soc "<chip>"` (your own repo only;
+`node cli.mjs claim-add SLUG --note "..."` asks an admin without a repo).
 
 ## Record the status
 
@@ -83,7 +87,10 @@ node cli.mjs gpu-issue-add SLUG "symptom" --kind white-widgets|black-ui|gpu-faul
 node cli.mjs gpu-issue-set SLUG ID --state fixed --fix "..."               # when a boot proves the fix
 node cli.mjs gpu-issues SLUG                        # the known GPU issues (no login)
 node cli.mjs fork-sync --repo OWNER/REPO --device SLUG --best-result "..." # the repo's best result on that phone
-node cli.mjs post-add --title "..." --link URL [--published DATE] [--note "..."]   # the updates feed: a release
+node cli.mjs update SLUG --text "OneiOS vX.Y.Z: ... (https://github.com/akshaynexus/OneiOS/releases/tag/vX.Y.Z)"
+                                                    # text progress/release update on the phone's page
+node cli.mjs post-add --title "..." --link "https://www.reddit.com/r/..." [--note "..."]
+                                                    # Reddit links ONLY (non-Reddit URLs answer 400)
 ```
 
 ## What to record, and when
@@ -93,9 +100,9 @@ node cli.mjs post-add --title "..." --link URL [--published DATE] [--note "..."]
   fault it found or fixed (`gpu-issue-add` / `gpu-issue-set`). The source is a pushed commit or doc that records the
   boot (`docs/releases.md`'s row of that release says what it showed), at a commit (`blob/<sha>/...`), so the link
   keeps saying what the detail says.
-- **A release** (`scripts/release/release.sh` published it): `post-add --title "OneiOS vX.Y.Z: <its fixes>" --link
-  <the release page>` once, after its row in `docs/releases.md` is pushed. A release that was not booted changes no
-  state; its post says "not booted on a phone yet".
+- **A release** (`scripts/release/release.sh` published it): `update s24-ultra --text "OneiOS vX.Y.Z: <its fixes>
+  (<the release page>)"` once, after its row in `docs/releases.md` is pushed (use `post-add` only for Reddit posts).
+  A release that was not booted changes no state; its update says "not booted on a phone yet".
 - **A new best result** on the phone (the Home Screen on a new iOS build, a new area working): `fork-sync --repo
   akshaynexus/OneiOS --device s24-ultra --best-result "..."`.
 - Each detail: what was seen, the phone (SM-S928B), the release and the date, and the log line that shows it; "not
