@@ -189,6 +189,7 @@ struct DeviceState {
 	IOService *device;
 	IORegistryEntry *driver;
 	bool published;
+	unsigned lockKeyDelaySets;      // how often LockKeyDelay was put into the event service's properties (setLockKeyDelay)
 	unsigned clients;
 	uint64_t reports;
 	unsigned long long queued;
@@ -309,6 +310,42 @@ setQueueSize(IORegistryEntry *driver, const char *what)
 	    open ? "; already open: theirs stays 16 KiB until they open again" : "");
 }
 
+// The power key's 150 ms (YumikoHayamato/OneiOS b4619f8b). iOS's keyboard service filter (IOHIDKeyboardFilter, in
+// backboardd; read in 24A446's shared cache) holds a Consumer/Power key-down for its "lock key delay" when the HID
+// service conforms to a keyboard (usage page 1, usage 6): IOHIDKeyboardFilter::processLockKeyDelay arms a timer of
+// _lockKeyDelayMS (default 150 ms) unless the service's HIDEventServiceProperties has "LockKeyDelay" = 0. The buttons'
+// device is such a keyboard (1, 6), so every press of power reached SpringBoard 150 ms late; an iPhone's own buttons
+// are Consumer Control and never held. oneios-hid-lock-key-delay=N (ms) sets another value; 150 is iOS's own.
+static uint32_t oneios_hid_lock_key_delay = 0;
+
+static bool
+hasLockKeyDelay(IORegistryEntry *driver)
+{
+	OSObject *have = driver->copyProperty("HIDEventServiceProperties");
+	OSDictionary *properties = OSDynamicCast(OSDictionary, have);
+	OSNumber *delay = properties ? OSDynamicCast(OSNumber, properties->getObject("LockKeyDelay")) : nullptr;
+	const bool there = delay && delay->unsigned32BitValue() == oneios_hid_lock_key_delay;
+	OSSafeReleaseNULL(have);
+	return there;
+}
+
+static void
+setLockKeyDelay(IORegistryEntry *driver)
+{
+	OSObject *have = driver->copyProperty("HIDEventServiceProperties");
+	OSDictionary *old = OSDynamicCast(OSDictionary, have);
+	OSDictionary *properties = old ? OSDictionary::withDictionary(old) : OSDictionary::withCapacity(1);
+	OSNumber *delay = OSNumber::withNumber((unsigned long long)oneios_hid_lock_key_delay, 32);
+	const bool set = properties && delay && properties->setObject("LockKeyDelay", delay) &&
+	    driver->setProperty("HIDEventServiceProperties", properties);
+	OSSafeReleaseNULL(delay);
+	OSSafeReleaseNULL(properties);
+	OSSafeReleaseNULL(have);
+	IOLog("oneios-hid: buttons: LockKeyDelay %u ms %s the event service's HIDEventServiceProperties (iOS's keyboard "
+	    "filter holds a keyboard's power key-down for 150 ms without it)\n", oneios_hid_lock_key_delay,
+	    set ? "published in" : "NOT published in");
+}
+
 // The motion devices' line, every 60 s while the host sends frames: frames and reports since the last line, the SPU channel's
 // opens and commands since the boot. From the touch screen's 1 s tick (no timer of its own).
 static void
@@ -367,6 +404,7 @@ native_hid_live_checkpoint(IOService *device)
 	if (driver && driver != state->driver) {
 		state->driver = driver;
 		state->published = false;
+		state->lockKeyDelaySets = 0;
 		state->clients = 0;
 		IOLog("oneios-hid: %s: event driver %s attached (registry id 0x%llx)\n", what, driver->getMetaClass()->getClassName(),
 		    driver->getRegistryEntryID());
@@ -417,6 +455,11 @@ native_hid_live_checkpoint(IOService *device)
 		}
 		IOLog("oneios-hid: pen: Digitizer/Stylus, Built-In, DisplayIntegrated, MaxHoverHeight, AccurateMaxDigitizerPressureValue "
 		    "published on the event service; edge wrapper %u\n", native_touch_edge_install[0]);
+	}
+	// The buttons' power key is not held back by iOS's keyboard filter (setLockKeyDelay).
+	if (!touch && !pen && state->lockKeyDelaySets < 5 && (!state->lockKeyDelaySets || !hasLockKeyDelay(driver))) {
+		state->lockKeyDelaySets++;
+		setLockKeyDelay(driver);
 	}
 	// The buttons (oneios-hid-buttons-builtin=1; fix-power-key, docs/hardware.md 5). backboardd lists them as
 	// "eventSource: externalKeyboard; primaryUsagePage: 0x1; primaryUsage: 0x6; transport: Virtual" (the PC boot of
@@ -901,6 +944,7 @@ oneios_hid_input_start(void)
 	PE_parse_boot_argn("oneios-hid", &enabled, sizeof(enabled));
 	PE_parse_boot_argn("oneios-hid-log", &oneios_hid_log, sizeof(oneios_hid_log));
 	PE_parse_boot_argn("oneios-hid-buttons-builtin", &oneios_hid_buttons_builtin, sizeof(oneios_hid_buttons_builtin));
+	PE_parse_boot_argn("oneios-hid-lock-key-delay", &oneios_hid_lock_key_delay, sizeof(oneios_hid_lock_key_delay));
 	PE_parse_boot_argn("oneios-hid-queue-kib", &oneios_hid_queue_kib, sizeof(oneios_hid_queue_kib));
 	PE_parse_boot_argn("oneios-pen", &oneios_pen, sizeof(oneios_pen));
 	PE_parse_boot_argn("oneios-motion", &oneios_motion, sizeof(oneios_motion));

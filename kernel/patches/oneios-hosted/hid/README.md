@@ -458,3 +458,13 @@ Read from the session log of the S24 Ultra (xnuhost `b528fd2`): xnuhost took `/d
 11 contacts began, 7 of them at an edge. Whether the lock screen moved in that time was not recorded.
 The personalities and the two positions in the log are built (kernel `xnu.macho` links) and **not run**: no boot
 on the PC since the owner moved all boots to the phone.
+
+## Power key latency (`LockKeyDelay`, 2026-11-27)
+
+Ported from `YumikoHayamato/OneiOS` (`b4619f8b`): iOS's `IOHIDKeyboardFilter::processLockKeyDelay` in backboardd holds
+a Consumer/Power key-down for 150 ms on any HID service conforming to a keyboard `(1, 6)` unless its
+`HIDEventServiceProperties` dictionary has `LockKeyDelay = 0`. `OneiOSHidInput.cpp` now publishes `LockKeyDelay = 0` on
+the buttons' event service when its event driver attaches (and re-publishes up to 4 times if removed). Boot argument
+`oneios-hid-lock-key-delay=N` sets another delay in ms (`150` restores iOS's own hold). Not booted on a phone here:
+proof is `oneios-hid: buttons: LockKeyDelay 0 ms published in ...` and no ~150 ms `Event latency` on power key-down in
+iOS's log.
