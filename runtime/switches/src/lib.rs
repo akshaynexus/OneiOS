@@ -588,10 +588,12 @@ pub const SWITCHES: &[Switch] = &[
     Switch {
         part: "metal",
         ..text(
-            arg("oneios-dont-care", BOOL, "1", Some("0")),
+            arg("oneios-dont-care", BOOL, "0", Some("1")),
             "GPU",
             "DontCare stores (rt add-on)",
-            "rt add-on only: Metal's DontCare stores are Vulkan DONT_CARE on Turnip, a faster pass. Off: they store.",
+            "rt add-on only: 0: Metal's DontCare stores store, so a render pass the runtime splits keeps what it drew. \
+             1: they are Vulkan DONT_CARE on Turnip, a faster pass, but a split pass loses its first draws (garbage \
+             on screen); for an A/B only.",
         )
     },
     Switch {

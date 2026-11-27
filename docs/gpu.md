@@ -1628,7 +1628,12 @@ their subject; those below are the ones about memory held at rest):
 
 - Load and store actions map one to one (`render_target.rs` `load_op`, `store_op`): `Load`/`Clear`/`DontCare` to
   `LOAD`/`CLEAR`/`DONT_CARE`; `DontCare` and `MultisampleResolve` stores to `DONT_CARE` on Turnip (Droid-VM 0021,
-  `DriverFact::DontCareStoreIsOneOfMetals`; 0024's per-class mask). Nothing to add.
+  `DriverFact::DontCareStoreIsOneOfMetals`; 0024's per-class mask). Nothing to add. **On the rt add-on (what releases
+  ship since v0.1.36) the same mapping, rt 0005, is off by default since 2026-11-28**: rt fixes a store as a rendering
+  begins and begins a split pass's next rendering with `LOAD` (`render_encoder.rs` `interrupt`: memory barriers,
+  attachment reads' feedback moves and shadow copies, copies of textures over buffers), so a `DONT_CARE` store lost the
+  draws before each split on Turnip (read in the code as the cause of v0.1.40's garbage band in page transitions;
+  `userland/metal/rt/README.md`, "DontCare stores and split passes"; the A/B is `oneios-dont-care=1`).
 - Memoryless textures: `TRANSIENT_ATTACHMENT` usage and the `LAZILY_ALLOCATED` type first (`image_plan.rs`,
   `memory.rs` `candidates`); Turnip's darwin backend offers that type (`has_lazy_bos`, `TU_DARWIN_LAZY_BOS`), its memory
   made only where a pass renders in system memory. A pass that splits renders a memoryless color into a backing image

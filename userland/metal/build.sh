@@ -209,8 +209,9 @@ stage() {
   # 0102 (90110-shader-fix-switch.patch), unless the boot argument oneios-m2v-shader-fix=0 (on by default since 2026-11-25).
   cat "$HERE/ShaderFix.inc" >> "$R/drivers/AdrenoMetal/NativeAdrenoMetalPlugin.mm"
   say "staged NativeAdrenoMetalPlugin.mm: userland/metal/ShaderFix.inc appended (METAL2VULKAN_SHADER_FIX=1 unless oneios-m2v-shader-fix=0)"
-  # userland/metal/rt/RtSwitches.inc (METAL_RUNTIME=rt): the boot words oneios-dont-care=0 and oneios-queue-priority=0
-  # turn rt patches 0005 and 0006 off (docs/switches.md).
+  # userland/metal/rt/RtSwitches.inc (METAL_RUNTIME=rt): the boot word oneios-dont-care=1 turns rt patch
+  # 0005 on (off by default since 2026-11-28: not sound where a pass splits), oneios-queue-priority=0 turns 0006 off
+  # (docs/switches.md).
   if [ "$RUNTIME" = rt ]; then
     cat "$ROOT/userland/metal/rt/RtSwitches.inc" >> "$R/drivers/AdrenoMetal/NativeAdrenoMetalPlugin.mm"
     say "staged NativeAdrenoMetalPlugin.mm: userland/metal/rt/RtSwitches.inc appended (the rt bridge's switches)"

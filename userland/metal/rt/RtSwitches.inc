@@ -1,8 +1,9 @@
 // OneiOS: the switches of the bridge on metal2vulkan-rt (userland/metal/rt, docs/switches.md), read once as the plug-in
 // loads, before any device is made. Appended to the staged NativeAdrenoMetalPlugin.mm by userland/metal/build.sh `stage`
 // with METAL_RUNTIME=rt only (the 624bab3 build has none of these).
-//   boot-args-add=oneios-dont-care=0      Metal's DontCare stores as STORE (rt 0005 off; the bridge reads
-//                                         METAL2VULKAN_DONT_CARE_STORES=0)
+//   boot-args-add=oneios-dont-care=1      Metal's DontCare stores as DONT_CARE (rt 0005 on, an A/B of the speed only: it
+//                                         loses the draws before a split pass's split; the bridge reads
+//                                         METAL2VULKAN_DONT_CARE_STORES=1). Without it they store, the default.
 //   boot-args-add=oneios-queue-priority=0 no global queue priority (rt 0006 off; the plug-in's variable is
 //                                         METAL2VULKAN_QUEUE_PRIORITY=default, which the bridge takes as none)
 #include <stdlib.h>
@@ -25,7 +26,7 @@ __attribute__((constructor)) static void rtSwitches() {
     char args[1024] = {};
     size_t size = sizeof(args) - 1;
     if (sysctlbyname("kern.bootargs", args, &size, nullptr, 0)) return;
-    if (bootWord(args, "oneios-dont-care=0")) setenv("METAL2VULKAN_DONT_CARE_STORES", "0", 1);
+    if (bootWord(args, "oneios-dont-care=1")) setenv("METAL2VULKAN_DONT_CARE_STORES", "1", 1);
     // The plug-in sets "high" later in the render server without overwriting: "default" set here first stays.
     if (bootWord(args, "oneios-queue-priority=0")) setenv("METAL2VULKAN_QUEUE_PRIORITY", "default", 1);
 }

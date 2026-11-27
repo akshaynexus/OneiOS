@@ -135,10 +135,13 @@ pub fn open(loader: &str, cache: Option<&str>) -> Result<NmbDevice, String> {
         let name = crate::driver::device_name(&instance, &physical);
         let mut options = rt::DeviceOptions::default();
         options.pipeline_cache_dir = cache.map(Into::into);
-        // rt 0005: Turnip keeps one of Metal's answers at a DONT_CARE store (Droid-VM's gfxprobe dontcare), and storing cost
-        // 37 ms against 9 ms a full-screen pass of 64 blended draws. METAL2VULKAN_DONT_CARE_STORES=0 stores them, for an A/B.
+        // rt 0005, off unless METAL2VULKAN_DONT_CARE_STORES=1 (boot word oneios-dont-care=1, an A/B of the speed only): rt
+        // fixes a store as the rendering begins, and an encoder that ends its rendering early (a memory barrier, an
+        // attachment read's feedback move, a copy of a texture over a buffer: RenderCommandEncoder::interrupt) begins it
+        // again with LOAD. Turnip leaves a DONT_CARE store's tiles unwritten, so the draws before such a split were lost
+        // (read in the code 2026-11-28 as the cause of v0.1.40's garbage band in page transitions). Stored, a split keeps them.
         options.dont_care_stores =
-            name.starts_with("Turnip") && std::env::var("METAL2VULKAN_DONT_CARE_STORES").map_or(true, |v| v != "0");
+            name.starts_with("Turnip") && std::env::var("METAL2VULKAN_DONT_CARE_STORES").is_ok_and(|v| v == "1");
         // rt 0006: the queues' global priority the plug-in asks for (high in the render server, so the compositor's frames do
         // not wait behind an app's), through whichever of the two extensions the device lists.
         options.queue_global_priority = match std::env::var("METAL2VULKAN_QUEUE_PRIORITY").as_deref() {

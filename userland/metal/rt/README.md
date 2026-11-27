@@ -166,7 +166,7 @@ Decisions: **upstream** (the new tip does it), **bridge** (the consumer's job in
 | 0018 specialized-linked-functions-closed | linked functions with constants | `LinkedFunction.constants` | check |
 | 0019 pooled-block-size-from-the-environment | 16 MiB blocks | rt's unit is 16 MiB | upstream |
 | 0020 hold-back-memory-under-pressure | no kept room under pressure | rt keeps one 16 MiB reserve per class | drop (bridge: nothing to hold back but its own pools) |
-| 0021, 0023, 0024 Turnip DontCare stores | Metal's DontCare/MultisampleResolve stores as `DONT_CARE` (37 ms -> 9 ms a pass of 64 blended draws) | rt stores them (`pass.rs`: `STORE`) | **rt 0005** (`DeviceOptions::dont_care_stores`, set on Turnip; 0023 and 0024's A/B is the switch `oneios-dont-care=0`) |
+| 0021, 0023, 0024 Turnip DontCare stores | Metal's DontCare/MultisampleResolve stores as `DONT_CARE` (37 ms -> 9 ms a pass of 64 blended draws) | rt stores them (`pass.rs`: `STORE`) | **rt 0005** (`DeviceOptions::dont_care_stores`), **off by default since 2026-11-28**: not sound where rt splits a pass (below, "DontCare stores and split passes"); the A/B is the switch `oneios-dont-care=1` |
 | 0022 trim-spare-command-pools | spare command pools trimmed | rt's reaper frees pools past the idle ones it keeps | upstream (per the other helper; to confirm by the GPU blob count on the phone) |
 | 0025 full-barriers-switch | a diagnostic | | drop |
 | 0026 copy-back-drops-carried-shadows | shadow copy-back | rt's own shadows | check |
@@ -217,13 +217,47 @@ Its findings that hold for rt too: the pipeline cache and preprocess-pool commit
 | 0002 presenting-is-optional | surface and swapchain optional | the floor's guards updated; rt unit tests |
 | 0003 unattached-color-reads | Droid-VM 0015 | census: QuartzCore pairs 13 -> 15 of 21 (`path_blit_vert_lp[fh]`); the translator's tests of the touched areas: 224 passed, 3 failed before the tests were updated (the one that pinned the refusal now pins the zero read, the inputs encoding takes the new field, a tessellation test's spirv-val temp-file race passes alone); those 3 pass after |
 | 0004 quality-of-service-on-apple | NativeMetal 0023 | builds for arm64e; not run (Linux sets nothing) |
-| 0005 dont-care-stores | Droid-VM 0021 | `tests::pass` checks both mappings |
+| 0005 dont-care-stores | Droid-VM 0021, off by default (2026-11-28) | `tests::pass` checks both mappings |
 | 0006 queue-global-priority | Droid-VM 0012 | ANV refuses high (`NOT_PERMITTED`): the bridge makes the device at the default; Turnip (noop shim) takes it |
 | 0007 patch-with-no-control-points | NativeMetal 0009 | applies as it was |
 | 0008 render-pass-split-counts | the other effort's RP counters | `abi_smoke`'s census check |
 
 With all eight: rt's unit tests 188 passed, 0 failed, 2 ignored (`build.sh test`); `abi_smoke` 35 checks, 0 failed;
 `m2v-rt-check --selftest` 0 wrong outputs, QuartzCore 38 of 41 kernels and 15 of 21 pairs.
+
+### DontCare stores and split passes (2026-11-28)
+
+The owner's boot of v0.1.40 (2026-11-27, rt add-on, `oneios-dont-care=1`, then the default): garbage in the middle of
+the screen while SpringBoard, Settings and Safari change pages. Read in rt's code at the pin:
+
+- `pass.rs` `Target::info` fixes each attachment's store op as `vkCmdBeginRendering` records, and gives a rendering
+  begun again (`resumed`) the load op `LOAD`. Its module documentation (lines 7-12) says why rt stores every action:
+  "a pass may end its rendering before the encoder ends and begin it again, loading what it stored".
+- `render_encoder.rs` `interrupt` ends the rendering, records, and begins it again with `resumed` true. Its callers:
+  `ordered` (a memory barrier after a draw that wrote memory, or the barrier an attachment read owes), `feedback_moves`
+  (a draw that reads its own attachment through a texture: the backdrop and blur reads of a compositor),
+  `shadow_copies` (the same without the feedback loop), `results_owed` (a visibility result's copies) and
+  `draw_reaches` (copies of a texture over a buffer, `crate::over`, before a draw that samples it). None of them is
+  known as the rendering begins.
+- rt 0005 made `DontCare` and `MultisampleResolve` stores `DONT_CARE`. On Turnip a `DONT_CARE` store writes no tile
+  back to memory, so at a split the rendering before it is lost and the next one loads stale memory: the attachment
+  holds garbage where the earlier draws were (for a stencil or depth attachment, the later draws test against
+  garbage; for a multisampled one, the next resolve resolves stale samples over them). Whether the 624bab3 runtime's
+  Droid-VM 0021 has the same fault at its own splits was not checked (that add-on is not the one releases ship).
+
+Since Vulkan takes the store op at the beginning and rt cannot know there whether the encoder will split, the only
+sound choice is to store: the bridge sets `dont_care_stores` only for `METAL2VULKAN_DONT_CARE_STORES=1` (boot word
+`oneios-dont-care=1`, an A/B of the speed). The resolve itself is unchanged either way (`Target::info` names the resolve
+view and mode whatever the store op). What it costs is Droid-VM 0021's figure, a 4x attachment's samples stored per
+tile (37 ms against 9 ms for 64 blended full-screen 4x draws in gfxprobe); a 1x attachment's store is one tile write,
+as every `Store` pass does. Keeping `DONT_CARE` soundly needs a rendering whose begin is recorded after its end is
+known (each segment's draws in a secondary command buffer, the begin chosen at `interrupt` or `endEncoding`): not done.
+`turnip-submit-split.patch` splits Turnip's kernel submissions only where a command buffer begins, never a pass.
+
+Proof on the phone: the same transitions with no garbage band on the default (`oneios-dont-care=0` in xnuhost's
+`switches:` line), and the band back with `boot-args-add=oneios-dont-care=1`; iOS's log (`oneios-tool phone pull-log`)
+`oneios-gpu-text: backboardd[N] RP enc +E inst +I split +S barrier +B` with `S` above 0 shows that the render server's
+passes do split. Not booted yet.
 
 Not ported (with why): the in-place textures over host imports (NativeMetal 0014/0015: rt's copies of every
 IOSurface's bytes; a larger change to rt's `over` path, to do once the phone shows its cost), the rotated textures

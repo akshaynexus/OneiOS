@@ -1,4 +1,4 @@
-OneiOS rt 0005: DeviceOptions::dont_care_stores: Metal's DontCare and MultisampleResolve stores as DONT_CARE where the consumer measured its driver keep either Metal answer (Turnip: 37 ms -> 9 ms a full-screen pass of 64 blended draws; Droid-VM 0021).
+OneiOS rt 0005: DeviceOptions::dont_care_stores: Metal's DontCare and MultisampleResolve stores as DONT_CARE where the consumer measured its driver keep either Metal answer (Turnip: 37 ms -> 9 ms a full-screen pass of 64 blended draws; Droid-VM 0021). Off by default: not sound where rt splits a pass (a split rendering loads what the DONT_CARE store left unwritten, 2026-11-28), so it is only an A/B.
 
 diff --git a/crates/metal2vulkan-runtime/src/device.rs b/crates/metal2vulkan-runtime/src/device.rs
 index 313cbf88c..ec57929c5 100644
@@ -13,7 +13,7 @@ index 313cbf88c..ec57929c5 100644
      /// The compiled kernels by content, which every compute pipeline state of a content shares.
      pub(crate) kernels: KernelMap,
      /// The runtime's own kernels made so far (`crate::own`).
-@@ -464,6 +466,14 @@ pub struct DeviceOptions {
+@@ -464,6 +466,23 @@ pub struct DeviceOptions {
      /// breach entry that holds no ceiling counts as kept under 0, the default, so on a device
      /// given 0 every memory breach refuses.
      pub stage_memory_ceiling: u64,
@@ -24,6 +24,15 @@ index 313cbf88c..ec57929c5 100644
 +    /// Adreno, by Droid-VM's `gfxprobe dontcare` (Droid-VM 0021 on the old runtime), where
 +    /// `STORE` wrote a 4x attachment's samples to memory from every tile (37 ms against 9 ms a
 +    /// full-screen pass of 64 blended draws). False, the default, stores them.
++    ///
++    /// Not sound where a pass splits: the store is fixed as each rendering begins, and an
++    /// encoder that ends its rendering early (`RenderCommandEncoder::interrupt`: a memory
++    /// barrier after a draw that wrote memory, an attachment read's feedback move or shadow copy,
++    /// a copy of a texture over a buffer, a visibility result's copies) begins it again loading
++    /// what it stored (the `pass` module's documentation). A `DONT_CARE` store leaves a tiler's
++    /// tiles unwritten there, so the next rendering loads stale memory and the draws before the
++    /// split are lost (and a resolving pass resolves stale samples over them). The split is not
++    /// known as the rendering begins, so the consumer sets it only for an A/B of the speed.
 +    pub dont_care_stores: bool,
      /// For the device tests: what the block-maker thread does with the internals asked of it,
      /// from its first work on.
