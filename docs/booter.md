@@ -1653,7 +1653,7 @@ has the three presets; without them the bridge stays on VIB/STOP.
 The video encoder (`encoder=` in the image set's `xnuhost.conf` or its `overlay/userland/xnuhost.conf`, `--set
 encoder=...`, the command line wins; hevc-encoder and hevc-guest, 2026-11-15; until 2026-11-22 the image set's
 `encoder=` was read and then dropped, so only `--set` turned it on):
-`off`, the default until a phone session proves it, gives the guest no device; `auto` carves the 48 MiB media pool
+`off`, the built-in default, gives the guest no device (the S24 Ultra's host-table row gives `auto` since 2026-11-28, under the command line and the image set: docs/hardware.md 7h); `auto` carves the 48 MiB media pool
 between the GPU pool and the boot framebuffer (both inside the 64 MiB the hosted kernel lets a task map), makes the
 `droidvm,virtio-media` device `/arm-io/virtio-media-0` with its `media-host-pool`, and adds `droidvm-vt-paravirt=1`
 to the guest's boot arguments, so the kernel's codec archive publishes iOS's paravirtualized VideoToolbox driver.
@@ -1924,8 +1924,8 @@ The `blk.rs` flush counts and times count every `fdatasync`, whichever side (vCP
   rule and the new one were ready at the same frame there; the black frames before the logo are the phone's (its
   frames come through the GPU's blobs). The timeout path has run in the host tests only.
 
-- **The pen** (`src/pen.rs`, spen 2026-11-15; `docs/hardware.md` 7f). Settings: **`pen=off`** (the default until a phone
-  session proves it) or `pen=auto`; `pen-rotate=auto|0|90|180|270` (the digitizer's frame turned clockwise onto the
+- **The pen** (`src/pen.rs`, spen 2026-11-15; `docs/hardware.md` 7f). Settings: **`pen=off`** (the built-in default; the S24 Ultra's host-table row gives
+  `pen=auto` since 2026-11-28, under the command line and the image set: `docs/hardware.md` 7h) or `pen=auto`; `pen-rotate=auto|0|90|180|270` (the digitizer's frame turned clockwise onto the
   panel's; auto: 0 when the digitizer and the panel are both portrait, else 90, a guess for such a device; the S24 Ultra's IC is portrait, so 0: Samsung's driver reports the IC's frame unturned, `docs/hardware.md` 7f); `pen-mirror=1` (then mirrored
   left to right). These three settings come from the command line, else from the image set's `xnuhost.conf` or its
   `overlay/userland/xnuhost.conf`; until 2026-11-22 the image set's were read and then dropped (the C `xh_config_finish` did

@@ -1549,6 +1549,16 @@ impl Config {
         if !self.given("astc") && !image.given("astc") && device.given("astc") {
             self.astc = device.astc;
         }
+        // pen= and encoder=: the command line's, else the image set's (the takes above), else the host phone's (the S24
+        // Ultra: auto, 2026-11-28). Until then both came only from the image set's xnuhost.conf, and an image rebuilt
+        // without those lines (iOS 27.2.1 24B156, sessions of 2026-11-27) had no S Pen (no `pen:` line) and no hardware
+        // video decoder (`ONEIOS CODEC: 0 virtio-media device(s)`): Safari's video was decoded in software on the CPU.
+        if !self.given("pen") && !image.given("pen") && device.given("pen") {
+            self.pen = device.pen;
+        }
+        if !self.given("encoder") && !image.given("encoder") && device.given("encoder") {
+            self.encoder = device.encoder;
+        }
         if self.width == 0 && self.height == 0 && device.width != 0 && device.height != 0 {
             self.width = device.width;
             self.height = device.height;
@@ -1934,7 +1944,7 @@ impl Config {
                     || image.height != 0
                     || (key == "scale" && self.given("scale"))
             }
-            "return-graceful-ms" | "astc" | "corner-radius" | "artwork-subtype" | "thermal-cap" => {
+            "return-graceful-ms" | "astc" | "corner-radius" | "artwork-subtype" | "thermal-cap" | "pen" | "encoder" => {
                 self.given(key) || image.given(key)
             }
             "boot-args-add" => false,
@@ -2006,6 +2016,8 @@ fn device_key(key: &str) -> bool {
             | "scale"
             | "return-graceful-ms"
             | "astc"
+            | "pen"
+            | "encoder"
     ) || key.starts_with("hw-backend")
 }
 

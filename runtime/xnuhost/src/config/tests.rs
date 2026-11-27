@@ -1226,18 +1226,26 @@ fn host_device() {
     assert!(off.host.is_none() && off.host_line == "host: detection off (host-device=none): today's defaults");
     assert!(off.gpu == Gpu::Auto && off.hw == HwSettings::default());
     let off = host_clear(off);
-    // The S24 Ultra (the home device) and an unknown phone: byte for byte today's config.
+    // The S24 Ultra (the home device): today's config with its S Pen and its hardware codecs (pen=auto, encoder=auto,
+    // 2026-11-28); an unknown phone: byte for byte today's config.
+    let mut s24 = off.clone();
+    s24.pen = Pen::Auto;
+    s24.encoder = Encoder::Auto;
     let props = host_props(&dir, "s24u", "SM-S928B", "SM8650");
     let c = rig.finish(Some(&props), None, None).unwrap();
     assert!(c.host == find("galaxy-s24-ultra"));
     assert!(c.host_line.contains(
         "host: galaxy-s24-ultra (Galaxy S24 Ultra (SM-S928, SM8650)), matched by ro.product.model=SM-S928B; read: "
     ));
-    assert!(c.host_line.contains("; defaults: none (today's)"));
-    assert_eq!(host_clear(c), off);
+    assert!(c.host_line.contains("; defaults: pen=auto, encoder=auto"), "{}", c.host_line);
+    assert_eq!(host_clear(c), s24);
     let c = rig.finish(Some(&props), Some("galaxy-s24-ultra"), None).unwrap();
     assert!(c.host_line.contains("host-device=galaxy-s24-ultra (forced)"));
-    assert_eq!(host_clear(c), off);
+    assert_eq!(host_clear(c), s24);
+    // The command line still wins over the table: pen=off, encoder=off are kept.
+    let c = rig.finish(Some(&props), None, Some("pen=off")).unwrap();
+    assert!(c.pen == Pen::Off && c.encoder == Encoder::Auto, "{}", c.host_line);
+    assert!(c.host_line.contains("pen=auto not taken (the command line or the image set gives it)"), "{}", c.host_line);
     let props = host_props(&dir, "pixel", "Pixel 11 Pro", "Tensor G5");
     let c = rig.finish(Some(&props), None, None).unwrap();
     assert!(c.host.is_none());
@@ -1393,6 +1401,8 @@ fn host_device() {
                 "height" => assert_eq!(c.height, want.height),
                 "scale" => assert_eq!(c.scale, want.scale),
                 "return-graceful-ms" => assert_eq!(c.return_graceful_ms, want.return_graceful_ms),
+                "pen" => assert_eq!(c.pen, want.pen),
+                "encoder" => assert_eq!(c.encoder, want.encoder),
                 _ => assert_eq!(c.hw, hw.hw),
             }
         }

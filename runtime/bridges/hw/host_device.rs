@@ -75,18 +75,18 @@ const NONE: &[&str] = &[];
 // ---- the table ------------------------------------------------------------------------------------------------------
 // The one place that says what differs per host phone. Rules (docs/hardware.md, "The host device"):
 //   - an entry holds only settings that already exist as options: an xnuhost setting that the config merges as a device
-//     default (gpu, panel-fallback, hz, width/height/scale (one frame), return-graceful-ms, astc, hw-backend*), or an
+//     default (gpu, panel-fallback, hz, width/height/scale (one frame), return-graceful-ms, astc, pen, encoder, hw-backend*), or an
 //     environment variable a bridge reads;
-//   - the home device (the S24 Ultra) has none: its behaviour is today's, byte for byte;
+//   - the home device (the S24 Ultra) has only pen=auto and encoder=auto (its S Pen and its hardware codecs, 2026-11-28);
 //   - takeover: true allows session-mode=takeover there (the opt-in Android takeover, docs/booter.md 2.9d): only on a
 //     phone where that mode ran (the S26 Ultra, YMGPwcca's experiment) or that is the owner's (the S24 Ultra);
 //   - a value the docs mark unverified on that phone is not set (today's default is the conservative one) and is said
 //     here. Marks as in docs/s25.md: [F] read from the source named, [I] inferred, [U] unknown until a phone shows it.
 // Match strings: the model prefixes and codenames are the phone gates' (scripts/port/verify-host.sh, docs/a56-oneos-fork.md);
-// a SoC or platform match alone means "this SoC's entry" (the S24 and S24+ on SM8650 get the S24 Ultra's: no change).
+// a SoC or platform match alone means "this SoC's entry" (the S24 and S24+ on SM8650 get the S24 Ultra's: pen=auto finds no pen there).
 static TABLE: [HostDevice; 7] = [
     // The home device. [F] SM-S928*, e3q, SM8650 (verify-host.sh, the OneOS fork's gate); platform pineapple [F] (the
-    // stock device tree, qcom/pineapple-v2.dts, docs/hardware.md). No defaults: everything is today's.
+    // stock device tree, qcom/pineapple-v2.dts, docs/hardware.md). Defaults: pen=auto, encoder=auto (below).
     // The model prefix takes every S24 Ultra model number (docs/hardware.md 7h, "The S24 Ultra's models"; the record
     // profiles/host-galaxy-s24-ultra-sm8650.toml): SM-S928B (the owner's phone [F]), SM-S928U and SM-S928U1 (US),
     // SM-S928W (Canada, CSC XAC), SM-S928N (Korea), SM-S9280 (China).
@@ -97,6 +97,10 @@ static TABLE: [HostDevice; 7] = [
     // get this entry by their SoC (SM8650, the SoC's entry), which has no defaults either.
     // takeover: session-mode=takeover is allowed (the owner's phone, 2026-11-23: the opt-in Android takeover, ported from
     // YMGPwcca/OneOS's S26 experiment; docs/booter.md 2.9d). Not run on the phone yet.
+    // config (2026-11-28): pen=auto and encoder=auto, the phone's S Pen (sec_e-pen, read only, never grabbed) and its
+    // MediaCodec encoder and decoder (the virtio-media device: VideoToolbox's hardware H.264/HEVC/VP9/AV1). Both had
+    // been only in the image set's xnuhost.conf, which a rebuilt image (27.2.1 24B156) lost: no pen and software video.
+    // The command line and the image set still win (pen=off, encoder=off).
     HostDevice {
         name: "galaxy-s24-ultra",
         label: "Galaxy S24 Ultra (SM-S928, SM8650)",
@@ -104,7 +108,7 @@ static TABLE: [HostDevice; 7] = [
         devices: &["e3q"],
         socs: &["SM8650"],
         platforms: &["pineapple"],
-        config: NONE,
+        config: &["pen=auto", "encoder=auto"],
         env: NONE,
         takeover: true,
     },

@@ -69,6 +69,8 @@ fn host_device() {
                     | "scale"
                     | "return-graceful-ms"
                     | "astc"
+                    | "pen"
+                    | "encoder"
             );
             assert!(device_key || key.starts_with("hw-backend"), "{c}");
         }
@@ -81,7 +83,8 @@ fn host_device() {
             );
         }
     }
-    assert!(t[0].config.is_empty() && t[0].env.is_empty());
+    // The home device: its S Pen and its hardware codecs only (2026-11-28), no environment.
+    assert!(t[0].config == ["pen=auto", "encoder=auto"] && t[0].env.is_empty());
     assert!(std::ptr::eq(host_find("GALAXY-A56").unwrap(), &t[6]) && host_find("pixel").is_none());
     assert_eq!(
         host_names(),
