@@ -63,6 +63,35 @@ node cli.mjs references --gpu "Xclipse" | --area metal   # ports to learn from, 
 
 The areas now include `metal` and `gles` (beside `gpu`), `hotspot` and `mobile-data`.
 
+The CLI of 2026-11-28 (sha256 `3a9e6fa3…`, 1586 lines; it talks only to `TRACKER_URL` and runs `gh` for the gist login) adds
+these; read it again when its sha256 changes:
+
+```sh
+node cli.mjs feature-set SLUG ID [--state S] [--detail T] [--source URL]   # change a feature (feature-add on a name
+                                                    # that exists answers 409 with the ID to use)
+node cli.mjs gpu-issue-add SLUG "symptom" --kind white-widgets|black-ui|gpu-fault|out-of-memory|artifacts|slow|crash|other \
+    --state open|workaround|fixed --cause "..." [--fix "..."] --source URL
+node cli.mjs gpu-issue-set SLUG ID --state fixed --fix "..."               # when a boot proves the fix
+node cli.mjs gpu-issues SLUG                        # the known GPU issues (no login)
+node cli.mjs fork-sync --repo OWNER/REPO --device SLUG --best-result "..." # the repo's best result on that phone
+node cli.mjs post-add --title "..." --link URL [--published DATE] [--note "..."]   # the updates feed: a release
+```
+
+## What to record, and when
+
+- **A phone boot** (the next section): the areas it proves or breaks (`status-set`), the features it shows
+  (`feature-set`: S Pen, Video playback, ...), the GPU record when it measured frames (`gpu-set --fps`), and each GPU
+  fault it found or fixed (`gpu-issue-add` / `gpu-issue-set`). The source is a pushed commit or doc that records the
+  boot (`docs/releases.md`'s row of that release says what it showed), at a commit (`blob/<sha>/...`), so the link
+  keeps saying what the detail says.
+- **A release** (`scripts/release/release.sh` published it): `post-add --title "OneiOS vX.Y.Z: <its fixes>" --link
+  <the release page>` once, after its row in `docs/releases.md` is pushed. A release that was not booted changes no
+  state; its post says "not booted on a phone yet".
+- **A new best result** on the phone (the Home Screen on a new iOS build, a new area working): `fork-sync --repo
+  akshaynexus/OneiOS --device s24-ultra --best-result "..."`.
+- Each detail: what was seen, the phone (SM-S928B), the release and the date, and the log line that shows it; "not
+  confirmed on the phone yet" for a fix that is only built.
+
 Read the repo for each area: README "What works" and "Known issues", the device's `docs/<device>.md`, the docs of
 the area (docs/hardware.md, docs/gpu.md, ...), the open issues and the recent commits. Compare with the tracker.
 Change only what the evidence supports; list the rest as questions to the maintainer.
