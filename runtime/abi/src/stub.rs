@@ -82,7 +82,7 @@ pub struct XsOp {
 pub struct XsTrapPage {
     /// futex: xnuhost sets 1 to release the thread
     pub to_task: u32,
-    /// futex: the stub sets 1 when the thread has trapped (or its maps are done)
+    /// futex: the stub sets XS_HOST_OPS_ACK when deferred maps finish, or XS_HOST_TRAPPED when the thread has trapped
     pub to_host: u32,
     /// Linux thread id; the kernel zeroes it when the thread exits
     pub tid: u32,
@@ -114,6 +114,19 @@ pub struct XsTrapPage {
 }
 pub const XS_RUN: u32 = 0;
 pub const XS_EXIT: u32 = 1;
+/// `XsTrapPage.to_host` futex values: publishing the deferred-map acknowledgement on `to_host` itself lets
+/// `FUTEX_WAIT(to_host, event)` return `EAGAIN` if the stub finishes its maps before the host enters the wait
+/// (YMGPwcca/OneiOS 9e5a9933: previously `ops_done = 1` + `FUTEX_WAKE(to_host)` while `to_host == 0` could lose
+/// the wakeup and stall the host vCPU up to 200 ms holding the task lock).
+pub const XS_HOST_PENDING: u32 = 0;
+pub const XS_HOST_TRAPPED: u32 = 1;
+pub const XS_HOST_OPS_ACK: u32 = 2;
+
+/// True when `to_host` shows the released thread has finished any deferred ops (either acknowledged or already trapped).
+#[inline]
+pub const fn xs_host_event_has_ack(event: u32) -> bool {
+    event == XS_HOST_OPS_ACK || event == XS_HOST_TRAPPED
+}
 // Deferred maps and unmaps (XS_OP_MAP, XS_OP_UNMAP) after the trap page, in the same slot.
 pub const XS_OPS_OFF: u64 = 0x1000;
 pub const XS_THREAD_OPS: u32 = 256;
@@ -297,5 +310,17 @@ mod tests {
         last = qop(XS_OP_PROTECT, 0x600000, P, 1, 0);
         assert!(!last.queue_join(&qop(XS_OP_PROTECT, 0x600000 + P, P, 1, 0)));
         assert!(!last.queue_join(&qop(XS_OP_UNMAP, 0x600000, P, 0, 0)));
+    }
+
+    #[test]
+    fn host_event_states() {
+        assert!(!xs_host_event_has_ack(XS_HOST_PENDING));
+        assert!(xs_host_event_has_ack(XS_HOST_OPS_ACK));
+        assert!(xs_host_event_has_ack(XS_HOST_TRAPPED));
+        // Distinct non-zero values so FUTEX_WAIT(to_host, XS_HOST_PENDING) wakes on OPS_ACK,
+        // and FUTEX_WAIT(to_host, XS_HOST_OPS_ACK) wakes on TRAPPED.
+        assert_ne!(XS_HOST_PENDING, XS_HOST_OPS_ACK);
+        assert_ne!(XS_HOST_OPS_ACK, XS_HOST_TRAPPED);
+        assert_ne!(XS_HOST_PENDING, XS_HOST_TRAPPED);
     }
 }

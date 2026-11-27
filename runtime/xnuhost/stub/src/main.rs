@@ -154,9 +154,9 @@ fn counter() -> u64 {
     v
 }
 
-/// xnuhost-abi's stub.rs, the hand-off: store the word, then wake the other side only if it said it sleeps.
-fn post(w: &AtomicU32, sleeping: &AtomicU32) {
-    w.store(1, Ordering::Release);
+/// xnuhost-abi's stub.rs, the hand-off: store `event` on the futex word, then wake the other side only if it said it sleeps.
+fn post(w: &AtomicU32, sleeping: &AtomicU32, event: u32) {
+    w.store(event, Ordering::Release);
     fence(Ordering::SeqCst);
     if sleeping.load(Ordering::Relaxed) != 0 {
         futex_wake(w);
@@ -357,9 +357,9 @@ unsafe extern "C" fn xs_handler(signo: i32, info: *mut KSiginfo, uc: *mut KUcont
         let host_sleeping = word(addr_of_mut!((*tp).host_sleeping));
         to_task.store(0, Ordering::Release);
         if (*trap).kind == XH_TRAP_BOOT {
-            wake(to_host); // thread_create waits for this one in a timed futex
+            wake(to_host); // thread_create waits for this one in a timed futex (XS_HOST_TRAPPED == 1)
         } else {
-            post(to_host, host_sleeping);
+            post(to_host, host_sleeping, XS_HOST_TRAPPED);
         }
         (*tp).slept = await_word(to_task, word(addr_of_mut!((*tp).task_sleeping)), (*tp).spin_ticks);
         (*tp).t_woken = counter();
@@ -369,7 +369,8 @@ unsafe extern "C" fn xs_handler(signo: i32, info: *mut KSiginfo, uc: *mut KUcont
 
         // Maps, and unmaps given while none of the task's threads ran, that the kernel gave for this task since its
         // last order (task.rs, map-defer): carried out here, in their order, before the thread runs again, while
-        // xnuhost holds the task's order lock; then to_host is woken for them.
+        // xnuhost holds the task's order lock; then XS_HOST_OPS_ACK is published on to_host so a host FUTEX_WAIT
+        // cannot miss the wakeup.
         let nops = (*tp).nops;
         if nops != 0 {
             let ops = (tp as *mut u8).add(XS_OPS_OFF as usize) as *mut XsOp;
@@ -392,10 +393,7 @@ unsafe extern "C" fn xs_handler(signo: i32, info: *mut KSiginfo, uc: *mut KUcont
             }
             (*tp).nops = 0;
             word(addr_of_mut!((*tp).ops_done)).store(1, Ordering::Release);
-            fence(Ordering::SeqCst);
-            if host_sleeping.load(Ordering::Relaxed) != 0 {
-                futex_wake(to_host);
-            }
+            post(to_host, host_sleeping, XS_HOST_OPS_ACK);
         }
 
         if (*tp).pac_set != 0 {

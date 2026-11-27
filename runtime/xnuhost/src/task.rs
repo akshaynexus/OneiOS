@@ -1210,6 +1210,11 @@ mod machine {
         let sp_ops = unsafe { addr_of_mut!((*sp).ops) } as *mut XsOp;
         let first = take_queue(t, &mut q, sp_ops);
         drop(q);
+        // A flush (ops empty) whose deferred queue was already drained by a released thread while we waited for `t.lock()`
+        // has nothing left to send to the service thread (YMGPwcca/OneiOS bb950679).
+        if first == 0 && ops.is_empty() {
+            return 0;
+        }
         // The service thread on the ordering vCPU's host CPU, as an iOS thread is (cpu-pin): the order is then a
         // switch on that core and back, not the wake-up of another core.
         let epoch = PLACE_EPOCH.load(Acquire) as u8;
@@ -1681,7 +1686,7 @@ mod machine {
             }
             let t = &TASKS[th.task.load(Relaxed) as usize];
             let tp = trap_page(s as u32);
-            let running = word!(tp, to_task).load(Acquire) != 0 || word!(tp, to_host).load(Acquire) == 0;
+            let running = word!(tp, to_task).load(Acquire) != 0 || word!(tp, to_host).load(Acquire) != XS_HOST_TRAPPED;
             // SAFETY: a copy of the shared page's trap and state (a running thread may change them: for the log only).
             let (trap, st) = unsafe {
                 (ptr::read_volatile(addr_of_mut!((*tp).trap)), ptr::read_volatile(addr_of_mut!((*tp).state)))
@@ -1901,7 +1906,7 @@ mod machine {
         unsafe { ptr::write(addr_of_mut!((*tp).state), *state) };
         word!(tp, command).store(XS_RUN, Relaxed);
         word64!(tp, spin_ticks).store(SPIN_TASK.load(Relaxed), Relaxed);
-        word!(tp, to_host).store(0, Release);
+        word!(tp, to_host).store(XS_HOST_PENDING, Release);
         // From here a raise of this vCPU's line may kick the thread itself (kick): before the release, so that a raise
         // that comes first is a kick that stays pending in the stub and stops the thread before its first instruction.
         v.run_pid.store(t.pid(), Relaxed);
@@ -1932,7 +1937,11 @@ mod machine {
         let step = libc::timespec { tv_sec: 0, tv_nsec: 200_000_000 };
         let to_host = word!(tp, to_host);
         loop {
-            if drain.is_some() && word!(tp, ops_done).load(Acquire) != 0 {
+            // Keep this exact acquire snapshot for FUTEX_WAIT below: the stub publishes deferred-map completion as
+            // XS_HOST_OPS_ACK on `to_host` itself, so an ACK arriving between this load and FUTEX_WAIT returns EAGAIN
+            // instead of sleeping 200 ms holding the task lock (YMGPwcca/OneiOS 9e5a9933).
+            let event = to_host.load(Acquire);
+            if drain.is_some() && xs_host_event_has_ack(event) {
                 for i in 0..nops {
                     log_map_failure(t, &get_op(ops, i), "in the released thread");
                 }
@@ -1940,7 +1949,7 @@ mod machine {
                 drain = None;
                 p.step(Step::Drain, perf::ticks_ns(cpu::counter() - released));
             }
-            if drain.is_none() && to_host.load(Acquire) != 0 {
+            if drain.is_none() && event == XS_HOST_TRAPPED {
                 break;
             }
             if t.dead() {
@@ -2015,7 +2024,7 @@ mod machine {
                 continue; // look at the words once more before the first sleep
             }
             p.count(Count::HostSleeps, 1);
-            futex(to_host.as_ptr(), libc::FUTEX_WAIT, 0, Some(&step));
+            futex(to_host.as_ptr(), libc::FUTEX_WAIT, event, Some(&step));
         }
         if sleeping {
             word!(tp, host_sleeping).store(0, Relaxed);

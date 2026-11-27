@@ -629,7 +629,14 @@ mod machine {
         let coalesce = TIMER_COALESCE.load(Relaxed);
         if deadline == u64::MAX {
             v.timer_armed.store(false, Release);
-            if coalesce && v.timer_host_at.load(Acquire) != 0 {
+            let host_at = v.timer_host_at.load(Acquire);
+            if host_at == 0 {
+                // Already disarmed (never armed, already fired, or already cleared): skip a redundant timer_settime(0)
+                // syscall (YMGPwcca/OneiOS 257f7ee7).
+                line(index, false);
+                return;
+            }
+            if coalesce {
                 // timer-coalesce: the host timer stays armed; its signal finds nothing armed and raises nothing
                 v.perf.count(crate::perf::Count::TimerKept, 1);
                 line(index, false);
@@ -645,9 +652,11 @@ mod machine {
         v.timer_armed.store(true, Release);
         let now = counter();
         if deadline <= now {
-            v.perf.count(crate::perf::Count::TimerCalls, 1);
-            v.timer_host_at.store(0, Release);
-            settime(v, &ZERO_SPEC);
+            if v.timer_host_at.load(Acquire) != 0 {
+                v.perf.count(crate::perf::Count::TimerCalls, 1);
+                v.timer_host_at.store(0, Release);
+                settime(v, &ZERO_SPEC);
+            }
             line(index, gic::pending(index));
             return;
         }
