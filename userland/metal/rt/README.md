@@ -394,9 +394,19 @@ framebuffer has no reason to use [I: not seen in any log].
 **The fix** (xnuhost and the release, gpu.md "A runtime update brings its plug-in"): the release packs each plug-in
 also as the runtime's boot addon (`kernel/gpuaddon`, `kernel/24B156/gpuaddon`), and xnuhost gives it to the kernel
 when the image set has none of its own and the plug-in's `oneios-target` names the set's build, so the kernel writes
-the runtime's plug-in over the seed's at every boot. Not booted yet. The proof on such an image: `gpuaddon:
-.../kernel/gpuaddon: ... plug-ins for iPhone18,2 24A446 (the runtime's; ...)` in xnuhost.log, `oneios-gpu-addon: boot
-addon: N files` with N > 0, then no `sheng-exit: backboardd[N] ... Metal failed to build render pipeline` and
+the runtime's plug-in over the seed's at every boot.
+
+**v0.1.42 boot on SM-S928B (2026-11-28, iOS 27.2.1 24B156, takeover):** the boot addon worked (`gpuaddon:
+/data/runtime/kernel/24B156/gpuaddon: 9517872 bytes, 2 CDHashes trusted`, `oneios-gpu-addon: boot addon: 5 files, 5
+written`), making this the first boot where the 24B156 image ran `metal2vulkan-rt`. `backboardd` still aborted three
+times on `spec=Pb3a8BsovXmw_TaltA3Xhf_Isrc` (`downsample_blur_vert_lph` + `alpha_threshold_lph`: `unsupported: Format;
+needs NotImplemented at metada`), and `launchd` triggered shutdown at +66.8 s. `'b3a8'` is `MTLPixelFormatRGB10A8_2P_XR10`
+(the exact two-plane XR10 format `abi::stored` had skipped above). `abi::stored` now also maps `RGB10A8_2P_XR10` /
+`RGB10A8_2P_XR10_sRGB` to `RGBA16Float` (same 8 bytes/texel as rt's `R32G32_UINT`, with hardware blending and alpha)
+and `R16Bfloat`/`RG16Bfloat`/`RGBA16Bfloat` to `R16Float`/`RG16Float`/`RGBA16Float`; `nmb_device_linear_bytes_per_row`
+reads `pixel_format_info` of the stored format; and `nmb_texture_new_on_surface` allows single-plane views (such as
+NV12 video planes) over 2-plane IOSurfaces instead of rejecting whenever `chroma_bytes_per_row != 0`. Not booted on a
+phone yet: the proof is `gpuaddon` loaded + no `sheng-exit: backboardd ... Metal failed to build render pipeline` +
 SpringBoard 9 of 9.
 
 Not the cause either: the conformance list's `padded-fetch-*` refusals (`known-gaps-rt.tsv`, "at metadata of entry

@@ -95,9 +95,13 @@ pub fn stored(pf: rt::PixelFormat) -> rt::PixelFormat {
     match pf {
         P::BGR10XR | P::BGR10XRSRGB => P::RG11B10Float,
         P::BGRA10XR | P::BGRA10XRSRGB => P::RGBA16Float,
+        P::RGB10A82PXR10 | P::RGB10A82PXR10SRGB => P::RGBA16Float,
         P::RGB10A2UnormSRGB => P::RGB10A2Unorm,
         P::R10UnormX6 | P::R10UnormX6SRGB => P::R16Unorm,
         P::RG10UnormX12 | P::RG10UnormX12SRGB => P::RG16Unorm,
+        P::R16Bfloat => P::R16Float,
+        P::RG16Bfloat => P::RG16Float,
+        P::RGBA16Bfloat => P::RGBA16Float,
         other => other,
     }
 }
@@ -163,17 +167,18 @@ mod tests {
     #[test]
     fn apple_forms_are_held_in_formats_of_their_size() {
         let size = |p: P| match p {
-            P::BGR10XR | P::BGR10XRSRGB | P::RGB10A2UnormSRGB | P::RG10UnormX12 | P::RG10UnormX12SRGB => 4,
-            P::BGRA10XR | P::BGRA10XRSRGB => 8,
-            P::R10UnormX6 | P::R10UnormX6SRGB => 2,
-            P::RG11B10Float | P::RGB10A2Unorm | P::RG16Unorm => 4,
+            P::BGR10XR | P::BGR10XRSRGB | P::RGB10A2UnormSRGB | P::RG10UnormX12 | P::RG10UnormX12SRGB | P::RG16Bfloat => 4,
+            P::BGRA10XR | P::BGRA10XRSRGB | P::RGB10A82PXR10 | P::RGB10A82PXR10SRGB | P::RGBA16Bfloat => 8,
+            P::R10UnormX6 | P::R10UnormX6SRGB | P::R16Bfloat => 2,
+            P::RG11B10Float | P::RGB10A2Unorm | P::RG16Unorm | P::RG16Float => 4,
             P::RGBA16Float => 8,
-            P::R16Unorm => 2,
+            P::R16Unorm | P::R16Float => 2,
             _ => 0,
         };
         for p in [
-            P::BGR10XR, P::BGR10XRSRGB, P::BGRA10XR, P::BGRA10XRSRGB, P::RGB10A2UnormSRGB, P::R10UnormX6,
-            P::R10UnormX6SRGB, P::RG10UnormX12, P::RG10UnormX12SRGB,
+            P::BGR10XR, P::BGR10XRSRGB, P::BGRA10XR, P::BGRA10XRSRGB, P::RGB10A82PXR10, P::RGB10A82PXR10SRGB,
+            P::RGB10A2UnormSRGB, P::R10UnormX6, P::R10UnormX6SRGB, P::RG10UnormX12, P::RG10UnormX12SRGB,
+            P::R16Bfloat, P::RG16Bfloat, P::RGBA16Bfloat,
         ] {
             assert_ne!(stored(p), p, "{p:?}");
             assert_eq!(size(stored(p)), size(p), "{p:?}");

@@ -670,7 +670,7 @@ pub extern "C" fn nmb_device_linear_bytes_per_row(device: *const NmbDevice, form
         let d = get(device)?;
         let pf = super::pixel_format(format, "pixel format")?;
         let alignment = d.device.minimum_linear_texture_alignment(pf).map_err(e("linear texture"))?;
-        let info = d.device.pixel_format_info(format);
+        let info = d.device.pixel_format_info(pf.as_raw() as u64);
         // flags 0x400: a format of blocks; words[0]: the bytes of a texel.
         let texel = if info.flags & 0x400 != 0 { 0 } else { info.words[0] };
         if texel == 0 {

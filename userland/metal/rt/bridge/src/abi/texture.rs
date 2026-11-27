@@ -139,15 +139,18 @@ pub extern "C" fn nmb_texture_new_on_buffer(buffer: *mut NmbBuffer, descriptor_:
     guard(std::ptr::null_mut(), || over_buffer(buffer, descriptor_, offset, bytes_per_row))
 }
 
-/// `newTextureWithDescriptor:iosurface:plane:`: the asked plane's bytes as a texture over the surface's buffer. A two-plane
-/// texture of a YCbCr format (one texture reading both planes) is not made here: rt has no such texture over a buffer.
+/// `newTextureWithDescriptor:iosurface:plane:`: the asked plane's bytes as a texture over the surface's buffer. Single-plane
+/// views of a multi-plane surface (such as plane 0 `R8Unorm` / plane 1 `RG8Unorm` of NV12 video, or `BGR10_XR` / `A8Unorm`
+/// of `b3a8`) already have their plane's offset and `bytes_per_row` and go straight to `over_buffer`; only a multi-plane
+/// Metal pixel format (one texture reading both planes at once) is refused because rt has no two-plane texture over a buffer.
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_texture_new_on_surface(buffer: *mut NmbBuffer, descriptor_: *const NmbTextureDescriptor, offset: u64,
                                              bytes_per_row: u64, _pixel_format: u32, _plane: u64, _width: u64, _height: u64,
                                              _chroma_offset: u64, chroma_bytes_per_row: u64) -> *mut NmbTexture {
     guard(std::ptr::null_mut(), || {
-        if chroma_bytes_per_row != 0 {
-            return Err("a two-plane YCbCr texture over a surface is not made by the rt bridge".into());
+        let asked = raw::<rt::PixelFormat>(get(descriptor_)?.format, "pixel format")?;
+        if chroma_bytes_per_row != 0 && matches!(asked, rt::PixelFormat::RGB10A82PXR10 | rt::PixelFormat::RGB10A82PXR10SRGB) {
+            return Err("a two-plane RGB10A8_2P_XR10 texture over a surface is not made by the rt bridge".into());
         }
         over_buffer(buffer, descriptor_, offset, bytes_per_row)
     })
