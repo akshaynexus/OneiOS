@@ -18,7 +18,7 @@ static FIXTURE_AIR: &[u8] = include_bytes!(env!("NMB_FIXTURE_AIR"));
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let Some(path) = args.get(1) else {
-        eprintln!("usage: m2v-rt-check DRIVER.so|DRIVER.dylib [--floor-only | --census FILE... | --pair LIB VERTEX FRAGMENT [FORMAT...] | --selftest [--qc FILE]]");
+        eprintln!("usage: m2v-rt-check DRIVER.so|DRIVER.dylib [--floor-only | --census FILE... | --pair LIB VERTEX FRAGMENT [FORMAT...] [--raw] | --selftest [--qc FILE]]");
         return ExitCode::from(2);
     };
     let floor_only = args.iter().any(|a| a == "--floor-only");
@@ -198,11 +198,14 @@ fn census_all(physical: &rt::PhysicalDevice, files: &[String]) -> ExitCode {
 
 /// `--pair LIB VERTEX FRAGMENT [FORMAT...]`: one pair of LIB made with each FORMAT (a Metal name,
 /// `MTLPixelFormatBGRA8Unorm`, or its number) as the one color attachment; with no FORMAT, every
-/// pixel format the runtime names. Each answer printed whole. Exit 0 when every format asked for
+/// pixel format the runtime names. Each format as the plug-in holds it (`abi::stored`); with `--raw`, as rt is asked
+/// (its own refusals). Each answer printed whole. Exit 0 when every format asked for
 /// was made (with no FORMAT: when at least one was).
 fn pair(physical: &rt::PhysicalDevice, rest: &[String]) -> ExitCode {
-    let [lib, vertex, fragment, wanted @ ..] = rest else {
-        eprintln!("usage: m2v-rt-check DRIVER --pair LIB VERTEX FRAGMENT [FORMAT...]");
+    let as_bridge = !rest.iter().any(|a| a == "--raw");
+    let rest: Vec<String> = rest.iter().filter(|a| *a != "--raw").cloned().collect();
+    let [lib, vertex, fragment, wanted @ ..] = rest.as_slice() else {
+        eprintln!("usage: m2v-rt-check DRIVER --pair LIB VERTEX FRAGMENT [FORMAT...] [--raw]");
         return ExitCode::from(2);
     };
     let mut formats = Vec::new();
@@ -243,7 +246,7 @@ fn pair(physical: &rt::PhysicalDevice, rest: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let answers = match adreno_metal_bridge_rt::census::pair(&device, &indices, &bytes, vertex, fragment, &formats) {
+    let answers = match adreno_metal_bridge_rt::census::pair(&device, &indices, &bytes, vertex, fragment, &formats, as_bridge) {
         Ok(answers) => answers,
         Err(why) => {
             println!("pair {vertex}+{fragment}: {why}");

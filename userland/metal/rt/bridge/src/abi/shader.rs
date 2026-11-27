@@ -504,7 +504,7 @@ fn render_descriptor(descriptor: *const NmbRenderPipelineDescriptor) -> Result<R
         if c.format == 0 {
             continue;
         }
-        let mut a = ColorAttachmentDescriptor::new(raw::<PixelFormat>(c.format, "color format")?);
+        let mut a = ColorAttachmentDescriptor::new(super::pixel_format(c.format, "color format")?);
         a.write_mask = raw::<ColorWriteMask>(c.write_mask, "write mask")?;
         a.blending_enabled = c.blending != 0;
         a.source_rgb_blend_factor = raw::<BlendFactor>(c.source_rgb, "blend factor")?;

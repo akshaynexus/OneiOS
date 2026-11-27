@@ -2,10 +2,9 @@
 //! The device: Turnip opened with no loader (crate::driver), rt's device on it, the bridge's index grants, its retire gate
 //! and small-buffer pools; the device answers the frontend installs as methods; the counts of its telemetry rows.
 
-use super::{copy_out, e, get, guard, raw, release, boxed};
+use super::{copy_out, e, get, guard, release, boxed};
 use crate::indices::Indices;
 use metal2vulkan_runtime as rt;
-use rt::PixelFormat;
 use std::collections::BTreeSet;
 use std::ffi::{c_char, c_void, CStr};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
@@ -591,7 +590,7 @@ fn device_answer(d: &NmbDevice, selector: &str, arg: u64) -> Result<u64, String>
         "supportsYCBCRFormats12" | "supportsYCBCRPackedFormats12" => 0,
         "supportsSIMDGroup" => 1,
         "minimumLinearTextureAlignmentForPixelFormat:" => {
-            d.device.minimum_linear_texture_alignment(raw::<PixelFormat>(arg, "pixel format")?).map_err(e("linear texture alignment"))?
+            d.device.minimum_linear_texture_alignment(super::pixel_format(arg, "pixel format")?).map_err(e("linear texture alignment"))?
         }
         "supportsTextureSampleCount:" => d.device.supports_texture_sample_count(arg.min(64) as u32) as u64,
         // As the old runtime answered: 1, 2 and 4 views, rate maps of 1 and 2 layers, every primitive type and rounding mode.
@@ -666,7 +665,7 @@ pub extern "C" fn nmb_device_family_blockers(device: *const NmbDevice, family: i
 pub extern "C" fn nmb_device_linear_bytes_per_row(device: *const NmbDevice, format: u64, width: u64) -> u64 {
     guard(0, || {
         let d = get(device)?;
-        let pf = raw::<PixelFormat>(format, "pixel format")?;
+        let pf = super::pixel_format(format, "pixel format")?;
         let alignment = d.device.minimum_linear_texture_alignment(pf).map_err(e("linear texture"))?;
         let info = d.device.pixel_format_info(format);
         // flags 0x400: a format of blocks; words[0]: the bytes of a texel.

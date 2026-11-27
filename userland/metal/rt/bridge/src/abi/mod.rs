@@ -9,6 +9,7 @@ pub mod memory;
 pub mod shader;
 pub mod texture;
 
+use metal2vulkan_runtime as rt;
 use std::cell::RefCell;
 use std::ffi::c_char;
 
@@ -79,6 +80,33 @@ pub(crate) fn raw<T: TryFrom<u32>>(value: u64, what: &str) -> Result<T, String> 
     u32::try_from(value).ok().and_then(|v| T::try_from(v).ok()).ok_or_else(|| format!("{what} {value} is not a Metal value"))
 }
 
+/// The format the runtime holds a texture or a color attachment of Metal format `pf` in. rt makes no texture of Apple's
+/// extended-range and padded 10-bit forms (`Gap::TextureFormat`) and blends into no attachment of them (the extended-range
+/// ones `Format`, the padded ones `FramebufferFetch`: not implemented on any device). Core Animation renders and blends
+/// into them: its blur's `downsample_blur_vert_lph` + `alpha_threshold_lph` over `BGR10_XR` aborted backboardd at every boot
+/// on v0.1.36 (issue #81). Each is held in a format of the same bytes a pixel that Turnip renders and blends: the XR
+/// forms in floats (values past 1 kept; `RG11B10Float` drops negatives), the padded ones in 16-bit unorm or plain
+/// `RGB10A2Unorm` (the codes' sRGB transfer dropped: the values are kept, not the bytes). Every producer and consumer of
+/// such a texture is this runtime (backboardd's own framebuffer is 8-bit: the frontend withholds
+/// `supportsExtendedXR10Formats` from it), so the bytes need not be Apple's [I]. `nmb_texture_describe` answers the
+/// format asked for.
+pub fn stored(pf: rt::PixelFormat) -> rt::PixelFormat {
+    use rt::PixelFormat as P;
+    match pf {
+        P::BGR10XR | P::BGR10XRSRGB => P::RG11B10Float,
+        P::BGRA10XR | P::BGRA10XRSRGB => P::RGBA16Float,
+        P::RGB10A2UnormSRGB => P::RGB10A2Unorm,
+        P::R10UnormX6 | P::R10UnormX6SRGB => P::R16Unorm,
+        P::RG10UnormX12 | P::RG10UnormX12SRGB => P::RG16Unorm,
+        other => other,
+    }
+}
+
+/// A raw Metal pixel format as the runtime holds it ([`stored`]).
+pub(crate) fn pixel_format(value: u64, what: &str) -> Result<rt::PixelFormat, String> {
+    raw::<rt::PixelFormat>(value, what).map(stored)
+}
+
 pub(crate) fn e<E: std::fmt::Display>(what: &'static str) -> impl FnOnce(E) -> String {
     move |error| format!("{what}: {error}")
 }
@@ -121,6 +149,37 @@ impl Options {
             // Animation's attachments are memoryless.
             2 | 3 => StorageMode::Private,
             _ => StorageMode::Shared,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stored;
+    use metal2vulkan_runtime::PixelFormat as P;
+
+    /// Each of Apple's forms rt makes no texture of is held in a format of the same bytes a pixel; every other format is
+    /// held as it is.
+    #[test]
+    fn apple_forms_are_held_in_formats_of_their_size() {
+        let size = |p: P| match p {
+            P::BGR10XR | P::BGR10XRSRGB | P::RGB10A2UnormSRGB | P::RG10UnormX12 | P::RG10UnormX12SRGB => 4,
+            P::BGRA10XR | P::BGRA10XRSRGB => 8,
+            P::R10UnormX6 | P::R10UnormX6SRGB => 2,
+            P::RG11B10Float | P::RGB10A2Unorm | P::RG16Unorm => 4,
+            P::RGBA16Float => 8,
+            P::R16Unorm => 2,
+            _ => 0,
+        };
+        for p in [
+            P::BGR10XR, P::BGR10XRSRGB, P::BGRA10XR, P::BGRA10XRSRGB, P::RGB10A2UnormSRGB, P::R10UnormX6,
+            P::R10UnormX6SRGB, P::RG10UnormX12, P::RG10UnormX12SRGB,
+        ] {
+            assert_ne!(stored(p), p, "{p:?}");
+            assert_eq!(size(stored(p)), size(p), "{p:?}");
+        }
+        for p in [P::BGRA8Unorm, P::BGRA8UnormSRGB, P::RGBA16Float, P::A8Unorm, P::R8Unorm, P::Depth32Float] {
+            assert_eq!(stored(p), p);
         }
     }
 }

@@ -311,13 +311,35 @@ pair downsample_blur_vert_lph+alpha_threshold_lph: 40 of 44 attachments made (ea
 
 rt refuses **every blend into Apple's extended-range forms** (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their
 `_sRGB` twins) on every device (`metal2vulkan/src/lower/stage_io/extended_color.rs`, `plan`: "not implemented on any
-device"). Core Animation draws its blurs blended into such a surface. The 624bab3 add-on blends them
-(NativeMetal 0012, srgb-extended-range-blend-rounded-model, the "check" row above). **Until that is ported, releases
-ship the 624bab3 add-on** (no `--metal-rt`, `docs/releases.md`); v0.1.37 does. To port: an rt patch that blends an
-extended-range attachment (NativeMetal 0012's rounded model), then this `--pair` line with 44 of 44 made, then a phone
-boot.
+device"), and every blend into its padded 10-bit forms (`RGB10A2Unorm_sRGB`, `R10Unorm_X6`, `RG10Unorm_X12`, their
+`_sRGB` twins: `FramebufferFetch`); it makes no texture of them at all (`Gap::TextureFormat`). The 624bab3 add-on
+blended them in the shader (NativeMetal 0012).
 
-`--pair LIB VERTEX FRAGMENT [FORMAT...]` (a lasting tool): one vertex/fragment pair, which the name-matched census never
-makes, built with a vertex descriptor from the vertex function's own `[[attribute(n)]]` list (buffer 30). Each format
-(a Metal name with or without `MTLPixelFormat`, or its number; none given: all 301) is tried plain, with Core
-Animation's premultiplied "over" blend, alpha-masked and colour-masked, and every refusal is printed whole.
+**The fix (the bridge, 2026-11-27): the rt add-on holds those forms in formats rt renders and blends**
+(`bridge/src/abi/mod.rs`, `stored`), of the same bytes a pixel: `BGR10_XR`(`_sRGB`) in `RG11B10Float`,
+`BGRA10_XR`(`_sRGB`) in `RGBA16Float`, `RGB10A2Unorm_sRGB` in `RGB10A2Unorm`, `R10Unorm_X6`(`_sRGB`) in `R16Unorm`,
+`RG10Unorm_X12`(`_sRGB`) in `RG16Unorm`. Textures, views, render pipeline attachments and the linear alignment go
+through it; `nmb_texture_describe` answers the format asked for. The values are kept (floats keep values past 1;
+`RG11B10Float` drops negatives), not Apple's bytes: every producer and consumer of such a texture is this runtime, as
+backboardd's own framebuffer is 8-bit (the frontend withholds `supportsExtendedXR10Formats` from it) [I: a CPU read of
+such a texture's bytes would see the other encoding; none seen]. `RGB10A8_2P_XR10` (two planes) is not mapped. On the
+laptop (Turnip a750, noop shim):
+
+```
+$ m2v-rt-check libvulkan_freedreno.so --pair metallibs/QuartzCore-default.metallib downsample_blur_vert_lph alpha_threshold_lph \
+    BGR10_XR BGR10_XR_sRGB BGRA10_XR BGRA10_XR_sRGB RGB10A2Unorm_sRGB R10Unorm_X6 R10Unorm_X6_sRGB RG10Unorm_X12 RG10Unorm_X12_sRGB BGRA8Unorm
+pair downsample_blur_vert_lph+alpha_threshold_lph: 40 of 40 attachments made (...)
+$ ... the same with --raw (rt alone)
+pair downsample_blur_vert_lph+alpha_threshold_lph: 29 of 40 attachments made (...)
+```
+
+the QuartzCore census unchanged (kernels 38 of 41, pairs 15 of 21), `abi_smoke` over ANV 0 failed, the bridge's unit
+test of the mapping (`abi::tests`). v0.1.37 shipped the 624bab3 add-on while this was open; the next `--metal-rt`
+release carries the fix. Not booted on a phone yet: the proof is backboardd with no `sheng-exit ... Metal failed to
+build render pipeline` and SpringBoard (9 of 9).
+
+`--pair LIB VERTEX FRAGMENT [FORMAT...] [--raw]` (a lasting tool): one vertex/fragment pair, which the name-matched census
+never makes, built with a vertex descriptor from the vertex function's own `[[attribute(n)]]` list (buffer 30). Each
+format (a Metal name with or without `MTLPixelFormat`, or its number; none given: all 301) is tried plain, with Core
+Animation's premultiplied "over" blend, alpha-masked and colour-masked, held as the plug-in holds it (`--raw`: as rt is
+asked), and every refusal is printed whole.

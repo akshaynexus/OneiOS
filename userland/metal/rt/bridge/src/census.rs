@@ -90,7 +90,8 @@ pub fn census(device: &rt::Device, indices: &crate::indices::Indices, bytes: &[u
 /// its only attachment (index 0): the runtime's whole answer for each (not cut to a line), so a
 /// refusal a client's crash report truncates (`... at metada`) is read whole. A pair from two
 /// different shader families (QuartzCore's `downsample_blur_vert_lph` with `alpha_threshold_lph`,
-/// issue #81) is one the name-matched census never makes.
+/// issue #81) is one the name-matched census never makes. `as_bridge`: each format as the plug-in holds it
+/// (`abi::stored`: Apple's extended-range and padded forms in formats rt renders), else as rt is asked.
 pub fn pair(
     device: &rt::Device,
     indices: &crate::indices::Indices,
@@ -98,6 +99,7 @@ pub fn pair(
     vertex: &str,
     fragment: &str,
     formats: &[rt::PixelFormat],
+    as_bridge: bool,
 ) -> Result<Vec<(rt::PixelFormat, &'static str, Result<(), String>)>, String> {
     use metal2vulkan::metal::{BlendFactor, ColorWriteMask};
     let library = rt::Library::parse(bytes).map_err(|e| format!("library: {}", first_line(e)))?;
@@ -120,7 +122,9 @@ pub fn pair(
                 let mut descriptor = rt::RenderPipelineDescriptor::new(rt::StageSource::Function(rt::FunctionDescriptor::new(v)));
                 descriptor.vertex_descriptor = layout;
                 descriptor.fragment = Some(rt::StageSource::Function(rt::FunctionDescriptor::new(f)));
-                let mut color = rt::ColorAttachmentDescriptor::new(format);
+                // as the plug-in holds it (`abi::stored`), unless the runtime's own answer is asked for
+                let held = if as_bridge { crate::abi::stored(format) } else { format };
+                let mut color = rt::ColorAttachmentDescriptor::new(held);
                 color.write_mask = mask;
                 if blend {
                     color.blending_enabled = true;

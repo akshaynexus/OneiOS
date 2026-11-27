@@ -29,8 +29,8 @@
 # --build-only builds and checks, and publishes nothing. --runtime-only and --apk-only are CI's "runtime only" and
 # "apk only" (an APK-only release is not marked latest). --skip-tests leaves out the tests lane. --metal-rt builds the
 # Metal plug-in on metal2vulkan-rt (METAL_RUNTIME=rt, userland/metal/rt) instead of the default 624bab3 one: v0.1.36 was
-# made so, and its backboardd aborts at every boot (issue #81: rt refuses a blend into BGR10_XR; userland/metal/rt/README.md):
-# leave it out until that README says the gap is ported.
+# made so, and its backboardd aborted at every boot (issue #81: rt refuses a blend into BGR10_XR); since 2026-11-27 the rt
+# bridge holds those formats in ones rt blends (userland/metal/rt/README.md, "Issue #81").
 # --metal-dir DIR takes a Metal plug-in built before (userland/metal/build.sh's output folder, with camera/ holding
 # H9ISP.mediacapture when the capture plug-in goes too) instead of building one; --metal-more-dir DIR (with
 # --metal-dir, repeatable) adds another iOS build's (ONEIOS_METAL_TARGET="iPhone18,2 24B156" userland/metal/build.sh); --no-metal makes a runtime without

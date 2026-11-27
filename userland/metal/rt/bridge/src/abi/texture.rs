@@ -7,7 +7,7 @@ use super::device::{device_of, DeviceRef, NmbDevice};
 use super::memory::{purgeable, NmbBuffer, NmbHeap};
 use super::{boxed, e, get, get_mut, guard, raw, release, words, Options};
 use metal2vulkan_runtime as rt;
-use rt::{PixelFormat, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage};
+use rt::{TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage};
 use std::ffi::c_void;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -31,6 +31,9 @@ pub struct NmbTextureDescriptor {
 
 pub struct NmbTexture {
     pub(crate) texture: rt::Texture,
+    /// The Metal pixel format asked for (0: the texture's own): rt holds some of Apple's in another (`super::stored`), and
+    /// `nmb_texture_describe` answers this one.
+    asked: u64,
     pub(crate) device: DeviceRef,
     index: Option<u32>,
     options: u64,
@@ -61,7 +64,7 @@ fn u32_of(v: u64, what: &str) -> Result<u32, String> {
 
 fn descriptor(d: *const NmbTextureDescriptor) -> Result<(rt::TextureDescriptor, &'static NmbTextureDescriptor), String> {
     let d: &'static NmbTextureDescriptor = get(d)?;
-    let mut out = rt::TextureDescriptor::new(raw::<TextureType>(d.kind, "texture type")?, raw::<PixelFormat>(d.format, "pixel format")?,
+    let mut out = rt::TextureDescriptor::new(raw::<TextureType>(d.kind, "texture type")?, super::pixel_format(d.format, "pixel format")?,
                                              u32_of(d.width, "width")?, u32_of(d.height.max(1), "height")?);
     out.depth = u32_of(d.depth.max(1), "depth")?;
     out.mipmap_level_count = u32_of(d.levels.max(1), "levels")?;
@@ -82,6 +85,7 @@ impl NmbTexture {
     fn new(texture: rt::Texture, d: &NmbDevice, index: Option<u32>, source: &NmbTextureDescriptor) -> NmbTexture {
         NmbTexture {
             texture,
+            asked: source.format,
             device: d as *const NmbDevice,
             index,
             options: source.options,
@@ -161,7 +165,8 @@ fn view(texture: *mut NmbTexture, format: u64, kind: Option<u64>, levels: *const
     let t = get(texture)?;
     let d = device_of(t.device);
     let parent = t.texture.descriptor();
-    let format = raw::<PixelFormat>(format, "pixel format")?;
+    let asked = format;
+    let format = super::pixel_format(format, "pixel format")?;
     let (kind, l, s) = match kind {
         None => {
             let slices = match parent.texture_type {
@@ -191,6 +196,7 @@ fn view(texture: *mut NmbTexture, format: u64, kind: Option<u64>, levels: *const
         options: t.options, rotation: t.rotation, framebuffer_only: t.framebuffer_only as u64, is_drawable: 0,
     });
     out.framebuffer_only = t.framebuffer_only;
+    out.asked = asked;
     Ok(boxed(out))
 }
 
@@ -231,7 +237,7 @@ pub extern "C" fn nmb_texture_describe(texture: *const NmbTexture, out: *mut Nmb
         let out = get_mut(out)?;
         *out = NmbTextureDescriptor {
             kind: d.texture_type.as_raw() as u64,
-            format: d.pixel_format.as_raw() as u64,
+            format: if t.asked != 0 { t.asked } else { d.pixel_format.as_raw() as u64 },
             width: d.width as u64,
             height: d.height as u64,
             depth: d.depth as u64,
