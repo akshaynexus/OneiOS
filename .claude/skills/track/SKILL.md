@@ -22,6 +22,15 @@ and what is broken, each with a detail and a source. Args: `OWNER/REPO DEVICE-SL
 - **Ask the maintainer when unsure**, and before you change a state that the maintainer set by hand (the detail says
   "(OneiOS maintainer, ...)" or "owner").
 - No Apple files and no screenshots with personal data in `media-upload`.
+- **Ask before every image or video** (`media-upload`, `--photo`): show the file and the caption, post on a yes only,
+  whatever the update setting is.
+- **Ask once how updates should go** (the setup below) and follow the answer: `auto` (update and report), `ask` (show
+  the exact changes first; the default) or `off` (only list what could change); the same for release posts. Kept per
+  repo and phone in `~/.config/iosonand/agent-prefs.json` (never committed):
+  `{"akshaynexus/OneiOS s24-ultra": {"updates": "ask", "posts": "ask", "asked": "DATE"}}`. No entry: ask first.
+
+The generic version of this skill, for any port and any agent (to give to iOSOnAnd and to forks):
+`tools/iosonand/SKILL.md`.
 
 ## First time: sign in and claim
 
