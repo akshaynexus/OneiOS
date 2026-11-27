@@ -133,7 +133,7 @@ the owner. The `/track` skill (`.claude/skills/track/SKILL.md`) has the commands
   only built or host-tested changes no state.
 - **Only claim what the repo or a log shows.** Ask the owner before you change a state the owner set by hand.
 - **Ask before posting any image or video** to the tracker, whatever the setting.
-- **The skill for other ports:** `tools/iosonand/SKILL.md` is the generic iosonand skill (for iOSOnAnd and forks;
+- **The skill for other ports:** `skills/iosonand/SKILL.md` is the generic iosonand skill (for iOSOnAnd and forks;
   link it from a fork's CLAUDE.md or AGENTS.md).
 - **Sign in with the gist proof only** (`node cli.mjs login`); never `login --token`. Read `cli.mjs` before the first
   run. No email address, no personal detail, no Apple file in anything sent to the tracker.

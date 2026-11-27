@@ -124,7 +124,7 @@ read skills, and add to `CLAUDE.md` / `AGENTS.md` (or your agent's instructions)
 
 This port's per-phone status is on the iOSOnAnd tracker (https://hackios.appaiproxy.com), repo OWNER/REPO, phone SLUG.
 Follow the iosonand skill (.claude/skills/iosonand/SKILL.md; the latest at
-https://github.com/akshaynexus/OneiOS/blob/main/tools/iosonand/SKILL.md): ask the user once how tracker updates should
+https://github.com/akshaynexus/OneiOS/blob/main/skills/iosonand/SKILL.md): ask the user once how tracker updates should
 go (auto, ask, off), update the tracker after a phone boot or a release as they chose, and always ask before posting
 an image or a video.
 ```

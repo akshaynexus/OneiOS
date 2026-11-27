@@ -30,7 +30,7 @@ and what is broken, each with a detail and a source. Args: `OWNER/REPO DEVICE-SL
   `{"akshaynexus/OneiOS s24-ultra": {"updates": "ask", "posts": "ask", "asked": "DATE"}}`. No entry: ask first.
 
 The generic version of this skill, for any port and any agent (to give to iOSOnAnd and to forks):
-`tools/iosonand/SKILL.md`.
+`skills/iosonand/SKILL.md`.
 
 ## First time: sign in and claim
 
