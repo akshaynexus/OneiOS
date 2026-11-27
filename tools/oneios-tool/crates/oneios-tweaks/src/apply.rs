@@ -135,6 +135,13 @@ pub fn apply(a: &Apply) -> Result<Applied> {
     // xnuhost's part of the display: it reads this file from the image set's overlay/userland (docs/booter.md).
     let scale = oneios_common::pyrepr::str_value(cx.device.get("display").and_then(|d| d.get("scale")).unwrap_or(&Value::Null));
     let mut conf = format!("# written by roottweak: the UI scale this image was made for (2 or 3)\nscale={scale}\n");
+    // The S Pen as an Apple Pencil (docs/hardware.md 7f): xnuhost reads the digitizer and never grabs it, and finds
+    // nothing on a phone without one. The S24 Ultra's image carried this by hand since 2026-11-16 and a rebuilt image
+    // lost it (the owner's S Pen stopped working, 2026-11-25); the generator writes it, so a rebuild keeps it. Not for
+    // the A56's 16.5 image, whose port never claimed the pen.
+    if cx.build != "20F66" {
+        conf.push_str("pen=auto\n");
+    }
     if cx.build == "20F66" {
         // iOS 16.5 (port-a56, docs/a56.md): the 16.5 userland on the 24A446 collection (cli.py has the reasons).
         // oneios-mac-exec-skip (kernel 0073): 24A446's Sandbox refuses 20F66's mediaserverd and TVRemoteConnectionService at

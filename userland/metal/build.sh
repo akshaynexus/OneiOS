@@ -157,9 +157,12 @@ stage() {
   # warning option an error), so the plug-in script is told about it only when the compiler knows it
   local knows=0
   echo 'int x;' | "$IOS_DIR/ios-clang" -Werror -Wno-error=unused-but-set-global -x c -c - -o /dev/null 2>/dev/null && knows=1
-  local rt=()
-  [ "$RUNTIME" = rt ] && rt=(--rt)
-  "$ONEIOS_TOOL" ios metal-stage-edit "$R" "$HOOKS" "$JOBS" "$knows" "${rt[@]}"
+  # macOS runners ship Bash 3.2, where expanding an empty array under `set -u` is an error.
+  if [ "$RUNTIME" = rt ]; then
+    "$ONEIOS_TOOL" ios metal-stage-edit "$R" "$HOOKS" "$JOBS" "$knows" --rt
+  else
+    "$ONEIOS_TOOL" ios metal-stage-edit "$R" "$HOOKS" "$JOBS" "$knows"
+  fi
   # The bridge script takes the translator's source only as the pin plus a prefix of its patch list ("Translator source
   # differs from the pinned revision plus its recorded patches"). A list whose order or a patch that changed since the
   # last stage leaves a tree that is no prefix (2026-11-25: main's 90101, 90102, 90110 came before this branch's
@@ -252,7 +255,14 @@ finish() {
   cp -r "$built" "$bundle"
   # The file the root tweaks look for: this bundle's addresses are this guest's.
   echo "$TARGET_ID" > "$bundle/oneios-target"
-  "$ONEIOS_TOOL" ios macho-check --local "$bundle/libvulkan_freedreno.dylib" "$bundle/NativeAdrenoMetal" "$bundle/libvulkan_freedreno.dylib" | tee "$OUT/NativeAdrenoMetal.check.txt"
+  if [ -s "$IOS_TBD/usr/lib/libSystem.B.tbd" ]; then
+    "$ONEIOS_TOOL" ios macho-check --tbd "$IOS_TBD" --local "$bundle/libvulkan_freedreno.dylib" \
+      "$bundle/NativeAdrenoMetal" "$bundle/libvulkan_freedreno.dylib" | tee "$OUT/NativeAdrenoMetal.check.txt"
+  else
+    say "guest shared-cache stubs are unavailable; checking against the iPhoneOS SDK stubs"
+    "$ONEIOS_TOOL" ios macho-check --sdk --local "$bundle/libvulkan_freedreno.dylib" \
+      "$bundle/NativeAdrenoMetal" "$bundle/libvulkan_freedreno.dylib" | tee "$OUT/NativeAdrenoMetal.check.txt"
+  fi
   "$ONEIOS_TOOL" ios metal-record "$ROOT" "$bundle" "$OUT/NativeAdrenoMetal.build.json" "$HOOKS" "$TARGET_ID"
   # Which bridge runtime the bundle carries, beside the record (the record names the base's pins either way).
   echo "$RUNTIME" > "$OUT/NativeAdrenoMetal.runtime"
@@ -265,8 +275,17 @@ finish() {
 # image's overlay/userland/owner-trust.json all the same; this is for changing the plug-in without a new Data seed.
 addon() {
   local bundle=$OUT/NativeAdrenoMetal.bundle
-  [ -f "$bundle/NativeAdrenoMetal" ] || { echo "metal: no bundle in $OUT: run the build first" >&2; exit 1; }
-  "$ONEIOS_TOOL" ios gpuaddon "$bundle" "$OUT/NativeAdrenoMetal.gpuaddon"
+  [ -s "$bundle/NativeAdrenoMetal" ] && [ -s "$bundle/libvulkan_freedreno.dylib" ] && [ -s "$bundle/oneios-target" ] || {
+    echo "metal: incomplete bundle in $OUT: run the build first" >&2
+    exit 1
+  }
+  [ "$(cat "$bundle/oneios-target")" = "$TARGET_ID" ] || {
+    echo "metal: bundle target does not match $TARGET_ID in $bundle/oneios-target" >&2
+    exit 1
+  }
+  # `phone addon` needs the .cdhashes companion to update owner-trust.json. `ios addon` writes the same NGPUADD2
+  # bundle payload as `ios gpuaddon`, and writes every packaged Mach-O's CDHash beside it.
+  "$ONEIOS_TOOL" ios addon "$OUT/NativeAdrenoMetal.gpuaddon" --metal "$bundle"
 }
 
 say "SDK $IOS_SDK_VERSION ($IOS_SDK); stubs $([ -f "$IOS_TBD/usr/lib/libSystem.B.tbd" ] && echo "$IOS_TBD" || echo "none: the SDK's own"); target $IOS_TARGET"

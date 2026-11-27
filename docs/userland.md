@@ -248,7 +248,7 @@ MobileGestalt reads them from `/product`. Without an identity tree the guest's `
 
 The loader (`runtime/loader/src/machine.rs`, `Machine::tree`; `machine.c`'s `xl_machine_tree` when this was written) now writes, without an identity, the values of 24A446's
 V54 device tree (`out/kernel-inputs/24A446/devicetree.bin`, read with `xnuloader-inspect adt`): `artwork-device-idiom`
-"phone", `artwork-device-subtype` 2868, `artwork-dynamic-displaymode` "0", `graphics-featureset-class` "APPLE10",
+"phone", `artwork-device-subtype` 2868 (or 2340 on a 1080x2340 panel, the iPhone 12/13 mini 360x780-point grid; `artwork-subtype=N` overrides either; ported from `NoNameBuilder/OneiOS` `2a021be7`), `display-corner-radius` when `corner-radius=N` is non-zero (two little-endian u32s, radius and 1; 34 on `galaxy-s25`, `120df342`), `artwork-dynamic-displaymode` "0", `graphics-featureset-class` "APPLE10",
 `graphics-featureset-fallbacks` "APPLE9:APPLE8:APPLE7:APPLE6:APPLE5:APPLE4:APPLE3:APPLE3v1:APPLE1:GLES2,0" (APPLE2
 taken out, as with an identity; since 2026-11-25 only with xnuhost's `astc=0`: at the default `astc=1` APPLE2 and MTL2,2 stay, MobileGestalt
 answers DeviceSupportsASTC, and SpringBoard's snapshots are kept JPEG or PNG by the Metal plug-in's `SnapshotFormat.inc`, which

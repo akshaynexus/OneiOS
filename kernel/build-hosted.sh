@@ -1,6 +1,4 @@
-# (made again when stale, or when a link of it is broken: the layout was written from a worktree that is gone)
-  [ -x "$TOOLCHAIN/unixnu/CommandLineTools/usr/bin/xnu-host-cc" ] && [ -x "$TOOLCHAIN/unixnu/CommandLineTools/usr/bin/ld" ] &&
-    [ "$TOOLCHAIN/unixnu" -nt "$ROOT/kernel/linux/clang-wrapper" ] || "$ROOT/kernel/linux/unixnu-layout.sh"#!/bin/bash
+#!/bin/bash
 # Build the hosted OneiOS XNU: the kernel of kernel/build-linux.sh plus the hosted machine layer
 # (kernel/patches/oneios-hosted), which runs as a Linux process under xnuhost instead of at EL1.
 #   scripts/bg.sh kernel-hosted env HOSTED_OUT=<name> kernel/build-hosted.sh

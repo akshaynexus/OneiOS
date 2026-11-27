@@ -1313,12 +1313,15 @@ fn lanes(g: &mut Guest) {
     BLOB_HELD.store(3, Ordering::Release);
     let pa = |o: usize| g.ram.pa(o);
     let (pca, pra, pcc, prc, pcb, prb) = (pa(ca), pa(ra), pa(cc), pa(rc), pa(cb), pa(rb));
-    g.d.send(0, &[(pca, 14 * 4, false), (pra, 24, true)], true);
-    g.d.send(0, &[(pcc, 14 * 4, false), (prc, 24, true)], true);
-    g.d.send_at(0, 2, &[(pcb, 10 * 4, false), (prb, 24, true)], true); // three chains at once: 0, 4, 2
-                                                                       // The submit is answered while both blobs wait; or, when the slow lane took the first blob's turn before the
-                                                                       // submit came, right after that one blob and before the second (the fast lane's turn at the lock), however the
-                                                                       // threads run.
+    // Post all three chains and kick once: a kick of its own would reap a response here (send_at's reap), and the
+    // count below must see all three.
+    g.d.send(0, &[(pca, 14 * 4, false), (pra, 24, true)], false);
+    g.d.send(0, &[(pcc, 14 * 4, false), (prc, 24, true)], false);
+    g.d.send_at(0, 2, &[(pcb, 10 * 4, false), (prb, 24, true)], false); // three chains at once: 0, 4, 2
+    g.d.kick(0);
+    // The submit is answered while both blobs wait; or, when the slow lane took the first blob's turn before the
+    // submit came, right after that one blob and before the second (the fast lane's turn at the lock), however the
+    // threads run.
     let mut released = false;
     for _ in 0..20000 {
         if g.ram.u32(rb) == 0x1100 {
@@ -1333,7 +1336,9 @@ fn lanes(g: &mut Guest) {
     assert!(g.ram.u32(rb) == 0x1100 && g.ram.u32(rc) == 0xeeee_eeee && (released || g.ram.u32(ra) == 0xeeee_eeee));
     BLOB_HELD.store(0, Ordering::Release);
     idle(&dev);
-    assert!(g.ram.u32(ra) == 0x1100 && g.ram.u32(rc) == 0x1100 && g.returned() == 3);
+    assert_eq!(g.ram.u32(ra), 0x1100, "the first blob's chain");
+    assert_eq!(g.ram.u32(rc), 0x1100, "the second blob's chain");
+    assert_eq!(g.returned(), 3, "the chains returned");
     g.clear();
     g.cmd(0, 0x201);
     g.cmd(4, 40);

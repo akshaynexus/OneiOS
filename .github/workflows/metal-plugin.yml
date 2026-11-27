@@ -121,10 +121,11 @@ jobs:
           set -euo pipefail
           bundle=out/userland/NativeAdrenoMetal.bundle
           addon=out/userland/NativeAdrenoMetal.gpuaddon
+          cdhashes=out/userland/NativeAdrenoMetal.gpuaddon.cdhashes
           record=out/userland/NativeAdrenoMetal.build.json
           check=out/userland/NativeAdrenoMetal.check.txt
           runtime=out/userland/NativeAdrenoMetal.runtime
-          for file in "$bundle/NativeAdrenoMetal" "$bundle/libvulkan_freedreno.dylib" "$bundle/oneios-target" "$addon" "$record" "$check" "$runtime"; do
+          for file in "$bundle/NativeAdrenoMetal" "$bundle/libvulkan_freedreno.dylib" "$bundle/oneios-target" "$addon" "$cdhashes" "$record" "$check" "$runtime"; do
             [ -s "$file" ] || { echo "::error::Required Metal build output is missing or empty: $file"; exit 1; }
           done
           [ "$(cat "$bundle/oneios-target")" = "$ONEIOS_METAL_TARGET" ] || { echo "::error::Bundle target does not match $ONEIOS_METAL_TARGET"; exit 1; }
@@ -133,13 +134,13 @@ jobs:
           grep -Fq 'ios macho-check passed' "$record" || { echo "::error::Build record does not confirm the Mach-O check"; exit 1; }
           manifest=out/userland/NativeAdrenoMetal.sha256
           find "$bundle" -type f -print0 | xargs -0 shasum -a 256 > "$manifest"
-          shasum -a 256 "$addon" "$record" "$check" "$runtime" >> "$manifest"
+          shasum -a 256 "$addon" "$cdhashes" "$record" "$check" "$runtime" >> "$manifest"
           cat "$manifest"
           {
             echo "### Metal plug-in outputs verified"
             echo "- Target: \`$ONEIOS_METAL_TARGET\`"
             echo "- Bridge runtime: \`$(cat "$runtime")\`"
-            echo "- Bundle, arm64e binaries, Mach-O check, build record, and NGPUADD2 sidecar are present."
+            echo "- Bundle, arm64e binaries, Mach-O check, build record, NGPUADD2 sidecar, and its phone-staging CDHashes are present."
             echo "- SHA-256 manifest: \`out/userland/NativeAdrenoMetal.sha256\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: What was built
@@ -158,6 +159,7 @@ jobs:
           path: |
             out/userland/NativeAdrenoMetal.bundle
             out/userland/NativeAdrenoMetal.gpuaddon
+            out/userland/NativeAdrenoMetal.gpuaddon.cdhashes
             out/userland/NativeAdrenoMetal.build.json
             out/userland/NativeAdrenoMetal.check.txt
             out/userland/NativeAdrenoMetal.runtime

@@ -1252,7 +1252,8 @@ scripts/setup/get-references.sh         # NativeMetal, NativeAdreno, AdrenoPM4, 
 rustup toolchain install 1.98.0 && rustup +1.98.0 component add rust-src
 # macOS: brew install ninja glslang shaderc spirv-tools bison llvm; uv pip install --python "$(command -v python3)" meson mako pyyaml
 scripts/bg.sh metal userland/metal/build.sh
-# -> out/userland/NativeAdrenoMetal.bundle, NativeAdrenoMetal.build.json, NativeAdrenoMetal.check.txt, NativeAdrenoMetal.gpuaddon
+# -> out/userland/NativeAdrenoMetal.bundle, NativeAdrenoMetal.build.json, NativeAdrenoMetal.check.txt,
+#    NativeAdrenoMetal.gpuaddon and NativeAdrenoMetal.gpuaddon.cdhashes (ready for `oneios-tool phone addon`)
 # iOS 27.2.1 (24B156; userland/metal/hooks/iPhone18,2-24B156.json): the same into out/userland-24B156 (METAL_OUT for another)
 scripts/bg.sh metal272 env ONEIOS_METAL_TARGET="iPhone18,2 24B156" userland/metal/build.sh
 # The bridge on metal2vulkan-rt instead (userland/metal/rt/README.md), in out/metal-rt and out/userland-rt:

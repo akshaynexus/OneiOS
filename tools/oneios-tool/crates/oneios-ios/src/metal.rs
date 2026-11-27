@@ -448,7 +448,9 @@ pub fn record(root: &Path, bundle: &Path, record: &Path, hooks: &Path, target: &
     }
     let mut cdhashes: Vec<String> = files.values().filter_map(|f| if let Value::Object(m) = f { m.get("cdhash").map(Value::text) } else { None }).collect();
     cdhashes.sort();
-    let tbd = Path::new(&env("IOS_TBD")?).join("tbd.json");
+    let tbd_root = std::path::PathBuf::from(env("IOS_TBD")?);
+    let tbd = tbd_root.join("tbd.json");
+    let checked_with_guest_stubs = tbd_root.join("usr/lib/libSystem.B.tbd").is_file();
     let stubs = if tbd.exists() { oneios_json::read(&tbd.to_string_lossy())? } else { Value::Null };
     let mut sdk = Map::new();
     sdk.insert("path".into(), Value::String(env("IOS_SDK")?));
@@ -473,7 +475,12 @@ pub fn record(root: &Path, bundle: &Path, record: &Path, hooks: &Path, target: &
     r.insert("sources".into(), Value::Object(sources));
     let hooks_rel = hooks.strip_prefix(root).map(|p| p.display().to_string()).unwrap_or_else(|_| hooks.display().to_string());
     r.insert("hooks".into(), Value::String(hooks_rel));
-    r.insert("check".into(), Value::String("ios macho-check passed against the stubs above".into()));
+    let check = if checked_with_guest_stubs {
+        "ios macho-check passed against the guest's shared-cache stubs"
+    } else {
+        "ios macho-check passed against the iPhoneOS SDK's stubs"
+    };
+    r.insert("check".into(), Value::String(check.into()));
     std::fs::write(record, oneios_json::to_pretty(&Value::Object(r)))?;
     println!("metal: built for {target}");
     for (name, f) in &files {

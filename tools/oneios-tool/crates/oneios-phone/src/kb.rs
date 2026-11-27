@@ -57,21 +57,35 @@ pub fn sources(repo: &Path, build: &str) -> Result<Vec<(String, PathBuf)>> {
         ("pairs.json".to_string(), prelink.join(format!("pairs-{build}.json"))),
         ("stubs.json".to_string(), prelink.join(format!("stubs-{build}.json"))),
     ];
-    // kernel/prelink/build.sh's matcher folder: external/XnuPrelink, else the kernel base's submodule
-    let own = repo.join("external/XnuPrelink/fixtures");
-    let fixtures = if own.is_dir() { own } else { repo.join("external/Droid-VM-UniXNU/kits/XnuPrelink/fixtures") };
-    let mut found: Vec<PathBuf> = fs::read_dir(&fixtures)
-        .with_context(|| format!("{} (scripts/setup/get-references.sh XnuPrelink)", fixtures.display()))?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("fileset-") && n.ends_with("-symbols.json")))
-        .collect();
-    found.sort();
-    if found.is_empty() {
-        bail!("kb: no fileset-*-symbols.json in {}", fixtures.display());
+    // kernel/prelink/build.sh's matcher folder: external/XnuPrelink when there is one, else the kernel base's kit
+    // submodule. A file the first folder does not have is taken from the next (the base's submodule at b74ed7c knows
+    // two filesets, and the fork's assets carry a macOS build's third; the upstream reference's kit has it). A name
+    // found twice keeps the first copy: a kit's fileset of one build is not interchangeable with another kit's.
+    let dirs: Vec<PathBuf> = [
+        repo.join("external/XnuPrelink/fixtures"),
+        repo.join("external/Droid-VM-UniXNU/kits/XnuPrelink/fixtures"),
+        repo.join("external/UniXNU/kits/XnuPrelink/fixtures"),
+    ]
+    .into_iter()
+    .filter(|d| d.is_dir())
+    .collect();
+    if dirs.is_empty() {
+        bail!("kb: no matcher fixtures folder (scripts/setup/get-references.sh XnuPrelink)");
     }
-    for f in found {
-        out.push((format!("match/fixtures/{}", f.file_name().unwrap().to_string_lossy()), f));
+    let mut found: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for dir in &dirs {
+        for e in fs::read_dir(dir).with_context(|| dir.display().to_string())?.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with("fileset-") && name.ends_with("-symbols.json") {
+                found.entry(name).or_insert_with(|| e.path());
+            }
+        }
+    }
+    if found.is_empty() {
+        bail!("kb: no fileset-*-symbols.json in {}", dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", "));
+    }
+    for (name, f) in found {
+        out.push((format!("match/fixtures/{name}"), f));
     }
     for (_, path) in &out {
         if !path.is_file() {

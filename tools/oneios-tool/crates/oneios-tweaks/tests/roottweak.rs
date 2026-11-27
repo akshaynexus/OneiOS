@@ -808,7 +808,7 @@ fn sealed_scale_2_reaches_the_contract_the_seed_and_xnuhost() {
         assert!(expect.contains(line), "{line}");
     }
     let conf = fs::read_to_string(c.out.join("xnuhost.conf")).unwrap();
-    assert_eq!(conf.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>(), ["scale=2"]);
+    assert_eq!(conf.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>(), ["scale=2", "pen=auto"]);
     assert!(disp.get("scale_note").is_some());
     assert!(adt.get("required").unwrap().get("chosen/unique-chip-id").is_some());
     // the two nodes of Apple's tree that must stay out: the modem, and the fstab that names volumes this layout has not
@@ -866,6 +866,8 @@ fn sealed_20f66_gets_the_16_userland_boot_args() {
         assert!(conf.contains(part), "{part}");
     }
     assert!(!conf.contains("text-fixup=keybagd"));
+    // The A56's 16.5 image never claimed the pen: no pen=auto there.
+    assert!(!conf.contains("pen=auto"), "{conf}");
 }
 
 // ---------------------------------------------------------------- Hook
@@ -903,7 +905,10 @@ fn hook_the_image_hook_speaks_api_1() {
     let mut names: Vec<String> = fs::read_dir(overlay.join("userland")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     names.sort();
     assert_eq!(names, ["boot-contract.json", "owner-trust.json", "report.json", "report.txt", "tweaks.manifest.json", "xnuhost.conf"]);
-    assert!(fs::read_to_string(overlay.join("userland/xnuhost.conf")).unwrap().contains("scale=2\n"));
+    let conf = fs::read_to_string(overlay.join("userland/xnuhost.conf")).unwrap();
+    assert!(conf.contains("scale=2\n"));
+    // The S Pen stays on across a rebuilt image (docs/hardware.md 7f): xnuhost's pen=auto, safe on a phone without one.
+    assert!(conf.contains("pen=auto\n"), "{conf}");
     let summary = json::load(&info).unwrap();
     assert!(summary.get("first_start_unpacker").unwrap().is_null());
     let rules: HashMap<String, String> = fs::read_to_string(&owners).unwrap().lines().map(|l| l.split_once('\t').map(|(a, b)| (a.to_string(), b.to_string())).unwrap()).collect();
