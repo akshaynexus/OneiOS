@@ -1,0 +1,71 @@
+--- a/iokit/Kernel/IODataQueue.cpp
++++ b/iokit/Kernel/IODataQueue.cpp
+@@ -512,6 +512,54 @@
+ }
+ #endif /* XNU_HOSTED */
+ 
++#if XNU_HOSTED
++#include <IOKit/IOSharedDataQueue.h>
++/*
++ * OneiOS hosted (0110): the queue's size for 0102 and 0103, read only when one of them is on. Their calls read
++ * ((IODataQueueInternal *)notifyMsg)->queueSize at every notification, but an IOSharedDataQueue (IOHIDFamily's event
++ * queues, the VideoToolbox paravirtualization's queue) allocates notifyMsg as a bare mach_msg_header_t
++ * (IOSharedDataQueue::initWithCapacity): the read was 4 bytes past a 24-byte element, harmless while the next element
++ * was mapped, a kernel data abort when the element ended a page (S24 Ultra, 2026-11-28, v0.1.41 with encoder=auto:
++ * "Kernel data abort" in sendDataAvailableNotification+0x40 from AppleVideoToolboxParavirtualizationUserClient::
++ * sendToGuest, esr 0x96000007). An IOSharedDataQueue keeps its size in its _reserved (getQueueSize, protected: read
++ * through a subclass's static member, never instantiated).
++ */
++namespace {
++class HostedSharedQueueSize : public IOSharedDataQueue {
++public:
++	static UInt32
++	of(IOSharedDataQueue *q)
++	{
++		return static_cast<HostedSharedQueueSize *>(q)->getQueueSize();
++	}
++};
++}
++
++static bool
++hosted_dq_tools_on(void)
++{
++	if (hosted_hid16 < 0) {
++		int on = 0;
++		hosted_hid16 = PE_parse_boot_argn("oneios-hid16", &on, sizeof(on)) && on;
++	}
++	if (hosted_dqh_left < 0) {
++		int n = 0;
++		hosted_dqh_left = PE_parse_boot_argn("oneios-dq-head", &n, sizeof(n)) && n > 0 ? (n > 2000 ? 2000 : n) : 0;
++	}
++	return hosted_hid16 || hosted_dqh_left > 0;
++}
++
++static UInt32
++hosted_dq_size(IODataQueue *q, void *notifyMsg)
++{
++	IOSharedDataQueue *shared = OSDynamicCast(IOSharedDataQueue, q);
++	if (shared != NULL) {
++		return HostedSharedQueueSize::of(shared);
++	}
++	return notifyMsg != NULL ? ((IODataQueueInternal *)notifyMsg)->queueSize : 0;
++}
++#endif /* XNU_HOSTED */
++
+ void
+ IODataQueue::sendDataAvailableNotification()
+ {
+@@ -520,8 +568,11 @@
+ 
+ 	msgh = &((IODataQueueInternal *) notifyMsg)->msg;
+ #if XNU_HOSTED
+-	hosted_hid16_queue(dataQueue, ((IODataQueueInternal *) notifyMsg)->queueSize);
+-	hosted_dqh_dump(dataQueue, ((IODataQueueInternal *) notifyMsg)->queueSize);
++	if (hosted_dq_tools_on()) {
++		UInt32 hosted_size = hosted_dq_size(this, notifyMsg);
++		hosted_hid16_queue(dataQueue, hosted_size);
++		hosted_dqh_dump(dataQueue, hosted_size);
++	}
+ #endif
+ 	if (msgh->msgh_remote_port) {
+ 		kr = mach_msg_send_from_kernel_with_options(msgh, msgh->msgh_size,

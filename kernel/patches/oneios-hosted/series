@@ -575,3 +575,9 @@
 # oneios-legacy-registered-ports=1 (only a 20F66 image passes it), else 1. Line "oneios-arm64e-slices: off: ...".
 # bsd/dev/arm/kern_machdep.c is no other patch's. README.md, "0109".
 0109-ios16-arm64-slices.patch
+# 0110 (2026-11-28, the S24 Ultra's v0.1.41 boot of 01:07): 0102's and 0103's calls in sendDataAvailableNotification
+# read ((IODataQueueInternal *)notifyMsg)->queueSize at every notification, though an IOSharedDataQueue allocates
+# notifyMsg as a bare 24-byte mach_msg_header_t: a read past the element, a kernel data abort when it ended a page (the
+# VideoToolbox paravirtualization's queue, with encoder=auto). The size is now read only when oneios-hid16 or
+# oneios-dq-head is on, and from IOSharedDataQueue::getQueueSize for a shared queue. README.md, "0110".
+0110-data-queue-shared-size.patch

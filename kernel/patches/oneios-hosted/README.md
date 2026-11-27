@@ -2539,3 +2539,18 @@ it: the fault, the rule, the sandbox, the lines).
   `Process[N] crashed: webbookmarksd`. Built into the release kernel `xnu-12377.121.6-ios-27.0.1-24A446-181d8bf2d60a` (`release-kernel-a56`
   `0888d97`, with 0108; prelink audit 0 failures; docs/releases.md); not booted (no A56 here, no
   qemu boot).
+
+## 0110-data-queue-shared-size.patch (2026-11-28)
+
+The S24 Ultra's first boot of v0.1.41 (`encoder=auto`, so iOS's paravirtualized VideoToolbox runs) panicked 2 s after
+its first frame: `Kernel data abort` (`esr 0x96000007`, a translation fault) at `IODataQueue::sendDataAvailableNotification()+0x40`,
+from `IOSharedDataQueue::enqueue` in `AppleVideoToolboxParavirtualizationUserClient::sendToGuest` (an `encoderList`
+answer; `oneios-tool log stacks`, `out/session-logs/2026-11-28-v0141/xnuhost.log`). The cause is ours: 0102 and 0103 pass
+`((IODataQueueInternal *) notifyMsg)->queueSize` to their tools at every notification, but `IOSharedDataQueue`
+allocates `notifyMsg` as a bare `mach_msg_header_t` (`IOSharedDataQueue::initWithCapacity`), so the read was 4 bytes
+past a 24-byte element: harmless while the next element was mapped (every HID event queue since 0102), a fault when the
+element ended a page. Now the size is read only when `oneios-hid16` or `oneios-dq-head` is on (one boot-arg read each,
+then two compares a notification), and for a shared queue from `IOSharedDataQueue::getQueueSize()` (protected: through a
+static member of a subclass that is never made). Nothing changes with both off, which is every S24 Ultra session.
+Tested: the series applies (`kernel/tests/host.sh`) and the kernel builds; the phone proof is a boot with `encoder=auto`
+that passes SpringBoard and plays a Safari video, with no `Kernel data abort` in `IODataQueue`.
