@@ -317,6 +317,11 @@ fn kms_mode_is_the_largest_then_fastest() {
     let tie = [m(1440, 3120, 120, false), m(1440, 3120, 120, true)];
     assert_eq!(kms::pick_mode(&tie).unwrap().kind, kms::MODE_TYPE_PREFERRED);
     assert!(kms::pick_mode(&[kms::ModeInfo::default(); 32]).is_none());
+    // vrefresh takes precedence; when 0, mode_hz computes from clock / (htotal * vtotal)
+    assert_eq!(kms::mode_hz(&m(1440, 3120, 60, false)), 60);
+    let derived = kms::ModeInfo { clock: 576_000, htotal: 1500, vtotal: 3200, ..Default::default() };
+    assert_eq!(kms::mode_hz(&derived), 120);
+    assert_eq!(kms::mode_hz(&kms::ModeInfo::default()), 0);
 }
 
 /// A flip's completion is found among the events read from the descriptor (struct drm_event records), whatever comes

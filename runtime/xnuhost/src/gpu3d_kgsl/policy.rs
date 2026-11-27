@@ -443,6 +443,7 @@ impl Policy {
         }
         let fit = self.fit(budget);
         let mut want = self.level;
+        let bg_min_active = self.last_bg_min_ns != 0 && now_ns.saturating_sub(self.last_bg_min_ns) < 200_000_000;
         if self.mode == Mode::Hold {
             want = Level::Top; // 0005's rule: every frame at the top
         } else if cold {
@@ -455,15 +456,18 @@ impl Policy {
                 0
             };
             want = if predict == 0 || predict > fit { Level::Top } else { Level::Governor };
-            // Background contexts were at the lowest level just now: KGSL keeps that until it expires unless a faster
-            // one comes.
-            if self.last_bg_min_ns != 0 && now_ns - self.last_bg_min_ns < 200_000_000 {
+            // Background contexts (or display-off) were at the lowest level just now: KGSL keeps that until it expires
+            // unless a faster one comes.
+            if bg_min_active {
                 want = Level::Top;
             }
             self.easy = 0;
             self.down_need = self.down_frames;
-        } else if self.level == Level::Governor && self.gov_us > fit {
+        } else if bg_min_active || (self.level == Level::Governor && self.gov_us > fit) {
             want = Level::Top;
+        }
+        if want == Level::Top && bg_min_active {
+            self.last_bg_min_ns = 0;
         }
         if want != self.level {
             if want == Level::Top {
@@ -542,6 +546,23 @@ impl Policy {
             self.easy = 0;
             self.down_need = if self.down_need < 64 { self.down_need * 4 } else { 64 };
         }
+    }
+
+    /// While the display is off (`gpu-off-level=1`): drop any held top level and record that KGSL is pinned to its
+    /// lowest level (`PWR_MIN`), so the first wake frame cancels the constraint even if it arrives inside `idle_us`.
+    pub fn display_off(&mut self, now_ns: u64, priority_on: bool) -> (Action, bool) {
+        let action = if self.level == Level::Top || self.told == Level::Top {
+            self.level = Level::Governor;
+            self.told = Level::Governor;
+            Action::Governor
+        } else {
+            self.level = Level::Governor;
+            Action::None
+        };
+        if priority_on {
+            self.last_bg_min_ns = now_ns;
+        }
+        (action, priority_on)
     }
 
     /// Whether background contexts get the lowest level now: no counted frame for quiet_us (the screen is still).

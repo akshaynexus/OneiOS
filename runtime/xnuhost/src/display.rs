@@ -657,6 +657,15 @@ mod kms {
         false
     }
 
+    /// Refresh rate of a DRM mode in Hz: `vrefresh`, else derived from `clock / (htotal * vtotal)`.
+    pub fn mode_hz(m: &ModeInfo) -> u32 {
+        if m.vrefresh != 0 {
+            return m.vrefresh;
+        }
+        let total = m.htotal as u64 * m.vtotal as u64;
+        (m.clock as u64 * 1000 + total / 2).checked_div(total).unwrap_or(0) as u32
+    }
+
     /// The mode the back end sets: the largest (the panel's native size, not a lower One UI resolution of the same
     /// panel), then the fastest, then the preferred one.
     pub fn pick_mode(modes: &[ModeInfo]) -> Option<ModeInfo> {
@@ -664,7 +673,7 @@ mod kms {
             .iter()
             .filter(|m| m.hdisplay != 0 && m.vdisplay != 0)
             .max_by_key(|m| {
-                (m.hdisplay as u32 * m.vdisplay as u32, m.vrefresh, (m.kind & MODE_TYPE_PREFERRED != 0) as u32)
+                (m.hdisplay as u32 * m.vdisplay as u32, mode_hz(m), (m.kind & MODE_TYPE_PREFERRED != 0) as u32)
             })
             .copied()
     }
@@ -851,14 +860,7 @@ fn panel_native() -> Option<PanelMode> {
         }
         let list: Vec<PanelMode> = modes[..conn.count_modes as usize]
             .iter()
-            .map(|m| {
-                let mut hz = m.vrefresh;
-                let total = m.htotal as u64 * m.vtotal as u64;
-                if hz == 0 && total != 0 {
-                    hz = ((m.clock as u64 * 1000 + total / 2) / total) as u32;
-                }
-                PanelMode { width: m.hdisplay as u32, height: m.vdisplay as u32, hz }
-            })
+            .map(|m| PanelMode { width: m.hdisplay as u32, height: m.vdisplay as u32, hz: kms::mode_hz(m) })
             .collect();
         if let Some(n) = config::panel_native(&list) {
             return Some(n);
@@ -1237,7 +1239,7 @@ pub fn init(c: &Config) -> Result<(u32, u32, u32), Failed> {
     let mut first_client = None;
     let mut first_flags = 0;
     let (panel, reported, known) = if let Some(d) = drm.as_ref() {
-        (Some(PanelMode { width: d.w, height: d.h, hz: 0 }), false, true)
+        (Some(PanelMode { width: d.w, height: d.h, hz: kms::mode_hz(&d.mode) }), false, true)
     } else if session && !pinned {
         let report =
             if backend == DisplayBackend::Shm { helper_report(listen.as_ref(), &mut first_client) } else { None };

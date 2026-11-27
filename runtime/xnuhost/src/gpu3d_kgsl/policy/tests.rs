@@ -791,3 +791,38 @@ fn down_with_a_wide_clock_range() {
     assert_eq!(p.gov_x16, DOWN_GUESS_X16);
     assert!(p.downs > 0, "gov_x16 decayed and allowed stepping down from TOP");
 }
+
+/// gpu-off-level=1: display_off drops a held top level, keeps `told` in sync, and marks `last_bg_min_ns` so that a
+/// wake frame cancels KGSL's PWR_MIN constraint immediately even if it arrives inside `idle_us` (non-cold).
+#[test]
+fn display_off_syncs_told_and_cancels_pwr_min_on_wake() {
+    let mut p = Policy::new(Mode::Deadline);
+    let mut t = 10_000 * MS;
+    // Start at TOP, then turn the display off.
+    assert_eq!(frame(&mut p, Class::Render, t, 0, 300), Action::Top);
+    assert_eq!(p.level, Level::Top);
+    assert_eq!(p.told, Level::Top);
+    t += 10 * MS;
+    assert_eq!(p.display_off(t, true), (Action::Governor, true));
+    assert_eq!(p.level, Level::Governor);
+    assert_eq!(p.told, Level::Governor);
+    assert_eq!(p.last_bg_min_ns, t);
+    // Second submit while still off: no duplicate Governor action.
+    t += 10 * MS;
+    assert_eq!(p.display_off(t, true), (Action::None, true));
+    // Display wakes 20 ms later (within idle_us = 100 ms, so non-cold): must ask TOP to cancel KGSL PWR_MIN.
+    t += 20 * MS;
+    assert_eq!(frame(&mut p, Class::Render, t, 0, 300), Action::Top);
+    assert_eq!(p.last_bg_min_ns, 0);
+    // Without priority_on, display_off does not set last_bg_min_ns; after >idle_us with an easy cold_us, no spurious
+    // Governor or Top action.
+    let mut p = Policy::new(Mode::Deadline);
+    p.cold_us = 500;
+    t = 20_000 * MS;
+    assert_eq!(frame(&mut p, Class::Render, t, 0, 500), Action::None);
+    t += 10 * MS;
+    assert_eq!(p.display_off(t, false), (Action::None, false));
+    assert_eq!(p.last_bg_min_ns, 0);
+    t += 200 * MS;
+    assert_eq!(frame(&mut p, Class::Render, t, 0, 500), Action::None);
+}

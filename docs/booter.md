@@ -1838,8 +1838,12 @@ The `blk.rs` flush counts and times count every `fdatasync`, whichever side (vCP
   one buffer with `DIRTYFB`. `display: 10 s: KMS N frames by page flip|mode set|DIRTYFB, M flips later than 34 ms`
   every 10 s while frames come. For a session in which surfaceflinger and the composer are stopped
   (`session-mode=takeover`, `display=drm`). Until 2026-11-27 the first EBUSY (two flushes inside one vblank) turned
-  flipping off for good and left only `DIRTYFB` into the scanned buffer: the owner's `display=drm` boots
-  (reported 2026-11-27) kept a black panel while iOS ran. The fix is host-tested (`cargo test --lib display::`), not yet booted.
+  flipping off for good and left only `DIRTYFB` into the scanned buffer; and `config::Config::finish_with` dropped
+  `display=` (and `display-present=`, and `touch-exclusive=0` in takeover) read from the image's `xnuhost.conf` /
+  `overlay/userland/xnuhost.conf`, so a takeover boot with `display=drm` in `xnuhost.conf` stayed on `shm` while the
+  switch skipped `oneios-display` (black panel; `display: no helper connected within 10 s`). `display::init` also now
+  passes the KMS mode's refresh rate (`vrefresh`, else `clock / (htotal * vtotal)`) instead of 0. Both fixes are
+  host-tested (`cargo test --lib config::`, `cargo test --lib display::`), not yet booted.
   What is still open (atomic commits, panel power, a boot picture, the real vsync):
   [plan-ios-first-session.md](plan-ios-first-session.md) section 2.1.
 - **`none`.** Frame in memory only.

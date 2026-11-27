@@ -371,6 +371,31 @@ fn image_set_settings() {
     let long = format!("boot-args=-{}", "a".repeat(999));
     let e = run(&["--image", &image, "--set", &long]).unwrap_err(); // 1000 + 24 do not fit
     assert_eq!(e.lines, ["boot-args-add does not fit beside the guest boot args (1023 bytes at most)"]);
+    // display=, display-present=, touch-exclusive= in image/xnuhost.conf and overlay/userland/xnuhost.conf apply when
+    // the command line has none (until 2026-11-27 display= and display-present= were dropped and touch-exclusive=0 was
+    // overwritten in takeover).
+    let overlay = format!("{image}/overlay/userland");
+    fs::create_dir_all(&overlay).unwrap();
+    let overlay_conf = format!("{overlay}/xnuhost.conf");
+    write(&path, &format!("boot-args=-v debug=0x8\n{set_meminfo}\n"));
+    write(&overlay_conf, "display=drm\ndisplay-present=window\n");
+    let c = run(&img1).unwrap();
+    assert_eq!(c.display, DisplayBackend::Drm);
+    assert!(!c.display_present_ahb);
+    let c = run(&[&img1[..], &["--display", "shm", "--set", "display-present=ahb"]].concat()).unwrap();
+    assert_eq!(c.display, DisplayBackend::Shm);
+    assert!(c.display_present_ahb);
+    write(&overlay_conf, "display=drm\ndisplay-format=rgba16f\n");
+    assert_eq!(run(&img1).unwrap_err().lines, ["display-format=rgba16f needs --display shm"]);
+    write(&overlay_conf, "display=vnc\n");
+    assert_eq!(run(&img1).unwrap_err().lines, ["display vnc is not supported"]);
+    assert_eq!(run(&[&img1[..], &["--display", "none"]].concat()).unwrap().display, DisplayBackend::None);
+    write(&overlay_conf, "session-mode=takeover\ntouch-exclusive=0\nhost-device=galaxy-s24-ultra\n");
+    let c = run(&img1).unwrap();
+    assert_eq!(c.session_mode, SessionMode::Takeover);
+    assert!(!c.touch_exclusive);
+    let c = run(&[&img1[..], &["--set", "touch-exclusive=1"]].concat()).unwrap();
+    assert!(c.touch_exclusive);
     let _ = fs::remove_dir_all(&dir);
 }
 

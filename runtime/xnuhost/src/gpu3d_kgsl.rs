@@ -750,13 +750,8 @@ impl Gpu3d for Kgsl {
                         let c = s.ctx[i];
                         let display_off = OFF_LEVEL.load(Ordering::Relaxed) && !onebridges::brightness::display_on();
                         let (action, next, lowest) = if display_off {
-                            let action = if s.pol.level == policy::Level::Top {
-                                s.pol.level = policy::Level::Governor;
-                                Action::Governor
-                            } else {
-                                Action::None
-                            };
-                            (action, Frame::default(), s.priority_on)
+                            let (action, lowest) = s.pol.display_off(now, s.priority_on);
+                            (action, Frame::default(), lowest)
                         } else {
                             let (action, next) =
                                 s.pol.frame_start(c.cls, now, c.hint[2] as u32 * policy::HINT_DEADLINE_US);

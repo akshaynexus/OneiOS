@@ -456,6 +456,7 @@ const GIVEN_KEYS: &[&str] = &[
     "ram-unlock-below",
     "return-graceful-ms",
     "ready-content-wait",
+    "display",
     "display-format",
     "panel-fallback",
     "scale",
@@ -497,6 +498,7 @@ const GIVEN_KEYS: &[&str] = &[
     "encoder-10bit",
     "encoder-warmup",
     "display-post",
+    "display-present",
     "decoder",
     "decoder-codecs",
     "astc",
@@ -1401,6 +1403,16 @@ impl Config {
         take!(self, image, "takeover-stops", takeover_stops);
         take!(self, image, "takeover-reclaim", takeover_reclaim);
         take!(self, image, "takeover-swappiness", takeover_swappiness);
+        // display= of the image set (image/xnuhost.conf or overlay/userland/xnuhost.conf): until 2026-11-27 it was
+        // parsed into `image` and dropped, so display=drm in takeover left xnuhost on shm while the switch stopped
+        // surfaceflinger and skipped oneios-display (black panel). The command line still wins.
+        if !self.given("display") && image.given("display") {
+            if let Some(display) = &image.unsupported_display {
+                return Err(ConfigError::new(format!("display {display} is not supported")));
+            }
+            self.display = image.display;
+        }
+        take!(self, image, "touch-exclusive", touch_exclusive);
         // session-mode= of the image set (its overlay/userland/xnuhost.conf) when the command line has none.
         take!(self, image, "session-mode", session_mode);
         let takeover_mode = self.session_mode == SessionMode::Takeover;
@@ -1439,7 +1451,7 @@ impl Config {
             if !self.input {
                 return Err(ConfigError::new("session-mode=takeover needs input=1 (its touchscreen grab)"));
             }
-            if !self.given("touch-exclusive") {
+            if !self.given("touch-exclusive") && !image.given("touch-exclusive") {
                 self.touch_exclusive = true;
             }
         }
