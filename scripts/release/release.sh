@@ -11,7 +11,9 @@
 #            and again for each other iOS build of METAL_TARGETS (iPhone18,2 24B156: OUT/guest-24B156, the same capture
 #            plug-in; each plug-in build is taken from out/release-cache when its inputs are those of an earlier one:
 #            plugin_key, cached_build), then runtime/package.sh VERSION with them as lib/guest/ and lib/guest/<build>/ (METAL_DIR,
-#            CAMERA_DIR, REQUIRE_METAL=1, METAL_MORE_DIRS) and the kernels pinned in kernel/release-kernel.txt (one line
+#            CAMERA_DIR, REQUIRE_METAL=1, METAL_MORE_DIRS; METAL_BOOT_ADDON=1: each plug-in also as the boot addon kernel/gpuaddon,
+#            kernel/<build>/gpuaddon, which xnuhost gives an image made by an older runtime, issue #86) and the kernels
+#            pinned in kernel/release-kernel.txt (one line
 #            each, the first the default; each after it another build's, kernel/<build>/: KERNEL_MORE_DIRS; downloaded and
 #            checked as CI does), then the package's checks: drm2kgsl in xnuhost and gpuctl, elf-check.sh, the members, the Metal
 #            bundle in runtime.json, and .github/scripts/check-phone-tool.sh;
@@ -242,10 +244,11 @@ lane_runtime() {
         rm -rf "$t/camera"; cp -R "$g/camera" "$t/camera"
         more_metal="$more_metal $t"
       done
-      guest=(METAL_DIR="$g" CAMERA_DIR="$g/camera" REQUIRE_METAL=1) ;;
+      guest=(METAL_DIR="$g" CAMERA_DIR="$g/camera" REQUIRE_METAL=1 METAL_BOOT_ADDON=1) ;;
     dir)
       guest=(METAL_DIR="$METAL_FROM" REQUIRE_METAL=1)
       [ ! -f "$METAL_FROM/camera/H9ISP.mediacapture" ] || guest+=(CAMERA_DIR="$METAL_FROM/camera")
+      [ ! -f "$METAL_FROM/NativeAdrenoMetal.gpuaddon" ] || guest+=(METAL_BOOT_ADDON=1)
       more_metal=${METAL_MORE_FROM:-} ;;
     none) echo "--no-metal: no Metal plug-in in this runtime" ;;
   esac
@@ -266,7 +269,7 @@ lane_runtime() {
   done
   runtime/package/elf-check.sh "$d"
   zstd -dc "$a" | tar -t > "$OUT/members.txt"
-  if grep -Ev '^(runtime\.json|NOTICE|LICENSE|(bin|lib|scripts)/[^/].*|kernel/([0-9A-Z]+/)?xnu\.macho(\.build\.json)?)$' "$OUT/members.txt"; then
+  if grep -Ev '^(runtime\.json|NOTICE|LICENSE|(bin|lib|scripts)/[^/].*|kernel/([0-9A-Z]+/)?(xnu\.macho(\.build\.json)?|gpuaddon(\.cdhashes)?))$' "$OUT/members.txt"; then
     echo "the package has members outside the runtime's folders (above)"; return 1
   fi
   [ "$(head -n 1 "$OUT/members.txt")" = runtime.json ] || { echo "runtime.json is not the first member"; return 1; }

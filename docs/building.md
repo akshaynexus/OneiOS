@@ -267,6 +267,9 @@ runtime/package.sh 0.1.0-dev      # -> out/release/oneios-runtime-0.1.0-dev-arm6
                                   #    OUT_DIR=DIR KERNEL_DIR=DIR for another output and kernel (relative: from the current folder)
                                   #    METAL_DIR=DIR (userland/metal/build.sh's output) CAMERA_DIR=DIR (userland/camera/build.sh's):
                                   #    the iOS plug-ins as lib/guest/, which the phone's Make iOS image seeds (releases.md)
+                                  #    METAL_BOOT_ADDON=1 (release.sh sets it): each Metal folder's NativeAdrenoMetal.gpuaddon
+                                  #    also as kernel/gpuaddon, kernel/<build>/gpuaddon: xnuhost's boot addon for an older
+                                  #    image of that build (gpu.md, issue #86)
 runtime/package/elf-check.sh DIR  # can Android load every library and dynamic helper under DIR? (a stage, or one file)
 runtime/host-tests.sh             # every host test of the runtime, one summary line per part (below)
 runtime/build.sh --test           # the same as runtime/host-tests.sh

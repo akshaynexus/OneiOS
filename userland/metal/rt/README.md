@@ -377,3 +377,29 @@ never makes, built with a vertex descriptor from the vertex function's own `[[at
 format (a Metal name with or without `MTLPixelFormat`, or its number; none given: all 301) is tried plain, with Core
 Animation's premultiplied "over" blend, alpha-masked and colour-masked, held as the plug-in holds it (`--raw`: as rt is
 asked), and every refusal is printed whole.
+
+## Issue #86: the same abort on v0.1.38, from the image's old plug-in (2026-11-28)
+
+The reporter of #81 booted v0.1.38 (git `686ac41`, the bridge's fix above) on the same SM-S928B and 24A446 image, and
+backboardd aborted three times with the same cut message (`... alpha_threshold_lph: unsupported: Format; needs
+NotImplemented at metada`). **The cause was not rt or the bridge: the plug-in that ran was v0.1.36's.** An image keeps
+the plug-in its Data seed was made with (`/private/var/oneios/addons/Extensions`), and nothing replaced it: the log has
+`oneios-gpu-addon: boot addon: -1 files (-1 none)`, the same `data.seed` (1202 MiB, checkpoint xid 15) as the #81
+boots, and a Data store carried on from them (xid 300 then 420; a new seed starts the store over, image-format.md 5).
+v0.1.38's plug-in builds this pair for every format the bridge holds (`--pair` over all 301 formats, Turnip a750,
+noop shim, 2026-11-28): the only refusals of the `needs NotImplemented at metadata` kind left are the "over" blend into
+`RGB10A8_2P_XR10` and `RGB10A8_2P_XR10_sRGB` (two planes, not mapped by `stored`), which backboardd's 8-bit
+framebuffer has no reason to use [I: not seen in any log].
+
+**The fix** (xnuhost and the release, gpu.md "A runtime update brings its plug-in"): the release packs each plug-in
+also as the runtime's boot addon (`kernel/gpuaddon`, `kernel/24B156/gpuaddon`), and xnuhost gives it to the kernel
+when the image set has none of its own and the plug-in's `oneios-target` names the set's build, so the kernel writes
+the runtime's plug-in over the seed's at every boot. Not booted yet. The proof on such an image: `gpuaddon:
+.../kernel/gpuaddon: ... plug-ins for iPhone18,2 24A446 (the runtime's; ...)` in xnuhost.log, `oneios-gpu-addon: boot
+addon: N files` with N > 0, then no `sheng-exit: backboardd[N] ... Metal failed to build render pipeline` and
+SpringBoard 9 of 9.
+
+Not the cause either: the conformance list's `padded-fetch-*` refusals (`known-gaps-rt.tsv`, "at metadata of entry
+pfx_fetch_read, argument 1": a fragment function that reads its padded attachment). `alpha_threshold_lph` does not read
+its attachment (its refusal names no argument), and through the bridge the padded forms are held in `R16Unorm`,
+`RG16Unorm` and `RGB10A2Unorm` (`stored`) [I: a fetching pair over them not tried]; those rows stay rt's own gaps.

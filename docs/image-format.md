@@ -331,9 +331,11 @@ plug-in: ...`, and in its `ok` event's `metal` field:
 Why a phone-made image without a bundle is still not refused (decided 2026-11-24): the phone cannot build the
 bundle, so a refusal would stop Make iOS image on every runtime without one, while the image without it boots and
 composites on the CPU, as every phone-made image did before. The line above and the `ok` event's `metal` say it.
-A runtime update with a new plug-in reaches an image made before it only by making the image again, or by the boot
-add-on (`oneios-tool phone addon`, [gpu.md](gpu.md)); the switch does not stage the runtime's plug-in as the add-on
-(gpu.md says why).
+A runtime update with a new plug-in reaches an image made before it without a new image (issue #86, 2026-11-28): the
+release packs the plug-in also as the runtime's boot addon (`kernel/gpuaddon`, `kernel/<build>/gpuaddon`), and xnuhost
+hands it to the kernel when the set has no `kernel.kc.gpuaddon` of its own and the plug-in's `oneios-target` names the
+set's build, with its CDHashes in that boot's trust cache; the set's files are not changed ([gpu.md](gpu.md), "A
+runtime update brings its plug-in"). A set's own add-on (`oneios-tool phone addon`) still wins.
 
 `oneios-tool image tweaks hook` also reads `ONEIOS_OS_IMAGE`: the OS volume's raw image, read with the tool's own
 APFS reader instead of the mounted `ONEIOS_OS_ROOT` (the phone mounts nothing; the same seed). The hooks read only

@@ -222,6 +222,25 @@ if [ -f "$METAL_LICENSES_DIR/metal2vulkan/LICENSE-GPL-2.0" ] && [ -f "$METAL_LIC
   done
   grep -q '^package: Metal plug-in for iPhone18,2 24B156 from .* (lib/guest/24B156/)$' "$T/log" || { cat "$T/log"; fail "no line for the second target"; }
   ok "two targets: lib/guest/24B156/ beside lib/guest/, runtime.json \"metals\" and \"cameras\" list both, \"metal\" stays 24A446's"
+  # METAL_BOOT_ADDON=1 (issue #86): each folder's NativeAdrenoMetal.gpuaddon as the runtime's boot addon for its build
+  # (kernel/gpuaddon, kernel/24B156/gpuaddon), each with its .cdhashes; refused without a kernel or without the addon
+  for g in "$T/g" "$T/g3"; do
+    printf 'NGPUADD2\0\0\0\0\0\0\0\0\030\0\0\0\0\0\0\0' > "$g/NativeAdrenoMetal.gpuaddon"
+    echo "4baf7dbb8b7faf1312e87d5b81ea830b5578b3fd addons/NativeAdrenoMetal.bundle/NativeAdrenoMetal" > "$g/NativeAdrenoMetal.gpuaddon.cdhashes"
+  done
+  METAL_BOOT_ADDON=1 KERNEL_DIR=$T/k METAL_DIR=$T/g CAMERA_DIR=$T/g/camera METAL_MORE_DIRS=$T/g3 "$ROOT/runtime/package.sh" $V > "$T/log" 2>&1 || { cat "$T/log"; fail "package with the boot addons"; }
+  zstd -dc "$P" | tar -t > "$T/members"
+  for f in kernel/gpuaddon kernel/gpuaddon.cdhashes kernel/24B156/gpuaddon kernel/24B156/gpuaddon.cdhashes; do
+    grep -qxF "$f" "$T/members" || { cat "$T/members"; fail "$f is not in the package"; }
+  done
+  grep -q '^package: boot addon 24 bytes, 1 CDHashes (kernel/24B156/gpuaddon)$' "$T/log" || { cat "$T/log"; fail "no line for the 24B156 boot addon"; }
+  rc=0; METAL_BOOT_ADDON=1 METAL_DIR=$T/g "$ROOT/runtime/package.sh" $V > "$T/log" 2>&1 || rc=$?
+  [ "$rc" = 1 ] && grep -q 'needs a kernel in the package' "$T/log" || { cat "$T/log"; fail "METAL_BOOT_ADDON=1 without a kernel: exit $rc"; }
+  rm "$T/g3/NativeAdrenoMetal.gpuaddon.cdhashes"
+  rc=0; METAL_BOOT_ADDON=1 KERNEL_DIR=$T/k METAL_DIR=$T/g METAL_MORE_DIRS=$T/g3 "$ROOT/runtime/package.sh" $V > "$T/log" 2>&1 || rc=$?
+  [ "$rc" = 1 ] && grep -q 'NativeAdrenoMetal.gpuaddon.cdhashes (the pair oneios-tool ios addon writes) are needed' "$T/log" || { cat "$T/log"; fail "a boot addon without its list: exit $rc"; }
+  rm -f "$T/g/NativeAdrenoMetal.gpuaddon" "$T/g/NativeAdrenoMetal.gpuaddon.cdhashes" "$T/g3/NativeAdrenoMetal.gpuaddon"
+  ok "METAL_BOOT_ADDON=1: kernel/gpuaddon and kernel/24B156/gpuaddon with their lists; refused without a kernel or a list"
   rc=0; METAL_MORE_DIRS=$T/g3 "$ROOT/runtime/package.sh" $V > "$T/log" 2>&1 || rc=$?
   [ "$rc" = 1 ] && grep -q 'METAL_MORE_DIRS without METAL_DIR' "$T/log" || { cat "$T/log"; fail "METAL_MORE_DIRS alone: exit $rc"; }
   rc=0; METAL_DIR=$T/g METAL_MORE_DIRS="$T/g3 $T/g3" "$ROOT/runtime/package.sh" $V > "$T/log" 2>&1 || rc=$?

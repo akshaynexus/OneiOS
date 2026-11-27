@@ -35,7 +35,8 @@
 # (ONEIOS_TOOL_ANDROID=PATH names a phone oneios-tool built elsewhere; CARGO_TARGET_DIR is honoured).
 # Env: ANDROID_NDK_ROOT (default $HOME/Android/Sdk/ndk/28.2.13676358, on macOS $HOME/Library/Android/sdk/ndk/...;
 #      the revision is checked; runtime/build.sh gets it as NDK unless NDK is set), ANDROID_API (35),
-#      KERNEL_DIR, ONEIOS_GPUADDON (ios addon output plus .cdhashes, packed as kernel/gpuaddon),
+#      KERNEL_DIR, ONEIOS_GPUADDON (ios addon output plus .cdhashes, packed as kernel/gpuaddon), METAL_BOOT_ADDON=1
+#      (each Metal folder's NativeAdrenoMetal.gpuaddon as kernel/gpuaddon, kernel/<build>/gpuaddon: step 3e),
 #      OUT_DIR (out/release; a relative one is taken from the current folder), SOURCE_DATE_EPOCH (default: the commit time),
 #      KERNEL_MORE_DIRS (step 3a), METAL_DIR, CAMERA_DIR, REQUIRE_METAL (step 3b; neither given: no lib/guest/), METAL_AMD_DIR,
 #      REQUIRE_METAL_AMD (3c), METAL_MORE_DIRS (step 3d),
@@ -204,11 +205,14 @@ for d in ${KERNEL_MORE_DIRS:-}; do
 done
 
 # 3a. The runtime's boot addon (Metal and capture plug-ins) alongside the default kernel. The image's own sidecar wins;
-# when absent, xnuhost can load this copy and add its CDHashes to the boot trust cache without rebuilding the image.
-if [ -n "${ONEIOS_GPUADDON:-}" ]; then
-  addon=$ONEIOS_GPUADDON
+# when absent, xnuhost loads this copy (kernel/<build>/gpuaddon for an image of that build, else kernel/gpuaddon, when
+# its plug-ins' oneios-target names the image's build) and adds its CDHashes to the boot trust cache without rebuilding
+# the image: so a runtime update brings its plug-in to an image made before it (issue #86; runtime/xnuhost/src/addon.rs).
+# ONEIOS_GPUADDON names the default one; METAL_BOOT_ADDON=1 (step 3e) takes each Metal folder's NativeAdrenoMetal.gpuaddon.
+pack_addon() { # pack_addon ADDON DEST (DEST under the stage: kernel/gpuaddon or kernel/<build>/gpuaddon)
+  local addon=$1 dest=$2 addon_bytes addon_hashes line word
   [ "$HAVE_KERNEL" = 1 ] ||
-    { echo "package: ONEIOS_GPUADDON needs a kernel in the package (kernel/gpuaddon is its sidecar)" >&2; exit 1; }
+    { echo "package: $dest needs a kernel in the package (the boot addon is its sidecar)" >&2; exit 1; }
   [ -f "$addon" ] && [ -f "$addon.cdhashes" ] ||
     { echo "package: $addon and $addon.cdhashes (the pair oneios-tool ios addon writes) are needed" >&2; exit 1; }
   [ "$(head -c 8 "$addon")" = NGPUADD2 ] ||
@@ -226,11 +230,14 @@ if [ -n "${ONEIOS_GPUADDON:-}" ]; then
   done < "$addon.cdhashes"
   [ "$addon_hashes" -gt 0 ] ||
     { echo "package: $addon.cdhashes lists no CDHash: the plug-in's code would not be trusted" >&2; exit 1; }
-  cp "$addon" "$STAGE/kernel/gpuaddon"
-  cp "$addon.cdhashes" "$STAGE/kernel/gpuaddon.cdhashes"
-  chmod 0644 "$STAGE/kernel/gpuaddon" "$STAGE/kernel/gpuaddon.cdhashes"
-  echo "package: boot addon $addon_bytes bytes, $addon_hashes CDHashes (kernel/gpuaddon)"
-fi
+  [ ! -e "$STAGE/$dest" ] || { echo "package: a second boot addon for $dest ($addon)" >&2; exit 1; }
+  mkdir -p "$(dirname "$STAGE/$dest")"
+  cp "$addon" "$STAGE/$dest"
+  cp "$addon.cdhashes" "$STAGE/$dest.cdhashes"
+  chmod 0644 "$STAGE/$dest" "$STAGE/$dest.cdhashes"
+  echo "package: boot addon $addon_bytes bytes, $addon_hashes CDHashes ($dest)"
+}
+[ -z "${ONEIOS_GPUADDON:-}" ] || pack_addon "$ONEIOS_GPUADDON" kernel/gpuaddon
 
 # 3b. The guest's own plug-ins, when given: METAL_DIR (userland/metal/build.sh's output folder: NativeAdrenoMetal.bundle
 # and NativeAdrenoMetal.build.json) and CAMERA_DIR (userland/camera/build.sh's: H9ISP.mediacapture), as lib/guest/.
@@ -318,6 +325,18 @@ for d in ${METAL_MORE_DIRS:-}; do
     echo "package: capture plug-in for $target from $d/camera"
   fi
 done
+
+# 3e. METAL_BOOT_ADDON=1: each Metal folder's NativeAdrenoMetal.gpuaddon (userland/metal/build.sh `addon`: the same
+# bundle as lib/guest/, as a boot addon with its .cdhashes) as the runtime's boot addon for its build: METAL_DIR's as
+# kernel/gpuaddon (unless ONEIOS_GPUADDON gave one), each METAL_MORE_DIRS's as kernel/<build>/gpuaddon (step 3a).
+if [ "${METAL_BOOT_ADDON:-0}" = 1 ]; then
+  [ "$HAVE_METAL" = 1 ] || { echo "package: METAL_BOOT_ADDON=1 without METAL_DIR" >&2; exit 1; }
+  [ -e "$STAGE/kernel/gpuaddon" ] || pack_addon "$METAL_DIR/NativeAdrenoMetal.gpuaddon" kernel/gpuaddon
+  for d in ${METAL_MORE_DIRS:-}; do
+    target=$(cat "$d/NativeAdrenoMetal.bundle/oneios-target")
+    pack_addon "$d/NativeAdrenoMetal.gpuaddon" "kernel/${target#* }/gpuaddon"
+  done
+fi
 
 # 3c. The Galaxy A56's GPU plug-ins for iOS 16.5, when given: METAL_AMD_DIR (userland/metal-amd's output folder,
 # out/metal-amd: OneiOSRadeonMetal.bundle from `air/build.sh plugin`, gl/OneiOSRadeonGL.bundle from the GL hook of

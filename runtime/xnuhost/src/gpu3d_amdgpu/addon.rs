@@ -51,6 +51,28 @@ fn files(blob: &[u8]) -> Result<Vec<File<'_>>, String> {
     Ok(out)
 }
 
+/// Every plug-in bundle's `oneios-target` line in `addon` (`addons/<name>.bundle/oneios-target`, "MODEL BUILD"), as
+/// (name, line): which iOS build each plug-in the sidecar carries was linked against (crate::addon::runtime_addon
+/// refuses a runtime's sidecar whose plug-ins are for another build than the image set's).
+pub fn bundle_targets(addon: &[u8]) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::new();
+    for (name, packed, size) in files(addon)? {
+        let Some(bundle) = name.strip_prefix(b"addons/").and_then(|r| r.strip_suffix(b".bundle/oneios-target")) else {
+            continue;
+        };
+        if bundle.contains(&b'/') {
+            continue;
+        }
+        let bundle = String::from_utf8_lossy(bundle).into_owned();
+        let text = xh_core::inflate::zlib(packed, 256)
+            .ok()
+            .filter(|t| t.len() as u64 == size)
+            .ok_or_else(|| format!("the {bundle} plug-in's oneios-target does not unpack"))?;
+        out.push((bundle, String::from_utf8_lossy(&text).trim().to_owned()));
+    }
+    Ok(out)
+}
+
 /// The plug-in in `addon` (None: there is no sidecar), for an image set of build `build` (None: no image set):
 /// Ok(what it holds), or Err(why not) in the words of the session's "gpu: 2D only" line.
 pub fn plugin_in_addon(addon: Option<&[u8]>, build: Option<&str>) -> Result<Plugin, String> {

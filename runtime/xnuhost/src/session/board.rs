@@ -262,9 +262,11 @@ impl Session {
             kgsl,
             !kgsl && config.gpu == Gpu::Auto && gpu3d_amdgpu::node_check(&gpu3d_amdgpu::System, node).is_ok(),
             || {
+                // The image set is opened further down; the runtime's addon is taken only for the set's build.
+                let early_build = ImageSet::load(&config.image).ok().flatten().map(|s| s.build);
                 let addon = sidecar(&config.kernel, "gpuaddon", 64 << 20)
                     .map(|blob| crate::addon::Addon { blob, cdhashes: Vec::new() })
-                    .or_else(|| crate::addon::runtime_addon(&config.runtime));
+                    .or_else(|| crate::addon::runtime_addon(&config.runtime, early_build.as_deref()));
                 let found = gpu3d_amdgpu::plugin_in_addon(addon.as_ref().map(|a| a.blob.as_slice()), None);
                 addon_read = Some(addon);
                 found
@@ -601,7 +603,7 @@ impl Session {
                     let addon = addon_read.take().unwrap_or_else(|| {
                         sidecar(&kernel, "gpuaddon", 64 << 20)
                             .map(|blob| crate::addon::Addon { blob, cdhashes: Vec::new() })
-                            .or_else(|| crate::addon::runtime_addon(&config.runtime))
+                            .or_else(|| crate::addon::runtime_addon(&config.runtime, build.as_deref()))
                     });
                     let found =
                         gpu3d_amdgpu::plugin_in_addon(addon.as_ref().map(|a| a.blob.as_slice()), build.as_deref());
@@ -857,7 +859,9 @@ impl Session {
             Some(addon) => addon,
             None => sidecar(&config.kernel, "gpuaddon", 64 << 20)
                 .map(|blob| crate::addon::Addon { blob, cdhashes: Vec::new() })
-                .or_else(|| crate::addon::runtime_addon(&config.runtime)),
+                .or_else(|| {
+                    crate::addon::runtime_addon(&config.runtime, self.image_set.as_ref().map(|s| s.build.as_str()))
+                }),
         };
         let policies = sidecar(&config.kernel, "vroot", 128 << 20);
         // Apple's trust caches of the set (IM4P) and the owner module, as the sidecar the kernel takes, unless one is

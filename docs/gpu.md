@@ -1018,7 +1018,8 @@ no `AGX*` user-client call from backboardd). Now:
 - The source is the Data seed's folder, or `/private/var/ngpu/addons` if a GPU addon was handed to this boot:
   `kernel.kc.gpuaddon` beside the kernel (`userland/metal/build.sh addon` makes it as
   `out/userland/NativeAdrenoMetal.gpuaddon` with its `.cdhashes` list, xnuhost passes it on — or falls back to
-  `<runtime>/kernel/gpuaddon` with `kernel/gpuaddon.cdhashes` when the image set has none — and
+  the runtime's `kernel/<build>/gpuaddon`, else `kernel/gpuaddon`, with its `.cdhashes`, when the image set has none
+  and every plug-in in it names the set's build in its `oneios-target` (`runtime/xnuhost/src/addon.rs`) — and
   `native_ram_block_gpu_addon` in `gpu/OneiOSAdreno.cpp` finds it). The kernel writes its files into Data first, so a
   rebuilt plug-in needs no new seed. Its CDHashes must still be in the image's `overlay/userland/owner-trust.json` (or
   folded in from `<runtime>/kernel/gpuaddon.cdhashes` on the runtime fallback).
@@ -1069,13 +1070,30 @@ above prove it on such an image: `oneios-gpu-addon: ... stage 5`, `oneios-gpu-pl
 of NativeAdrenoMetal: error 0`, `oneios-gpu-open: backboardd[N] AGXAccelerator type 0x4149 -> 0x0,
 AGXDeviceUserClient`.
 
-Not done: the switch staging the runtime's plug-in as `image/kernel.kc.gpuaddon`, so that a runtime update brings a
-new plug-in to an image made before it. The add-on runs only with its CDHashes in `overlay/userland/owner-trust.json`,
-which is a file of the image set: `manifest.json`, `image.sha256` and `image.ids` list it, xnuhost builds the owner
-trust module from it, and the switch's preflight refuses a set whose files are not the ones those lists name. The
-switch would have to rewrite a listed file and its lines as root at every switch, in shell, and a mistake there
-stops the switch. Until xnuhost takes the runtime's add-on and its CDHashes itself (a change to the trust path,
-docs/booter.md), a new plug-in reaches an old image by making the image again or by `oneios-tool phone addon`.
+**A runtime update brings its plug-in to an image made before it (issue #86, 2026-11-28).** Before this, an image kept
+the plug-in its Data seed was made with, whatever runtime booted it: on an SM-S928B an image made on v0.1.36 (whose
+metal2vulkan-rt plug-in refused the blur over `BGR10_XR`, issue #81) and booted by v0.1.38 (whose plug-in has the
+fix) still ran v0.1.36's plug-in (`oneios-gpu-addon: boot addon: -1 files (-1 none)`: nothing replaced the seed's;
+the same seed and a Data store carried on from the #81 boots), and backboardd aborted three times with `Metal failed
+to build render pipeline`. xnuhost had a fallback to the runtime's `kernel/gpuaddon` (v0.1.39), but no release
+carried one. Now `scripts/release/release.sh` packs each plug-in it builds also as the runtime's boot addon
+(`runtime/package.sh` `METAL_BOOT_ADDON=1`: the default build's `NativeAdrenoMetal.gpuaddon` as `kernel/gpuaddon`,
+24B156's as `kernel/24B156/gpuaddon`, each with its `.cdhashes`; about 9.5 MB each), and xnuhost, when the image set
+has no `kernel.kc.gpuaddon`, takes `kernel/<the set's build>/gpuaddon`, else `kernel/gpuaddon`, only when every
+`addons/*.bundle/oneios-target` in it names the set's build; its CDHashes join this boot's trust cache
+(`imageset.rs` `trustcaches_trusting`), so the image's `owner-trust.json` is not rewritten. The kernel writes the
+addon's files into the Data store at every boot and mounts them instead of the seed's (0031, 0090). An image of
+another build (the A56's 20F66) keeps its own plug-in. Log lines (xnuhost, always on):
+
+```
+gpuaddon: /data/runtime/kernel/gpuaddon: N bytes, 2 CDHashes trusted, plug-ins for iPhone18,2 24A446 (the runtime's; the image set has no kernel.kc.gpuaddon): they replace the Data store's
+gpuaddon: .../kernel/gpuaddon: its NativeAdrenoMetal plug-in is for "iPhone18,2 24A446", the image set is build 20F66: the runtime's add-on left out (the image's own plug-in stays)
+```
+
+and in the guest `oneios-gpu-addon: boot addon: N files ...` (N > 0, written or unchanged) and `oneios-camera-addon: ... M of the Metal plug-in
+(addons/)` with M > 0. Host-tested (`addon::tests`, `runtime/package/test.sh`); not booted on a phone yet: the proof on
+an image made by v0.1.36-v0.1.38 is the lines above and backboardd with no `sheng-exit ... Metal failed to build render
+pipeline`, SpringBoard 9 of 9.
 
 **What the camera needs (fix-camera-preview-stream, 2026-11-23).** cameracaptured's capture graph (CMCapture,
 CMImaging) is a Metal client; on the phone (main 44d9c49) two answers of the frontend at b0d6a07 stopped it, and
