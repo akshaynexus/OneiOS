@@ -11,7 +11,7 @@
 #
 # M2V_RT_WORK defaults to out/m2v-rt (never out/metal, the default add-on's). Needs: the toolchain of the pin's
 # rust-toolchain.toml (nightly-2026-11-03, rustup installs it on first use), llvm-as (LLVM 21 or newer).
-# m2v-rt-check DRIVER [--floor-only | --census FILE... | --selftest [--qc FILE]]: see bridge/src/bin/m2v-rt-check.rs;
+# m2v-rt-check DRIVER [--floor-only | --census FILE... | --pair LIB VERTEX FRAGMENT [FORMAT...] | --selftest [--qc FILE]]: see bridge/src/bin/m2v-rt-check.rs;
 # abi_smoke DRIVER: the C ABI through NativeMetal's headers (bridge/tests/abi_smoke.c). On the laptop
 #   m2v-rt-check /usr/lib/libvulkan_intel.so                                   the direct path, one dispatch
 #   FD_CHIP_ID=0x43051401 LD_PRELOAD=<mesa>/libfreedreno_noop_drm_shim.so \

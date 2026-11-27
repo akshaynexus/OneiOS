@@ -297,3 +297,43 @@ fn the_serial_post_option() {
         });
     }
 }
+
+/// The KMS back end's mode: the panel's largest, then its fastest, then the preferred one; never a zero mode (a
+/// connector list the kernel did not copy reads as zeros).
+#[test]
+fn kms_mode_is_the_largest_then_fastest() {
+    let m = |w: u16, h: u16, hz: u32, preferred: bool| kms::ModeInfo {
+        hdisplay: w,
+        vdisplay: h,
+        vrefresh: hz,
+        kind: if preferred { kms::MODE_TYPE_PREFERRED } else { 0 },
+        ..Default::default()
+    };
+    // a lower One UI resolution at the same rate, listed first and preferred, does not win over the native size
+    let list =
+        [m(1080, 2340, 120, true), m(1440, 3120, 60, false), m(1440, 3120, 120, false), m(720, 1560, 120, false)];
+    let picked = kms::pick_mode(&list).unwrap();
+    assert_eq!((picked.hdisplay, picked.vdisplay, picked.vrefresh), (1440, 3120, 120));
+    let tie = [m(1440, 3120, 120, false), m(1440, 3120, 120, true)];
+    assert_eq!(kms::pick_mode(&tie).unwrap().kind, kms::MODE_TYPE_PREFERRED);
+    assert!(kms::pick_mode(&[kms::ModeInfo::default(); 32]).is_none());
+}
+
+/// A flip's completion is found among the events read from the descriptor (struct drm_event records), whatever comes
+/// before it; a vblank event alone or a short read is not one.
+#[test]
+fn kms_flip_event_is_found() {
+    let event = |kind: u32, len: u32| {
+        let mut e = vec![0u8; (len as usize).max(8)];
+        e[..4].copy_from_slice(&kind.to_ne_bytes());
+        e[4..8].copy_from_slice(&len.to_ne_bytes());
+        e
+    };
+    assert!(kms::flip_completed(&event(kms::EVENT_FLIP_COMPLETE, 32)));
+    let mut two = event(0x01, 32); // DRM_EVENT_VBLANK
+    two.extend(event(kms::EVENT_FLIP_COMPLETE, 32));
+    assert!(kms::flip_completed(&two));
+    assert!(!kms::flip_completed(&event(0x01, 32)));
+    assert!(!kms::flip_completed(&[0u8; 4]));
+    assert!(!kms::flip_completed(&event(0x01, 0))); // a zero length ends the walk instead of looping
+}

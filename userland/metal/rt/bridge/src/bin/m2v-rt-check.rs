@@ -18,7 +18,7 @@ static FIXTURE_AIR: &[u8] = include_bytes!(env!("NMB_FIXTURE_AIR"));
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let Some(path) = args.get(1) else {
-        eprintln!("usage: m2v-rt-check DRIVER.so|DRIVER.dylib [--floor-only]");
+        eprintln!("usage: m2v-rt-check DRIVER.so|DRIVER.dylib [--floor-only | --census FILE... | --pair LIB VERTEX FRAGMENT [FORMAT...] | --selftest [--qc FILE]]");
         return ExitCode::from(2);
     };
     let floor_only = args.iter().any(|a| a == "--floor-only");
@@ -84,6 +84,9 @@ fn main() -> ExitCode {
     }
     if let Some(at) = args.iter().position(|a| a == "--census") {
         return census_all(&physical, &args[at + 1..]);
+    }
+    if let Some(at) = args.iter().position(|a| a == "--pair") {
+        return pair(&physical, &args[at + 1..]);
     }
     match compute(&physical) {
         Ok(0) => {
@@ -191,6 +194,71 @@ fn census_all(physical: &rt::PhysicalDevice, files: &[String]) -> ExitCode {
         }
     }
     if failed == 0 { ExitCode::SUCCESS } else { ExitCode::from(1) }
+}
+
+/// `--pair LIB VERTEX FRAGMENT [FORMAT...]`: one pair of LIB made with each FORMAT (a Metal name,
+/// `MTLPixelFormatBGRA8Unorm`, or its number) as the one color attachment; with no FORMAT, every
+/// pixel format the runtime names. Each answer printed whole. Exit 0 when every format asked for
+/// was made (with no FORMAT: when at least one was).
+fn pair(physical: &rt::PhysicalDevice, rest: &[String]) -> ExitCode {
+    let [lib, vertex, fragment, wanted @ ..] = rest else {
+        eprintln!("usage: m2v-rt-check DRIVER --pair LIB VERTEX FRAGMENT [FORMAT...]");
+        return ExitCode::from(2);
+    };
+    let mut formats = Vec::new();
+    for w in wanted {
+        let found = w.parse::<u32>().ok().and_then(|n| rt::PixelFormat::try_from(n).ok()).or_else(|| {
+            rt::PixelFormat::from_name(w).or_else(|| rt::PixelFormat::from_name(&format!("MTLPixelFormat{w}")))
+        });
+        match found {
+            Some(f) => formats.push(f),
+            None => {
+                eprintln!("m2v-rt-check: no pixel format {w}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let all = formats.is_empty();
+    if all {
+        formats = rt::PixelFormat::ALL.to_vec();
+    }
+    let device = match rt::Device::new(physical, rt::DeviceOptions::default()) {
+        Ok(device) => device,
+        Err(why) => {
+            println!("device: {why}");
+            return ExitCode::from(1);
+        }
+    };
+    let indices = match adreno_metal_bridge_rt::indices::Indices::grant(&device) {
+        Ok(indices) => indices,
+        Err(why) => {
+            println!("grants: {why}");
+            return ExitCode::from(1);
+        }
+    };
+    let bytes = match std::fs::read(lib) {
+        Ok(bytes) => bytes,
+        Err(why) => {
+            println!("{lib}: {why}");
+            return ExitCode::from(1);
+        }
+    };
+    let answers = match adreno_metal_bridge_rt::census::pair(&device, &indices, &bytes, vertex, fragment, &formats) {
+        Ok(answers) => answers,
+        Err(why) => {
+            println!("pair {vertex}+{fragment}: {why}");
+            return ExitCode::from(1);
+        }
+    };
+    let made = answers.iter().filter(|(_, _, r)| r.is_ok()).count();
+    for (format, variant, answer) in &answers {
+        match answer {
+            Ok(()) => println!("pair {vertex}+{fragment} {} ({}) {variant}: made", format.name(), format.as_raw()),
+            Err(why) => println!("pair {vertex}+{fragment} {} ({}) {variant}: {why}", format.name(), format.as_raw()),
+        }
+    }
+    println!("pair {vertex}+{fragment}: {made} of {} attachments made (each format plain, blended, alpha-masked, colour-masked)", answers.len());
+    if (all && made > 0) || (!all && made == answers.len()) { ExitCode::SUCCESS } else { ExitCode::from(1) }
 }
 
 /// `--selftest [--qc FILE]`: the plug-in's nmb_selftest steps through the bridge's own device open (compute, render, a render

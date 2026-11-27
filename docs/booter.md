@@ -1825,10 +1825,18 @@ The `blk.rs` flush counts and times count every `fdatasync`, whichever side (vCP
 
   `/product artwork-device-subtype` stays the identity's (2868). The Data seed's `identity.expect` holds the
   scale the image was built with; a `--set scale=` that differs from the image's makes `oneios-mg` report it.
-- **`drm`.** Direct KMS: DRM master on `/dev/dri/card0`, a dumb buffer, `SETCRTC`, `DIRTYFB` per flush. For a
-  session in which surfaceflinger and the composer are stopped. Written against the kernel's UAPI, never run. What it
-  still needs before it can replace the surfaceflinger path (the master, a probe of Qualcomm's driver, atomic
-  commits, two buffers and flips, the mode, panel power, a boot picture, the fork's part and the way back):
+- **`drm`.** Direct KMS: DRM master on `/dev/dri/card0`, the connected panel's largest mode (then the fastest, then
+  the preferred one; up to 256 modes read, since the kernel copies none of a list that does not fit), two dumb
+  buffers, a legacy `SETCRTC`, then each flush copies its damage (and the frame before's) into the back buffer and
+  `PAGE_FLIP`s it with `DRM_MODE_PAGE_FLIP_EVENT`. The next flush first waits for that flip's event (at most 34 ms;
+  a later one is counted as late). An EBUSY is waited for and tried again. Only a flip the driver refuses for good
+  steps down, once and logged: to a `SETCRTC` a frame (a whole commit, which a command-mode panel needs [I]), then to
+  one buffer with `DIRTYFB`. `display: 10 s: KMS N frames by page flip|mode set|DIRTYFB, M flips later than 34 ms`
+  every 10 s while frames come. For a session in which surfaceflinger and the composer are stopped
+  (`session-mode=takeover`, `display=drm`). Until 2026-11-27 the first EBUSY (two flushes inside one vblank) turned
+  flipping off for good and left only `DIRTYFB` into the scanned buffer: the owner's `display=drm` boots
+  (reported 2026-11-27) kept a black panel while iOS ran. The fix is host-tested (`cargo test --lib display::`), not yet booted.
+  What is still open (atomic commits, panel power, a boot picture, the real vsync):
   [plan-ios-first-session.md](plan-ios-first-session.md) section 2.1.
 - **`none`.** Frame in memory only.
 - **Input** is read from evdev directly and not grabbed, so the switch's Volume Up + Volume Down watcher

@@ -291,3 +291,33 @@ event a command buffer signals, a fence, blits, the memory counts. The arm64e-ap
 Known performance gap found while porting: rt makes a texture over imported host memory (every IOSurface: the render
 server's client surfaces) an optimal image of its own and copies the bytes in and back once a submission (rt README,
 `Buffer::new_texture`), which NativeMetal 0014/0015 had removed on the old runtime. To port (milestone 4).
+
+## Issue #81: backboardd's blur over a wide-colour attachment (2026-11-27)
+
+v0.1.36 was the first release made with `--metal-rt`, so it shipped this add-on. On an SM-S928B (issue #81, OneOS
+0.5.97) backboardd aborted three times a boot ("Metal failed to build render pipeline"), launchd rebooted iOS
+("critical process crashes: backboardd"), and xnuhost ended with a kernel panic. The refusal, cut in the crash report
+at "at metada", read whole on the build laptop with the new `--pair` mode (Turnip a750, noop shim):
+
+```
+$ m2v-rt-check libvulkan_freedreno.so --pair metallibs/QuartzCore-default.metallib downsample_blur_vert_lph alpha_threshold_lph \
+    BGRA8Unorm BGRA8Unorm_sRGB RGBA16Float A8Unorm R8Unorm R16Float BGR10_XR BGRA10_XR BGRA10_XR_sRGB BGR10_XR_sRGB RGBA8Unorm_sRGB
+pair downsample_blur_vert_lph+alpha_threshold_lph MTLPixelFormatBGR10_XR (554) over: the translator made no pipeline of
+  downsample_blur_vert_lph, alpha_threshold_lph: unsupported: Format; needs NotImplemented at metadata of entry
+  alpha_threshold_lph, color attachment 0
+  (the same for BGRA10_XR, BGRA10_XR_sRGB, BGR10_XR_sRGB)
+pair downsample_blur_vert_lph+alpha_threshold_lph: 40 of 44 attachments made (each format plain, blended, alpha-masked, colour-masked)
+```
+
+rt refuses **every blend into Apple's extended-range forms** (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their
+`_sRGB` twins) on every device (`metal2vulkan/src/lower/stage_io/extended_color.rs`, `plan`: "not implemented on any
+device"). Core Animation draws its blurs blended into such a surface. The 624bab3 add-on blends them
+(NativeMetal 0012, srgb-extended-range-blend-rounded-model, the "check" row above). **Until that is ported, releases
+ship the 624bab3 add-on** (no `--metal-rt`, `docs/releases.md`); v0.1.37 does. To port: an rt patch that blends an
+extended-range attachment (NativeMetal 0012's rounded model), then this `--pair` line with 44 of 44 made, then a phone
+boot.
+
+`--pair LIB VERTEX FRAGMENT [FORMAT...]` (a lasting tool): one vertex/fragment pair, which the name-matched census never
+makes, built with a vertex descriptor from the vertex function's own `[[attribute(n)]]` list (buffer 30). Each format
+(a Metal name with or without `MTLPixelFormat`, or its number; none given: all 301) is tried plain, with Core
+Animation's premultiplied "over" blend, alpha-masked and colour-masked, and every refusal is printed whole.

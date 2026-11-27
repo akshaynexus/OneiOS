@@ -27,7 +27,10 @@
 # then made public, which creates the tag. The tag's own CI run builds and tests again, and its release job leaves a
 # release that exists alone (the plan job's "published from a machine" check), so nothing is uploaded twice.
 # --build-only builds and checks, and publishes nothing. --runtime-only and --apk-only are CI's "runtime only" and
-# "apk only" (an APK-only release is not marked latest). --skip-tests leaves out the tests lane.
+# "apk only" (an APK-only release is not marked latest). --skip-tests leaves out the tests lane. --metal-rt builds the
+# Metal plug-in on metal2vulkan-rt (METAL_RUNTIME=rt, userland/metal/rt) instead of the default 624bab3 one: v0.1.36 was
+# made so, and its backboardd aborts at every boot (issue #81: rt refuses a blend into BGR10_XR; userland/metal/rt/README.md):
+# leave it out until that README says the gap is ported.
 # --metal-dir DIR takes a Metal plug-in built before (userland/metal/build.sh's output folder, with camera/ holding
 # H9ISP.mediacapture when the capture plug-in goes too) instead of building one; --metal-more-dir DIR (with
 # --metal-dir, repeatable) adds another iOS build's (ONEIOS_METAL_TARGET="iPhone18,2 24B156" userland/metal/build.sh); --no-metal makes a runtime without

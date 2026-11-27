@@ -176,17 +176,38 @@ struct DrmBuf {
     map: *mut u8,
 }
 
+/// How the DRM back end puts a written buffer on the panel. Each step down is taken once, when the one above it is
+/// refused for good (never for EBUSY: a flip still in flight is waited for).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Present {
+    /// PAGE_FLIP of the back buffer with DRM_MODE_PAGE_FLIP_EVENT; the next frame waits for the event.
+    Flip,
+    /// SETCRTC of the back buffer: a whole (blocking) commit a frame. A command-mode panel (the S24 Ultra's) is sent a
+    /// frame only by a commit [I]: writes into the scanned buffer alone do not reach it.
+    SetCrtc,
+    /// One buffer, written in place, and DIRTYFB: drivers with neither of the above.
+    Dirty,
+}
+
 /// The DRM back end's double-buffered dumb buffers and mode.
 struct Drm {
     fd: OwnedFd,
     crtc: u32,
+    connector: u32,
+    mode: kms::ModeInfo,
     bufs: [DrmBuf; 2],
     front: usize,
-    page_flip: bool,
+    present: Present,
+    /// A PAGE_FLIP whose completion event has not been read yet.
+    flip_pending: bool,
     prev_dirty: (u32, u32, u32, u32),
     w: u32,
     h: u32,
     stride: u32,
+    /// Frames put on the panel, and flips that were not done within FLIP_WAIT_MS (both for the 10 s line).
+    shown: u64,
+    late: u64,
+    last_note_us: i64,
 }
 
 // SAFETY: the dumb buffer's mapping is used under the display's drm lock only.
@@ -613,6 +634,40 @@ mod kms {
     pub const CREATE_DUMB: u32 = iowr(0xb2, std::mem::size_of::<CreateDumb>());
     pub const MAP_DUMB: u32 = iowr(0xb3, std::mem::size_of::<MapDumb>());
     pub const MODE_TYPE_PREFERRED: u32 = 1 << 3;
+    /// drm_mode.h's DRM_MODE_PAGE_FLIP_EVENT: the flip's completion is read from the descriptor.
+    pub const PAGE_FLIP_EVENT: u32 = 0x01;
+    /// drm.h's DRM_EVENT_FLIP_COMPLETE.
+    pub const EVENT_FLIP_COMPLETE: u32 = 0x02;
+
+    /// Whether the events read from the descriptor (`buf`: whole struct drm_event records, { u32 type, u32 length,
+    /// ... }) hold a flip's completion.
+    pub fn flip_completed(buf: &[u8]) -> bool {
+        let mut at = 0usize;
+        while at + 8 <= buf.len() {
+            let kind = u32::from_ne_bytes(buf[at..at + 4].try_into().unwrap());
+            let length = u32::from_ne_bytes(buf[at + 4..at + 8].try_into().unwrap()) as usize;
+            if kind == EVENT_FLIP_COMPLETE {
+                return true;
+            }
+            if length < 8 {
+                break;
+            }
+            at += length;
+        }
+        false
+    }
+
+    /// The mode the back end sets: the largest (the panel's native size, not a lower One UI resolution of the same
+    /// panel), then the fastest, then the preferred one.
+    pub fn pick_mode(modes: &[ModeInfo]) -> Option<ModeInfo> {
+        modes
+            .iter()
+            .filter(|m| m.hdisplay != 0 && m.vdisplay != 0)
+            .max_by_key(|m| {
+                (m.hdisplay as u32 * m.vdisplay as u32, m.vrefresh, (m.kind & MODE_TYPE_PREFERRED != 0) as u32)
+            })
+            .copied()
+    }
 
     #[repr(C)]
     #[derive(Default)]
@@ -839,13 +894,15 @@ fn drm_init() -> Result<Drm, ()> {
         loge!("display: KMS resources: {}", std::io::Error::last_os_error());
         return Err(());
     }
+    // The kernel copies none of a connector's modes when they do not all fit (as panel_native); 256 holds every list
+    // seen. With 32, a panel of more modes came back as 32 zero modes and a 0x0 dumb buffer.
+    let mut modes = vec![kms::ModeInfo::default(); 256];
     for connector in connectors.iter().take(res.count_connectors.min(16) as usize) {
-        let mut modes = [kms::ModeInfo::default(); 32];
         let mut conn_encoders = [0u32; 8];
         let mut conn = kms::Connector {
             connector_id: *connector,
             modes_ptr: modes.as_mut_ptr() as u64,
-            count_modes: 32,
+            count_modes: 256,
             encoders_ptr: conn_encoders.as_mut_ptr() as u64,
             count_encoders: 8,
             ..Default::default()
@@ -854,15 +911,11 @@ fn drm_init() -> Result<Drm, ()> {
             || conn.connection != 1
             || !config::panel_connector(conn.connector_type)
             || conn.count_modes == 0
+            || conn.count_modes > 256
         {
             continue;
         }
-        let n = conn.count_modes.min(32) as usize;
-        let mode = modes[..n]
-            .iter()
-            .max_by_key(|m| (m.vrefresh, (m.kind & kms::MODE_TYPE_PREFERRED != 0) as u32))
-            .copied()
-            .unwrap_or(modes[0]);
+        let Some(mode) = kms::pick_mode(&modes[..conn.count_modes as usize]) else { continue };
         let mut enc = kms::Encoder {
             encoder_id: if conn.encoder_id != 0 { conn.encoder_id } else { conn_encoders[0] },
             ..Default::default()
@@ -950,74 +1003,203 @@ fn drm_init() -> Result<Drm, ()> {
         return Ok(Drm {
             fd,
             crtc,
+            connector: *connector,
+            mode,
             bufs: [b0, b1],
             front: 0,
-            page_flip: true,
+            present: Present::Flip,
+            flip_pending: false,
             prev_dirty: (0, 0, mode.hdisplay as u32, mode.vdisplay as u32),
             w: mode.hdisplay as u32,
             h: mode.vdisplay as u32,
             stride: pitch,
+            shown: 0,
+            late: 0,
+            last_note_us: now_us(),
         });
     }
     loge!("display: no connected KMS connector");
     Err(())
 }
 
-fn drm_flush(d: &Display, drm: &mut Drm, x: u32, y: u32, w: u32, h: u32) {
-    // Copy the union of this frame's damage and the previous frame's damage into the back buffer so both
-    // buffers stay in sync across page-flips.
-    let (px, py, pw, ph) = drm.prev_dirty;
-    let (cx, cy, cw, ch) = if drm.page_flip && pw > 0 && ph > 0 {
-        let nx = x.min(px);
-        let ny = y.min(py);
-        let nx2 = (x + w).max(px + pw);
-        let ny2 = (y + h).max(py + ph);
-        (nx, ny, nx2 - nx, ny2 - ny)
-    } else {
-        (x, y, w, h)
-    };
-    let target = if drm.page_flip { 1 - drm.front } else { drm.front };
+/// How long a frame waits for the flip before it (two frames at 60 Hz; a flip later than that is counted as late and
+/// taken as done).
+const FLIP_WAIT_MS: i32 = 34;
+
+/// Waits for the flip in flight to complete (its event read from the descriptor), at most FLIP_WAIT_MS.
+fn drm_wait_flip(drm: &mut Drm) {
+    let started = now_us();
+    while drm.flip_pending {
+        let left = FLIP_WAIT_MS - ((now_us() - started) / 1000) as i32;
+        if left <= 0 {
+            drm.late += 1;
+            drm.flip_pending = false; // a lost event must not stop the display: the next flip says EBUSY if it is not
+            break;
+        }
+        let mut p = libc::pollfd { fd: drm.fd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        // SAFETY: one pollfd of ours.
+        let n = unsafe { libc::poll(&mut p, 1, left) };
+        if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+            continue;
+        }
+        if n <= 0 {
+            continue; // timed out: the loop's deadline decides
+        }
+        let mut buf = [0u8; 1024];
+        // SAFETY: reads into the buffer, at most its length.
+        let got = unsafe { libc::read(drm.fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
+        if got > 0 && kms::flip_completed(&buf[..got as usize]) {
+            drm.flip_pending = false;
+        }
+    }
+}
+
+/// Puts `target` on the panel the way `drm.present` says; steps down (once, logged) when the driver refuses it.
+/// True when the buffer is shown (or will be at the next vblank).
+fn drm_present(drm: &mut Drm, target: usize) -> bool {
+    let raw = drm.fd.as_raw_fd();
+    let fb = drm.bufs[target].fb;
+    if drm.present == Present::Flip {
+        for attempt in 0..2 {
+            let mut flip =
+                kms::PageFlip { crtc_id: drm.crtc, fb_id: fb, flags: kms::PAGE_FLIP_EVENT, ..Default::default() };
+            if kms::call(raw, kms::PAGE_FLIP, &mut flip) {
+                drm.flip_pending = true;
+                return true;
+            }
+            let e = std::io::Error::last_os_error();
+            if e.raw_os_error() == Some(libc::EBUSY) && attempt == 0 {
+                // A flip still in flight (one this code did not wait for, or the modeset's own commit): wait, again.
+                drm.flip_pending = true;
+                drm_wait_flip(drm);
+                continue;
+            }
+            loge!("display: KMS page flip refused ({}): a mode set (SETCRTC) a frame from now on", e);
+            drm.present = Present::SetCrtc;
+            break;
+        }
+    }
+    if drm.present == Present::SetCrtc {
+        let mut set = kms::Crtc {
+            crtc_id: drm.crtc,
+            fb_id: fb,
+            set_connectors_ptr: &drm.connector as *const u32 as u64,
+            count_connectors: 1,
+            mode: drm.mode,
+            mode_valid: 1,
+            ..Default::default()
+        };
+        if kms::call(raw, kms::SETCRTC, &mut set) {
+            return true;
+        }
+        loge!(
+            "display: KMS mode set a frame refused ({}): one buffer written in place with DIRTYFB from now on",
+            std::io::Error::last_os_error()
+        );
+        drm.present = Present::Dirty;
+        // the panel scans drm.front: the caller copies the whole frame into it next time
+    }
+    false
+}
+
+/// Copies the frame's rectangle (x, y, w, h) into dumb buffer `target`, centred where the mode is larger.
+fn drm_copy(d: &Display, drm: &Drm, target: usize, (x, y, w, h): (u32, u32, u32, u32)) {
     let buf = &drm.bufs[target];
     let f = &d.frame;
     let ox = if drm.w > f.width { (drm.w - f.width) / 2 } else { 0 };
     let oy = if drm.h > f.height { (drm.h - f.height) / 2 } else { 0 };
-    let mut row = cy;
-    while row < cy + ch && row + oy < drm.h {
-        let width = if cx + cw + ox <= drm.w {
-            cw
-        } else if cx + ox < drm.w {
-            drm.w - cx - ox
-        } else {
-            0
-        };
+    let (x, y) = (x.min(f.width), y.min(f.height));
+    let (w, h) = (w.min(f.width - x), h.min(f.height - y));
+    let width = if x + ox >= drm.w { 0 } else { w.min(drm.w - x - ox) };
+    let mut row = y;
+    while row < y + h && row + oy < drm.h && width != 0 {
         // SAFETY: both rows lie inside their buffers (the clipping above); the frame is mapped for the process's life.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                f.as_ptr().add(row as usize * f.stride as usize + cx as usize * 4),
-                buf.map.add((row + oy) as usize * drm.stride as usize + (cx + ox) as usize * 4),
+                f.as_ptr().add(row as usize * f.stride as usize + x as usize * 4),
+                buf.map.add((row + oy) as usize * drm.stride as usize + (x + ox) as usize * 4),
                 width as usize * 4,
             )
         };
         row += 1;
     }
-    if drm.page_flip {
-        let mut flip = kms::PageFlip { crtc_id: drm.crtc, fb_id: buf.fb, ..Default::default() };
-        if kms::call(drm.fd.as_raw_fd(), kms::PAGE_FLIP, &mut flip) {
-            drm.front = target;
-            drm.prev_dirty = (x, y, w, h);
-            return;
-        }
-        drm.page_flip = false;
+}
+
+fn drm_flush(d: &Display, drm: &mut Drm, x: u32, y: u32, w: u32, h: u32) {
+    // The back buffer is written only once the flip to it before has completed: writing a buffer the panel still
+    // scans tears, and a second PAGE_FLIP before the first's vblank is refused (EBUSY). Until 2026-11-27 the code
+    // asked for no event and waited for nothing, so the first EBUSY (two flushes inside one vblank: the boot console's
+    // ticks, the guest's first frames) turned flipping off for good and left only DIRTYFB, written into the buffer the
+    // panel showed. A command-mode panel (the S24 Ultra's) is sent a frame only by a commit, and DIRTYFB makes none
+    // on a driver without a dirty hook [I: a guess for Qualcomm's SDE, not checked on the phone]: the panel kept the
+    // zeroed first buffer, black while iOS ran (the owner's display=drm boots, reported 2026-11-27).
+    if drm.flip_pending {
+        drm_wait_flip(drm);
     }
+    let now = (x, y, w, h);
+    if drm.present == Present::Dirty {
+        let front = drm.front;
+        drm_copy(d, drm, front, now);
+        drm_dirty(d, drm, front, now);
+    } else {
+        // The back buffer is a frame behind: this frame's damage and the frame before's.
+        let (px, py, pw, ph) = drm.prev_dirty;
+        let union = if pw > 0 && ph > 0 {
+            let (nx, ny) = (x.min(px), y.min(py));
+            let (nx2, ny2) = ((x + w).max(px + pw), (y + h).max(py + ph));
+            (nx, ny, nx2 - nx, ny2 - ny)
+        } else {
+            now
+        };
+        let target = 1 - drm.front;
+        drm_copy(d, drm, target, union);
+        if drm_present(drm, target) {
+            drm.front = target;
+            drm.prev_dirty = now;
+        } else {
+            // Stepped down to one buffer: the whole frame into the one the panel scans.
+            let front = drm.front;
+            let all = (0, 0, d.frame.width, d.frame.height);
+            drm_copy(d, drm, front, all);
+            drm_dirty(d, drm, front, all);
+        }
+    }
+    drm.shown += 1;
+    let t = now_us();
+    if t - drm.last_note_us >= 10_000_000 {
+        logi!(
+            "display: 10 s: KMS {} frames by {}, {} flips later than {} ms",
+            drm.shown,
+            match drm.present {
+                Present::Flip => "page flip",
+                Present::SetCrtc => "mode set",
+                Present::Dirty => "DIRTYFB",
+            },
+            drm.late,
+            FLIP_WAIT_MS
+        );
+        (drm.shown, drm.late, drm.last_note_us) = (0, 0, t);
+    }
+}
+
+/// DIRTYFB of the rectangle of buffer `target` (the frame's coordinates, centred as drm_copy places them).
+fn drm_dirty(d: &Display, drm: &Drm, target: usize, (x, y, w, h): (u32, u32, u32, u32)) {
+    let f = &d.frame;
+    let ox = if drm.w > f.width { (drm.w - f.width) / 2 } else { 0 };
+    let oy = if drm.h > f.height { (drm.h - f.height) / 2 } else { 0 };
     let mut clip = kms::ClipRect {
-        x1: (cx + ox) as u16,
-        y1: (cy + oy) as u16,
-        x2: (cx + ox + cw) as u16,
-        y2: (cy + oy + ch) as u16,
+        x1: (x + ox).min(drm.w) as u16,
+        y1: (y + oy).min(drm.h) as u16,
+        x2: (x + ox + w).min(drm.w) as u16,
+        y2: (y + oy + h).min(drm.h) as u16,
     };
-    let mut dirty =
-        kms::FbDirty { fb_id: buf.fb, clips_ptr: &mut clip as *mut _ as u64, num_clips: 1, ..Default::default() };
-    kms::call(drm.fd.as_raw_fd(), kms::DIRTYFB, &mut dirty); // command-mode panels need it; others ignore it
+    let mut dirty = kms::FbDirty {
+        fb_id: drm.bufs[target].fb,
+        clips_ptr: &mut clip as *mut _ as u64,
+        num_clips: 1,
+        ..Default::default()
+    };
+    kms::call(drm.fd.as_raw_fd(), kms::DIRTYFB, &mut dirty);
 }
 
 // ---- the start ---------------------------------------------------------------------------------------------------------

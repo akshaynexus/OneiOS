@@ -142,8 +142,8 @@ They are idle when iOS does not use them [I]. They stay.
 
 ### 2.1 Display: DRM/KMS with surfaceflinger and the composer stopped
 
-xnuhost's `drm` back end (`runtime/xnuhost/src/display.rs`, `docs/booter.md` 2.8; written in C, ported to Rust on 2026-11-23) is written and never run [F]: DRM
-master, one dumb buffer, legacy `SETCRTC`, `DIRTYFB` per flush, `DROP_MASTER` at the close. What it needs before it
+xnuhost's `drm` back end (`runtime/xnuhost/src/display.rs`, `docs/booter.md` 2.8; written in C, ported to Rust on 2026-11-23) was written and never run [F] until the owner's takeover boots (reported 2026-11-27: a black panel; fixed 2026-11-27, docs/booter.md 2.8: two buffers, flips with their events): DRM
+master, legacy `SETCRTC`, then `PAGE_FLIP` a frame (waiting for each flip's event), `DROP_MASTER` at the close. What it needs before it
 can replace the surfaceflinger path:
 
 1. **The master.** Only one process is the DRM master: today the composer. `SET_MASTER` fails while the composer
