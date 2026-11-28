@@ -47,7 +47,9 @@ one setting turns one back: [docs/switches.md](docs/switches.md) has the table a
 - **Audio:** works, but laggy. Volume control, the volume keys and the power key work.
 - **Thermal:** the phone runs hot.
 - **Wi-Fi and Bluetooth:** work.
-- **S Pen:** it worked before, and does not work in the latest iOS build (to be fixed).
+- **S Pen:** works as an Apple Pencil with pressure sensitivity and hover on iOS 27.2.1 (the owner, 2026-11-28, runtime
+  v0.1.44 and later: [the post](https://www.reddit.com/r/hackios/comments/1y7j0oz/s_pen_emulated_as_apple_pencil_on_ios_27/)).
+  The rebuilt 27.2.1 image had lost `pen=auto`; since v0.1.41 the S24 Ultra's host row turns it on.
 - **Haptics:** work.
 - **Camera:** work in progress: the Camera app shows a black preview.
 - **Video playback:** works, but laggy.
