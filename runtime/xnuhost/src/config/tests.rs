@@ -970,24 +970,28 @@ fn boot_argument_helpers() {
                                                                                         // the display driver's switches on the kernel's command line: added once, a given value stays
     let mut a = "-v debug=0x8".to_owned();
     assert!(display_boot_args(&mut a, 128, 3, 120, DisplayFormat::Bgrx8).is_ok());
-    assert_eq!(a, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120 sheng-vsync-fixed=1");
+    assert_eq!(a, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120");
     assert!(display_boot_args(&mut a, 128, 2, 60, DisplayFormat::Bgrx8).is_ok());
-    assert_eq!(a, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120 sheng-vsync-fixed=1");
+    assert_eq!(a, "-v debug=0x8 offline-legacy-unit-scale=3 sheng-vsync=120");
     let mut a = "sheng-vsync=90 not-sheng-vsync=1".to_owned();
     assert!(display_boot_args(&mut a, 128, 2, 120, DisplayFormat::Bgrx8).is_ok());
-    assert_eq!(a, "sheng-vsync=90 not-sheng-vsync=1 offline-legacy-unit-scale=2 sheng-vsync-fixed=1");
+    assert_eq!(a, "sheng-vsync=90 not-sheng-vsync=1 offline-legacy-unit-scale=2");
+    // a given sheng-vsync-fixed=1 (one fixed rate) stays; none is added (2026-11-28: the 60..120 Hz range)
+    let mut a = "sheng-vsync-fixed=1".to_owned();
+    assert!(display_boot_args(&mut a, 128, 3, 120, DisplayFormat::Bgrx8).is_ok());
+    assert_eq!(a, "sheng-vsync-fixed=1 offline-legacy-unit-scale=3 sheng-vsync=120");
     let mut a = String::new();
     assert!(display_boot_args(&mut a, 128, 2, 120, DisplayFormat::Bgrx8).is_ok());
-    assert_eq!(a, "offline-legacy-unit-scale=2 sheng-vsync=120 sheng-vsync-fixed=1");
+    assert_eq!(a, "offline-legacy-unit-scale=2 sheng-vsync=120");
     assert!(display_boot_args(&mut a, 44, 2, 120, DisplayFormat::Bgrx8).is_ok());
     assert_eq!(display_boot_args(&mut String::new(), 40, 2, 120, DisplayFormat::Bgrx8), Err(NoRoom)); // no room
                                                                                                       // a half-float frame: the guest is told to hand its half-float surfaces over as they are; a given value stays
     let mut a = String::new();
     assert!(display_boot_args(&mut a, 128, 3, 120, DisplayFormat::Rgba16f).is_ok());
-    assert_eq!(a, "oneios-display-wide=1 offline-legacy-unit-scale=3 sheng-vsync=120 sheng-vsync-fixed=1");
+    assert_eq!(a, "oneios-display-wide=1 offline-legacy-unit-scale=3 sheng-vsync=120");
     let mut a = "oneios-display-wide=0".to_owned();
     assert!(display_boot_args(&mut a, 128, 3, 120, DisplayFormat::Rgba16f).is_ok());
-    assert_eq!(a, "oneios-display-wide=0 offline-legacy-unit-scale=3 sheng-vsync=120 sheng-vsync-fixed=1");
+    assert_eq!(a, "oneios-display-wide=0 offline-legacy-unit-scale=3 sheng-vsync=120");
 }
 
 #[test]
@@ -1676,7 +1680,7 @@ fn the_switches() {
     c.boot_args = "-v oneios-wifi-rssi=0 oneios-telemetry-jobs=1 oneios-pool-cut=0 oneios-pressure-big=0 \
                    oneios-disable-allowed=0 oneios-nested-exact=0 oneios-upgrade-flush=1 oneios-fill-fast-fault=0 \
                    oneios-audio-rt=0 oneios-audio-curve=0 oneios-codec-irq=0 oneios-idle-spares=0 oneios-bo-cache-idle=0 \
-                   oneios-keep-room=0 oneios-dl-full=0 sheng-vsync-min=24 sheng-vsync-fixed=0 oneios-compile-s=0 oneios-snapshot-astc=1 \
+                   oneios-keep-room=0 oneios-dl-full=0 sheng-vsync-min=24 sheng-vsync-fixed=1 oneios-compile-s=0 oneios-snapshot-astc=1 \
                    oneios-camera-notify=0 oneios-m2v-shader-fix=0 oneios-dont-care=1 oneios-queue-priority=0"
         .into();
     let line = c.switches_line();
@@ -1689,7 +1693,7 @@ fn the_switches() {
         line.contains(
             " oneios-wifi-rssi=0 oneios-telemetry-jobs=1 oneios-pool-cut=0 oneios-pressure-big=0 oneios-disable-allowed=0 \
              oneios-nested-exact=0 oneios-upgrade-flush=1 oneios-fill-fast-fault=0 oneios-audio-rt=0 oneios-audio-curve=0 \
-             oneios-codec-irq=0 oneios-idle-spares=0 oneios-bo-cache-idle=0 oneios-keep-room=0 oneios-dl-full=0 sheng-vsync-min=24 sheng-vsync-fixed=0 \
+             oneios-codec-irq=0 oneios-idle-spares=0 oneios-bo-cache-idle=0 oneios-keep-room=0 oneios-dl-full=0 sheng-vsync-min=24 sheng-vsync-fixed=1 \
              oneios-compile-s=0 oneios-snapshot-astc=1 oneios-camera-notify=0 oneios-m2v-shader-fix=0 oneios-dont-care=1 \
              oneios-queue-priority=0 (docs/switches.md)"
         ),

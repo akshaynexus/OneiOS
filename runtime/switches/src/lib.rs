@@ -535,13 +535,13 @@ pub const SWITCHES: &[Switch] = &[
         )
     },
     Switch {
-        auto: Some("xnuhost adds 1 above 60 Hz unless the boot arguments name sheng-vsync-fixed"),
+        auto: Some("0 (since 2026-11-28; xnuhost added 1 above 60 Hz before): the 60..120 Hz range of sheng-vsync-min"),
         ..text(
-            arg("sheng-vsync-fixed", BOOL, "1", Some("0")),
+            arg("sheng-vsync-fixed", BOOL, "0", Some("1")),
             "Display",
             "Keep animations at panel rate",
-            "1: above 60 Hz, report one fixed panel rate so CoreAnimation cannot select 30 Hz from the 24..120 Hz range. \
-             0: keep the variable range for an A/B comparison.",
+            "0: the variable range (sheng-vsync-min..the panel's rate, 60..120 Hz): 120 Hz for touch and scrolling, 60 for \
+             light animations, cooler. 1: one fixed panel rate, every animation at 120 Hz.",
         )
     },
     Switch {

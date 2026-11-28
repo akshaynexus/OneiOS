@@ -2268,13 +2268,11 @@ pub fn display_boot_args(
     if !has_switch(args, "sheng-vsync") {
         append_arg(args, size, &format!("sheng-vsync={hz}"))?;
     }
-    // The panel refreshes at one rate; its driver's original maximum refresh interval (1/24 s) is ProMotion's range,
-    // not this panel's. The render server reads the range and lets CoreAnimation pick 30 Hz for an animation inside
-    // it; a fixed rate makes the animation ask for the panel's (docs/gpu.md, "The refresh range"). A given
-    // sheng-vsync-fixed stays (0: the variable range set by sheng-vsync-min, 60..120 by default).
-    if hz > 60 && !has_switch(args, "sheng-vsync-fixed") {
-        append_arg(args, size, "sheng-vsync-fixed=1")?;
-    }
+    // No sheng-vsync-fixed by default (2026-11-28): the guest's display then reports sheng-vsync-min..HZ (60..120), so
+    // Core Animation runs touch, scrolling and transitions at 120 Hz and light or idle animations at 60, as ProMotion
+    // does. Until then xnuhost added sheng-vsync-fixed=1 above 60 Hz, one fixed rate that kept every animation at 120
+    // Hz (the S24 Ultra at 95 C with all its cores at the top, v0.1.40). The 30 Hz it once guarded against is under
+    // sheng-vsync-min=60. A given sheng-vsync-fixed=1 stays.
     Ok(())
 }
 
