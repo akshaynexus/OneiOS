@@ -208,6 +208,8 @@ plug-in, is the next step.
 
 ```sh
 userland/camera/build.sh          # -> out/userland/camera/H9ISP.mediacapture, cdhashes.txt
+# (the target: env.sh's IOS_TARGET, arm64e iOS 27 by default; IOS_MIN=16.5 IOS_TARGET=arm64-apple-ios16.5 for a 16.5
+# guest, its signature then checked as arm64; the 16.5 CMCapture ABI is not proven)
 # then the image build (docs/building.md section 1): the image hook takes out/userland/camera (ONEIOS_CAMERA_PLUGIN=DIR for another)
 ```
 

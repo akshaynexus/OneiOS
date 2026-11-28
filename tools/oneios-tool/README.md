@@ -2208,6 +2208,7 @@ oneios-tool phone pen wake                    # 2,0 then 2,1 to that node, then 
 oneios-tool phone backlight status            # the panel's level, max_brightness, One UI's own value (read only)
 oneios-tool phone backlight set N             # 1..max_brightness (12750); the return writes One UI's own value back
 oneios-tool phone cpu [--trace S] [--out F]   # cores, domains, top and capped clocks, cpusets, xnuhost's threads and uclamps (read only)
+oneios-tool phone hw [--out DIR]              # the hardware map of a new port: fdt.dtb, iomem, interrupts, partitions, kernel.config (read only)
 oneios-tool phone wifi p2p [--station IFACE] [--save FILE]   # the staged wifictl p2p as root (read only): every radio, Wonder,
                                               #   the AirDrop verdicts, Wonder's files; then a summary of those lines
 oneios-tool phone wifi wonder [--seconds 30] [--freq 2437|5220|5745] [--country CC] [--save FILE]
@@ -2238,8 +2239,8 @@ oneios-tool phone sparse-write OUT [--gunzip] [--expect-size N]   # stdin to OUT
 ```
 
 **The host phone in `status` (2026-11-21).** After `root: yes`, one line: `host: galaxy-s24-ultra (Galaxy S24 Ultra
-(SM-S928, SM8650)), matched by ro.product.model=SM-S928B; defaults: none (today's)`, or for another known phone its
-defaults (`galaxy-s26-ultra ... defaults: ONEIOS_BRIGHT_MAX=2300`, `galaxy-a56 ... defaults: gpu=auto, panel-fallback=1080x2340@120, width=720, height=1560, scale=2, hz=60, return-graceful-ms=4000, astc=0, hw-backend-haptics=treble, hw-backend-fallback=1`), or `host: unknown
+(SM-S928, SM8650)), matched by ro.product.model=SM-S928B; defaults: pen=auto, encoder=auto` (xnuhost's table's S24 Ultra row since 7c70ef93; this mirror followed on 2026-11-28), or for another known phone its
+defaults (`galaxy-s26-ultra ... defaults: ONEIOS_BRIGHT_MAX=2300, ONEIOS_AUDIO_PROBE_PREFILL=1`, `galaxy-a56 ... defaults: gpu=auto, panel-fallback=1080x2340@120, width=720, height=1560, scale=2, hz=60, return-graceful-ms=4000, astc=0, hw-backend-haptics=treble, hw-backend-fallback=1`), or `host: unknown
 phone (ro.product.model=... ...): xnuhost keeps today's defaults (host-device=NAME forces one)`. One `adb shell` call as
 the shell user: `getprop` of `ro.product.model`, `ro.product.device`, `ro.board.platform`, `ro.soc.model`,
 `ro.soc.manufacturer`, and `/sys/devices/soc0/{machine,soc_id}`, `/proc/device-tree/compatible`; matched in xnuhost's
@@ -2609,6 +2610,22 @@ that one named node: the bridge's own search of `tsp*` folders is not repeated h
 `docs/hardware.md` 7f). Only in a session, only that node. The brightness bridge wakes it with the touch IC when xnuhost
 gives iOS the pen (`ONEIOS_PEN_IC=1`); this is the check and the fix by hand. Unit-tested (the scripts name only
 that node); the stand-in phone (`tests/phone`) has no `sec_epen` node, and the commands have not run on the phone.
+
+**`phone hw [--out DIR]`** (2026-11-28, from YumikoHayamato/OneiOS `9ff6bbd9`; `crates/oneios-phone/src/hw.rs`). Read
+only, refused during a session: the phone's hardware as its running kernel was given it, the first facts of a new port
+(beside `tools/probe/s25-probe.sh`; [docs/forks.md](../../docs/forks.md) "What a new port still needs"). Into DIR
+(default `phone-hw`): `fdt.dtb` (`/sys/firmware/fdt`, the flattened tree the bootloader handed Linux; checked for its
+magic; `dtc -I dtb -O dts` decompiles it), `cmdline.txt`, `version.txt`, `cpuinfo.txt`, `meminfo.txt`, `iomem.txt`
+(root: real addresses), `partitions.txt`, `interrupts.txt`, `cpuregs.txt` (MIDR and REVIDR of cpu0-7 by name),
+`drm.txt` (`/sys/class/drm/card0-DSI-1/{status,modes}`), `by-name.txt` (`ls -l /dev/block/by-name`), `props.txt`,
+`modules.txt` (`/proc/modules`), `hyp.txt` (`ls -lZ` of `/dev/gunyah`, `/dev/kvm`, `/dev/udmabuf` and AVF's
+`crosvm`, `vm`, `pvmfw.img` by name; the hypervisor's properties; the package manager's virtualization features),
+`avf.txt` (`vm info`, `crosvm version`, `crosvm run --help`: queries, no VM is made, 20 s each) and `config.gz`
+(`/proc/config.gz`, also unpacked to `kernel.config`); `hw.txt` lists what came. One script for the texts (each after
+a `=== NAME` line, each in a subshell whose stdin is /dev/null: on the fork's phone `vm info` waited on the script's
+own stdin for ever), one `exec-out` per binary. Named files only (`hw::tests::the_script_reads_named_files_only`; 3
+unit tests). Run by the fork on an SM-S938B on 2026-11-20; not run here on the S24 Ultra. The files carry the
+handset's serial number: keep them in the git-ignored `logs/` or `out/`.
 
 **`phone cpu [--trace SECONDS] [--out FILE]`** (fix-host-overhead, 2026-11-15; `crates/oneios-phone/src/cpu.rs`). Read
 only, with or without a session: for each of cpu0-7 by name, the core (`regs/identification/midr_el1`), `cpu_capacity`,

@@ -97,7 +97,7 @@ hw_backend_checks() {
   printf '[ro.product.model]: [SM-S928B]\n[ro.product.device]: [e3q]\n[ro.soc.model]: [SM8650]\n' > "$S26/getprop-s24.txt"
   BL_ARGS=(info)
   out=$(bl "$S26" ONEIOS_HOST_PROPS="$S26/getprop.txt" ONEIOS_HOST_ROOT="$S26/root" 2>&1); st=$?
-  [ $st = 0 ] && printf '%s\n' "$out" | grep -q '^bridges: host: galaxy-s26-ultra, matched by ro.product.model=SM-S948B; read: .*; defaults: ONEIOS_BRIGHT_MAX=2300$' \
+  [ $st = 0 ] && printf '%s\n' "$out" | grep -q '^bridges: host: galaxy-s26-ultra, matched by ro.product.model=SM-S948B; read: .*; defaults: ONEIOS_BRIGHT_MAX=2300, ONEIOS_AUDIO_PROBE_PREFILL=1$' \
     && printf '%s\n' "$out" | grep -q 'panel0-backlight/brightness  max_brightness 12750, slider range 1..2300, One UI.s value 1500' \
     && [ "$(cat "$S26/sys/class/backlight/panel0-backlight/brightness")" = 1500 ] \
     && ok "host device: S26 Ultra detected: the slider ends at One UI's manual top (1..2300 of 12750)" || bad "host device: S26 Ultra detected" "status $st: $(printf '%s' "$out" | tr '\n' '|')"
@@ -106,7 +106,7 @@ hw_backend_checks() {
     && printf '%s\n' "$out" | grep -q 'max_brightness 12750, slider range 1..12750' \
     && ok "host device: ONEIOS_HOST_DEVICE=none: today's range (1..12750)" || bad "host device: none" "status $st: $(printf '%s' "$out" | tr '\n' '|')"
   out=$(bl "$S26" ONEIOS_HOST_PROPS="$S26/getprop.txt" ONEIOS_HOST_ROOT="$S26/root" ONEIOS_BRIGHT_MAX=1000 2>&1); st=$?
-  [ $st = 0 ] && printf '%s\n' "$out" | grep -q 'defaults: ONEIOS_BRIGHT_MAX=2300 not taken (the environment.s 1000)$' \
+  [ $st = 0 ] && printf '%s\n' "$out" | grep -q 'defaults: ONEIOS_BRIGHT_MAX=2300 not taken (the environment.s 1000), ONEIOS_AUDIO_PROBE_PREFILL=1$' \
     && printf '%s\n' "$out" | grep -q 'slider range 1..1000' \
     && ok "host device: a set ONEIOS_BRIGHT_MAX wins over the table (1..1000)" || bad "host device: the environment over the table" "status $st: $(printf '%s' "$out" | tr '\n' '|')"
   out=$(bl "$S26" ONEIOS_HOST_PROPS="$S26/getprop-s24.txt" ONEIOS_HOST_ROOT="$S26/root" 2>&1); st=$?

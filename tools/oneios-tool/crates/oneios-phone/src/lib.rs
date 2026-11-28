@@ -9,6 +9,7 @@ pub mod adb;
 pub mod app;
 pub mod cpu;
 pub mod cycle;
+pub mod hw;
 pub mod host;
 pub mod kb;
 pub mod local;
@@ -94,6 +95,15 @@ pub enum Command {
         /// Where the trace goes (default oneios-cpu.pftrace)
         #[arg(long, value_name = "FILE")]
         out: Option<String>,
+    },
+    /// The hardware as the phone's kernel was given it, read only, the first facts of a new port: the device tree
+    /// (/sys/firmware/fdt), /proc's cmdline, cpuinfo, meminfo, iomem, partitions, interrupts, the CPUs' MIDR, the
+    /// panel's connector, the partitions' names and the kernel's configuration, into DIR. Named files only; refused
+    /// during a session
+    Hw {
+        /// The folder for the files (fdt.dtb, iomem.txt, ..., hw.txt)
+        #[arg(long, value_name = "DIR", default_value = "phone-hw")]
+        out: String,
     },
     /// The staged runtime's wifictl as root beside One UI (docs/hardware.md 4a): `p2p` (read only: every radio, Google's
     /// Wonder radio, the verdicts for AirDrop) and `wonder` (a session on Wonder's raw 802.11 path beside wlan0, AWDL's
@@ -375,6 +385,7 @@ pub fn main(cli: Cli) -> i32 {
         Command::Pen { command: TouchCommand::Status } => Adb::connect(serial).and_then(|adb| session::pen_status(&adb)),
         Command::Pen { command: TouchCommand::Wake } => Adb::connect(serial).and_then(|adb| session::pen_wake(&adb)),
         Command::Cpu { trace, out } => Adb::connect(serial).and_then(|adb| cpu::cpu(&adb, trace, out.as_deref())),
+        Command::Hw { out } => Adb::connect(serial).and_then(|adb| hw::hw(&adb, &out)),
         Command::Wifi { command: WifiCommand::P2p { station, save } } => Adb::connect(serial).and_then(|adb| wifi::p2p(&adb, &station, &save)),
         Command::Wifi { command: WifiCommand::Wonder { seconds, freq, country, save } } => {
             Adb::connect(serial).and_then(|adb| wifi::wonder(&adb, &wifi::Wonder { seconds, freq, country, save }))
