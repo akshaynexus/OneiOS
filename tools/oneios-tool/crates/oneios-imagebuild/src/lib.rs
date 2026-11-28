@@ -866,18 +866,17 @@ pub fn build(args: &Args, space: Space) -> R<Built> {
     }
     let said = image_cmd(&margs)?.trim_end().to_string();
     println!("{said}");
-    // The Galaxy A56's GPU plug-ins of the staged runtime (a56gpu.rs): an iOS 16.5 set they are for gets its
-    // kernel.kc.gpuaddon of them and their CDHashes in owner-trust.json (and that entry of manifest.json), before the
-    // verify reads the manifest; the sidecar is not in the manifest, so it is added to the lists below by name.
-    let mut a56_addon: Option<String> = None;
+    // The Galaxy A56's GPU plug-ins of the staged runtime (a56gpu.rs): an iOS 16.5 set they are for gets their
+    // CDHashes in owner-trust.json (and that entry of manifest.json) before the verify reads the manifest, and its
+    // kernel.kc.gpuaddon of them after it: the sidecar is not in the manifest (the verify would refuse it, issue
+    // #87), so it is added to the lists below by name.
+    let mut a56_placed: Option<a56gpu::Placed> = None;
     if let Some(runtime) = &args.tweak.runtime_a56 {
         let plugins = a56gpu::runtime_plugins(Path::new(runtime)).map_err(failed)?;
-        match a56gpu::for_set(&set, plugins.as_ref()).map_err(failed)? {
+        match a56gpu::place_listed(&set, plugins.as_ref()).map_err(failed)? {
             Ok(placed) => {
-                a56gpu::write(&placed, &set, false).map_err(failed)?;
                 println!("{}", a56gpu::counts_line(&placed));
-                println!("{}", a56gpu::placed_line(&placed));
-                a56_addon = Some(oneios_image::sha256_of(&format!("{set_s}/{}", a56gpu::ADDON)).map_err(image)?);
+                a56_placed = Some(placed);
             }
             Err(why) => println!("@@A56GPU none: {why}"),
         }
@@ -891,6 +890,14 @@ pub fn build(args: &Args, space: Space) -> R<Built> {
     })?;
     job::end();
     println!("{said}");
+    let a56_addon = match &a56_placed {
+        Some(placed) => {
+            let sha = a56gpu::write_sidecar(placed, &set).map_err(failed)?;
+            println!("{}", a56gpu::placed_line(placed));
+            Some(sha)
+        }
+        None => None,
+    };
 
     // ---- 11. the lists, the set in place
     between()?;

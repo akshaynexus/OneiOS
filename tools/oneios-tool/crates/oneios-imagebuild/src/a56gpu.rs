@@ -6,7 +6,8 @@
 //!
 //! Two callers: `oneios-tool image a56-gpu-place --stage STAGE --out DIR` (the app's root script, at Update the
 //! kernel's `finish kernel`: the three files in DIR, the script moves them in and rewrites image.sha256 and image.ids),
-//! and Make iOS image (`build` here, after the manifest: the set gets them before its lists are made). Only a set whose
+//! and Make iOS image (`build` here, after the manifest: owner-trust.json and manifest.json before the verify, the
+//! sidecar after it, before its lists are made: [`place_listed`], [`write_sidecar`]). Only a set whose
 //! manifest names the build the plug-ins are for (`iPhone10,3 20F66`); an iOS 27 set (24A446) never takes them, and
 //! nothing is written for it.
 
@@ -119,15 +120,43 @@ pub fn for_set(set: &Path, plugins: Option<&Plugins>) -> Result<Result<Placed, S
     Ok(Ok(Placed { addon, trust, manifest, cdhashes: cdhashes.len(), new }))
 }
 
+fn put_file(path: &Path, data: &[u8]) -> Result<(), String> {
+    let part = path.with_extension("part");
+    std::fs::write(&part, data).and_then(|()| std::fs::rename(&part, path)).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// Write a placing's three files under `dir` (DIR/kernel.kc.gpuaddon, DIR/owner-trust.json, DIR/manifest.json for
 /// the root script; the set's own paths for Make iOS image: `flat` false).
 pub fn write(placed: &Placed, dir: &Path, flat: bool) -> Result<(), String> {
+    write_sidecar(placed, dir)?;
+    write_listed(placed, dir, flat)
+}
+
+/// The two files of a placing that manifest.json lists: owner-trust.json and manifest.json itself.
+pub fn write_listed(placed: &Placed, dir: &Path, flat: bool) -> Result<(), String> {
     let trust_at = if flat { dir.join("owner-trust.json") } else { dir.join(TRUST) };
-    for (path, data) in [(dir.join(ADDON), placed.addon.as_slice()), (trust_at, placed.trust.as_bytes()), (dir.join(MANIFEST), placed.manifest.as_bytes())] {
-        let part = path.with_extension("part");
-        std::fs::write(&part, data).and_then(|()| std::fs::rename(&part, &path)).map_err(|e| format!("{}: {e}", path.display()))?;
-    }
-    Ok(())
+    put_file(&trust_at, placed.trust.as_bytes())?;
+    put_file(&dir.join(MANIFEST), placed.manifest.as_bytes())
+}
+
+/// The sidecar of a placing, `kernel.kc.gpuaddon`, which manifest.json does not list (oneios-phone `SIDECARS`;
+/// the lists image.sha256 and image.ids name it); its SHA-256.
+pub fn write_sidecar(placed: &Placed, dir: &Path) -> Result<String, String> {
+    put_file(&dir.join(ADDON), &placed.addon)?;
+    Ok(sha256_hex(&placed.addon))
+}
+
+/// Make iOS image's placing, part one (before the set's verify): the owner-trust.json and manifest.json of the
+/// placing written into the set. The sidecar goes in only after the verify ([`write_sidecar`]): `image verify`
+/// refuses a file its manifest does not list, and kernel.kc.gpuaddon is not listed (issue #87: the A56's Make iOS
+/// image stopped at "not in the manifest: kernel.kc.gpuaddon" when all three went in before the verify).
+pub fn place_listed(set: &Path, plugins: Option<&Plugins>) -> Result<Result<Placed, String>, String> {
+    let placed = match for_set(set, plugins)? {
+        Ok(placed) => placed,
+        Err(why) => return Ok(Err(why)),
+    };
+    write_listed(&placed, set, false)?;
+    Ok(Ok(placed))
 }
 
 /// The line of a placing: the root script reads it as the tool's last line, word for word (the app's `a56_gpu_place`):

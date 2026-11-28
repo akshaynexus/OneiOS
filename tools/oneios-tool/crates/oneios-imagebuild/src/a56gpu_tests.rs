@@ -163,3 +163,61 @@ fn the_placed_line_is_the_apps_seven_words() {
     }
     assert_eq!(counts_line(&p), "a56gpu: the addon's 3 CDHashes, 2 of them new in owner-trust.json");
 }
+
+/// Issue #87: Make iOS image for the A56 (iOS 16.5, 20F66) stopped at "not in the manifest: kernel.kc.gpuaddon",
+/// because the sidecar went into the set before the verify. The make-image order: [`place_listed`] (owner-trust.json
+/// and manifest.json), the set's verify, then [`write_sidecar`]. The verify passes on the placed set, the sidecar
+/// is the runtime's addon, and it stays outside the manifest (the lists name it).
+#[test]
+fn make_image_places_the_sidecar_after_the_verify() {
+    let root = tmp("make-image");
+    let hashes = runtime(&root, Some("iPhone10,3 20F66"));
+    let s = root.join("image");
+    std::fs::create_dir_all(s.join("overlay/userland")).unwrap();
+    let trust = "{\n  \"cdhashes\": [],\n  \"files\": [],\n  \"schema\": 1\n}\n";
+    std::fs::write(s.join(TRUST), trust).unwrap();
+    let kc = b"a kernel collection".to_vec();
+    std::fs::write(s.join("kernel.kc"), &kc).unwrap();
+    let manifest = format!(
+        "{{\"name\": \"oneios-image\", \"format\": 1, \"version\": \"16.5\", \"build\": \"20F66\", \"device\": \"iPhone10,3\", \"files\": [{{\"path\": \"kernel.kc\", \"size\": {}, \"sha256\": \"{}\"}}, {{\"path\": \"{TRUST}\", \"size\": {}, \"sha256\": \"{}\", \"role\": \"overlay\"}}]}}\n",
+        kc.len(),
+        sha256_hex(&kc),
+        trust.len(),
+        sha256_hex(trust.as_bytes())
+    );
+    std::fs::write(s.join(MANIFEST), manifest).unwrap();
+    let set_s = s.to_str().unwrap();
+    oneios_image::verify_set(set_s, false).unwrap();
+
+    let plugins = runtime_plugins(&root.join("runtime")).unwrap();
+    let placed = place_listed(&s, plugins.as_ref()).unwrap().unwrap();
+    assert!(!s.join(ADDON).exists(), "no sidecar before the verify");
+    // the verify make-image runs: the new owner-trust.json against the new manifest.json, nothing extra
+    oneios_image::verify_set(set_s, false).unwrap();
+    let listed: Vec<String> = json::load(s.join(TRUST)).unwrap().get("cdhashes").unwrap().as_list().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert_eq!(listed, hashes);
+
+    let sha = write_sidecar(&placed, &s).unwrap();
+    let blob = std::fs::read(s.join(ADDON)).unwrap();
+    assert_eq!(sha, sha256_hex(&blob));
+    assert!(blob.starts_with(b"NGPUADD2"));
+    assert!(placed_line(&placed).contains(&format!("{ADDON} {sha} {}", blob.len())));
+    // the sidecar is not a manifest file: a verify with it in the set refuses it, which is why it comes after
+    let refused = oneios_image::verify_set(set_s, false).unwrap_err().to_string();
+    assert!(refused.ends_with(&format!("not in the manifest: {ADDON}")), "{refused}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// An iOS 27 set (the S24 Ultra's) is left as it was by Make iOS image's placing: no file written.
+#[test]
+fn make_image_writes_nothing_for_ios27() {
+    let root = tmp("make-image-27");
+    runtime(&root, Some("iPhone10,3 20F66"));
+    let s = set(&root, "iPhone18,2", "24A446", &"1".repeat(40));
+    let before = (std::fs::read(s.join(MANIFEST)).unwrap(), std::fs::read(s.join(TRUST)).unwrap());
+    let plugins = runtime_plugins(&root.join("runtime")).unwrap();
+    assert!(place_listed(&s, plugins.as_ref()).unwrap().is_err());
+    assert_eq!(before, (std::fs::read(s.join(MANIFEST)).unwrap(), std::fs::read(s.join(TRUST)).unwrap()));
+    assert!(!s.join(ADDON).exists());
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -919,7 +919,10 @@ places them at Update the kernel.
    The activation runs `bin/oneios-tool image a56-gpu-place` on the 20F66 set and moves in `image/kernel.kc.gpuaddon`,
    the merged `overlay/userland/owner-trust.json` and `manifest.json`, with `image.sha256` and `image.ids` rewritten;
    the page then says "The A56's GPU addon (Metal and OpenGL ES for iOS 16.5) is in place too: ...". An iOS 27 set
-   never runs this step. Make iOS image (a new 20F66 image) places the same addon before its lists.
+   never runs this step. Make iOS image (a new 20F66 image) places the same addon before its lists: owner-trust.json
+   and its manifest entry before the `verify` step, `kernel.kc.gpuaddon` after it (the sidecar is not in the
+   manifest, which `verify` refuses: issue #87, fixed 2026-11-28, `a56gpu::place_listed` then `write_sidecar`; unit
+   test `make_image_places_the_sidecar_after_the_verify`; not yet booted on an A56).
 3. **Switch to iOS 16.5**: xnuhost finds the addon, runs its amdgpu self-test, and turns the GPU path on.
 
 **On and off.** On: the addon in the set and `gpu=auto` (the `galaxy-a56` row's default) with the self-test passing;
