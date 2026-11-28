@@ -362,8 +362,13 @@ blended them in the shader (NativeMetal 0012).
 `RG10Unorm_X12`(`_sRGB`) in `RG16Unorm`. Textures, views, render pipeline attachments and the linear alignment go
 through it; `nmb_texture_describe` answers the format asked for. The values are kept (floats keep values past 1;
 `RG11B10Float` drops negatives), not Apple's bytes: every producer and consumer of such a texture is this runtime, as
-backboardd's own framebuffer is 8-bit (the frontend withholds `supportsExtendedXR10Formats` from it) [I: a CPU read of
-such a texture's bytes would see the other encoding; none seen]. `RGB10A8_2P_XR10` (two planes) is not mapped. On the
+backboardd's own framebuffer is 8-bit. **That held only for the render server** (2026-11-28): the frontend withholds
+`supportsExtendedXR10Formats` from backboardd but keeps it for the poster extensions (`MercuryPosterExtension`, ...),
+so their lock-screen and wallpaper surfaces were XR IOSurfaces in Apple's bytes, read by backboardd through these
+formats (and the two-plane `b3a8` ones refused): the S24 Ultra's glitches in transitions with this add-on on
+v0.1.40-v0.1.44 (`oneios-dont-care=0` did not end them), none with the 624bab3 add-on, which decodes XR. The bridge now
+answers `supportsExtendedXR10Formats` false to every process (`bridge/src/abi/device.rs`), so Core Animation renders
+those layers in BGRA8 or RGBA16Float. Proof on the phone: the same page transitions with no glitch. `RGB10A8_2P_XR10` (two planes) is not mapped. On the
 laptop (Turnip a750, noop shim):
 
 ```

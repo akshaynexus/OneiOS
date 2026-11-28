@@ -472,7 +472,14 @@ const PRIVATE_FLAGS: &[(&str, Option<bool>)] = &[
     ("supportsComputeCompressedTextureWrite", None),
     ("supportsConditionalLoadStore", None),
     ("supportsDynamicAttributeStride", Some(true)),
-    ("supportsExtendedXR10Formats", Some(true)),
+    // false for every process (2026-11-28): rt holds Apple's extended-range forms in other encodings (`stored`: BGR10_XR in
+    // RG11B10Float, BGRA10_XR in RGBA16Float) and refuses the two-plane RGB10A8_2P_XR10 over a surface, so an XR IOSurface
+    // that a CPU or another process wrote in Apple's bytes reads back as the wrong values. The frontend withholds this answer
+    // from the render server but keeps it for the poster extensions (MercuryPosterExtension, ...: NativeMetal's own runtime
+    // decoded XR in its shaders), whose lock-screen and wallpaper surfaces backboardd then sampled through the substitute
+    // formats: the S24 Ultra's glitches in transitions with the rt add-on, none with the 624bab3 one. Without it Core
+    // Animation renders those layers in BGRA8 or RGBA16Float, whose bytes the CPU and rt read alike.
+    ("supportsExtendedXR10Formats", Some(false)),
     ("supportsFloat16BCubicFiltering", Some(false)),
     ("supportsHeapWithAddressRanges", Some(false)),
     ("supportsImageBlocks", Some(false)),

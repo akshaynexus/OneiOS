@@ -87,8 +87,9 @@ pub(crate) fn raw<T: TryFrom<u32>>(value: u64, what: &str) -> Result<T, String> 
 /// on v0.1.36 (issue #81). Each is held in a format of the same bytes a pixel that Turnip renders and blends: the XR
 /// forms in floats (values past 1 kept; `RG11B10Float` drops negatives), the padded ones in 16-bit unorm or plain
 /// `RGB10A2Unorm` (the codes' sRGB transfer dropped: the values are kept, not the bytes). Every producer and consumer of
-/// such a texture is this runtime (backboardd's own framebuffer is 8-bit: the frontend withholds
-/// `supportsExtendedXR10Formats` from it), so the bytes need not be Apple's [I]. `nmb_texture_describe` answers the
+/// such a texture must be this runtime, so the device answers `supportsExtendedXR10Formats` false to every process
+/// (`device.rs`, 2026-11-28; until then the frontend withheld it from the render server only, and the poster extensions
+/// wrote XR surfaces in Apple's bytes that backboardd read through these formats). `nmb_texture_describe` answers the
 /// format asked for.
 pub fn stored(pf: rt::PixelFormat) -> rt::PixelFormat {
     use rt::PixelFormat as P;
