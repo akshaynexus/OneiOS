@@ -765,6 +765,11 @@ impl Gpu {
         // SAFETY: the device's lanes (one at a time, under `core`) are the frame's only writer; a DRM buffer's view is
         // written only by the writer display.rs gave it to.
         let px = unsafe { d.bytes_mut() };
+        // The same layout in the guest and in `d` (half floats into half floats, B,G,R,X/A into B,G,R,X): a row is its
+        // bytes, copied segment by segment, a pixel split between two segments too (no carry, no conversion call per
+        // segment; YMGPwcca/OneiOS 8be9ec18). Every other pair goes through convert_to.
+        let raw = (scan.format == FMT_RGBA16F && dformat == RGBA16F)
+            || ((scan.format == FMT_BGRX || scan.format == FMT_BGRA) && dformat == BGRX8);
         let (mut seg, mut seg_start) = (0usize, 0u64); // the blob offset at which entries[seg] begins
         for y in 0..hgt {
             let mut at = scan.offset as u64 + (rect.y + y) as u64 * scan.stride as u64 + rect.x as u64 * gbpp;
@@ -788,6 +793,13 @@ impl Gpu {
                 let Some(from) = guest(entries[seg].addr + inside, n).filter(|_| n & 3 == 0) else {
                     return RESP_ERR_INVALID_PARAMETER;
                 };
+                if raw {
+                    px[to..to + n as usize].copy_from_slice(from);
+                    to += n as usize;
+                    at += n;
+                    left -= n;
+                    continue;
+                }
                 let mut off = 0usize;
                 if have != 0 {
                     off = (gbpp as usize - have).min(n as usize);
@@ -1557,11 +1569,14 @@ fn worker(dev: Arc<Virtio<Gpu>>) {
                 g.slow_cv.notify_all();
                 continue;
             }
-            let before = lock(&g.lanes).slow_queued; // the slow lane's commands that came before this one
             if g.work(head, chain, gen, true).is_none() {
                 g.fast_want(false); // the slow lane's turn, up to this command's place
                 {
                     let mut l = lock(&g.lanes);
+                    // The slow lane's commands that came before this one: only this thread queues slow jobs (above), so
+                    // the count read now is the one at this command's place. Read here, not before every fast command
+                    // (a lock and unlock of `lanes` per command saved: YMGPwcca/OneiOS 8be9ec18).
+                    let before = l.slow_queued;
                     while l.slow_done < before {
                         l = g.slow_cv.wait(l).unwrap_or_else(|e| e.into_inner());
                     }

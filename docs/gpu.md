@@ -513,7 +513,9 @@ the slow lane's thread, unlocking and locking it again on its own CPU between bl
 the lane choice of an app's next blob and the render server's submit it took the next blob's turn, so a frame could
 wait for several blobs. A fast-lane command that names a resource the
 slow lane has not made yet (an app's surface the render server attaches, the unref of an app's blob) waits for the slow
-lane's commands that came before it and runs again. A device reset drops the slow lane's chains of the old queue. Test:
+lane's commands that came before it and runs again. The count of those commands is read only then, under the lock that wait takes (2026-11-28, from YMGPwcca/OneiOS
+`8be9ec18`: only the queue's thread queues slow-lane commands, so it is the count at the command's place), not before
+every fast command: a lock and unlock fewer per command. A device reset drops the slow lane's chains of the old queue. Test:
 `test_virtio_gpu3d` (now `three_d`; all its contexts are the slow lane's now, and one case holds two of an app's blobs: the render
 server's submission is answered before both, or right after the first when the slow lane had started it, never after
 the second; 8 runs green with every core of the PC busy, where the old one-blob check failed 2 of 3: it asked for the
@@ -526,7 +528,9 @@ pages to the display (a CPU copy per frame: crosvm's zero-copy import to the com
 Since 2026-11-12 the copy goes straight from the guest's pages into the display's buffer, walking the blob's segments
 once per flush; before, each of the 3120 rows went through a row buffer and searched the segment list from its start
 (about 1100 segments of 16 KiB pages for a 1440x3120 frame). On an M4, for that frame: 4.2-10.6 ms before, 2.0-3.3 ms
-after (a stand-alone copy of both loops; not measured on the phone). xnuhost logs the copy every 10 s while frames
+after (a stand-alone copy of both loops; not measured on the phone). Since 2026-11-28 a scanout whose layout is the display's
+(B,G,R,X/A onto B,G,R,X, half floats onto half floats) is copied byte for byte per segment, without the per-segment
+conversion call and the split-pixel carry (YMGPwcca/OneiOS `8be9ec18`; host-tested, not measured on the phone). xnuhost logs the copy every 10 s while frames
 come: `display: 10 s: flushes N, copy mean X us max Y us (Z MiB)`. The fast lane's thread does the copy, so the render server's
 next commands wait behind it. The guest's `oneios-display-report` `done=` of a swap (128-211 ms on the phone,
 2026-11-12) runs from the swap's validation to its transfer: the frame's GPU work, then this flush, each behind
