@@ -337,6 +337,70 @@ int main(int argc, char **argv) {
         nmb_buffer_release(ysurf);
     }
 
+    /* Apple's extended-range forms (rt patch 0012): a texture over a buffer keeps Apple's bytes there, decoded into its float
+       image before the GPU reads it and encoded back after the GPU writes it; a GPU texture's CPU bytes are Apple's too. */
+    {
+        uint64_t xr = 0;
+        CHECK(nmb_device_answer(device, "supportsExtendedXR10Formats", 0, &xr) && xr == 1, "supportsExtendedXR10Formats=1");
+        /* BGR10_XR (554), 4x4, rows 16 bytes: red 1.0 (code 894), green 0.0 (384), blue -0.752941 (0), the top bits ones. */
+        uint32_t words[16];
+        for (int i = 0; i < 16; i++) words[i] = (894u << 20) | (384u << 10) | 0u | 0xC0000000u;
+        NmbBuffer *xsurf = nmb_buffer_new(device, sizeof words, 0, words);
+        struct NmbTextureDescriptor xtd;
+        memset(&xtd, 0, sizeof xtd);
+        xtd.type = 2; xtd.format = 554;
+        xtd.width = 4; xtd.height = 4; xtd.depth = 1; xtd.levels = 1; xtd.samples = 1; xtd.array_length = 1;
+        xtd.usage = 1 | 4; /* shader read, render target */
+        NmbTexture *xtex = xsurf ? nmb_texture_new_on_buffer(xsurf, &xtd, 0, 16, true) : NULL;
+        struct NmbTextureDescriptor xback;
+        if (xtex) nmb_texture_describe(xtex, &xback);
+        CHECK(xtex && xback.format == 554, "nmb_texture_new_on_buffer BGR10_XR (%s)", xtex ? "made" : nmb_last_error());
+        NmbBuffer *xread = nmb_buffer_new(device, 4 * 4 * 8, 0, NULL);
+        uint64_t xo[3] = {0, 0, 0}, xs[3] = {4, 4, 1};
+        cb = nmb_command_buffer_new(queue);
+        enc = nmb_blit_encoder_new(cb);
+        int xok = xtex && xread && enc && nmb_blit_texture_to_buffer(enc, xtex, 0, 0, xo, xs, xread, 0, 32, 128, 0) &&
+                  nmb_encoder_end(enc) && nmb_command_buffer_commit(cb) && nmb_command_buffer_wait(cb, 10000) == 0;
+        const uint16_t *xh = xread ? (const uint16_t *)nmb_buffer_contents(xread) : NULL;
+        /* half 1.0 = 0x3c00, 0.0 = 0, -0.752941 = 0xba06; BGR10_XR reads alpha 1. */
+        CHECK(xok && xh && xh[0] == 0x3c00 && xh[1] == 0 && xh[2] == 0xba06 && xh[3] == 0x3c00,
+              "BGR10_XR decoded from Apple's bytes=(%#x,%#x,%#x,%#x)", xh ? xh[0] : 0, xh ? xh[1] : 0, xh ? xh[2] : 0, xh ? xh[3] : 0);
+        nmb_command_buffer_release(cb);
+        /* The GPU writes it (a copy into its image): red 0.0, green 1.0, blue 0.5 go back as codes 384, 894, 639. */
+        uint16_t halves[16 * 4];
+        for (int i = 0; i < 16; i++) { halves[i * 4] = 0; halves[i * 4 + 1] = 0x3c00; halves[i * 4 + 2] = 0x3800; halves[i * 4 + 3] = 0x3c00; }
+        NmbBuffer *xsrc = nmb_buffer_new(device, sizeof halves, 0, halves);
+        cb = nmb_command_buffer_new(queue);
+        enc = nmb_blit_encoder_new(cb);
+        int wok = xtex && xsrc && enc && nmb_blit_buffer_to_texture(enc, xsrc, 0, 32, 128, xs, xtex, 0, 0, xo, 0) &&
+                  nmb_encoder_end(enc) && nmb_command_buffer_commit(cb) && nmb_command_buffer_wait(cb, 10000) == 0;
+        const uint32_t *xw = xsurf ? (const uint32_t *)nmb_buffer_contents(xsurf) : NULL;
+        const uint32_t want = 639u | (894u << 10) | (384u << 20) | 0xC0000000u;
+        CHECK(wok && xw && xw[0] == want && xw[15] == want, "BGR10_XR encoded back into Apple's bytes=%#x (want %#x)", xw ? xw[0] : 0, want);
+        nmb_command_buffer_release(cb);
+        /* A GPU texture of BGRA10_XR (552): Apple's 64-bit texels through replaceRegion and back through getBytes. */
+        xtd.format = 552; xtd.usage = 1;
+        NmbTexture *gtex = nmb_texture_new(device, &xtd);
+        uint16_t texels[16 * 4], out[16 * 4];
+        for (int i = 0; i < 16; i++) {
+            texels[i * 4] = (uint16_t)((i * 61) % 1024) << 6;      /* blue */
+            texels[i * 4 + 1] = (uint16_t)((i * 37 + 3) % 1024) << 6; /* green */
+            texels[i * 4 + 2] = (uint16_t)(1023 - i) << 6;          /* red */
+            texels[i * 4 + 3] = (uint16_t)(384 + i * 30) << 6;      /* alpha within [384, 894] */
+        }
+        uint64_t whole[6] = {0, 0, 0, 4, 4, 1};
+        memset(out, 0, sizeof out);
+        int rgok = gtex && nmb_texture_replace(gtex, whole, 0, 0, texels, 32, 128, sizeof texels) &&
+                   nmb_texture_get_bytes(gtex, out, 32, 128, sizeof out, whole, 0, 0);
+        CHECK(rgok && !memcmp(texels, out, sizeof out), "BGRA10_XR replaceRegion and getBytes in Apple's bytes (%s)",
+              rgok ? "compared" : nmb_last_error());
+        nmb_texture_release(gtex);
+        nmb_buffer_release(xsrc);
+        nmb_buffer_release(xread);
+        nmb_texture_release(xtex);
+        nmb_buffer_release(xsurf);
+    }
+
     /* The GPU memory row's census (CommandPoolRow.inc's GM and RP lines), weak in the plug-in. */
     uint64_t census[16];
     CHECK(m2v_memory_census(census, 16) == 16 && census[1] > 0 && census[12] >= 1 && census[13] >= census[12],

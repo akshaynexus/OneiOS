@@ -84,17 +84,17 @@ pub(crate) fn raw<T: TryFrom<u32>>(value: u64, what: &str) -> Result<T, String> 
 /// extended-range and padded 10-bit forms (`Gap::TextureFormat`) and blends into no attachment of them (the extended-range
 /// ones `Format`, the padded ones `FramebufferFetch`: not implemented on any device). Core Animation renders and blends
 /// into them: its blur's `downsample_blur_vert_lph` + `alpha_threshold_lph` over `BGR10_XR` aborted backboardd at every boot
-/// on v0.1.36 (issue #81). Each is held in a format of the same bytes a pixel that Turnip renders and blends: the XR
-/// forms in floats (values past 1 kept; `RG11B10Float` drops negatives), the padded ones in 16-bit unorm or plain
-/// `RGB10A2Unorm` (the codes' sRGB transfer dropped: the values are kept, not the bytes). Every producer and consumer of
-/// such a texture must be this runtime, so the device answers `supportsExtendedXR10Formats` false to every process
-/// (`device.rs`, 2026-11-28; until then the frontend withheld it from the render server only, and the poster extensions
-/// wrote XR surfaces in Apple's bytes that backboardd read through these formats). `nmb_texture_describe` answers the
+/// on v0.1.36 (issue #81). Each is held in a format a pixel of which Turnip renders and blends: the XR forms in
+/// `RGBA16Float` (negative values and values past 1 kept, which `RG11B10Float` was not: it drops negatives), the padded
+/// ones in 16-bit unorm or plain `RGB10A2Unorm` (the codes' sRGB transfer dropped: the values are kept, not the bytes).
+/// A texture of an XR form over a buffer or a surface keeps Apple's bytes there all the same: rt patch 0012
+/// (`Buffer::new_xr_texture`, `texture.rs`'s `over_buffer_xr`) decodes them into its float image and encodes them back,
+/// so the device answers `supportsExtendedXR10Formats` true again (`device.rs`). `nmb_texture_describe` answers the
 /// format asked for.
 pub fn stored(pf: rt::PixelFormat) -> rt::PixelFormat {
     use rt::PixelFormat as P;
     match pf {
-        P::BGR10XR | P::BGR10XRSRGB => P::RG11B10Float,
+        P::BGR10XR | P::BGR10XRSRGB => P::RGBA16Float,
         P::BGRA10XR | P::BGRA10XRSRGB => P::RGBA16Float,
         P::RGB10A82PXR10 | P::RGB10A82PXR10SRGB => P::RGBA16Float,
         P::RGB10A2UnormSRGB => P::RGB10A2Unorm,
@@ -163,21 +163,25 @@ mod tests {
     use super::stored;
     use metal2vulkan_runtime::PixelFormat as P;
 
-    /// Each of Apple's forms rt makes no texture of is held in a format of the same bytes a pixel; every other format is
-    /// held as it is.
+    /// Each of Apple's forms rt makes no texture of is held in a format of the same bytes a pixel, but the extended-range
+    /// ones, which are all held in `RGBA16Float` (their CPU bytes converted: `texture.rs`'s `xr_replace`, `xr_get`); every
+    /// other format is held as it is.
     #[test]
     fn apple_forms_are_held_in_formats_of_their_size() {
         let size = |p: P| match p {
-            P::BGR10XR | P::BGR10XRSRGB | P::RGB10A2UnormSRGB | P::RG10UnormX12 | P::RG10UnormX12SRGB | P::RG16Bfloat => 4,
-            P::BGRA10XR | P::BGRA10XRSRGB | P::RGB10A82PXR10 | P::RGB10A82PXR10SRGB | P::RGBA16Bfloat => 8,
+            P::RGB10A2UnormSRGB | P::RG10UnormX12 | P::RG10UnormX12SRGB | P::RG16Bfloat => 4,
+            P::RGB10A82PXR10 | P::RGB10A82PXR10SRGB | P::RGBA16Bfloat => 8,
             P::R10UnormX6 | P::R10UnormX6SRGB | P::R16Bfloat => 2,
             P::RG11B10Float | P::RGB10A2Unorm | P::RG16Unorm | P::RG16Float => 4,
             P::RGBA16Float => 8,
             P::R16Unorm | P::R16Float => 2,
             _ => 0,
         };
+        for p in [P::BGR10XR, P::BGR10XRSRGB, P::BGRA10XR, P::BGRA10XRSRGB, P::RGB10A82PXR10, P::RGB10A82PXR10SRGB] {
+            assert_eq!(stored(p), P::RGBA16Float, "{p:?}");
+        }
         for p in [
-            P::BGR10XR, P::BGR10XRSRGB, P::BGRA10XR, P::BGRA10XRSRGB, P::RGB10A82PXR10, P::RGB10A82PXR10SRGB,
+            P::RGB10A82PXR10, P::RGB10A82PXR10SRGB,
             P::RGB10A2UnormSRGB, P::R10UnormX6, P::R10UnormX6SRGB, P::RG10UnormX12, P::RG10UnormX12SRGB,
             P::R16Bfloat, P::RG16Bfloat, P::RGBA16Bfloat,
         ] {

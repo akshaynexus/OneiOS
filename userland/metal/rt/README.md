@@ -309,8 +309,10 @@ What the bridge does that the old runtime did (rt's README, "What the consumer i
 | Device answers | the old runtime's answers on the Adreno 750 (dumped on the laptop: 28 counts, 23 flags, the public queries), the Vulkan limits read where they depend on the device; `supportsFamily:` true for Apple1-3 and Common1-2 as before |
 | Telemetry rows | rt's `Metrics` and `Gauges` where they count the same thing; the stage ring, allocation sites and no-copy remaps answer nothing |
 
-Not made by this bridge (each call fails with its reason in `nmb_last_error`): two-plane `RGB10A8_2P_XR10` / 12-bit / PQ / XR YCbCr textures over a surface
-(`supportsYCBCRFormats12`, `PQ`, `XR` answer NO; 8-bit and 10-bit SDR two-plane YCbCr/RGB formats are converted on the GPU by rt 0011), sparse heaps, a tessellation factor scale other than 1, patches drawn with a
+Not made by this bridge (each call fails with its reason in `nmb_last_error`): 12-bit / PQ / XR YCbCr textures over a surface
+(`supportsYCBCRFormats12`, `PQ`, `XR` answer NO; 8-bit and 10-bit SDR two-plane YCbCr/RGB formats are converted on the GPU by
+rt 0011, and Apple's extended-range RGB forms, the two-plane `RGB10A8_2P_XR10` among them, by rt 0012), CPU bytes
+(`replaceRegion`, `getBytes`) of a two-plane `RGB10A8_2P_XR10` texture, sparse heaps, a tessellation factor scale other than 1, patches drawn with a
 control point index buffer, blit option `RowLinearPVRTC`, pipeline states' resource IDs (0; rt refuses indirect command
 buffers on Turnip anyway).
 
@@ -357,19 +359,17 @@ device"), and every blend into its padded 10-bit forms (`RGB10A2Unorm_sRGB`, `R1
 blended them in the shader (NativeMetal 0012).
 
 **The fix (the bridge, 2026-11-27): the rt add-on holds those forms in formats rt renders and blends**
-(`bridge/src/abi/mod.rs`, `stored`), of the same bytes a pixel: `BGR10_XR`(`_sRGB`) in `RG11B10Float`,
-`BGRA10_XR`(`_sRGB`) in `RGBA16Float`, `RGB10A2Unorm_sRGB` in `RGB10A2Unorm`, `R10Unorm_X6`(`_sRGB`) in `R16Unorm`,
-`RG10Unorm_X12`(`_sRGB`) in `RG16Unorm`. Textures, views, render pipeline attachments and the linear alignment go
-through it; `nmb_texture_describe` answers the format asked for. The values are kept (floats keep values past 1;
-`RG11B10Float` drops negatives), not Apple's bytes: every producer and consumer of such a texture is this runtime, as
-backboardd's own framebuffer is 8-bit. **That held only for the render server** (2026-11-28): the frontend withholds
+(`bridge/src/abi/mod.rs`, `stored`): `BGR10_XR`(`_sRGB`) and `BGRA10_XR`(`_sRGB`) in `RGBA16Float` (`BGR10_XR` was in
+`RG11B10Float` until 2026-11-28, which drops negatives), `RGB10A2Unorm_sRGB` in `RGB10A2Unorm`, `R10Unorm_X6`(`_sRGB`) in
+`R16Unorm`, `RG10Unorm_X12`(`_sRGB`) in `RG16Unorm`. Textures, views, render pipeline attachments and the linear alignment go
+through it; `nmb_texture_describe` answers the format asked for. The values are kept (floats keep values past 1), not
+Apple's bytes. **That held only for the render server** (2026-11-28): the frontend withholds
 `supportsExtendedXR10Formats` from backboardd but keeps it for the poster extensions (`MercuryPosterExtension`, ...),
 so their lock-screen and wallpaper surfaces were XR IOSurfaces in Apple's bytes, read by backboardd through these
 formats (and the two-plane `b3a8` ones refused): the S24 Ultra's glitches in transitions with this add-on on
-v0.1.40-v0.1.44 (`oneios-dont-care=0` did not end them), none with the 624bab3 add-on, which decodes XR. The bridge now
-answers `supportsExtendedXR10Formats` false to every process (`bridge/src/abi/device.rs`), so Core Animation renders
-those layers in BGRA8 or RGBA16Float. Proof on the phone: the same page transitions with no glitch. `RGB10A8_2P_XR10` (two planes) is not mapped. On the
-laptop (Turnip a750, noop shim):
+v0.1.40-v0.1.44 (`oneios-dont-care=0` did not end them), none with the 624bab3 add-on, which decodes XR. v0.1.45
+answered `supportsExtendedXR10Formats` false to every process as a stopgap; rt patch 0012 (below, "Apple's
+extended-range bytes") converts those surfaces and answers it true again. On the laptop (Turnip a750, noop shim):
 
 ```
 $ m2v-rt-check libvulkan_freedreno.so --pair metallibs/QuartzCore-default.metallib downsample_blur_vert_lph alpha_threshold_lph \
@@ -389,6 +389,48 @@ never makes, built with a vertex descriptor from the vertex function's own `[[at
 format (a Metal name with or without `MTLPixelFormat`, or its number; none given: all 301) is tried plain, with Core
 Animation's premultiplied "over" blend, alpha-masked and colour-masked, held as the plug-in holds it (`--raw`: as rt is
 asked), and every refusal is printed whole.
+
+## Apple's extended-range bytes (rt 0012, 2026-11-28)
+
+The owner: support XR, do not withhold it. v0.1.45's stopgap (`supportsExtendedXR10Formats` false to every process)
+hid the format; **rt patch `0012-xr-extended-range-textures.patch` converts it.** A texture of an extended-range form
+over a buffer or a surface (`Buffer::new_xr_texture`, from the bridge's `over_buffer_xr`: `nmb_texture_new_on_buffer`,
+`nmb_texture_new_linear` and `nmb_texture_new_on_surface`, the two-plane `b3a8` with its plane 1 as `XrPlanes`) holds its
+texels in an optimal `RGBA16Float` image of its own with a storage view (it takes a shader-write index), and where rt's
+copies over buffers (`crate::over`) would copy bytes, a compute pass (`xr.rs`, `xr_convert.comp`, precompiled to
+`xr_spv.rs`) **decodes** Apple's bytes into the image before the GPU reads it and **encodes** the image back after a
+command wrote it (at the segment's end, and before a command that reaches the buffer), so CoreGraphics, the CPU and every
+other process see Apple's encoding. The copy back now dispatches too: `over::record` and the two copy-back sites of
+`command.rs` forget the bound compute pipeline and push constants after it.
+
+The encodings (`xr.rs`'s header; rt's own `metal::format::ExtendedRange` table of Metal's answers, and Apple's
+`MTLPixelFormat` reference for the bit order):
+
+| Form | Bytes | Value |
+|---|---|---|
+| `BGR10_XR` | one LE word: blue bits 0-9, green 10-19, red 20-29; 30-31 unread, written as ones | colour `(c - 384) / 510`: 384 → 0.0, 894 → 1.0, 0 → -0.752941, 1023 → 1.252941 (Apple quotes 1.25098, code 1022); alpha 1 |
+| `BGRA10_XR` | four LE 16-bit fields blue, green, red, alpha, each code in bits 6-15, bits 0-5 written 0 | colour as above; alpha's code clamped to [384, 894], [0, 1] |
+| `RGB10A8_2P_XR10` | plane 0 of `BGR10_XR` words, plane 1 of alpha bytes (`b / 255`) | colour as above |
+| `_sRGB` twins | as their twin | the colour value is extended sRGB: read to linear by the sRGB transfer of its magnitude, sign kept; written back the other way |
+
+A write clamps the value to `[-384/510, 639/510]` (NaN as 0) and stores `roundEven(v * 510) + 384`; every code of each
+channel goes through the image's `half` and back to itself (`xr::tests`, all 1024 codes, sRGB too). `stored` holds
+`BGR10_XR` in `RGBA16Float` now (negatives kept), as the converted image is, so pipelines' attachments and views agree.
+A GPU texture of `BGR10_XR`/`BGRA10_XR` (`_sRGB`) takes and gives Apple's bytes on the CPU too: the bridge's
+`replaceRegion`/`getBytes` decode them into the halves rt holds and encode them back (`xr_replace`, `xr_get`; over a
+buffer they write and read the buffer itself), and `requiredLinearTextureBytesPerRow` counts Apple's texel (4 or 8 bytes).
+The device answers `supportsExtendedXR10Formats` true again; the frontend still withholds it from backboardd, whose
+framebuffer is 8-bit.
+
+Tested on the build laptop: `build.sh test` (rt's unit tests with `xr::tests`: the known codes, every code's round trip
+through the image, the texels' bytes, `half` rounding), `build.sh check` and `abi_smoke` over ANV (a `BGR10_XR` texture
+over a buffer of Apple's bytes reads (1.0, 0.0, -0.752941, 1.0); a blit into it leaves codes 384/894/639 in the buffer;
+a `BGRA10_XR` GPU texture's `replaceRegion` and `getBytes` return the same Apple bytes), `m2v-rt-check --selftest`, the
+bridge's unit tests. **Not booted on a phone.** What proves it there: `supportsExtendedXR10Formats` true for the poster
+extensions, no `extended-range texture over a buffer` refusals in `ioslog`, the `b3a8` surfaces made (no `RGB10A8_2P_XR10
+... not made` line), and page transitions and the lock screen with no garbage. Left: a blit between an XR texture and a
+buffer copies the `RGBA16Float` rt holds, not Apple's bytes (no caller seen); a view of an XR texture over a buffer
+takes CPU bytes as `RGBA16Float`.
 
 ## Issue #86: the same abort on v0.1.38, from the image's old plug-in (2026-11-28)
 

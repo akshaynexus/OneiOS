@@ -1,0 +1,1459 @@
+# Apple's extended-range forms over a buffer (BGR10_XR, BGRA10_XR, the two-plane
+# RGB10A8_2P_XR10 and their _sRGB twins): Buffer::new_xr_texture keeps the texels in an
+# optimal RGBA16Float image of its own with a storage view, and where the copies over buffers
+# would copy bytes (over::record_side), a compute pass (xr.rs, xr_convert.comp, xr_spv.rs)
+# decodes Apple's bytes into the image and encodes the image back, so the host and every other
+# process reads and writes the buffer in Apple's encoding. A colour code c is (c - 384) / 510
+# (384 -> 0.0, 894 -> 1.0, 0 -> -0.752941, 1023 -> 1.252941), written roundEven(v * 510) + 384
+# clamped to [0, 1023]; BGRA10_XR alpha's code is clamped to [384, 894]; the two-plane alpha is
+# a unorm byte; an _sRGB twin's value is extended sRGB, converted to linear and back. The copy
+# back dispatches too: over::record and command.rs's copy-back sites forget the bound compute
+# pipeline after it. (OneiOS userland/metal/rt/README.md, "Apple's extended-range bytes".)
+diff --git a/crates/metal2vulkan-runtime/src/command.rs b/crates/metal2vulkan-runtime/src/command.rs
+index 8742cd9..0be6726 100644
+--- a/crates/metal2vulkan-runtime/src/command.rs
++++ b/crates/metal2vulkan-runtime/src/command.rs
+@@ -998,9 +998,12 @@ impl Building {
+                     // SAFETY: the command buffer records outside any render pass and keeps each
+                     // texture, which holds its buffer, until it retires; each image is in its
+                     // home layout between commands.
+-                    unsafe {
+-                        over::record_side(&core, command, &back, false);
+-                    };
++                    // An extended-range texture's copy back binds a compute pipeline of its own
++                    // (`crate::xr`).
++                    if unsafe { over::record_side(&core, command, &back, false) } {
++                        self.bound = None;
++                        self.pushed = Pushed::default();
++                    }
+                     self.host_written |= back.iter().any(|copy| copy.shared);
+                 }
+                 // Its end barrier pays what is owed and starts the hazard sets again.
+@@ -1456,7 +1459,11 @@ impl Building {
+         // SAFETY: the command buffer records outside any render pass and keeps each image, and
+         // each buffer through its texture or below, until it retires; each image is in its home
+         // layout between commands.
+-        unsafe { over::record_side(&core, command, &copies, false) };
++        if unsafe { over::record_side(&core, command, &copies, false) } {
++            // An extended-range texture's copy back bound a compute pipeline of its own.
++            self.bound = None;
++            self.pushed = Pushed::default();
++        }
+         self.gpu
+             .images
+             .extend(backs.into_iter().map(|(_, _, image)| image));
+diff --git a/crates/metal2vulkan-runtime/src/device.rs b/crates/metal2vulkan-runtime/src/device.rs
+index a40ebea..1d287df 100644
+--- a/crates/metal2vulkan-runtime/src/device.rs
++++ b/crates/metal2vulkan-runtime/src/device.rs
+@@ -383,6 +383,8 @@ pub(crate) struct Core {
+     pub(crate) own: crate::own::OwnKernels,
+     /// Two-plane YCbCr/RGB compute conversion pipeline (`crate::ycbcr`).
+     pub(crate) ycbcr: crate::ycbcr::YcbcrPipeline,
++    /// The extended-range conversion of textures over buffers (`crate::xr`).
++    pub(crate) xr: crate::xr::XrPipeline,
+     /// The translator's decodes and specialized entries of the functions the device's pipeline
+     /// states lowered, which every creation reads, so a module is decoded and a stage
+     /// specialized once for the device rather than once a state. Bounded by the translator: the
+@@ -911,6 +913,7 @@ impl Device {
+             kernels: KernelMap::new(),
+             own: crate::own::OwnKernels::default(),
+             ycbcr: crate::ycbcr::YcbcrPipeline::default(),
++            xr: crate::xr::XrPipeline::default(),
+             entries: metal2vulkan::pipeline::StageEntries::new(),
+             closed: AtomicBool::new(false),
+             halt: AtomicU8::new(RUNNING),
+@@ -1802,6 +1805,7 @@ impl Drop for Core {
+         unsafe {
+             self.own.destroy(self);
+             self.ycbcr.destroy(self);
++            self.xr.destroy(self);
+         };
+         // SAFETY: the device is idle; nothing reads the ring.
+         let ring_blocks = unsafe { self.ring.destroy(&self.device) };
+diff --git a/crates/metal2vulkan-runtime/src/lib.rs b/crates/metal2vulkan-runtime/src/lib.rs
+index 606d525..68ca4cc 100644
+--- a/crates/metal2vulkan-runtime/src/lib.rs
++++ b/crates/metal2vulkan-runtime/src/lib.rs
+@@ -67,6 +67,8 @@ mod tests;
+ mod texture;
+ mod times;
+ mod visibility;
++mod xr;
++mod xr_spv;
+ mod ycbcr;
+ mod ycbcr_spv;
+ 
+@@ -164,5 +166,6 @@ pub use surface::{
+ pub use texture::{
+     BytesPlace, HeapRange, Region, SizeAndAlign, StorageMode, Texture, TextureDescriptor,
+ };
++pub use xr::{half_bits, half_value, XrEncoding, XrForm, XrPlanes};
+ pub use ycbcr::YcbcrSpec;
+ pub use times::{host_time, HOST_DOMAIN};
+diff --git a/crates/metal2vulkan-runtime/src/over.rs b/crates/metal2vulkan-runtime/src/over.rs
+index c716b37..d7828a7 100644
+--- a/crates/metal2vulkan-runtime/src/over.rs
++++ b/crates/metal2vulkan-runtime/src/over.rs
+@@ -54,6 +54,7 @@ use crate::kept::AddressHasher;
+ use crate::memory::BlockId;
+ use crate::record::{memory_barrier, Reach};
+ use crate::texture::{Image, OverCopy, TextureInner, TextureObject};
++use crate::xr::XrCopy;
+ use crate::ycbcr::YcbcrCopy;
+ use ash::vk;
+ use std::collections::{HashMap, HashSet};
+@@ -415,16 +416,26 @@ pub(crate) unsafe fn record(
+     copies: &Copies,
+ ) -> (bool, bool) {
+     // SAFETY: the caller's contract.
+-    let ycbcr_ran = unsafe {
+-        record_side(core, command, &copies.back, false);
+-        record_side(core, command, &copies.into, true)
++    let ran = unsafe {
++        // An extended-range texture's copy back is a compute dispatch too (`crate::xr`).
++        let back = record_side(core, command, &copies.back, false);
++        record_side(core, command, &copies.into, true) | back
+     };
+-    (copies.back.iter().any(|copy| copy.shared && copy.ycbcr.is_none()), ycbcr_ran)
++    (copies.back.iter().any(|copy| copy.shared && copy.ycbcr.is_none()), ran)
++}
++
++/// Whether `copy` is a plain one, a `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` region:
++/// not a two-plane YCbCr conversion (`crate::ycbcr`) nor an extended-range one (`crate::xr`).
++fn plain(copy: &OverCopy) -> bool {
++    copy.ycbcr.is_none() && copy.xr.is_none()
+ }
+ 
+ /// Records `copies` into `command`: each buffer's bytes into its image (`into`), or back, between
+ /// one pair of barriers. Two-plane YCbCr/RGB textures run their compute conversion on `into` and
+-/// are read-only (ignored on `into == false`). Returns `true` if any YCbCr compute dispatch ran.
++/// are read-only (ignored on `into == false`); extended-range textures (`crate::xr`) decode their
++/// buffer's bytes into the image on `into` and encode the image back into them otherwise, each
++/// by a compute dispatch between a pair of barriers. Returns `true` if any compute dispatch ran,
++/// which leaves the compute pipeline and push constants the caller bound replaced.
+ ///
+ /// # Safety
+ ///
+@@ -442,7 +453,7 @@ pub(crate) unsafe fn record_side(
+     }
+     let device = &core.device;
+     let counters = &core.counters;
+-    let plain: Vec<&OverCopy> = copies.iter().filter(|c| c.ycbcr.is_none()).collect();
++    let plain: Vec<&OverCopy> = copies.iter().filter(|c| self::plain(c)).collect();
+     let ycbcr: Vec<&OverCopy> = if into {
+         copies.iter().filter(|c| c.ycbcr.is_some()).collect()
+     } else {
+@@ -530,27 +541,34 @@ pub(crate) unsafe fn record_side(
+         counters.count(Metric::Barriers);
+         counters.count(Metric::Barriers);
+     }
+-    if ycbcr.is_empty() {
++    let xr: Vec<&OverCopy> = copies.iter().filter(|c| c.xr.is_some()).collect();
++    if ycbcr.is_empty() && xr.is_empty() {
+         return false;
+     }
+     let ycbcr_copies: Vec<YcbcrCopy> = ycbcr.iter().filter_map(|c| c.ycbcr).collect();
++    let xr_copies: Vec<XrCopy> = xr.iter().filter_map(|c| c.xr).collect();
+     let earlier = [memory_barrier(Reach::Commands)];
+     let later = [vk::MemoryBarrier2::default()
+         .src_stage_mask(S::COMPUTE_SHADER)
+         .src_access_mask(A::SHADER_WRITE)
+         .dst_stage_mask(S::ALL_COMMANDS)
+         .dst_access_mask(A::MEMORY_READ | A::MEMORY_WRITE)];
+-    // SAFETY: caller's contract; YCbCr images stay in GENERAL layout and buffers remain live.
+-    let ran = unsafe {
+-        if plain.is_empty() {
++    // SAFETY: caller's contract; YCbCr and extended-range images stay in the general layout (a
++    // storage element's home) and their buffers live until the command buffer retires. The plain
++    // copies' end barrier orders every command before it, but not the transfer reads of a copy
++    // back before an encode's writes of the same buffer: so the earlier barrier is recorded
++    // whatever the plain copies recorded.
++    unsafe {
++        if plain.is_empty() || !xr.is_empty() {
+             device.cmd_pipeline_barrier2(
+                 command,
+                 &vk::DependencyInfo::default().memory_barriers(&earlier),
+             );
+             counters.count(Metric::Barriers);
+         }
+-        let dispatched = core.ycbcr.dispatch(core, command, &ycbcr_copies);
+-        for copy in &ycbcr {
++        let mut dispatched = core.ycbcr.dispatch(core, command, &ycbcr_copies);
++        dispatched |= core.xr.dispatch(core, command, &xr_copies, !into);
++        for copy in ycbcr.iter().chain(&xr) {
+             counters.over_copied(copy.bytes, copy.imported, copy.kind);
+         }
+         if dispatched {
+@@ -561,8 +579,7 @@ pub(crate) unsafe fn record_side(
+             counters.count(Metric::Barriers);
+         }
+         dispatched
+-    };
+-    ran
++    }
+ }
+ 
+ /// A copy back a reader of a Managed buffer's device copy takes ([`ManagedOvers::backs`]): the
+diff --git a/crates/metal2vulkan-runtime/src/texture.rs b/crates/metal2vulkan-runtime/src/texture.rs
+index a89639e..8f61231 100644
+--- a/crates/metal2vulkan-runtime/src/texture.rs
++++ b/crates/metal2vulkan-runtime/src/texture.rs
+@@ -343,6 +343,9 @@ struct Named {
+     form: Form,
+     /// Two-plane YCbCr/RGB conversion parameters (`Buffer::new_ycbcr_texture`).
+     ycbcr: Option<(crate::ycbcr::YcbcrSpec, u32)>,
++    /// One of Apple's extended-range forms in the buffer, converted in and back
++    /// (`Buffer::new_xr_texture`); its colour plane is `places[0]`.
++    xr: Option<crate::xr::XrPlace>,
+ }
+ 
+ impl Named {
+@@ -1490,6 +1493,7 @@ impl Device {
+                     places: places.to_vec(),
+                     form: Form::Managed,
+                     ycbcr: None,
++                    xr: None,
+                 };
+                 (Some(named), vk::ImageLayout::UNDEFINED, plan.home)
+             }
+@@ -1509,6 +1513,24 @@ impl Device {
+                         Err(cause) => Form::Copied(cause),
+                     },
+                     ycbcr: None,
++                    xr: None,
++                };
++                (Some(named), vk::ImageLayout::UNDEFINED, plan.home)
++            }
++            // Apple's bytes, which no Vulkan format holds: an image of its own, which the
++            // submissions convert them into and back (`crate::xr`). `Buffer::new_xr_texture`
++            // checked the layout.
++            Source::Converted(buffer, offset, bytes_per_row, xr) => {
++                let named = Named {
++                    buffer: Arc::clone(buffer.object()),
++                    places: vec![BytesPlace {
++                        offset: *offset,
++                        bytes_per_row: *bytes_per_row,
++                        bytes_per_image: 0,
++                    }],
++                    form: Form::Copied(OverCause::Linear),
++                    ycbcr: None,
++                    xr: Some(*xr),
+                 };
+                 (Some(named), vk::ImageLayout::UNDEFINED, plan.home)
+             }
+@@ -1523,7 +1545,7 @@ impl Device {
+         // from its first texel a resolve into it may reach (`render_reach`).
+         let mut resolve_reach = None;
+         let (bind, mut block) = match source {
+-            Source::Plain | Source::Managed(..) => (Bind::Pooled, None),
++            Source::Plain | Source::Managed(..) | Source::Converted(..) => (Bind::Pooled, None),
+             Source::Heap(block, heap, offset) => {
+                 let bind = Bind::Heap {
+                     memory: block.memory.device_memory(),
+@@ -2923,6 +2945,9 @@ enum Source<'a> {
+     Heap(Arc<Block>, HeapRange, u64),
+     /// A buffer, the texture's offset in it and its rows' pitch.
+     Over(&'a Buffer, u64, u64),
++    /// As `Over`, of one of Apple's extended-range forms in the buffer, always in an image of its
++    /// own ([`Buffer::new_xr_texture`]).
++    Converted(&'a Buffer, u64, u64, crate::xr::XrPlace),
+ }
+ 
+ /// Where [`make`] binds the image.
+@@ -4072,6 +4097,7 @@ impl Texture {
+                 places: levels.clone().flat_map(level_places).collect(),
+                 form: named.form,
+                 ycbcr: named.ycbcr,
++                xr: named.xr,
+             }
+         });
+         let view = TextureInner {
+@@ -5182,6 +5208,53 @@ pub(crate) trait TextureObject {
+                     storage_idx,
+                     flags,
+                 }),
++                xr: None,
++            };
++            return Some((&named.buffer, copy));
++        }
++        if let Some(xr) = named.xr {
++            // The conversion reads and writes the image through this texture's storage element
++            // (`Buffer::new_xr_texture` made the texture and each view of it with one).
++            let storage = inner.index.filter(|_| inner.stores()).map(|(i, _)| i)?;
++            let (buffer, _) = named.buffer.device_range();
++            let address = named.buffer.gpu_address();
++            let place = named.places[0];
++            let (start, end, bytes) = xr.span(place, d.width, d.height);
++            let copy = OverCopy {
++                image: image.image,
++                home: image.home,
++                aspects: image.aspects,
++                buffer,
++                region: vk::BufferImageCopy::default(),
++                unit,
++                range: (start, end),
++                memory: Span {
++                    block: whole.block,
++                    start: whole.start + start,
++                    end: whole.start + end,
++                },
++                bytes,
++                shared: named.buffer.is_shared(),
++                imported: device_copy.is_none() && block.memory.imported(),
++                exported: device_copy.is_none() && block.memory.exported(),
++                kind: OverCopyKind {
++                    cause,
++                    pixel_format: d.pixel_format,
++                    width: d.width,
++                    height: d.height,
++                    usage: d.usage,
++                },
++                ycbcr: None,
++                xr: Some(crate::xr::XrCopy {
++                    colour: address.wrapping_add(place.offset),
++                    colour_row: place.bytes_per_row as u32,
++                    alpha: xr.planes.map_or(0, |p| address.wrapping_add(p.alpha_offset)),
++                    alpha_row: xr.planes.map_or(0, |p| p.alpha_bytes_per_row as u32),
++                    width: d.width,
++                    height: d.height,
++                    storage,
++                    encoding: xr.encoding,
++                }),
+             };
+             return Some((&named.buffer, copy));
+         }
+@@ -5215,6 +5288,7 @@ pub(crate) trait TextureObject {
+                 usage: d.usage,
+             },
+             ycbcr: None,
++            xr: None,
+         };
+         Some((&named.buffer, copy))
+     }
+@@ -5493,6 +5567,7 @@ impl Buffer {
+             ],
+             form: Form::Copied(OverCause::Linear),
+             ycbcr: Some((spec, flags)),
++            xr: None,
+         };
+         let mut stored_desc = d;
+         stored_desc.pixel_format = PixelFormat::RGBA16Float;
+@@ -5536,6 +5611,90 @@ impl Buffer {
+         Ok(texture)
+     }
+ 
++    /// A texture of one of Apple's extended-range forms over this buffer ([`crate::xr`]:
++    /// `BGR10_XR`, `BGRA10_XR`, the two-plane `RGB10A8_2P_XR10` with `planes`, and their `_sRGB`
++    /// twins) of `descriptor` (its `pixel_format` the form asked for), its colour plane at
++    /// `offset` with rows `bytes_per_row` apart. No Vulkan format holds Apple's bytes: its texels
++    /// live in an optimal `RGBA16Float` image of its own with a storage view (the texture reports
++    /// `RGBA16Float`, and takes the index of a texture shaders write), which the submissions'
++    /// copies over buffers fill by decoding the buffer's bytes and write back by encoding them
++    /// (`crate::over`), so the host and every other reader of the buffer sees Apple's bytes.
++    ///
++    /// Err: [`Gap::TextureFormat`] for another form; [`Gap::TextureOverBuffer`] for a texture
++    /// that is not one 2D image of one level and sample; [`Refusal::BufferTextureLayout`] where a
++    /// plane's offset or rows are not 4-byte aligned, its rows are shorter than its texels, or it
++    /// runs past the buffer; [`Refusal::TextureIndex`] without an index; [`Error::Vulkan`] where
++    /// the conversion's pipeline or the image cannot be made; as [`Device::new_texture`].
++    pub fn new_xr_texture(
++        &self,
++        descriptor: &TextureDescriptor,
++        index: Option<u32>,
++        offset: u64,
++        bytes_per_row: u64,
++        planes: Option<crate::xr::XrPlanes>,
++    ) -> Result<Texture, Error> {
++        let mut d = *descriptor;
++        let encoding = crate::xr::XrEncoding::of(d.pixel_format).ok_or(Error::Unsupported(
++            Gap::TextureFormat {
++                pixel_format: d.pixel_format,
++            },
++        ))?;
++        if d.texture_type != TextureType::Type2D
++            || d.width == 0
++            || d.height == 0
++            || d.depth != 1
++            || d.mipmap_level_count != 1
++            || d.sample_count != 1
++            || d.array_length != 1
++            || (encoding.form == crate::xr::XrForm::Planes) != planes.is_some()
++        {
++            return Err(Error::Unsupported(Gap::TextureOverBuffer {
++                pixel_format: d.pixel_format,
++            }));
++        }
++        let len = self.length();
++        let (w, h) = (u64::from(d.width), u64::from(d.height));
++        let fits = |at: u64, row: u64, min_row: u64| {
++            at % 4 == 0
++                && row % 4 == 0
++                && row >= min_row
++                && u32::try_from(row).is_ok()
++                && at
++                    .checked_add((h - 1) * row + min_row)
++                    .is_some_and(|end| end <= len)
++        };
++        let colour_fits = fits(offset, bytes_per_row, w * u64::from(encoding.texel_bytes()));
++        let alpha_fits = planes.is_none_or(|p| {
++            fits(p.alpha_offset, p.alpha_bytes_per_row, w.next_multiple_of(4))
++        });
++        if !colour_fits || !alpha_fits {
++            return Err(Error::Refused(Refusal::BufferTextureLayout {
++                offset,
++                bytes_per_row,
++                len,
++            }));
++        }
++        let device = self.device();
++        // The conversion must not be dropped later, at a submission.
++        device.core().xr.ready(device.core())?;
++        d.storage_mode = match self.held() {
++            (_, Some(_)) => StorageMode::Managed,
++            (block, None) => match block.memory.class {
++                MemoryClass::Shared => StorageMode::Shared,
++                MemoryClass::Private => StorageMode::Private,
++            },
++        };
++        d.pixel_format = encoding.held();
++        // The conversion reads and writes the image through its storage element.
++        d.usage |= TextureUsage::SHADER_WRITE;
++        let place = crate::xr::XrPlace { encoding, planes };
++        device.texture(
++            &d,
++            Reach::Index(index),
++            Source::Converted(self, offset, bytes_per_row, place),
++        )
++    }
++
+     /// A surface plane's texture over this buffer, as [`Buffer::new_texture`] makes it, but that
+     /// with no index a plane shaders read or write is reached through its views alone
+     /// ([`Device::new_texture_for_views`]).
+@@ -5826,6 +5985,7 @@ impl Device {
+             }],
+             form: Form::InPlace,
+             ycbcr: None,
++            xr: None,
+         };
+         let inner = TextureInner {
+             core: Arc::clone(core),
+@@ -5893,6 +6053,9 @@ pub(crate) struct OverCopy {
+     pub(crate) kind: OverCopyKind,
+     /// Two-plane YCbCr/RGB compute conversion parameters (`None` for plain buffer-to-image copies).
+     pub(crate) ycbcr: Option<crate::ycbcr::YcbcrCopy>,
++    /// An extended-range texture's conversion of Apple's bytes in and back (`crate::xr`; `None`
++    /// for every other).
++    pub(crate) xr: Option<crate::xr::XrCopy>,
+ }
+ 
+ impl crate::kept::Handle for Texture {
+diff --git a/crates/metal2vulkan-runtime/src/xr.rs b/crates/metal2vulkan-runtime/src/xr.rs
+new file mode 100644
+index 0000000..7e9dbcf
+--- /dev/null
++++ b/crates/metal2vulkan-runtime/src/xr.rs
+@@ -0,0 +1,508 @@
++//! Apple's extended-range forms over a buffer ([`Buffer::new_xr_texture`](crate::Buffer::new_xr_texture)):
++//! `BGR10_XR`, `BGRA10_XR`, the two-plane `RGB10A8_2P_XR10` and their `_sRGB` twins. Vulkan has
++//! no format of their bytes, so such a texture's texels live in an optimal `R16G16B16A16_SFLOAT`
++//! image of its own (the runtime's copies over buffers, `crate::over`), and where the plain
++//! texture over a buffer copies the bytes in and back, a compute shader (`xr_convert.comp`)
++//! decodes Apple's bytes into the image's values and encodes them back, so the CPU and every other
++//! process that reads or writes the buffer (an IOSurface's pages) sees Apple's bytes.
++//!
++//! The encodings, as `metal::format::ExtendedRange` records Metal's answers (measured on an Apple
++//! M3 Max and an M4, every code; Apple's `MTLPixelFormat` reference names the bit order):
++//!
++//! - A colour code `c` (10 bits) is the value `(c - 384) / 510`: code 384 is 0.0, 894 is 1.0, 0 is
++//!   -0.752941 and 1023 is 1.252941 (Apple's documentation quotes the range as up to 1.25098,
++//!   code 1022, the largest a render pass's tile holds). A write clamps the value to
++//!   `[-384 / 510, 639 / 510]`, a NaN as 0, and stores `roundEven(v * 510) + 384`.
++//! - Alpha (`BGRA10_XR`) reads its code clamped to `[384, 894]`, `[0, 1]`, and a write clamps the
++//!   value to `[0, 1]`. The two-plane form's alpha is an 8-bit unorm byte, `b / 255`, written
++//!   `roundEven(clamp(v, 0, 1) * 255)`. `BGR10_XR` reads alpha 1.
++//! - An `_sRGB` twin's colour value is in extended sRGB: a read takes it to linear by the sRGB
++//!   transfer of its magnitude, the sign kept, and a write the other way (Metal's own tables meet
++//!   the transfer within a code, `lower::arith::extended_range`). The image holds the linear
++//!   values, so shaders sample, blend and render linear values, as Metal's sRGB forms do. Alpha is
++//!   linear.
++//! - Bytes: `BGR10_XR` is one little-endian 32-bit word, blue in bits 0-9, green 10-19, red 20-29;
++//!   bits 30-31 are not read and are written as ones. `BGRA10_XR` is four little-endian 16-bit
++//!   fields, blue, green, red, alpha from the lowest, each code in a field's top 10 bits (bits
++//!   6-15), the low 6 bits not read and written as zeros. `RGB10A8_2P_XR10` is plane 0 of
++//!   `BGR10_XR` words and plane 1 of alpha bytes.
++//!
++//! Each value goes through `half` in the image: every code of each channel decodes and encodes
++//! back to itself (the unit tests, over all 1024 codes).
++
++use crate::counters::Gauge;
++use crate::device::{lock, Core};
++use crate::error::Error;
++use crate::pipeline::{made_through_cache, PUSH_STAGES};
++use crate::xr_spv::XR_SPV;
++use crate::PixelFormat;
++use ash::vk;
++use std::sync::Mutex;
++
++/// The layout of one of Apple's extended-range forms ([`XrEncoding`]).
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub enum XrForm {
++    /// `BGR10_XR`: a 32-bit word a texel.
++    Bgr10,
++    /// `BGRA10_XR`: four 16-bit fields a texel.
++    Bgra10,
++    /// `RGB10A8_2P_XR10`: plane 0 of `BGR10_XR` words, plane 1 of alpha bytes ([`XrPlanes`]).
++    Planes,
++}
++
++/// One of Apple's extended-range pixel formats, as a texture over a buffer holds it.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub struct XrEncoding {
++    /// Its layout.
++    pub form: XrForm,
++    /// The `_sRGB` twin: its colour values are in extended sRGB.
++    pub srgb: bool,
++}
++
++/// Where a two-plane `RGB10A8_2P_XR10` texture's alpha plane lies in its buffer.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub struct XrPlanes {
++    /// The alpha plane's first byte, from the buffer's start; a multiple of 4.
++    pub alpha_offset: u64,
++    /// The alpha plane's rows' pitch in bytes; a multiple of 4.
++    pub alpha_bytes_per_row: u64,
++}
++
++impl XrEncoding {
++    /// The extended-range form `pf` is, if it is one this path converts.
++    pub fn of(pf: PixelFormat) -> Option<XrEncoding> {
++        let (form, srgb) = match pf {
++            PixelFormat::BGR10XR => (XrForm::Bgr10, false),
++            PixelFormat::BGR10XRSRGB => (XrForm::Bgr10, true),
++            PixelFormat::BGRA10XR => (XrForm::Bgra10, false),
++            PixelFormat::BGRA10XRSRGB => (XrForm::Bgra10, true),
++            PixelFormat::RGB10A82PXR10 => (XrForm::Planes, false),
++            PixelFormat::RGB10A82PXR10SRGB => (XrForm::Planes, true),
++            _ => return None,
++        };
++        Some(XrEncoding { form, srgb })
++    }
++
++    /// The bytes of a texel of its colour plane (plane 0).
++    pub fn texel_bytes(self) -> u32 {
++        match self.form {
++            XrForm::Bgr10 | XrForm::Planes => 4,
++            XrForm::Bgra10 => 8,
++        }
++    }
++
++    /// The format the texture's image holds its values in.
++    pub fn held(self) -> PixelFormat {
++        PixelFormat::RGBA16Float
++    }
++
++    /// The shader's flags word: bit 0 encode, bits 1-2 the form, bit 3 sRGB.
++    pub(crate) fn flags(self, encode: bool) -> u32 {
++        let form = match self.form {
++            XrForm::Bgr10 => 0,
++            XrForm::Bgra10 => 1,
++            XrForm::Planes => 2,
++        };
++        u32::from(encode) | (form << 1) | (u32::from(self.srgb) << 3)
++    }
++
++    /// The RGBA values of a texel, red first, from its colour-plane bytes (`texel_bytes` of them,
++    /// little-endian) and, for the two-plane form, its alpha byte: as the shader decodes it.
++    pub fn decode_texel(self, bytes: &[u8], alpha_byte: u8) -> [f32; 4] {
++        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
++        let c = |code: u32| decode_colour(code as u16, self.srgb);
++        match self.form {
++            XrForm::Bgra10 => {
++                let (lo, hi) = (word(0), word(4));
++                [
++                    c((hi >> 6) & 1023),
++                    c((lo >> 22) & 1023),
++                    c((lo >> 6) & 1023),
++                    decode_alpha(((hi >> 22) & 1023) as u16),
++                ]
++            }
++            XrForm::Bgr10 | XrForm::Planes => {
++                let w = word(0);
++                let alpha = match self.form {
++                    XrForm::Planes => f32::from(alpha_byte) / 255.0,
++                    _ => 1.0,
++                };
++                [c((w >> 20) & 1023), c((w >> 10) & 1023), c(w & 1023), alpha]
++            }
++        }
++    }
++
++    /// The colour-plane bytes (`texel_bytes` of them, into `out`) and, for the two-plane form, the
++    /// alpha byte of the RGBA values `v`, red first: as the shader encodes them.
++    pub fn encode_texel(self, v: [f32; 4], out: &mut [u8]) -> u8 {
++        let [r, g, b] = [v[0], v[1], v[2]].map(|v| u32::from(encode_colour(v, self.srgb)));
++        match self.form {
++            XrForm::Bgra10 => {
++                let lo = (b << 6) | (g << 22);
++                let hi = (r << 6) | (u32::from(encode_alpha(v[3])) << 22);
++                out[0..4].copy_from_slice(&lo.to_le_bytes());
++                out[4..8].copy_from_slice(&hi.to_le_bytes());
++                0
++            }
++            XrForm::Bgr10 | XrForm::Planes => {
++                let w = b | (g << 10) | (r << 20) | 0xC000_0000;
++                out[0..4].copy_from_slice(&w.to_le_bytes());
++                match self.form {
++                    XrForm::Planes => encode_byte(v[3]),
++                    _ => 0,
++                }
++            }
++        }
++    }
++}
++
++/// The lowest and highest colour values: codes 0 and 1023.
++pub const XR_LOW: f32 = -384.0 / 510.0;
++pub const XR_HIGH: f32 = 639.0 / 510.0;
++
++fn srgb_to_linear(s: f32) -> f32 {
++    let a = s.abs();
++    let l = if a <= 0.04045 { a / 12.92 } else { ((a + 0.055) / 1.055).powf(2.4) };
++    if s < 0.0 { -l } else { l }
++}
++
++fn linear_to_srgb(l: f32) -> f32 {
++    let a = l.abs();
++    let s = if a <= 0.003_130_8 { a * 12.92 } else { 1.055 * a.powf(1.0 / 2.4) - 0.055 };
++    if l < 0.0 { -s } else { s }
++}
++
++/// A colour code's value (the module docs), linear for an `_sRGB` twin.
++pub fn decode_colour(code: u16, srgb: bool) -> f32 {
++    let v = (f32::from(code & 1023) - 384.0) / 510.0;
++    if srgb { srgb_to_linear(v) } else { v }
++}
++
++/// A `BGRA10_XR` alpha code's value: clamped to the codes of `[0, 1]`.
++pub fn decode_alpha(code: u16) -> f32 {
++    (f32::from(code.clamp(384, 894)) - 384.0) / 510.0
++}
++
++/// The colour code of value `v`, linear for an `_sRGB` twin (the module docs).
++pub fn encode_colour(v: f32, srgb: bool) -> u16 {
++    let v = if v.is_nan() { 0.0 } else { v };
++    let v = if srgb { linear_to_srgb(v) } else { v };
++    let v = v.clamp(XR_LOW, XR_HIGH);
++    ((v * 510.0).round_ties_even() as i32 + 384).clamp(0, 1023) as u16
++}
++
++/// The `BGRA10_XR` alpha code of value `v`.
++pub fn encode_alpha(v: f32) -> u16 {
++    let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
++    ((v * 510.0).round_ties_even() as i32 + 384).clamp(384, 894) as u16
++}
++
++/// The two-plane form's alpha byte of value `v`.
++pub fn encode_byte(v: f32) -> u8 {
++    let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
++    (v * 255.0).round_ties_even() as u8
++}
++
++/// The `half` bits of `v`, rounded to nearest even, as the image stores a value.
++pub fn half_bits(v: f32) -> u16 {
++    let bits = v.to_bits();
++    let sign = ((bits >> 16) & 0x8000) as u16;
++    let exp = ((bits >> 23) & 0xff) as i32;
++    let mant = bits & 0x7f_ffff;
++    if exp == 0xff {
++        return sign | 0x7c00 | if mant != 0 { 0x200 } else { 0 };
++    }
++    let e = exp - 127 + 15;
++    if e >= 31 {
++        return sign | 0x7c00;
++    }
++    if e <= 0 {
++        // A subnormal half, or zero: the significand with its implicit bit, shifted down.
++        if e < -10 {
++            return sign;
++        }
++        let m = mant | 0x80_0000;
++        let shift = (14 - e) as u32;
++        let half = m >> shift;
++        let rest = m & ((1 << shift) - 1);
++        let mid = 1 << (shift - 1);
++        let up = rest > mid || (rest == mid && half & 1 == 1);
++        return sign | (half + u32::from(up)) as u16;
++    }
++    let half = ((e as u32) << 10) | (mant >> 13);
++    let rest = mant & 0x1fff;
++    let up = rest > 0x1000 || (rest == 0x1000 && half & 1 == 1);
++    sign | (half + u32::from(up)) as u16
++}
++
++/// The value of `half` bits `h`.
++pub fn half_value(h: u16) -> f32 {
++    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
++    let exp = i32::from((h >> 10) & 0x1f);
++    let mant = f32::from(h & 0x3ff);
++    sign * match exp {
++        0 => mant * (2.0f32).powi(-24),
++        31 if mant == 0.0 => f32::INFINITY,
++        31 => f32::NAN,
++        _ => (1.0 + mant / 1024.0) * (2.0f32).powi(exp - 15),
++    }
++}
++
++/// What a texture over a buffer of an extended-range form converts ([`Buffer::new_xr_texture`](crate::Buffer::new_xr_texture)):
++/// its form and, for the two-plane form, where its alpha plane lies. Its colour plane is the
++/// texture's one byte place.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) struct XrPlace {
++    pub(crate) encoding: XrEncoding,
++    pub(crate) planes: Option<XrPlanes>,
++}
++
++impl XrPlace {
++    /// The bytes of the buffer the conversion of a `width` x `height` texture with its colour
++    /// plane at `place` reads or writes: `(start, end, bytes)`, `start..end` from the buffer's
++    /// start covering both planes, `bytes` the texels' own.
++    pub(crate) fn span(&self, place: crate::BytesPlace, width: u32, height: u32) -> (u64, u64, u64) {
++        let (w, h) = (u64::from(width), u64::from(height));
++        let row = w * u64::from(self.encoding.texel_bytes());
++        let mut start = place.offset;
++        let mut end = place.offset + (h - 1) * place.bytes_per_row + row;
++        let mut bytes = row * h;
++        if let Some(p) = self.planes {
++            // The alpha plane is written a word at a time (`xr_convert.comp`).
++            let alpha_row = w.next_multiple_of(4);
++            start = start.min(p.alpha_offset);
++            end = end.max(p.alpha_offset + (h - 1) * p.alpha_bytes_per_row + alpha_row);
++            bytes += w * h;
++        }
++        (start, end, bytes)
++    }
++}
++
++/// One conversion between a texture's buffer and its image, recorded in `crate::over::record_side`.
++#[derive(Clone, Copy, Debug)]
++pub(crate) struct XrCopy {
++    /// The colour plane's first texel's device address, and its rows' pitch.
++    pub(crate) colour: u64,
++    pub(crate) colour_row: u32,
++    /// The alpha plane's (the two-plane form), 0 for the others.
++    pub(crate) alpha: u64,
++    pub(crate) alpha_row: u32,
++    pub(crate) width: u32,
++    pub(crate) height: u32,
++    /// The texture's storage element, where the shader reads and writes its image.
++    pub(crate) storage: u32,
++    pub(crate) encoding: XrEncoding,
++}
++
++impl XrCopy {
++    /// The 40-byte push constants of `xr_convert.comp`.
++    fn push(&self, encode: bool) -> [u8; 40] {
++        let mut out = [0u8; 40];
++        out[0..8].copy_from_slice(&self.colour.to_ne_bytes());
++        out[8..16].copy_from_slice(&self.alpha.to_ne_bytes());
++        out[16..20].copy_from_slice(&self.colour_row.to_ne_bytes());
++        out[20..24].copy_from_slice(&self.alpha_row.to_ne_bytes());
++        out[24..28].copy_from_slice(&self.width.to_ne_bytes());
++        out[28..32].copy_from_slice(&self.height.to_ne_bytes());
++        out[32..36].copy_from_slice(&self.storage.to_ne_bytes());
++        out[36..40].copy_from_slice(&self.encoding.flags(encode).to_ne_bytes());
++        out
++    }
++}
++
++/// The device's conversion pipeline, made at its first use.
++#[derive(Default)]
++pub(crate) struct XrPipeline {
++    made: Mutex<Option<(vk::ShaderModule, vk::Pipeline)>>,
++}
++
++impl XrPipeline {
++    fn pipeline(&self, core: &Core) -> Result<vk::Pipeline, Error> {
++        let mut made = lock(&self.made);
++        if let Some((_, pipeline)) = *made {
++            return Ok(pipeline);
++        }
++        let info = vk::ShaderModuleCreateInfo::default().code(XR_SPV);
++        // SAFETY: `XR_SPV` is SPIR-V 1.6 that `spirv-val --target-env vulkan1.3` passes, of the
++        // floor's features (buffer device addresses, update-after-bind storage images).
++        let module = unsafe { core.device.create_shader_module(&info, None) }
++            .map_err(|result| Error::Vulkan { call: "vkCreateShaderModule", result })?;
++        let stage = vk::PipelineShaderStageCreateInfo::default()
++            .stage(vk::ShaderStageFlags::COMPUTE)
++            .module(module)
++            .name(c"main");
++        let create = vk::ComputePipelineCreateInfo::default().stage(stage).layout(core.layout);
++        let pipeline = made_through_cache(core, "vkCreateComputePipelines", |cache| {
++            // SAFETY: the module, layout and cache are the device's.
++            unsafe { core.device.create_compute_pipelines(cache, &[create], None) }
++        });
++        match pipeline {
++            Ok(pipeline) => {
++                *made = Some((module, pipeline));
++                Ok(pipeline)
++            }
++            Err(error) => {
++                // SAFETY: no pipeline was made of the module.
++                unsafe { core.device.destroy_shader_module(module, None) };
++                Err(error)
++            }
++        }
++    }
++
++    /// Records the conversion of each of `copies`: Apple's bytes into the image (`encode` false)
++    /// or the image into Apple's bytes. False where none was recorded (no copies, or the pipeline
++    /// could not be made, which a texture's making checked first, [`XrPipeline::ready`]).
++    ///
++    /// # Safety
++    ///
++    /// `command` records outside any render pass; each image is in the general layout, its
++    /// storage element at `copy.storage` of set 1; each address is live until the command
++    /// buffer retires.
++    pub(crate) unsafe fn dispatch(
++        &self,
++        core: &Core,
++        command: vk::CommandBuffer,
++        copies: &[XrCopy],
++        encode: bool,
++    ) -> bool {
++        if copies.is_empty() {
++            return false;
++        }
++        let Ok(pipeline) = self.pipeline(core) else {
++            return false;
++        };
++        let device = &core.device;
++        // SAFETY: the caller's contract; the layout and set 1 are the device's.
++        unsafe {
++            device.cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, pipeline);
++            device.cmd_bind_descriptor_sets(
++                command,
++                vk::PipelineBindPoint::COMPUTE,
++                core.layout,
++                1,
++                &[core.arrays.set()],
++                &[],
++            );
++            for copy in copies {
++                device.cmd_push_constants(command, core.layout, PUSH_STAGES, 0, &copy.push(encode));
++                let groups = copy.width.div_ceil(4).div_ceil(8);
++                device.cmd_dispatch(command, groups, copy.height.div_ceil(8), 1);
++            }
++        }
++        true
++    }
++
++    /// Makes the pipeline where it is not made yet: a texture's making calls it, so that no
++    /// conversion is dropped later.
++    pub(crate) fn ready(&self, core: &Core) -> Result<(), Error> {
++        self.pipeline(core).map(|_| ())
++    }
++
++    /// Destroys the pipeline and its module where made.
++    ///
++    /// # Safety
++    ///
++    /// The device is idle.
++    pub(crate) unsafe fn destroy(&self, core: &Core) {
++        if let Some((module, pipeline)) = lock(&self.made).take() {
++            // SAFETY: the caller's contract.
++            unsafe {
++                core.device.destroy_pipeline(pipeline, None);
++                core.device.destroy_shader_module(module, None);
++            }
++            core.counters.fall(Gauge::Pipelines);
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// The value a code's decode leaves in the image: through `half`.
++    fn held(v: f32) -> f32 {
++        half_value(half_bits(v))
++    }
++
++    #[test]
++    fn known_codes() {
++        assert_eq!(decode_colour(384, false), 0.0);
++        assert_eq!(decode_colour(894, false), 1.0);
++        assert!((decode_colour(0, false) - -0.752_941).abs() < 1e-6);
++        assert!((decode_colour(1023, false) - 1.252_941).abs() < 1e-6);
++        assert!((decode_colour(1022, false) - 1.250_98).abs() < 1e-5, "Apple's quoted top");
++        assert_eq!(decode_alpha(0), 0.0);
++        assert_eq!(decode_alpha(1023), 1.0);
++        assert_eq!(encode_colour(0.0, false), 384);
++        assert_eq!(encode_colour(1.0, false), 894);
++        assert_eq!(encode_colour(-0.752_941, false), 0);
++        assert_eq!(encode_colour(1.252_941, false), 1023);
++        assert_eq!(encode_colour(5.0, false), 1023);
++        assert_eq!(encode_colour(-5.0, false), 0);
++        assert_eq!(encode_colour(f32::NAN, false), 384);
++        assert_eq!(encode_colour(f32::INFINITY, true), 1023);
++        assert_eq!(encode_alpha(1.5), 894);
++        assert_eq!(encode_alpha(-0.2), 384);
++        assert_eq!(encode_alpha(f32::NAN), 384);
++        assert_eq!(encode_byte(0.5), 128);
++        // sRGB: 0 and 1 are fixed points of the transfer; it is odd.
++        assert_eq!(decode_colour(384, true), 0.0);
++        assert!((decode_colour(894, true) - 1.0).abs() < 1e-6);
++        assert_eq!(decode_colour(0, true), -decode_colour(768, true));
++    }
++
++    #[test]
++    fn every_code_round_trips_through_the_image() {
++        for code in 0..1024u16 {
++            for srgb in [false, true] {
++                let v = held(decode_colour(code, srgb));
++                assert_eq!(encode_colour(v, srgb), code, "colour {code} srgb {srgb}: {v}");
++            }
++            let a = held(decode_alpha(code));
++            assert_eq!(encode_alpha(a), code.clamp(384, 894), "alpha {code}");
++        }
++        for byte in 0..=255u8 {
++            assert_eq!(encode_byte(held(f32::from(byte) / 255.0)), byte, "byte {byte}");
++        }
++    }
++
++    #[test]
++    fn texels_lie_in_apple_bytes() {
++        let e = XrEncoding::of(PixelFormat::BGR10XR).unwrap();
++        let mut out = [0u8; 8];
++        // Red 1.0 (894), green 0.0 (384), blue -0.752941 (0).
++        e.encode_texel([1.0, 0.0, XR_LOW, 0.25], &mut out);
++        assert_eq!(u32::from_le_bytes(out[0..4].try_into().unwrap()), (894 << 20) | (384 << 10) | 0xC000_0000);
++        assert_eq!(e.decode_texel(&out, 0), [1.0, 0.0, decode_colour(0, false), 1.0]);
++        let e = XrEncoding::of(PixelFormat::BGRA10XR).unwrap();
++        e.encode_texel([1.0, 0.0, XR_HIGH, 0.5], &mut out);
++        let fields: Vec<u16> = out.chunks(2).map(|f| u16::from_le_bytes([f[0], f[1]])).collect();
++        assert_eq!(fields, [1023 << 6, 384 << 6, 894 << 6, 639 << 6]);
++        assert_eq!(e.decode_texel(&out, 0), [1.0, 0.0, decode_colour(1023, false), decode_alpha(639)]);
++        let e = XrEncoding::of(PixelFormat::RGB10A82PXR10SRGB).unwrap();
++        assert_eq!(e.encode_texel([0.0, 0.0, 0.0, 1.0], &mut out), 255);
++        assert_eq!(e.decode_texel(&out, 51), [0.0, 0.0, 0.0, 0.2]);
++        assert_eq!(e.texel_bytes(), 4);
++        assert_eq!(XrEncoding::of(PixelFormat::BGRA8Unorm), None);
++    }
++
++    #[test]
++    fn halves_round_to_nearest_even() {
++        assert_eq!(half_bits(1.0), 0x3c00);
++        assert_eq!(half_bits(-2.0), 0xc000);
++        assert_eq!(half_bits(65504.0), 0x7bff);
++        assert_eq!(half_bits(1e6), 0x7c00);
++        assert_eq!(half_bits(2.0f32.powi(-24)), 0x0001);
++        assert_eq!(half_bits(1.0 + 2.0f32.powi(-11)), 0x3c00, "a tie to even");
++        assert_eq!(half_bits(1.0 + 3.0 * 2.0f32.powi(-11)), 0x3c02, "a tie up to even");
++        for h in (0..0x7c00u16).step_by(7) {
++            assert_eq!(half_bits(half_value(h)), h, "{h:#x}");
++        }
++    }
++
++    #[test]
++    fn the_shader_is_spirv() {
++        assert_eq!(XR_SPV[0], 0x0723_0203);
++        assert!(XR_SPV.len() > 100);
++    }
++}
+diff --git a/crates/metal2vulkan-runtime/src/xr_convert.comp b/crates/metal2vulkan-runtime/src/xr_convert.comp
+new file mode 100644
+index 0000000..52000ed
+--- /dev/null
++++ b/crates/metal2vulkan-runtime/src/xr_convert.comp
+@@ -0,0 +1,135 @@
++// Apple's extended-range texels over a buffer <-> a texture's float image (`crate::xr`).
++//
++// Compiled to `xr_spv.rs` with:
++//   glslc --target-env=vulkan1.3 -O -mfmt=num -o - xr_convert.comp
++//   spirv-val --target-env vulkan1.3
++// The arithmetic is `crate::xr`'s reference (`decode`, `encode`), which the unit tests check over
++// every code; keep the two the same.
++//
++// One invocation converts four texels of a row, x = 4 * gid.x .. +3, so that a write of the
++// two-plane form's alpha plane is one whole word an invocation owns (its rows are words apart).
++#version 460
++#extension GL_EXT_buffer_reference : require
++#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
++#extension GL_EXT_nonuniform_qualifier : require
++
++layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
++
++layout(buffer_reference, std430, buffer_reference_align = 4) buffer Words {
++    uint w[];
++};
++
++// Set 1's storage-texture array (`crate::arrays`); the texture's element is a view of its
++// `R16G16B16A16_SFLOAT` image.
++layout(set = 1, binding = 1, rgba16f) uniform image2D images[];
++
++layout(push_constant) uniform Push {
++    uint64_t color;     // the colour plane's first texel, 4-byte aligned
++    uint64_t alpha;     // the two-plane form's alpha plane, 4-byte aligned (0 for the others)
++    uint color_row;     // bytes, a multiple of 4
++    uint alpha_row;     // bytes, a multiple of 4
++    uint width;
++    uint height;
++    uint image;         // the storage element's index
++    uint flags;         // bit 0: encode (image -> buffer); bits 1-2: form (0 BGR10_XR, 1 BGRA10_XR,
++                        // 2 RGB10A8_2P_XR10); bit 3: sRGB colour
++} p;
++
++const float LOW = -384.0 / 510.0;
++const float HIGH = 639.0 / 510.0;
++
++float srgb_to_linear(float s) {
++    float a = abs(s);
++    float l = a <= 0.04045 ? a / 12.92 : pow((a + 0.055) / 1.055, 2.4);
++    return s < 0.0 ? -l : l;
++}
++
++float linear_to_srgb(float l) {
++    float a = abs(l);
++    float s = a <= 0.0031308 ? a * 12.92 : 1.055 * pow(a, 1.0 / 2.4) - 0.055;
++    return l < 0.0 ? -s : s;
++}
++
++float colour_of(uint code, bool srgb) {
++    float v = float(int(code) - 384) / 510.0;
++    return srgb ? srgb_to_linear(v) : v;
++}
++
++float alpha_of(uint code) {
++    return float(int(clamp(code, 384u, 894u)) - 384) / 510.0;
++}
++
++uint colour_code(float v, bool srgb) {
++    v = isnan(v) ? 0.0 : v;
++    v = srgb ? linear_to_srgb(v) : v;
++    v = clamp(v, LOW, HIGH);
++    return uint(clamp(int(roundEven(v * 510.0)) + 384, 0, 1023));
++}
++
++uint alpha_code(float v) {
++    v = isnan(v) ? 0.0 : clamp(v, 0.0, 1.0);
++    return uint(clamp(int(roundEven(v * 510.0)) + 384, 384, 894));
++}
++
++uint byte_code(float v) {
++    v = isnan(v) ? 0.0 : clamp(v, 0.0, 1.0);
++    return uint(roundEven(v * 255.0));
++}
++
++void main() {
++    uint y = gl_GlobalInvocationID.y;
++    uint x0 = gl_GlobalInvocationID.x * 4u;
++    if (y >= p.height || x0 >= p.width) {
++        return;
++    }
++    bool encode = (p.flags & 1u) != 0u;
++    uint form = (p.flags >> 1u) & 3u;
++    bool srgb = (p.flags & 8u) != 0u;
++    Words colour = Words(p.color + uint64_t(y) * uint64_t(p.color_row));
++    Words alphas = Words(p.alpha + uint64_t(y) * uint64_t(p.alpha_row));
++    uint n = min(4u, p.width - x0);
++    if (!encode) {
++        uint aw = form == 2u ? alphas.w[x0 / 4u] : 0u;
++        for (uint i = 0u; i < n; i++) {
++            uint x = x0 + i;
++            vec4 t;
++            if (form == 1u) {
++                uint lo = colour.w[2u * x];
++                uint hi = colour.w[2u * x + 1u];
++                t.b = colour_of((lo >> 6u) & 1023u, srgb);
++                t.g = colour_of((lo >> 22u) & 1023u, srgb);
++                t.r = colour_of((hi >> 6u) & 1023u, srgb);
++                t.a = alpha_of((hi >> 22u) & 1023u);
++            } else {
++                uint word = colour.w[x];
++                t.b = colour_of(word & 1023u, srgb);
++                t.g = colour_of((word >> 10u) & 1023u, srgb);
++                t.r = colour_of((word >> 20u) & 1023u, srgb);
++                t.a = form == 2u ? float((aw >> (8u * i)) & 255u) / 255.0 : 1.0;
++            }
++            imageStore(images[p.image], ivec2(x, y), t);
++        }
++        return;
++    }
++    uint aw = 0u;
++    for (uint i = 0u; i < n; i++) {
++        uint x = x0 + i;
++        vec4 t = imageLoad(images[p.image], ivec2(x, y));
++        uint r = colour_code(t.r, srgb);
++        uint g = colour_code(t.g, srgb);
++        uint b = colour_code(t.b, srgb);
++        if (form == 1u) {
++            colour.w[2u * x] = (b << 6u) | (g << 22u);
++            colour.w[2u * x + 1u] = (r << 6u) | (alpha_code(t.a) << 22u);
++        } else {
++            // BGR10_XR's two top bits are written as ones, as Metal writes them.
++            colour.w[x] = b | (g << 10u) | (r << 20u) | 0xC0000000u;
++            aw |= byte_code(t.a) << (8u * i);
++        }
++    }
++    if (form == 2u) {
++        // The bytes of the word past the row's last texel are the row's padding: kept.
++        uint keep = n == 4u ? 0u : (0xFFFFFFFFu << (8u * n));
++        alphas.w[x0 / 4u] = (alphas.w[x0 / 4u] & keep) | aw;
++    }
++}
+diff --git a/crates/metal2vulkan-runtime/src/xr_spv.rs b/crates/metal2vulkan-runtime/src/xr_spv.rs
+new file mode 100644
+index 0000000..1e43564
+--- /dev/null
++++ b/crates/metal2vulkan-runtime/src/xr_spv.rs
+@@ -0,0 +1,348 @@
++//! Precompiled SPIR-V of `xr_convert.comp` (its header has the commands), the compute conversion
++//! between Apple's extended-range texels over a buffer and a texture's float image (`crate::xr`).
++pub(crate) const XR_SPV: &[u32] = &[
++    0x07230203, 0x00010600, 0x000d000b, 0x000004a7, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
++    0x0000000b, 0x00020011, 0x000014b6, 0x00020011, 0x000014e3, 0x0006000b, 0x00000001, 0x4c534c47,
++    0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x000014e4, 0x00000001, 0x0008000f, 0x00000005,
++    0x00000004, 0x6e69616d, 0x00000000, 0x000000cd, 0x000000dc, 0x000001ab, 0x00060010, 0x00000004,
++    0x00000011, 0x00000008, 0x00000008, 0x00000001, 0x00040047, 0x000000cd, 0x0000000b, 0x0000001c,
++    0x00030047, 0x000000da, 0x00000002, 0x00050048, 0x000000da, 0x00000000, 0x00000023, 0x00000000,
++    0x00050048, 0x000000da, 0x00000001, 0x00000023, 0x00000008, 0x00050048, 0x000000da, 0x00000002,
++    0x00000023, 0x00000010, 0x00050048, 0x000000da, 0x00000003, 0x00000023, 0x00000014, 0x00050048,
++    0x000000da, 0x00000004, 0x00000023, 0x00000018, 0x00050048, 0x000000da, 0x00000005, 0x00000023,
++    0x0000001c, 0x00050048, 0x000000da, 0x00000006, 0x00000023, 0x00000020, 0x00050048, 0x000000da,
++    0x00000007, 0x00000023, 0x00000024, 0x00040047, 0x00000101, 0x00000006, 0x00000004, 0x00030047,
++    0x00000102, 0x00000002, 0x00050048, 0x00000102, 0x00000000, 0x00000023, 0x00000000, 0x00040047,
++    0x000001ab, 0x00000021, 0x00000001, 0x00040047, 0x000001ab, 0x00000022, 0x00000001, 0x00020013,
++    0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040015,
++    0x0000000f, 0x00000020, 0x00000000, 0x00020014, 0x00000011, 0x0004002b, 0x00000006, 0x0000002d,
++    0x3d25aee6, 0x0004002b, 0x00000006, 0x00000033, 0x414eb852, 0x0004002b, 0x00000006, 0x00000037,
++    0x3d6147ae, 0x0004002b, 0x00000006, 0x00000039, 0x3f870a3d, 0x0004002b, 0x00000006, 0x0000003b,
++    0x4019999a, 0x0004002b, 0x00000006, 0x0000003f, 0x00000000, 0x0004002b, 0x00000006, 0x00000050,
++    0x3b4d2e1c, 0x0004002b, 0x00000006, 0x00000059, 0x3ed55555, 0x00040015, 0x0000006c, 0x00000020,
++    0x00000001, 0x0004002b, 0x0000006c, 0x0000006e, 0x00000180, 0x0004002b, 0x00000006, 0x00000071,
++    0x43ff0000, 0x0004002b, 0x0000000f, 0x00000080, 0x00000180, 0x0004002b, 0x0000000f, 0x00000081,
++    0x0000037e, 0x0004002b, 0x00000006, 0x00000098, 0xbf40c0c1, 0x0004002b, 0x00000006, 0x00000099,
++    0x3fa06060, 0x0004002b, 0x0000006c, 0x000000a0, 0x00000000, 0x0004002b, 0x0000006c, 0x000000a1,
++    0x000003ff, 0x0004002b, 0x00000006, 0x000000ad, 0x3f800000, 0x0004002b, 0x0000006c, 0x000000b5,
++    0x0000037e, 0x0004002b, 0x00000006, 0x000000c4, 0x437f0000, 0x00040017, 0x000000cb, 0x0000000f,
++    0x00000003, 0x00040020, 0x000000cc, 0x00000001, 0x000000cb, 0x0004003b, 0x000000cc, 0x000000cd,
++    0x00000001, 0x0004002b, 0x0000000f, 0x000000ce, 0x00000001, 0x00040020, 0x000000cf, 0x00000001,
++    0x0000000f, 0x0004002b, 0x0000000f, 0x000000d3, 0x00000000, 0x0004002b, 0x0000000f, 0x000000d6,
++    0x00000004, 0x00040015, 0x000000d9, 0x00000040, 0x00000000, 0x000a001e, 0x000000da, 0x000000d9,
++    0x000000d9, 0x0000000f, 0x0000000f, 0x0000000f, 0x0000000f, 0x0000000f, 0x0000000f, 0x00040020,
++    0x000000db, 0x00000009, 0x000000da, 0x0004003b, 0x000000db, 0x000000dc, 0x00000009, 0x0004002b,
++    0x0000006c, 0x000000dd, 0x00000005, 0x00040020, 0x000000de, 0x00000009, 0x0000000f, 0x0004002b,
++    0x0000006c, 0x000000e6, 0x00000004, 0x0004002b, 0x0000006c, 0x000000ef, 0x00000007, 0x0004002b,
++    0x0000000f, 0x000000f8, 0x00000003, 0x0004002b, 0x0000000f, 0x000000fd, 0x00000008, 0x00030027,
++    0x00000100, 0x000014e5, 0x0003001d, 0x00000101, 0x0000000f, 0x0003001e, 0x00000102, 0x00000101,
++    0x00040020, 0x00000100, 0x000014e5, 0x00000102, 0x00040020, 0x00000105, 0x00000009, 0x000000d9,
++    0x0004002b, 0x0000006c, 0x0000010a, 0x00000002, 0x0004002b, 0x0000006c, 0x00000112, 0x00000001,
++    0x0004002b, 0x0000006c, 0x00000117, 0x00000003, 0x0004002b, 0x0000000f, 0x0000012a, 0x00000002,
++    0x00040020, 0x00000132, 0x000014e5, 0x0000000f, 0x00040017, 0x00000155, 0x00000006, 0x00000004,
++    0x0004002b, 0x0000000f, 0x00000159, 0x00000006, 0x0004002b, 0x0000000f, 0x0000015b, 0x000003ff,
++    0x0004002b, 0x0000000f, 0x00000163, 0x00000016, 0x0004002b, 0x0000000f, 0x00000187, 0x0000000a,
++    0x0004002b, 0x0000000f, 0x00000190, 0x00000014, 0x0004002b, 0x0000000f, 0x000001a1, 0x000000ff,
++    0x00090019, 0x000001a8, 0x00000006, 0x00000001, 0x00000000, 0x00000000, 0x00000000, 0x00000002,
++    0x00000002, 0x0003001d, 0x000001a9, 0x000001a8, 0x00040020, 0x000001aa, 0x00000000, 0x000001a9,
++    0x0004003b, 0x000001aa, 0x000001ab, 0x00000000, 0x0004002b, 0x0000006c, 0x000001ac, 0x00000006,
++    0x00040020, 0x000001af, 0x00000000, 0x000001a8, 0x00040017, 0x000001b6, 0x0000006c, 0x00000002,
++    0x0004002b, 0x0000000f, 0x0000020e, 0xc0000000, 0x0004002b, 0x0000000f, 0x00000227, 0xffffffff,
++    0x0004002b, 0x00000006, 0x000004a1, 0x3b008081, 0x0004002b, 0x00000006, 0x000004a2, 0x3f72a76f,
++    0x0004002b, 0x00000006, 0x000004a3, 0x3d9e8391, 0x0004002b, 0x00000006, 0x000004a4, 0x3b808081,
++    0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x000300f7,
++    0x0000023a, 0x00000000, 0x000300fb, 0x000000d3, 0x0000023b, 0x000200f8, 0x0000023b, 0x00050041,
++    0x000000cf, 0x000000d0, 0x000000cd, 0x000000ce, 0x0004003d, 0x0000000f, 0x000000d1, 0x000000d0,
++    0x00050041, 0x000000cf, 0x000000d4, 0x000000cd, 0x000000d3, 0x0004003d, 0x0000000f, 0x000000d5,
++    0x000000d4, 0x00050084, 0x0000000f, 0x000000d7, 0x000000d5, 0x000000d6, 0x00050041, 0x000000de,
++    0x000000df, 0x000000dc, 0x000000dd, 0x0004003d, 0x0000000f, 0x000000e0, 0x000000df, 0x000500ae,
++    0x00000011, 0x000000e1, 0x000000d1, 0x000000e0, 0x000400a8, 0x00000011, 0x000000e2, 0x000000e1,
++    0x000300f7, 0x000000e4, 0x00000000, 0x000400fa, 0x000000e2, 0x000000e3, 0x000000e4, 0x000200f8,
++    0x000000e3, 0x00050041, 0x000000de, 0x000000e7, 0x000000dc, 0x000000e6, 0x0004003d, 0x0000000f,
++    0x000000e8, 0x000000e7, 0x000500ae, 0x00000011, 0x000000e9, 0x000000d7, 0x000000e8, 0x000200f9,
++    0x000000e4, 0x000200f8, 0x000000e4, 0x000700f5, 0x00000011, 0x000000ea, 0x000000e1, 0x0000023b,
++    0x000000e9, 0x000000e3, 0x000300f7, 0x000000ec, 0x00000000, 0x000400fa, 0x000000ea, 0x000000eb,
++    0x000000ec, 0x000200f8, 0x000000eb, 0x000200f9, 0x0000023a, 0x000200f8, 0x000000ec, 0x00050041,
++    0x000000de, 0x000000f0, 0x000000dc, 0x000000ef, 0x0004003d, 0x0000000f, 0x000000f1, 0x000000f0,
++    0x000500c7, 0x0000000f, 0x000000f2, 0x000000f1, 0x000000ce, 0x000500c2, 0x0000000f, 0x000000f7,
++    0x000000f1, 0x000000ce, 0x000500c7, 0x0000000f, 0x000000f9, 0x000000f7, 0x000000f8, 0x000500c7,
++    0x0000000f, 0x000000fe, 0x000000f1, 0x000000fd, 0x000500ab, 0x00000011, 0x000000ff, 0x000000fe,
++    0x000000d3, 0x00050041, 0x00000105, 0x00000106, 0x000000dc, 0x000000a0, 0x0004003d, 0x000000d9,
++    0x00000107, 0x00000106, 0x00040071, 0x000000d9, 0x00000109, 0x000000d1, 0x00050041, 0x000000de,
++    0x0000010b, 0x000000dc, 0x0000010a, 0x0004003d, 0x0000000f, 0x0000010c, 0x0000010b, 0x00040071,
++    0x000000d9, 0x0000010d, 0x0000010c, 0x00050084, 0x000000d9, 0x0000010e, 0x00000109, 0x0000010d,
++    0x00050080, 0x000000d9, 0x0000010f, 0x00000107, 0x0000010e, 0x00040078, 0x00000100, 0x00000110,
++    0x0000010f, 0x00050041, 0x00000105, 0x00000113, 0x000000dc, 0x00000112, 0x0004003d, 0x000000d9,
++    0x00000114, 0x00000113, 0x00050041, 0x000000de, 0x00000118, 0x000000dc, 0x00000117, 0x0004003d,
++    0x0000000f, 0x00000119, 0x00000118, 0x00040071, 0x000000d9, 0x0000011a, 0x00000119, 0x00050084,
++    0x000000d9, 0x0000011b, 0x00000109, 0x0000011a, 0x00050080, 0x000000d9, 0x0000011c, 0x00000114,
++    0x0000011b, 0x00040078, 0x00000100, 0x0000011d, 0x0000011c, 0x00050041, 0x000000de, 0x0000011f,
++    0x000000dc, 0x000000e6, 0x0004003d, 0x0000000f, 0x00000120, 0x0000011f, 0x00050082, 0x0000000f,
++    0x00000122, 0x00000120, 0x000000d7, 0x0007000c, 0x0000000f, 0x00000123, 0x00000001, 0x00000026,
++    0x000000d6, 0x00000122, 0x000500aa, 0x00000011, 0x00000125, 0x000000f2, 0x000000d3, 0x000300f7,
++    0x00000127, 0x00000000, 0x000400fa, 0x00000125, 0x00000126, 0x00000127, 0x000200f8, 0x00000126,
++    0x000500aa, 0x00000011, 0x0000012b, 0x000000f9, 0x0000012a, 0x000300f7, 0x0000012e, 0x00000000,
++    0x000400fa, 0x0000012b, 0x0000012d, 0x00000135, 0x000200f8, 0x0000012d, 0x00050086, 0x0000000f,
++    0x00000131, 0x000000d7, 0x000000d6, 0x00060041, 0x00000132, 0x00000133, 0x0000011d, 0x000000a0,
++    0x00000131, 0x0006003d, 0x0000000f, 0x00000134, 0x00000133, 0x00000002, 0x00000004, 0x000200f9,
++    0x0000012e, 0x000200f8, 0x00000135, 0x000200f9, 0x0000012e, 0x000200f8, 0x0000012e, 0x000700f5,
++    0x0000000f, 0x0000045e, 0x00000134, 0x0000012d, 0x000000d3, 0x00000135, 0x000200f9, 0x00000138,
++    0x000200f8, 0x00000138, 0x000700f5, 0x0000000f, 0x0000045f, 0x000000d3, 0x0000012e, 0x000001ba,
++    0x0000013b, 0x000500b0, 0x00000011, 0x0000013f, 0x0000045f, 0x00000123, 0x000400f6, 0x0000013a,
++    0x0000013b, 0x00000000, 0x000400fa, 0x0000013f, 0x00000139, 0x0000013a, 0x000200f8, 0x00000139,
++    0x00050080, 0x0000000f, 0x00000143, 0x000000d7, 0x0000045f, 0x000500aa, 0x00000011, 0x00000145,
++    0x000000f9, 0x000000ce, 0x000300f7, 0x00000147, 0x00000000, 0x000400fa, 0x00000145, 0x00000146,
++    0x00000179, 0x000200f8, 0x00000146, 0x00050084, 0x0000000f, 0x0000014b, 0x0000012a, 0x00000143,
++    0x00060041, 0x00000132, 0x0000014c, 0x00000110, 0x000000a0, 0x0000014b, 0x0006003d, 0x0000000f,
++    0x0000014d, 0x0000014c, 0x00000002, 0x00000004, 0x00050080, 0x0000000f, 0x00000152, 0x0000014b,
++    0x000000ce, 0x00060041, 0x00000132, 0x00000153, 0x00000110, 0x000000a0, 0x00000152, 0x0006003d,
++    0x0000000f, 0x00000154, 0x00000153, 0x00000002, 0x00000004, 0x000500c2, 0x0000000f, 0x0000015a,
++    0x0000014d, 0x00000159, 0x000500c7, 0x0000000f, 0x0000015c, 0x0000015a, 0x0000015b, 0x0004007c,
++    0x0000006c, 0x00000245, 0x0000015c, 0x00050082, 0x0000006c, 0x00000246, 0x00000245, 0x0000006e,
++    0x0004006f, 0x00000006, 0x00000247, 0x00000246, 0x00050085, 0x00000006, 0x00000248, 0x00000247,
++    0x000004a1, 0x000300f7, 0x0000024f, 0x00000000, 0x000400fa, 0x000000ff, 0x0000024a, 0x0000024d,
++    0x000200f8, 0x0000024a, 0x0006000c, 0x00000006, 0x00000258, 0x00000001, 0x00000004, 0x00000248,
++    0x000500bc, 0x00000011, 0x0000025a, 0x00000258, 0x0000002d, 0x000300f7, 0x00000263, 0x00000000,
++    0x000400fa, 0x0000025a, 0x0000025b, 0x0000025e, 0x000200f8, 0x0000025b, 0x00050085, 0x00000006,
++    0x0000025d, 0x00000258, 0x000004a3, 0x000200f9, 0x00000263, 0x000200f8, 0x0000025e, 0x00050081,
++    0x00000006, 0x00000260, 0x00000258, 0x00000037, 0x00050085, 0x00000006, 0x00000261, 0x00000260,
++    0x000004a2, 0x0007000c, 0x00000006, 0x00000262, 0x00000001, 0x0000001a, 0x00000261, 0x0000003b,
++    0x000200f9, 0x00000263, 0x000200f8, 0x00000263, 0x000700f5, 0x00000006, 0x00000481, 0x0000025d,
++    0x0000025b, 0x00000262, 0x0000025e, 0x000500b8, 0x00000011, 0x00000266, 0x00000248, 0x0000003f,
++    0x000300f7, 0x0000026c, 0x00000000, 0x000400fa, 0x00000266, 0x00000267, 0x0000026a, 0x000200f8,
++    0x00000267, 0x0004007f, 0x00000006, 0x00000269, 0x00000481, 0x000200f9, 0x0000026c, 0x000200f8,
++    0x0000026a, 0x000200f9, 0x0000026c, 0x000200f8, 0x0000026c, 0x000700f5, 0x00000006, 0x00000482,
++    0x00000269, 0x00000267, 0x00000481, 0x0000026a, 0x000200f9, 0x0000024f, 0x000200f8, 0x0000024d,
++    0x000200f9, 0x0000024f, 0x000200f8, 0x0000024f, 0x000700f5, 0x00000006, 0x00000483, 0x00000482,
++    0x0000026c, 0x00000248, 0x0000024d, 0x000500c2, 0x0000000f, 0x00000164, 0x0000014d, 0x00000163,
++    0x000500c7, 0x0000000f, 0x00000165, 0x00000164, 0x0000015b, 0x0004007c, 0x0000006c, 0x00000274,
++    0x00000165, 0x00050082, 0x0000006c, 0x00000275, 0x00000274, 0x0000006e, 0x0004006f, 0x00000006,
++    0x00000276, 0x00000275, 0x00050085, 0x00000006, 0x00000277, 0x00000276, 0x000004a1, 0x000300f7,
++    0x0000027e, 0x00000000, 0x000400fa, 0x000000ff, 0x00000279, 0x0000027c, 0x000200f8, 0x00000279,
++    0x0006000c, 0x00000006, 0x00000287, 0x00000001, 0x00000004, 0x00000277, 0x000500bc, 0x00000011,
++    0x00000289, 0x00000287, 0x0000002d, 0x000300f7, 0x00000292, 0x00000000, 0x000400fa, 0x00000289,
++    0x0000028a, 0x0000028d, 0x000200f8, 0x0000028a, 0x00050085, 0x00000006, 0x0000028c, 0x00000287,
++    0x000004a3, 0x000200f9, 0x00000292, 0x000200f8, 0x0000028d, 0x00050081, 0x00000006, 0x0000028f,
++    0x00000287, 0x00000037, 0x00050085, 0x00000006, 0x00000290, 0x0000028f, 0x000004a2, 0x0007000c,
++    0x00000006, 0x00000291, 0x00000001, 0x0000001a, 0x00000290, 0x0000003b, 0x000200f9, 0x00000292,
++    0x000200f8, 0x00000292, 0x000700f5, 0x00000006, 0x00000487, 0x0000028c, 0x0000028a, 0x00000291,
++    0x0000028d, 0x000500b8, 0x00000011, 0x00000295, 0x00000277, 0x0000003f, 0x000300f7, 0x0000029b,
++    0x00000000, 0x000400fa, 0x00000295, 0x00000296, 0x00000299, 0x000200f8, 0x00000296, 0x0004007f,
++    0x00000006, 0x00000298, 0x00000487, 0x000200f9, 0x0000029b, 0x000200f8, 0x00000299, 0x000200f9,
++    0x0000029b, 0x000200f8, 0x0000029b, 0x000700f5, 0x00000006, 0x00000488, 0x00000298, 0x00000296,
++    0x00000487, 0x00000299, 0x000200f9, 0x0000027e, 0x000200f8, 0x0000027c, 0x000200f9, 0x0000027e,
++    0x000200f8, 0x0000027e, 0x000700f5, 0x00000006, 0x00000489, 0x00000488, 0x0000029b, 0x00000277,
++    0x0000027c, 0x000500c2, 0x0000000f, 0x0000016c, 0x00000154, 0x00000159, 0x000500c7, 0x0000000f,
++    0x0000016d, 0x0000016c, 0x0000015b, 0x0004007c, 0x0000006c, 0x000002a3, 0x0000016d, 0x00050082,
++    0x0000006c, 0x000002a4, 0x000002a3, 0x0000006e, 0x0004006f, 0x00000006, 0x000002a5, 0x000002a4,
++    0x00050085, 0x00000006, 0x000002a6, 0x000002a5, 0x000004a1, 0x000300f7, 0x000002ad, 0x00000000,
++    0x000400fa, 0x000000ff, 0x000002a8, 0x000002ab, 0x000200f8, 0x000002a8, 0x0006000c, 0x00000006,
++    0x000002b6, 0x00000001, 0x00000004, 0x000002a6, 0x000500bc, 0x00000011, 0x000002b8, 0x000002b6,
++    0x0000002d, 0x000300f7, 0x000002c1, 0x00000000, 0x000400fa, 0x000002b8, 0x000002b9, 0x000002bc,
++    0x000200f8, 0x000002b9, 0x00050085, 0x00000006, 0x000002bb, 0x000002b6, 0x000004a3, 0x000200f9,
++    0x000002c1, 0x000200f8, 0x000002bc, 0x00050081, 0x00000006, 0x000002be, 0x000002b6, 0x00000037,
++    0x00050085, 0x00000006, 0x000002bf, 0x000002be, 0x000004a2, 0x0007000c, 0x00000006, 0x000002c0,
++    0x00000001, 0x0000001a, 0x000002bf, 0x0000003b, 0x000200f9, 0x000002c1, 0x000200f8, 0x000002c1,
++    0x000700f5, 0x00000006, 0x0000048d, 0x000002bb, 0x000002b9, 0x000002c0, 0x000002bc, 0x000500b8,
++    0x00000011, 0x000002c4, 0x000002a6, 0x0000003f, 0x000300f7, 0x000002ca, 0x00000000, 0x000400fa,
++    0x000002c4, 0x000002c5, 0x000002c8, 0x000200f8, 0x000002c5, 0x0004007f, 0x00000006, 0x000002c7,
++    0x0000048d, 0x000200f9, 0x000002ca, 0x000200f8, 0x000002c8, 0x000200f9, 0x000002ca, 0x000200f8,
++    0x000002ca, 0x000700f5, 0x00000006, 0x0000048e, 0x000002c7, 0x000002c5, 0x0000048d, 0x000002c8,
++    0x000200f9, 0x000002ad, 0x000200f8, 0x000002ab, 0x000200f9, 0x000002ad, 0x000200f8, 0x000002ad,
++    0x000700f5, 0x00000006, 0x0000048f, 0x0000048e, 0x000002ca, 0x000002a6, 0x000002ab, 0x000500c2,
++    0x0000000f, 0x00000174, 0x00000154, 0x00000163, 0x000500c7, 0x0000000f, 0x00000175, 0x00000174,
++    0x0000015b, 0x0008000c, 0x0000000f, 0x000002cf, 0x00000001, 0x0000002c, 0x00000175, 0x00000080,
++    0x00000081, 0x0004007c, 0x0000006c, 0x000002d0, 0x000002cf, 0x00050082, 0x0000006c, 0x000002d1,
++    0x000002d0, 0x0000006e, 0x0004006f, 0x00000006, 0x000002d2, 0x000002d1, 0x00050085, 0x00000006,
++    0x000002d3, 0x000002d2, 0x000004a1, 0x00070050, 0x00000155, 0x000004a6, 0x0000048f, 0x00000489,
++    0x00000483, 0x000002d3, 0x000200f9, 0x00000147, 0x000200f8, 0x00000179, 0x00060041, 0x00000132,
++    0x0000017d, 0x00000110, 0x000000a0, 0x00000143, 0x0006003d, 0x0000000f, 0x0000017e, 0x0000017d,
++    0x00000002, 0x00000004, 0x000500c7, 0x0000000f, 0x00000180, 0x0000017e, 0x0000015b, 0x0004007c,
++    0x0000006c, 0x000002da, 0x00000180, 0x00050082, 0x0000006c, 0x000002db, 0x000002da, 0x0000006e,
++    0x0004006f, 0x00000006, 0x000002dc, 0x000002db, 0x00050085, 0x00000006, 0x000002dd, 0x000002dc,
++    0x000004a1, 0x000300f7, 0x000002e4, 0x00000000, 0x000400fa, 0x000000ff, 0x000002df, 0x000002e2,
++    0x000200f8, 0x000002df, 0x0006000c, 0x00000006, 0x000002ed, 0x00000001, 0x00000004, 0x000002dd,
++    0x000500bc, 0x00000011, 0x000002ef, 0x000002ed, 0x0000002d, 0x000300f7, 0x000002f8, 0x00000000,
++    0x000400fa, 0x000002ef, 0x000002f0, 0x000002f3, 0x000200f8, 0x000002f0, 0x00050085, 0x00000006,
++    0x000002f2, 0x000002ed, 0x000004a3, 0x000200f9, 0x000002f8, 0x000200f8, 0x000002f3, 0x00050081,
++    0x00000006, 0x000002f5, 0x000002ed, 0x00000037, 0x00050085, 0x00000006, 0x000002f6, 0x000002f5,
++    0x000004a2, 0x0007000c, 0x00000006, 0x000002f7, 0x00000001, 0x0000001a, 0x000002f6, 0x0000003b,
++    0x000200f9, 0x000002f8, 0x000200f8, 0x000002f8, 0x000700f5, 0x00000006, 0x00000460, 0x000002f2,
++    0x000002f0, 0x000002f7, 0x000002f3, 0x000500b8, 0x00000011, 0x000002fb, 0x000002dd, 0x0000003f,
++    0x000300f7, 0x00000301, 0x00000000, 0x000400fa, 0x000002fb, 0x000002fc, 0x000002ff, 0x000200f8,
++    0x000002fc, 0x0004007f, 0x00000006, 0x000002fe, 0x00000460, 0x000200f9, 0x00000301, 0x000200f8,
++    0x000002ff, 0x000200f9, 0x00000301, 0x000200f8, 0x00000301, 0x000700f5, 0x00000006, 0x00000461,
++    0x000002fe, 0x000002fc, 0x00000460, 0x000002ff, 0x000200f9, 0x000002e4, 0x000200f8, 0x000002e2,
++    0x000200f9, 0x000002e4, 0x000200f8, 0x000002e4, 0x000700f5, 0x00000006, 0x00000462, 0x00000461,
++    0x00000301, 0x000002dd, 0x000002e2, 0x000500c2, 0x0000000f, 0x00000188, 0x0000017e, 0x00000187,
++    0x000500c7, 0x0000000f, 0x00000189, 0x00000188, 0x0000015b, 0x0004007c, 0x0000006c, 0x00000309,
++    0x00000189, 0x00050082, 0x0000006c, 0x0000030a, 0x00000309, 0x0000006e, 0x0004006f, 0x00000006,
++    0x0000030b, 0x0000030a, 0x00050085, 0x00000006, 0x0000030c, 0x0000030b, 0x000004a1, 0x000300f7,
++    0x00000313, 0x00000000, 0x000400fa, 0x000000ff, 0x0000030e, 0x00000311, 0x000200f8, 0x0000030e,
++    0x0006000c, 0x00000006, 0x0000031c, 0x00000001, 0x00000004, 0x0000030c, 0x000500bc, 0x00000011,
++    0x0000031e, 0x0000031c, 0x0000002d, 0x000300f7, 0x00000327, 0x00000000, 0x000400fa, 0x0000031e,
++    0x0000031f, 0x00000322, 0x000200f8, 0x0000031f, 0x00050085, 0x00000006, 0x00000321, 0x0000031c,
++    0x000004a3, 0x000200f9, 0x00000327, 0x000200f8, 0x00000322, 0x00050081, 0x00000006, 0x00000324,
++    0x0000031c, 0x00000037, 0x00050085, 0x00000006, 0x00000325, 0x00000324, 0x000004a2, 0x0007000c,
++    0x00000006, 0x00000326, 0x00000001, 0x0000001a, 0x00000325, 0x0000003b, 0x000200f9, 0x00000327,
++    0x000200f8, 0x00000327, 0x000700f5, 0x00000006, 0x0000046a, 0x00000321, 0x0000031f, 0x00000326,
++    0x00000322, 0x000500b8, 0x00000011, 0x0000032a, 0x0000030c, 0x0000003f, 0x000300f7, 0x00000330,
++    0x00000000, 0x000400fa, 0x0000032a, 0x0000032b, 0x0000032e, 0x000200f8, 0x0000032b, 0x0004007f,
++    0x00000006, 0x0000032d, 0x0000046a, 0x000200f9, 0x00000330, 0x000200f8, 0x0000032e, 0x000200f9,
++    0x00000330, 0x000200f8, 0x00000330, 0x000700f5, 0x00000006, 0x0000046b, 0x0000032d, 0x0000032b,
++    0x0000046a, 0x0000032e, 0x000200f9, 0x00000313, 0x000200f8, 0x00000311, 0x000200f9, 0x00000313,
++    0x000200f8, 0x00000313, 0x000700f5, 0x00000006, 0x0000046c, 0x0000046b, 0x00000330, 0x0000030c,
++    0x00000311, 0x000500c2, 0x0000000f, 0x00000191, 0x0000017e, 0x00000190, 0x000500c7, 0x0000000f,
++    0x00000192, 0x00000191, 0x0000015b, 0x0004007c, 0x0000006c, 0x00000338, 0x00000192, 0x00050082,
++    0x0000006c, 0x00000339, 0x00000338, 0x0000006e, 0x0004006f, 0x00000006, 0x0000033a, 0x00000339,
++    0x00050085, 0x00000006, 0x0000033b, 0x0000033a, 0x000004a1, 0x000300f7, 0x00000342, 0x00000000,
++    0x000400fa, 0x000000ff, 0x0000033d, 0x00000340, 0x000200f8, 0x0000033d, 0x0006000c, 0x00000006,
++    0x0000034b, 0x00000001, 0x00000004, 0x0000033b, 0x000500bc, 0x00000011, 0x0000034d, 0x0000034b,
++    0x0000002d, 0x000300f7, 0x00000356, 0x00000000, 0x000400fa, 0x0000034d, 0x0000034e, 0x00000351,
++    0x000200f8, 0x0000034e, 0x00050085, 0x00000006, 0x00000350, 0x0000034b, 0x000004a3, 0x000200f9,
++    0x00000356, 0x000200f8, 0x00000351, 0x00050081, 0x00000006, 0x00000353, 0x0000034b, 0x00000037,
++    0x00050085, 0x00000006, 0x00000354, 0x00000353, 0x000004a2, 0x0007000c, 0x00000006, 0x00000355,
++    0x00000001, 0x0000001a, 0x00000354, 0x0000003b, 0x000200f9, 0x00000356, 0x000200f8, 0x00000356,
++    0x000700f5, 0x00000006, 0x00000470, 0x00000350, 0x0000034e, 0x00000355, 0x00000351, 0x000500b8,
++    0x00000011, 0x00000359, 0x0000033b, 0x0000003f, 0x000300f7, 0x0000035f, 0x00000000, 0x000400fa,
++    0x00000359, 0x0000035a, 0x0000035d, 0x000200f8, 0x0000035a, 0x0004007f, 0x00000006, 0x0000035c,
++    0x00000470, 0x000200f9, 0x0000035f, 0x000200f8, 0x0000035d, 0x000200f9, 0x0000035f, 0x000200f8,
++    0x0000035f, 0x000700f5, 0x00000006, 0x00000471, 0x0000035c, 0x0000035a, 0x00000470, 0x0000035d,
++    0x000200f9, 0x00000342, 0x000200f8, 0x00000340, 0x000200f9, 0x00000342, 0x000200f8, 0x00000342,
++    0x000700f5, 0x00000006, 0x00000472, 0x00000471, 0x0000035f, 0x0000033b, 0x00000340, 0x000300f7,
++    0x0000019c, 0x00000000, 0x000400fa, 0x0000012b, 0x0000019b, 0x000001a5, 0x000200f8, 0x0000019b,
++    0x00050084, 0x0000000f, 0x0000019f, 0x000000fd, 0x0000045f, 0x000500c2, 0x0000000f, 0x000001a0,
++    0x0000045e, 0x0000019f, 0x000500c7, 0x0000000f, 0x000001a2, 0x000001a0, 0x000001a1, 0x00040070,
++    0x00000006, 0x000001a3, 0x000001a2, 0x00050085, 0x00000006, 0x000001a4, 0x000001a3, 0x000004a4,
++    0x000200f9, 0x0000019c, 0x000200f8, 0x000001a5, 0x000200f9, 0x0000019c, 0x000200f8, 0x0000019c,
++    0x000700f5, 0x00000006, 0x0000047f, 0x000001a4, 0x0000019b, 0x000000ad, 0x000001a5, 0x00070050,
++    0x00000155, 0x000004a5, 0x00000472, 0x0000046c, 0x00000462, 0x0000047f, 0x000200f9, 0x00000147,
++    0x000200f8, 0x00000147, 0x000700f5, 0x00000155, 0x00000493, 0x000004a6, 0x000002ad, 0x000004a5,
++    0x0000019c, 0x00050041, 0x000000de, 0x000001ad, 0x000000dc, 0x000001ac, 0x0004003d, 0x0000000f,
++    0x000001ae, 0x000001ad, 0x00050041, 0x000001af, 0x000001b0, 0x000001ab, 0x000001ae, 0x0004003d,
++    0x000001a8, 0x000001b1, 0x000001b0, 0x0004007c, 0x0000006c, 0x000001b3, 0x00000143, 0x0004007c,
++    0x0000006c, 0x000001b5, 0x000000d1, 0x00050050, 0x000001b6, 0x000001b7, 0x000001b3, 0x000001b5,
++    0x00040063, 0x000001b1, 0x000001b7, 0x00000493, 0x000200f9, 0x0000013b, 0x000200f8, 0x0000013b,
++    0x00050080, 0x0000000f, 0x000001ba, 0x0000045f, 0x00000112, 0x000200f9, 0x00000138, 0x000200f8,
++    0x0000013a, 0x000200f9, 0x0000023a, 0x000200f8, 0x00000127, 0x000200f9, 0x000001be, 0x000200f8,
++    0x000001be, 0x000700f5, 0x0000000f, 0x0000043c, 0x000000d3, 0x00000127, 0x0000049f, 0x000001c1,
++    0x000700f5, 0x0000000f, 0x00000439, 0x000000d3, 0x00000127, 0x0000021b, 0x000001c1, 0x000500b0,
++    0x00000011, 0x000001c5, 0x00000439, 0x00000123, 0x000400f6, 0x000001c0, 0x000001c1, 0x00000000,
++    0x000400fa, 0x000001c5, 0x000001bf, 0x000001c0, 0x000200f8, 0x000001bf, 0x00050080, 0x0000000f,
++    0x000001c9, 0x000000d7, 0x00000439, 0x00050041, 0x000000de, 0x000001cb, 0x000000dc, 0x000001ac,
++    0x0004003d, 0x0000000f, 0x000001cc, 0x000001cb, 0x00050041, 0x000001af, 0x000001cd, 0x000001ab,
++    0x000001cc, 0x0004003d, 0x000001a8, 0x000001ce, 0x000001cd, 0x0004007c, 0x0000006c, 0x000001d0,
++    0x000001c9, 0x0004007c, 0x0000006c, 0x000001d2, 0x000000d1, 0x00050050, 0x000001b6, 0x000001d3,
++    0x000001d0, 0x000001d2, 0x00050062, 0x00000155, 0x000001d4, 0x000001ce, 0x000001d3, 0x00050051,
++    0x00000006, 0x000001d8, 0x000001d4, 0x00000000, 0x0004009c, 0x00000011, 0x00000366, 0x000001d8,
++    0x000600a9, 0x00000006, 0x00000368, 0x00000366, 0x0000003f, 0x000001d8, 0x000300f7, 0x0000036f,
++    0x00000000, 0x000400fa, 0x000000ff, 0x0000036a, 0x0000036d, 0x000200f8, 0x0000036a, 0x0006000c,
++    0x00000006, 0x00000381, 0x00000001, 0x00000004, 0x00000368, 0x000500bc, 0x00000011, 0x00000383,
++    0x00000381, 0x00000050, 0x000300f7, 0x0000038c, 0x00000000, 0x000400fa, 0x00000383, 0x00000384,
++    0x00000387, 0x000200f8, 0x00000384, 0x00050085, 0x00000006, 0x00000386, 0x00000381, 0x00000033,
++    0x000200f9, 0x0000038c, 0x000200f8, 0x00000387, 0x0007000c, 0x00000006, 0x00000389, 0x00000001,
++    0x0000001a, 0x00000381, 0x00000059, 0x00050085, 0x00000006, 0x0000038a, 0x00000039, 0x00000389,
++    0x00050083, 0x00000006, 0x0000038b, 0x0000038a, 0x00000037, 0x000200f9, 0x0000038c, 0x000200f8,
++    0x0000038c, 0x000700f5, 0x00000006, 0x0000043d, 0x00000386, 0x00000384, 0x0000038b, 0x00000387,
++    0x000500b8, 0x00000011, 0x0000038f, 0x00000368, 0x0000003f, 0x000300f7, 0x00000395, 0x00000000,
++    0x000400fa, 0x0000038f, 0x00000390, 0x00000393, 0x000200f8, 0x00000390, 0x0004007f, 0x00000006,
++    0x00000392, 0x0000043d, 0x000200f9, 0x00000395, 0x000200f8, 0x00000393, 0x000200f9, 0x00000395,
++    0x000200f8, 0x00000395, 0x000700f5, 0x00000006, 0x0000043e, 0x00000392, 0x00000390, 0x0000043d,
++    0x00000393, 0x000200f9, 0x0000036f, 0x000200f8, 0x0000036d, 0x000200f9, 0x0000036f, 0x000200f8,
++    0x0000036f, 0x000700f5, 0x00000006, 0x0000043f, 0x0000043e, 0x00000395, 0x00000368, 0x0000036d,
++    0x0008000c, 0x00000006, 0x00000372, 0x00000001, 0x0000002b, 0x0000043f, 0x00000098, 0x00000099,
++    0x00050085, 0x00000006, 0x00000374, 0x00000372, 0x00000071, 0x0006000c, 0x00000006, 0x00000375,
++    0x00000001, 0x00000002, 0x00000374, 0x0004006e, 0x0000006c, 0x00000376, 0x00000375, 0x00050080,
++    0x0000006c, 0x00000377, 0x00000376, 0x0000006e, 0x0008000c, 0x0000006c, 0x00000378, 0x00000001,
++    0x0000002d, 0x00000377, 0x000000a0, 0x000000a1, 0x0004007c, 0x0000000f, 0x00000379, 0x00000378,
++    0x00050051, 0x00000006, 0x000001df, 0x000001d4, 0x00000001, 0x0004009c, 0x00000011, 0x0000039c,
++    0x000001df, 0x000600a9, 0x00000006, 0x0000039e, 0x0000039c, 0x0000003f, 0x000001df, 0x000300f7,
++    0x000003a5, 0x00000000, 0x000400fa, 0x000000ff, 0x000003a0, 0x000003a3, 0x000200f8, 0x000003a0,
++    0x0006000c, 0x00000006, 0x000003b7, 0x00000001, 0x00000004, 0x0000039e, 0x000500bc, 0x00000011,
++    0x000003b9, 0x000003b7, 0x00000050, 0x000300f7, 0x000003c2, 0x00000000, 0x000400fa, 0x000003b9,
++    0x000003ba, 0x000003bd, 0x000200f8, 0x000003ba, 0x00050085, 0x00000006, 0x000003bc, 0x000003b7,
++    0x00000033, 0x000200f9, 0x000003c2, 0x000200f8, 0x000003bd, 0x0007000c, 0x00000006, 0x000003bf,
++    0x00000001, 0x0000001a, 0x000003b7, 0x00000059, 0x00050085, 0x00000006, 0x000003c0, 0x00000039,
++    0x000003bf, 0x00050083, 0x00000006, 0x000003c1, 0x000003c0, 0x00000037, 0x000200f9, 0x000003c2,
++    0x000200f8, 0x000003c2, 0x000700f5, 0x00000006, 0x00000440, 0x000003bc, 0x000003ba, 0x000003c1,
++    0x000003bd, 0x000500b8, 0x00000011, 0x000003c5, 0x0000039e, 0x0000003f, 0x000300f7, 0x000003cb,
++    0x00000000, 0x000400fa, 0x000003c5, 0x000003c6, 0x000003c9, 0x000200f8, 0x000003c6, 0x0004007f,
++    0x00000006, 0x000003c8, 0x00000440, 0x000200f9, 0x000003cb, 0x000200f8, 0x000003c9, 0x000200f9,
++    0x000003cb, 0x000200f8, 0x000003cb, 0x000700f5, 0x00000006, 0x00000441, 0x000003c8, 0x000003c6,
++    0x00000440, 0x000003c9, 0x000200f9, 0x000003a5, 0x000200f8, 0x000003a3, 0x000200f9, 0x000003a5,
++    0x000200f8, 0x000003a5, 0x000700f5, 0x00000006, 0x00000442, 0x00000441, 0x000003cb, 0x0000039e,
++    0x000003a3, 0x0008000c, 0x00000006, 0x000003a8, 0x00000001, 0x0000002b, 0x00000442, 0x00000098,
++    0x00000099, 0x00050085, 0x00000006, 0x000003aa, 0x000003a8, 0x00000071, 0x0006000c, 0x00000006,
++    0x000003ab, 0x00000001, 0x00000002, 0x000003aa, 0x0004006e, 0x0000006c, 0x000003ac, 0x000003ab,
++    0x00050080, 0x0000006c, 0x000003ad, 0x000003ac, 0x0000006e, 0x0008000c, 0x0000006c, 0x000003ae,
++    0x00000001, 0x0000002d, 0x000003ad, 0x000000a0, 0x000000a1, 0x0004007c, 0x0000000f, 0x000003af,
++    0x000003ae, 0x00050051, 0x00000006, 0x000001e6, 0x000001d4, 0x00000002, 0x0004009c, 0x00000011,
++    0x000003d2, 0x000001e6, 0x000600a9, 0x00000006, 0x000003d4, 0x000003d2, 0x0000003f, 0x000001e6,
++    0x000300f7, 0x000003db, 0x00000000, 0x000400fa, 0x000000ff, 0x000003d6, 0x000003d9, 0x000200f8,
++    0x000003d6, 0x0006000c, 0x00000006, 0x000003ed, 0x00000001, 0x00000004, 0x000003d4, 0x000500bc,
++    0x00000011, 0x000003ef, 0x000003ed, 0x00000050, 0x000300f7, 0x000003f8, 0x00000000, 0x000400fa,
++    0x000003ef, 0x000003f0, 0x000003f3, 0x000200f8, 0x000003f0, 0x00050085, 0x00000006, 0x000003f2,
++    0x000003ed, 0x00000033, 0x000200f9, 0x000003f8, 0x000200f8, 0x000003f3, 0x0007000c, 0x00000006,
++    0x000003f5, 0x00000001, 0x0000001a, 0x000003ed, 0x00000059, 0x00050085, 0x00000006, 0x000003f6,
++    0x00000039, 0x000003f5, 0x00050083, 0x00000006, 0x000003f7, 0x000003f6, 0x00000037, 0x000200f9,
++    0x000003f8, 0x000200f8, 0x000003f8, 0x000700f5, 0x00000006, 0x00000443, 0x000003f2, 0x000003f0,
++    0x000003f7, 0x000003f3, 0x000500b8, 0x00000011, 0x000003fb, 0x000003d4, 0x0000003f, 0x000300f7,
++    0x00000401, 0x00000000, 0x000400fa, 0x000003fb, 0x000003fc, 0x000003ff, 0x000200f8, 0x000003fc,
++    0x0004007f, 0x00000006, 0x000003fe, 0x00000443, 0x000200f9, 0x00000401, 0x000200f8, 0x000003ff,
++    0x000200f9, 0x00000401, 0x000200f8, 0x00000401, 0x000700f5, 0x00000006, 0x00000444, 0x000003fe,
++    0x000003fc, 0x00000443, 0x000003ff, 0x000200f9, 0x000003db, 0x000200f8, 0x000003d9, 0x000200f9,
++    0x000003db, 0x000200f8, 0x000003db, 0x000700f5, 0x00000006, 0x00000445, 0x00000444, 0x00000401,
++    0x000003d4, 0x000003d9, 0x0008000c, 0x00000006, 0x000003de, 0x00000001, 0x0000002b, 0x00000445,
++    0x00000098, 0x00000099, 0x00050085, 0x00000006, 0x000003e0, 0x000003de, 0x00000071, 0x0006000c,
++    0x00000006, 0x000003e1, 0x00000001, 0x00000002, 0x000003e0, 0x0004006e, 0x0000006c, 0x000003e2,
++    0x000003e1, 0x00050080, 0x0000006c, 0x000003e3, 0x000003e2, 0x0000006e, 0x0008000c, 0x0000006c,
++    0x000003e4, 0x00000001, 0x0000002d, 0x000003e3, 0x000000a0, 0x000000a1, 0x0004007c, 0x0000000f,
++    0x000003e5, 0x000003e4, 0x000500aa, 0x00000011, 0x000001eb, 0x000000f9, 0x000000ce, 0x000300f7,
++    0x000001ed, 0x00000000, 0x000400fa, 0x000001eb, 0x000001ec, 0x00000204, 0x000200f8, 0x000001ec,
++    0x00050084, 0x0000000f, 0x000001f0, 0x0000012a, 0x000001c9, 0x000500c4, 0x0000000f, 0x000001f2,
++    0x000003e5, 0x00000159, 0x000500c4, 0x0000000f, 0x000001f4, 0x000003af, 0x00000163, 0x000500c5,
++    0x0000000f, 0x000001f5, 0x000001f2, 0x000001f4, 0x00060041, 0x00000132, 0x000001f6, 0x00000110,
++    0x000000a0, 0x000001f0, 0x0005003e, 0x000001f6, 0x000001f5, 0x00000002, 0x00000004, 0x00050080,
++    0x0000000f, 0x000001fa, 0x000001f0, 0x000000ce, 0x000500c4, 0x0000000f, 0x000001fc, 0x00000379,
++    0x00000159, 0x00050051, 0x00000006, 0x000001ff, 0x000001d4, 0x00000003, 0x0004009c, 0x00000011,
++    0x00000407, 0x000001ff, 0x000300f7, 0x0000040c, 0x00000000, 0x000400fa, 0x00000407, 0x00000408,
++    0x00000409, 0x000200f8, 0x00000408, 0x000200f9, 0x0000040c, 0x000200f8, 0x00000409, 0x0008000c,
++    0x00000006, 0x0000040b, 0x00000001, 0x0000002b, 0x000001ff, 0x0000003f, 0x000000ad, 0x000200f9,
++    0x0000040c, 0x000200f8, 0x0000040c, 0x000700f5, 0x00000006, 0x0000045b, 0x0000003f, 0x00000408,
++    0x0000040b, 0x00000409, 0x00050085, 0x00000006, 0x0000040f, 0x0000045b, 0x00000071, 0x0006000c,
++    0x00000006, 0x00000410, 0x00000001, 0x00000002, 0x0000040f, 0x0004006e, 0x0000006c, 0x00000411,
++    0x00000410, 0x00050080, 0x0000006c, 0x00000412, 0x00000411, 0x0000006e, 0x0008000c, 0x0000006c,
++    0x00000413, 0x00000001, 0x0000002d, 0x00000412, 0x0000006e, 0x000000b5, 0x0004007c, 0x0000000f,
++    0x00000414, 0x00000413, 0x000500c4, 0x0000000f, 0x00000201, 0x00000414, 0x00000163, 0x000500c5,
++    0x0000000f, 0x00000202, 0x000001fc, 0x00000201, 0x00060041, 0x00000132, 0x00000203, 0x00000110,
++    0x000000a0, 0x000001fa, 0x0005003e, 0x00000203, 0x00000202, 0x00000002, 0x00000004, 0x000200f9,
++    0x000001ed, 0x000200f8, 0x00000204, 0x000500c4, 0x0000000f, 0x00000209, 0x000003af, 0x00000187,
++    0x000500c5, 0x0000000f, 0x0000020a, 0x000003e5, 0x00000209, 0x000500c4, 0x0000000f, 0x0000020c,
++    0x00000379, 0x00000190, 0x000500c5, 0x0000000f, 0x0000020d, 0x0000020a, 0x0000020c, 0x000500c5,
++    0x0000000f, 0x0000020f, 0x0000020d, 0x0000020e, 0x00060041, 0x00000132, 0x00000210, 0x00000110,
++    0x000000a0, 0x000001c9, 0x0005003e, 0x00000210, 0x0000020f, 0x00000002, 0x00000004, 0x00050051,
++    0x00000006, 0x00000213, 0x000001d4, 0x00000003, 0x0004009c, 0x00000011, 0x00000419, 0x00000213,
++    0x000300f7, 0x0000041e, 0x00000000, 0x000400fa, 0x00000419, 0x0000041a, 0x0000041b, 0x000200f8,
++    0x0000041a, 0x000200f9, 0x0000041e, 0x000200f8, 0x0000041b, 0x0008000c, 0x00000006, 0x0000041d,
++    0x00000001, 0x0000002b, 0x00000213, 0x0000003f, 0x000000ad, 0x000200f9, 0x0000041e, 0x000200f8,
++    0x0000041e, 0x000700f5, 0x00000006, 0x00000446, 0x0000003f, 0x0000041a, 0x0000041d, 0x0000041b,
++    0x00050085, 0x00000006, 0x00000421, 0x00000446, 0x000000c4, 0x0006000c, 0x00000006, 0x00000422,
++    0x00000001, 0x00000002, 0x00000421, 0x0004006d, 0x0000000f, 0x00000423, 0x00000422, 0x00050084,
++    0x0000000f, 0x00000216, 0x000000fd, 0x00000439, 0x000500c4, 0x0000000f, 0x00000217, 0x00000423,
++    0x00000216, 0x000500c5, 0x0000000f, 0x00000219, 0x0000043c, 0x00000217, 0x000200f9, 0x000001ed,
++    0x000200f8, 0x000001ed, 0x000700f5, 0x0000000f, 0x0000049f, 0x0000043c, 0x0000040c, 0x00000219,
++    0x0000041e, 0x000200f9, 0x000001c1, 0x000200f8, 0x000001c1, 0x00050080, 0x0000000f, 0x0000021b,
++    0x00000439, 0x00000112, 0x000200f9, 0x000001be, 0x000200f8, 0x000001c0, 0x000500aa, 0x00000011,
++    0x0000021d, 0x000000f9, 0x0000012a, 0x000300f7, 0x0000021f, 0x00000000, 0x000400fa, 0x0000021d,
++    0x0000021e, 0x0000021f, 0x000200f8, 0x0000021e, 0x000500aa, 0x00000011, 0x00000222, 0x00000123,
++    0x000000d6, 0x000300f7, 0x00000225, 0x00000000, 0x000400fa, 0x00000222, 0x00000224, 0x00000226,
++    0x000200f8, 0x00000224, 0x000200f9, 0x00000225, 0x000200f8, 0x00000226, 0x00050084, 0x0000000f,
++    0x00000229, 0x000000fd, 0x00000123, 0x000500c4, 0x0000000f, 0x0000022a, 0x00000227, 0x00000229,
++    0x000200f9, 0x00000225, 0x000200f8, 0x00000225, 0x000700f5, 0x0000000f, 0x0000043a, 0x000000d3,
++    0x00000224, 0x0000022a, 0x00000226, 0x00050086, 0x0000000f, 0x0000022e, 0x000000d7, 0x000000d6,
++    0x00060041, 0x00000132, 0x00000232, 0x0000011d, 0x000000a0, 0x0000022e, 0x0006003d, 0x0000000f,
++    0x00000233, 0x00000232, 0x00000002, 0x00000004, 0x000500c7, 0x0000000f, 0x00000235, 0x00000233,
++    0x0000043a, 0x000500c5, 0x0000000f, 0x00000237, 0x00000235, 0x0000043c, 0x0005003e, 0x00000232,
++    0x00000237, 0x00000002, 0x00000004, 0x000200f9, 0x0000021f, 0x000200f8, 0x0000021f, 0x000200f9,
++    0x0000023a, 0x000200f8, 0x0000023a, 0x000100fd, 0x00010038,
++];

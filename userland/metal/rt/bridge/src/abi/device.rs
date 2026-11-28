@@ -472,14 +472,13 @@ const PRIVATE_FLAGS: &[(&str, Option<bool>)] = &[
     ("supportsComputeCompressedTextureWrite", None),
     ("supportsConditionalLoadStore", None),
     ("supportsDynamicAttributeStride", Some(true)),
-    // false for every process (2026-11-28): rt holds Apple's extended-range forms in other encodings (`stored`: BGR10_XR in
-    // RG11B10Float, BGRA10_XR in RGBA16Float) and refuses the two-plane RGB10A8_2P_XR10 over a surface, so an XR IOSurface
-    // that a CPU or another process wrote in Apple's bytes reads back as the wrong values. The frontend withholds this answer
-    // from the render server but keeps it for the poster extensions (MercuryPosterExtension, ...: NativeMetal's own runtime
-    // decoded XR in its shaders), whose lock-screen and wallpaper surfaces backboardd then sampled through the substitute
-    // formats: the S24 Ultra's glitches in transitions with the rt add-on, none with the 624bab3 one. Without it Core
-    // Animation renders those layers in BGRA8 or RGBA16Float, whose bytes the CPU and rt read alike.
-    ("supportsExtendedXR10Formats", Some(false)),
+    // true again (rt patch 0012, 2026-11-28): a texture of an extended-range form over a buffer or a surface keeps Apple's
+    // bytes there (`Buffer::new_xr_texture`: its float image is decoded from them and encoded back by a compute pass at the
+    // submissions), so an XR IOSurface that a CPU or another process writes or reads is the encoding Apple's own runtime
+    // leaves. v0.1.45 answered false to every process (the poster extensions' XR surfaces, which backboardd sampled through
+    // RG11B10Float/RGBA16Float, were the S24 Ultra's glitches in transitions). The frontend still withholds it from the
+    // render server, whose framebuffer is 8-bit.
+    ("supportsExtendedXR10Formats", Some(true)),
     ("supportsFloat16BCubicFiltering", Some(false)),
     ("supportsHeapWithAddressRanges", Some(false)),
     ("supportsImageBlocks", Some(false)),
@@ -701,9 +700,15 @@ pub extern "C" fn nmb_device_linear_bytes_per_row(device: *const NmbDevice, form
         let d = get(device)?;
         let pf = super::pixel_format(format, "pixel format")?;
         let alignment = linear_texture_alignment(d, pf, format)?;
+        // An extended-range form's buffer holds Apple's bytes (rt patch 0012), not the RGBA16Float rt holds it in.
+        let xr = super::raw::<rt::PixelFormat>(format, "pixel format").ok().and_then(rt::XrEncoding::of);
         let info = d.device.pixel_format_info(pf.as_raw() as u64);
         // flags 0x400: a format of blocks; words[0]: the bytes of a texel.
-        let texel = if info.flags & 0x400 != 0 { 0 } else { info.words[0] };
+        let texel = match xr {
+            Some(e) => u64::from(e.texel_bytes()),
+            None if info.flags & 0x400 != 0 => 0,
+            None => info.words[0],
+        };
         if texel == 0 {
             return Err(format!("pixel format {format} has no texel size"));
         }

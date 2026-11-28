@@ -34,6 +34,9 @@ pub struct NmbTexture {
     /// The Metal pixel format asked for (0: the texture's own): rt holds some of Apple's in another (`super::stored`), and
     /// `nmb_texture_describe` answers this one.
     asked: u64,
+    /// An extended-range texture over a buffer (`over_buffer_xr`): the buffer whose bytes are Apple's, where the CPU's
+    /// `replaceRegion` and `getBytes` take and read them.
+    xr_over: Option<XrOver>,
     pub(crate) device: DeviceRef,
     index: Option<u32>,
     options: u64,
@@ -43,6 +46,13 @@ pub struct NmbTexture {
     purgeable: AtomicU64,
     /// A heap texture's heap and range, given back through the gate (automatic heaps).
     heap: Option<(Arc<super::memory::HeapInner>, Option<(u64, u64)>)>,
+}
+
+/// Where an extended-range texture over a buffer keeps Apple's bytes: its colour plane.
+struct XrOver {
+    buffer: rt::Buffer,
+    offset: u64,
+    bytes_per_row: u64,
 }
 
 impl Drop for NmbTexture {
@@ -89,6 +99,7 @@ impl NmbTexture {
         NmbTexture {
             texture,
             asked: source.format,
+            xr_over: None,
             device: d as *const NmbDevice,
             index,
             options: source.options,
@@ -128,12 +139,36 @@ pub extern "C" fn nmb_texture_new(device: *mut NmbDevice, descriptor_: *const Nm
 
 fn over_buffer(buffer: *mut NmbBuffer, descriptor_: *const NmbTextureDescriptor, offset: u64, bytes_per_row: u64)
                -> Result<*mut NmbTexture, String> {
+    let asked = raw::<rt::PixelFormat>(get(descriptor_)?.format, "pixel format")?;
+    if rt::XrEncoding::of(asked).is_some() {
+        return over_buffer_xr(buffer, descriptor_, asked, offset, bytes_per_row, None);
+    }
     let b = get(buffer)?;
     let d = device_of(b.device);
     let (desc, source) = descriptor(descriptor_)?;
     let (t, index) = at_index(d, desc.pixel_format, desc.usage, |i| b.buffer.new_texture(&desc, i, offset, bytes_per_row))
         .map_err(|w| format!("texture over a buffer: {w}"))?;
     Ok(boxed(NmbTexture::new(t, d, index, source)))
+}
+
+/// One of Apple's extended-range forms over a buffer or a surface (`BGR10_XR`, `BGRA10_XR`, the two-plane
+/// `RGB10A8_2P_XR10` with its alpha plane in `planes`, and their `_sRGB` twins): rt patch 0012's texture
+/// (`Buffer::new_xr_texture`), whose float image the submissions decode Apple's bytes into and encode back, so the CPU,
+/// CoreGraphics and every other process read and write the surface in Apple's encoding. It takes the index of a texture
+/// shaders write: the conversion reaches its image through its storage element.
+fn over_buffer_xr(buffer: *mut NmbBuffer, descriptor_: *const NmbTextureDescriptor, asked: rt::PixelFormat, offset: u64,
+                  bytes_per_row: u64, planes: Option<rt::XrPlanes>) -> Result<*mut NmbTexture, String> {
+    let b = get(buffer)?;
+    let d = device_of(b.device);
+    let (mut desc, source) = descriptor(descriptor_)?;
+    desc.pixel_format = asked;
+    let usage = desc.usage | TextureUsage::SHADER_WRITE;
+    let (t, index) = at_index(d, super::stored(asked), usage, |i| b.buffer.new_xr_texture(&desc, i, offset, bytes_per_row, planes))
+        .map_err(|w| format!("extended-range texture over a buffer: {w}"))?;
+    let mut texture = NmbTexture::new(t, d, index, source);
+    // (the two-plane form's CPU access is refused: `xr_rows`)
+    texture.xr_over = Some(XrOver { buffer: b.buffer.clone(), offset, bytes_per_row });
+    Ok(boxed(texture))
 }
 
 #[unsafe(no_mangle)]
@@ -153,7 +188,9 @@ pub extern "C" fn nmb_texture_new_on_surface(buffer: *mut NmbBuffer, descriptor_
     guard(std::ptr::null_mut(), || {
         let asked = raw::<rt::PixelFormat>(get(descriptor_)?.format, "pixel format")?;
         if chroma_bytes_per_row != 0 && matches!(asked, rt::PixelFormat::RGB10A82PXR10 | rt::PixelFormat::RGB10A82PXR10SRGB) {
-            return Err("a two-plane RGB10A8_2P_XR10 texture over a surface is not made by the rt bridge".into());
+            // Plane 0 of BGR10_XR words, plane 1 of alpha bytes (the frontend's b3a8Planes).
+            let planes = rt::XrPlanes { alpha_offset: chroma_offset, alpha_bytes_per_row: chroma_bytes_per_row };
+            return over_buffer_xr(buffer, descriptor_, asked, offset, bytes_per_row, Some(planes));
         }
         if chroma_bytes_per_row != 0 && metal2vulkan::metal::format::ycbcr_format(asked).is_some() {
             let b = get(buffer)?;
@@ -289,6 +326,117 @@ fn region(r: *const u64) -> Result<rt::Region, String> {
     })
 }
 
+/// The extended-range form a texture's CPU bytes are in, where rt holds them otherwise: Apple's `BGR10_XR` and
+/// `BGRA10_XR` (and `_sRGB`) in `RGBA16Float` (`super::stored`). The two-plane form is not converted here.
+fn xr_form(t: &NmbTexture) -> Option<rt::XrEncoding> {
+    let asked = raw::<rt::PixelFormat>(t.asked, "pixel format").ok()?;
+    rt::XrEncoding::of(asked).filter(|e| e.form != rt::XrForm::Planes)
+}
+
+/// The rows of a CPU access to an extended-range texture: `(width, rows, height)` of `region` (its depth's images one
+/// after another), where `level` and `slice` are 0 for one over a buffer.
+fn xr_rows(t: &NmbTexture, r: &rt::Region, level: u64, slice: u64) -> Result<(usize, usize, usize), String> {
+    if t.xr_over.is_some() && (level != 0 || slice != 0 || r.size[2] != 1 || r.origin[2] != 0) {
+        return Err("an extended-range texture over a buffer has one level and slice".into());
+    }
+    if xr_form(t).is_none() {
+        return Err("a two-plane extended-range texture takes no CPU bytes".into());
+    }
+    Ok((r.size[0] as usize, (r.size[1] * r.size[2]) as usize, r.size[1] as usize))
+}
+
+/// Where row `row` (of `height` a depth image) of a CPU access starts in the caller's bytes.
+fn xr_at(row: usize, height: usize, bytes_per_row: u64, bytes_per_image: u64) -> usize {
+    (row / height) * bytes_per_image as usize + (row % height) * bytes_per_row as usize
+}
+
+/// `replaceRegion` of Apple's extended-range bytes: over a buffer, into the buffer itself (its image is decoded from it at
+/// its next use); else decoded into the `RGBA16Float` rt holds the texture in.
+fn xr_replace(t: &NmbTexture, r: rt::Region, level: u64, slice: u64, src: &[u8], bytes_per_row: u64, bytes_per_image: u64)
+              -> Result<(), String> {
+    let (w, rows, height) = xr_rows(t, &r, level, slice)?;
+    let enc = xr_form(t).ok_or("not an extended-range form")?;
+    let texel = enc.texel_bytes() as usize;
+    let row_of = |row: usize| -> Result<&[u8], String> {
+        let at = xr_at(row, height, bytes_per_row, bytes_per_image);
+        src.get(at..at + w * texel).ok_or_else(|| "the bytes are shorter than the region".to_string())
+    };
+    if let Some(over) = &t.xr_over {
+        let host = over.buffer.contents().ok_or("the buffer has no contents")?;
+        let start = over.offset + u64::from(r.origin[1]) * over.bytes_per_row + u64::from(r.origin[0]) * texel as u64;
+        let span = (rows as u64 - 1) * over.bytes_per_row + (w * texel) as u64;
+        if start + span > over.buffer.length() {
+            return Err("the region is outside the buffer".into());
+        }
+        for row in 0..rows {
+            let from = row_of(row)?;
+            // SAFETY: the row lies in the buffer (checked above), whose contents live while it does.
+            unsafe {
+                let to = host.as_ptr().add((start + row as u64 * over.bytes_per_row) as usize);
+                std::ptr::copy_nonoverlapping(from.as_ptr(), to, from.len());
+            }
+        }
+        return over.buffer.did_modify_range(start, span).map_err(e("replace region"));
+    }
+    let mut halves = Vec::with_capacity(w * rows * 8);
+    for row in 0..rows {
+        for texel_bytes in row_of(row)?.chunks_exact(texel) {
+            for v in enc.decode_texel(texel_bytes, 0) {
+                halves.extend_from_slice(&rt::half_bits(v).to_le_bytes());
+            }
+        }
+    }
+    // SAFETY: `halves` lives across the call.
+    let host = unsafe { rt::HostBytes::from_raw(halves.as_ptr(), halves.len()) };
+    let row = (w * 8) as u64;
+    t.texture
+        .replace_region(r, u32_of(level, "level")?, u32_of(slice, "slice")?, host, row, row * height as u64)
+        .map_err(e("replace region"))
+}
+
+/// `getBytes` of an extended-range texture in Apple's bytes: over a buffer, from the buffer (the copy back of each command
+/// that wrote its image encodes into it); else encoded from the `RGBA16Float` rt holds.
+fn xr_get(t: &NmbTexture, r: rt::Region, level: u64, slice: u64, out: &mut [u8], bytes_per_row: u64, bytes_per_image: u64)
+          -> Result<(), String> {
+    let (w, rows, height) = xr_rows(t, &r, level, slice)?;
+    let enc = xr_form(t).ok_or("not an extended-range form")?;
+    let texel = enc.texel_bytes() as usize;
+    let mut row_out = |row: usize, bytes: &[u8]| -> Result<(), String> {
+        let at = xr_at(row, height, bytes_per_row, bytes_per_image);
+        out.get_mut(at..at + bytes.len()).ok_or("the bytes are shorter than the region")?.copy_from_slice(bytes);
+        Ok(())
+    };
+    if let Some(over) = &t.xr_over {
+        let host = over.buffer.contents().ok_or("the buffer has no contents")?;
+        let start = over.offset + u64::from(r.origin[1]) * over.bytes_per_row + u64::from(r.origin[0]) * texel as u64;
+        if start + (rows as u64 - 1) * over.bytes_per_row + (w * texel) as u64 > over.buffer.length() {
+            return Err("the region is outside the buffer".into());
+        }
+        for row in 0..rows {
+            // SAFETY: the row lies in the buffer (checked above), whose contents live while it does.
+            let bytes = unsafe {
+                std::slice::from_raw_parts(host.as_ptr().add((start + row as u64 * over.bytes_per_row) as usize), w * texel)
+            };
+            row_out(row, bytes)?;
+        }
+        return Ok(());
+    }
+    let mut halves = vec![0u8; w * rows * 8];
+    let row = (w * 8) as u64;
+    t.texture
+        .get_bytes(&mut halves, row, row * height as u64, r, u32_of(level, "level")?, u32_of(slice, "slice")?)
+        .map_err(e("get bytes"))?;
+    let mut bytes = vec![0u8; w * texel];
+    for (n, src) in halves.chunks_exact(w * 8).enumerate() {
+        for (x, h) in src.chunks_exact(8).enumerate() {
+            let v = [0, 2, 4, 6].map(|i| rt::half_value(u16::from_le_bytes([h[i], h[i + 1]])));
+            enc.encode_texel(v, &mut bytes[x * texel..(x + 1) * texel]);
+        }
+        row_out(n, &bytes)?;
+    }
+    Ok(())
+}
+
 /// # Safety
 /// `bytes` holds `length` bytes.
 #[unsafe(no_mangle)]
@@ -298,10 +446,16 @@ pub unsafe extern "C" fn nmb_texture_replace(texture: *mut NmbTexture, region_wo
         if bytes.is_null() {
             return Err("null bytes".into());
         }
+        let t = get(texture)?;
+        if t.xr_over.is_some() || xr_form(t).is_some() {
+            // SAFETY: the caller's contract.
+            let src = unsafe { std::slice::from_raw_parts(bytes as *const u8, length as usize) };
+            xr_replace(t, region(region_words)?, level, slice, src, bytes_per_row, bytes_per_image)?;
+            return Ok(true);
+        }
         // SAFETY: the caller's contract.
         let host = unsafe { rt::HostBytes::from_raw(bytes as *const u8, length as usize) };
-        get(texture)?
-            .texture
+        t.texture
             .replace_region(region(region_words)?, u32_of(level, "level")?, u32_of(slice, "slice")?, host, bytes_per_row, bytes_per_image)
             .map_err(e("replace region"))?;
         Ok(true)
@@ -319,8 +473,12 @@ pub unsafe extern "C" fn nmb_texture_get_bytes(texture: *const NmbTexture, bytes
         }
         // SAFETY: the caller's contract.
         let out = unsafe { std::slice::from_raw_parts_mut(bytes as *mut u8, length as usize) };
-        get(texture)?
-            .texture
+        let t = get(texture)?;
+        if t.xr_over.is_some() || xr_form(t).is_some() {
+            xr_get(t, region(region_words)?, level, slice, out, bytes_per_row, bytes_per_image)?;
+            return Ok(true);
+        }
+        t.texture
             .get_bytes(out, bytes_per_row, bytes_per_image, region(region_words)?, u32_of(level, "level")?, u32_of(slice, "slice")?)
             .map_err(e("get bytes"))?;
         Ok(true)

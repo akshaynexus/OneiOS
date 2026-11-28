@@ -1698,9 +1698,13 @@ the laptop through ANV: 1000 of 1000 outputs right), Turnip as an Adreno 750 aga
 patch 0002; no `VK_EXT_device_generated_commands`, so rt refuses Metal indirect command buffers there) and a census
 of the guest's own metallibs. `METAL_RUNTIME=rt userland/metal/build.sh` builds the plug-in with the bridge rewritten on
 rt (all 184 functions of NativeMetal's C ABI plus `nmb_encoder_memory_barrier` for intra-encoder compute/render
-barriers) and rt patches 0001-0011 (including `0009` 100 ms `vkWaitSemaphores` polling while GPU work is in flight so
+barriers) and rt patches 0001-0012 (including `0009` 100 ms `vkWaitSemaphores` polling while GPU work is in flight so
 KGSL resets surface `VK_ERROR_DEVICE_LOST`, `0010` porting OneiOS's large indexed constant blob fixes `0101`/`0102`,
-and `0011` GPU compute conversion for two-plane YCbCr/RGB IOSurface video textures), in `out/metal-rt`; the 624bab3
+`0011` GPU compute conversion for two-plane YCbCr/RGB IOSurface video textures, and `0012` Apple's extended-range
+forms over a buffer or a surface, `BGR10_XR`, `BGRA10_XR`, the two-plane `RGB10A8_2P_XR10` and their `_sRGB` twins,
+decoded from Apple's bytes into an `RGBA16Float` image and encoded back by a compute pass, so the plug-in answers
+`supportsExtendedXR10Formats` true again: userland/metal/rt/README.md, "Apple's extended-range bytes"), in
+`out/metal-rt`; the 624bab3
 build stays as fallback (docs/switches.md, "The Metal add-on").
 
 Built with the toolchain of [building.md](building.md) section 9: Xcode's on macOS, the cross toolchain on Linux. The
