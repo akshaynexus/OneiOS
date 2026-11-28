@@ -186,12 +186,25 @@ struct SendPtr(*mut c_void);
 unsafe impl Send for SendPtr {}
 
 /// # Safety
-/// `pointer` is page aligned, holds `length` bytes and stays mapped until `release` runs (or the buffer is released, without one).
+/// `pointer` lies in mapped host pages holding `length` bytes that stay mapped until `release` runs (or the buffer is released,
+/// without one). The Vulkan host-memory import rounds `[pointer, pointer + length)` out to 4096-byte boundaries, which divides
+/// both Linux's 4 KiB and iOS's 16 KiB pages and stays strictly inside the OS pages `[pointer, pointer + length)` already touches.
 unsafe fn no_copy(device: *mut NmbDevice, pointer: *mut c_void, length: u64, options: u64, release: Option<(NmbRelease, *mut c_void)>)
                   -> *mut NmbBuffer {
     guard(std::ptr::null_mut(), || {
         let d = get(device)?;
-        let base = NonNull::new(pointer as *mut u8).ok_or("null memory")?;
+        if pointer.is_null() {
+            return Err("null memory".into());
+        }
+        if length == 0 {
+            return Err("no-copy buffer: empty".into());
+        }
+        const ALIGN: u64 = 4096;
+        let addr = pointer as u64;
+        let start = addr & !(ALIGN - 1);
+        let offset = addr - start;
+        let import_len = offset.checked_add(length).and_then(|end| end.checked_next_multiple_of(ALIGN)).ok_or("no-copy buffer: length overflow")?;
+        let base = NonNull::new(start as *mut u8).ok_or("null memory")?;
         let release = release.map(|(f, context)| {
             let (context, pointer) = (SendPtr(context), SendPtr(pointer));
             Box::new(move || {
@@ -200,9 +213,9 @@ unsafe fn no_copy(device: *mut NmbDevice, pointer: *mut c_void, length: u64, opt
                 unsafe { f(context.0, pointer.0, length) }
             }) as Box<dyn FnOnce() + Send>
         });
-        // SAFETY: the caller's contract: the pages are mapped readable and writable until the release runs.
-        let (block, _) = unsafe { d.device.import_host_memory(base, length, release) }.map_err(e("no-copy buffer"))?;
-        let buffer = d.device.new_buffer(block.id, 0, length, None).map_err(e("no-copy buffer"))?;
+        // SAFETY: the caller's contract: the OS pages covering `[pointer, pointer + length)` are mapped readable and writable until `release` runs.
+        let (block, _) = unsafe { d.device.import_host_memory(base, import_len, release) }.map_err(e("no-copy buffer"))?;
+        let buffer = d.device.new_buffer(block.id, offset, length, None).map_err(e("no-copy buffer"))?;
         Ok(boxed(NmbBuffer::new(buffer, d as *const NmbDevice, Hold::Block(block), options)))
     })
 }

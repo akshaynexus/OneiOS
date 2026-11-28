@@ -54,8 +54,20 @@ pub const OPEN_STEPS: [&str; 6] = [
     "AMediaCodec_getInputFormat",
 ];
 
+std::thread_local! {
+    /// True on the warm-up thread so its background MediaCodec probe does not overwrite the main thread's OPEN_STEP.
+    static IGNORE_OPEN_STEP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks the current thread (warm-up) so its MediaCodec calls do not clobber the watchdog's OPEN_STEP.
+pub fn ignore_open_step_on_thread() {
+    IGNORE_OPEN_STEP.with(|f| f.set(true));
+}
+
 pub fn set_open_step(step: u8) {
-    OPEN_STEP.store(step, Ordering::Relaxed);
+    if !IGNORE_OPEN_STEP.with(|f| f.get()) {
+        OPEN_STEP.store(step, Ordering::Relaxed);
+    }
 }
 
 /// The name of the step an open is in now.

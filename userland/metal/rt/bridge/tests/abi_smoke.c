@@ -43,6 +43,15 @@ int main(int argc, char **argv) {
     uint64_t family = 0;
     CHECK(nmb_device_answer(device, "supportsFamily:", 1003, &family) && family == 1, "supportsFamily:Apple3 (%u answered, %u without an answer)",
           answered, refused);
+    uint64_t lin_align = 0;
+    CHECK(nmb_device_answer(device, "minimumLinearTextureAlignmentForPixelFormat:", 80 /* BGRA8Unorm */, &lin_align) && lin_align == 16 &&
+          nmb_device_linear_bytes_per_row(device, 80, 1440) == 5760 &&
+          !nmb_device_answer(device, "minimumLinearTextureAlignmentForPixelFormat:", 260 /* Depth32Float_Stencil8 */, &lin_align),
+          "minimumLinearTextureAlignmentForPixelFormat: BGRA8Unorm=%llu (1440->5760), depth refused", (unsigned long long)lin_align);
+    uint64_t ycbcr = 1, cubic_flag = 1;
+    CHECK(nmb_device_answer(device, "supportsYCBCRFormats", 0, &ycbcr) && ycbcr == 0 &&
+          nmb_device_answer(device, "supportsFloat16BCubicFiltering", 0, &cubic_flag) && cubic_flag == 0,
+          "supportsYCBCRFormats=0, supportsFloat16BCubicFiltering=0");
 
     /* Buffers: a small one (a slab slot), a large one (a block), one with bytes. */
     NmbBuffer *small = nmb_buffer_new(device, 100, 0, NULL);
@@ -55,11 +64,11 @@ int main(int argc, char **argv) {
     CHECK(nmb_buffer_gpu_address(small) && nmb_buffer_gpu_address(small) % 256 == 0, "small buffer GPU address %#llx",
           (unsigned long long)nmb_buffer_gpu_address(small));
 
-    /* No-copy buffer with its deallocator. */
+    /* No-copy buffer with its deallocator (including a non-4096-multiple length within mapped pages). */
     void *pages = mmap(NULL, 1 << 16, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     int was_released = 0;
-    NmbBuffer *nocopy = nmb_buffer_new_no_copy_releasing(device, pages, 1 << 16, 0, released, &was_released);
-    CHECK(nocopy && nmb_buffer_contents(nocopy) == pages, "nmb_buffer_new_no_copy_releasing");
+    NmbBuffer *nocopy = nmb_buffer_new_no_copy_releasing(device, pages, 52224, 0, released, &was_released);
+    CHECK(nocopy && nmb_buffer_contents(nocopy) == pages && nmb_buffer_length(nocopy) == 52224, "nmb_buffer_new_no_copy_releasing (52224 bytes)");
 
     /* Compute through the ABI: the fixture's scale_and_offset. */
     size_t air_length = 0;
@@ -119,6 +128,14 @@ int main(int argc, char **argv) {
     td.usage = 1 | 4; /* shader read, render target */
     NmbTexture *target = nmb_texture_new(device, &td);
     CHECK(target && nmb_texture_resource_id(target) != 0, "nmb_texture_new (resource id %#llx)", target ? (unsigned long long)nmb_texture_resource_id(target) : 0);
+    /* Depth/stencil render-target-only texture: not reached by shaders, takes no texture index. */
+    struct NmbTextureDescriptor dtd = td;
+    dtd.format = 260; /* Depth32Float_Stencil8 */
+    dtd.usage = 4;    /* RenderTarget only */
+    dtd.options = 2 << 4; /* Private */
+    NmbTexture *depth_rt = nmb_texture_new(device, &dtd);
+    CHECK(depth_rt != NULL, "nmb_texture_new Depth32Float_Stencil8 RenderTarget-only (unreached, no index)");
+    nmb_texture_release(depth_rt);
     struct NmbTextureDescriptor back;
     nmb_texture_describe(target, &back);
     CHECK(back.width == 8 && back.format == 70 && back.usage == 5, "nmb_texture_describe");
@@ -178,6 +195,11 @@ int main(int argc, char **argv) {
     sd.normalized = 1; sd.max_anisotropy = 1; sd.lod_max = 1000;
     NmbSampler *sampler = nmb_sampler_new(device, &sd);
     CHECK(sampler && nmb_sampler_resource_id(sampler), "nmb_sampler_new");
+    struct NmbSamplerDescriptor csd = sd;
+    csd.min_filter = 2; csd.mag_filter = 2; /* MTLSamplerMinMagFilterBicubic -> clamped to Linear */
+    NmbSampler *cubic_sampler = nmb_sampler_new(device, &csd);
+    CHECK(cubic_sampler && nmb_sampler_resource_id(cubic_sampler), "nmb_sampler_new cubic clamped to linear");
+    nmb_sampler_release(cubic_sampler);
     struct NmbDepthStencilDescriptor dd;
     memset(&dd, 0, sizeof dd);
     dd.compare = 7; dd.front.compare = 7; dd.back.compare = 7; dd.front.read_mask = dd.back.read_mask = 0xff;

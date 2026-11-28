@@ -6,6 +6,10 @@
 //                                         METAL2VULKAN_DONT_CARE_STORES=1). Without it they store, the default.
 //   boot-args-add=oneios-queue-priority=0 no global queue priority (rt 0006 off; the plug-in's variable is
 //                                         METAL2VULKAN_QUEUE_PRIORITY=default, which the bridge takes as none)
+//   boot-args-add=oneios-gmem=1           keep Turnip GMEM on for 8-bit BGRA displays (by default on 8-bit BGRA
+//                                         displays — when oneios-display-wide=1 is not set — TU_DEBUG=sysmem,nocb is
+//                                         set before deviceForPort so Turnip renders in system memory, avoiding GMEM
+//                                         tile/feedback-loop corruption on Adreno 750; sheng-tu-debug= still overrides).
 #include <stdlib.h>
 #include <string.h>
 #include <sys/sysctl.h>
@@ -29,6 +33,11 @@ __attribute__((constructor)) static void rtSwitches() {
     if (bootWord(args, "oneios-dont-care=1")) setenv("METAL2VULKAN_DONT_CARE_STORES", "1", 1);
     // The plug-in sets "high" later in the render server without overwriting: "default" set here first stays.
     if (bootWord(args, "oneios-queue-priority=0")) setenv("METAL2VULKAN_QUEUE_PRIORITY", "default", 1);
+    // On 8-bit BGRA displays (the default without oneios-display-wide=1), Turnip's GMEM path has known tile
+    // swap/feedback-loop corruption on Adreno 750 and was measured slightly slower than sysmem (NativeAdrenoMetalPlugin.mm).
+    // Set sysmem,nocb without overwriting so sheng-tu-debug= and /private/var/ngpu/tu_debug still win.
+    if (!bootWord(args, "oneios-display-wide=1") && !bootWord(args, "oneios-gmem=1") && !strstr(args, "sheng-tu-debug="))
+        setenv("TU_DEBUG", "sysmem,nocb", 0);
 }
 
 }  // namespace oneios_rt

@@ -473,7 +473,7 @@ const PRIVATE_FLAGS: &[(&str, Option<bool>)] = &[
     ("supportsConditionalLoadStore", None),
     ("supportsDynamicAttributeStride", Some(true)),
     ("supportsExtendedXR10Formats", Some(true)),
-    ("supportsFloat16BCubicFiltering", Some(true)),
+    ("supportsFloat16BCubicFiltering", Some(false)),
     ("supportsHeapWithAddressRanges", Some(false)),
     ("supportsImageBlocks", Some(false)),
     ("supportsMemoryOrderAtomics", Some(true)),
@@ -504,6 +504,10 @@ const PUBLIC_ANSWERS: &[(&str, u32)] = &[
     ("supports32BitFloatFiltering", 1),
     ("supportsMemorylessRenderTargets", 1),
     ("supportsSamplerReductionMode", 1),
+    ("supportsYCBCRFormats", 1),
+    ("supportsYCBCRPackedFormats", 1),
+    ("supportsYCBCRFormatsPQ", 1),
+    ("supportsYCBCRFormatsXR", 1),
     ("supportsYCBCRFormats12", 1),
     ("supportsYCBCRPackedFormats12", 1),
     ("supportsSIMDGroup", 1),
@@ -589,11 +593,17 @@ fn device_answer(d: &NmbDevice, selector: &str, arg: u64) -> Result<u64, String>
         "supportsMemorylessRenderTargets" => 1,
         // The old runtime answered false on the Adreno 750.
         "supportsSamplerReductionMode" => 0,
-        // No YCbCr two-plane formats through this bridge yet (abi::texture).
-        "supportsYCBCRFormats12" | "supportsYCBCRPackedFormats12" => 0,
+        // No two-plane YCbCr textures through this bridge yet (abi::texture); override _MTLDevice's
+        // Apple3=YES answers so CoreAnimation samples plane 0 (R8Unorm) and plane 1 (RG8Unorm) separately.
+        "supportsYCBCRFormats"
+        | "supportsYCBCRPackedFormats"
+        | "supportsYCBCRFormatsPQ"
+        | "supportsYCBCRFormatsXR"
+        | "supportsYCBCRFormats12"
+        | "supportsYCBCRPackedFormats12" => 0,
         "supportsSIMDGroup" => 1,
         "minimumLinearTextureAlignmentForPixelFormat:" => {
-            d.device.minimum_linear_texture_alignment(super::pixel_format(arg, "pixel format")?).map_err(e("linear texture alignment"))?
+            linear_texture_alignment(d, super::pixel_format(arg, "pixel format")?, arg)?
         }
         "supportsTextureSampleCount:" => d.device.supports_texture_sample_count(arg.min(64) as u32) as u64,
         // As the old runtime answered: 1, 2 and 4 views, rate maps of 1 and 2 layers, every primitive type and rounding mode.
@@ -662,6 +672,20 @@ pub extern "C" fn nmb_device_family_blockers(device: *const NmbDevice, family: i
     })
 }
 
+/// Linear texture row alignment (16 bytes for every uncompressed non-depth/stencil format).
+/// rt's `minimum_linear_texture_alignment` returns Turnip's VK_IMAGE_TILING_LINEAR pitch rounding (512 bytes), which makes
+/// CoreAnimation in backboardd refuse every framebuffer IOSurface (row bytes 5760 and 5888 are not 512-aligned -> black
+/// screen). rt's `Buffer::new_texture` takes any whole-texel pitch (using its optimal-image over-copy path for every
+/// `import_host_memory` IOSurface regardless), and 16 matches Apple Metal and the old runtime.
+fn linear_texture_alignment(d: &NmbDevice, pf: rt::PixelFormat, asked: u64) -> Result<u64, String> {
+    let info = d.device.pixel_format_info(pf.as_raw() as u64);
+    if !info.describes_a_format() || info.flags & 0x400 != 0 || metal2vulkan::metal::format::is_depth_stencil(pf) {
+        return Err(format!("pixel format {asked} is not linear"));
+    }
+    let _ = d.device.minimum_linear_texture_alignment(pf).map_err(e("linear texture alignment"))?;
+    Ok(16)
+}
+
 /// `requiredLinearTextureBytesPerRowForDescriptor:` (Apple SPI): a row of `width` texels of `format` rounded up to its linear
 /// alignment; 0 for a format no buffer can back.
 #[unsafe(no_mangle)]
@@ -669,7 +693,7 @@ pub extern "C" fn nmb_device_linear_bytes_per_row(device: *const NmbDevice, form
     guard(0, || {
         let d = get(device)?;
         let pf = super::pixel_format(format, "pixel format")?;
-        let alignment = d.device.minimum_linear_texture_alignment(pf).map_err(e("linear texture"))?;
+        let alignment = linear_texture_alignment(d, pf, format)?;
         let info = d.device.pixel_format_info(pf.as_raw() as u64);
         // flags 0x400: a format of blocks; words[0]: the bytes of a texel.
         let texel = if info.flags & 0x400 != 0 { 0 } else { info.words[0] };

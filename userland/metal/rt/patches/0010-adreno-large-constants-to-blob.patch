@@ -1,0 +1,82 @@
+# Large indexed program-scope constants (>4 KiB) go to the constant blob rather than
+# per-thread Private scratch memory (Adreno backs Private arrays per fiber and refuses
+# MercuryPoster Flocon's 192 KiB ramp tables), and blob_ptr resolves constant pointer
+# casts and constant-index GEP expressions into blob offsets. Ports OneiOS patches
+# 0101-large-indexed-constants-to-blob.patch and 0102-blob-constant-gep-pointers.patch.
+diff --git a/crates/metal2vulkan/src/memory/plan.rs b/crates/metal2vulkan/src/memory/plan.rs
+--- a/crates/metal2vulkan/src/memory/plan.rs
++++ b/crates/metal2vulkan/src/memory/plan.rs
+@@ -284,6 +284,10 @@ pub struct SharedPlan {
+     pub bytes: u64,
+ }
+ 
++/// The most bytes a constant indexed at run time keeps as a `Private` variable; a larger one is read
++/// from the constant blob.
++const PRIVATE_CONSTANT_BYTES: u64 = 4096;
++
+ /// Where a program-scope constant lives.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+ pub enum ConstGlobalForm {
+@@ -1200,8 +1204,16 @@ impl Planner<'_> {
+                 let closed = !u.merged && !u.escapes && !u.stored && !u.cross_compare && !u.write;
+                 // A type no typed object holds stays `Private`: selection refuses it, as before,
+                 // which only sends a typed object past the room to the blob.
+-                let form =
+-                    if closed && u.typed && self.fit(global.value_ty, room, m)? != Fit::OverRoom {
++                // A table indexed at run time and past PRIVATE_CONSTANT_BYTES goes to the blob: as a
++                // `Private` variable every thread holds its own copy in scratch memory, which an Adreno
++                // backs per fiber (MercuryPoster's Flocon: 192 KiB of ramp tables a thread, refused).
++                let big = u.indexed
++                    && self.layouts.alloc_size(global.value_ty).unwrap_or(0) > PRIVATE_CONSTANT_BYTES;
++                let form = if closed
++                    && u.typed
++                    && !big
++                    && self.fit(global.value_ty, room, m)? != Fit::OverRoom
++                {
+                         ConstGlobalForm::Private
+                     } else {
+                         let align = self.global_align(g, global.value_ty)?;
+diff --git a/crates/metal2vulkan/src/lower/access/blob.rs b/crates/metal2vulkan/src/lower/access/blob.rs
+--- a/crates/metal2vulkan/src/lower/access/blob.rs
++++ b/crates/metal2vulkan/src/lower/access/blob.rs
+@@ -170,13 +170,39 @@ pub fn blob_ptr(cx: &SelectCx<'_>, v: Value) -> Result<LocalPtr, Error> {
+     let Value::Const(c) = v else {
+         return Ok(LocalPtr::Value(operand(cx, v)?));
+     };
++    blob_const_offset(cx, c).map(LocalPtr::Offset)
++}
++
++/// The blob offset of pointer constant `c`: a global's address, a pointer cast of one, or a
++/// `getelementptr` constant expression over one at constant indices (Flocon's fragment shaders
++/// hand their helpers `getelementptr (@rampValuesIndex, 0, 0, 0)` and then index from it).
++fn blob_const_offset(cx: &SelectCx<'_>, c: crate::air::ir::ConstId) -> Result<u32, Error> {
++    use crate::air::ir::ConstExpr;
+     match cx.entry.module.consts().get(c).map(|k| &k.value) {
+         Some(Const::GlobalAddr(g)) => {
+             let off = global_offset(cx.memory, *g).ok_or_else(refuse)?;
+-            Ok(LocalPtr::Offset(u32::try_from(off).map_err(|_| refuse())?))
++            u32::try_from(off).map_err(|_| refuse())
++        }
++        Some(Const::Expr(ConstExpr::Cast {
++            op: CastOp::Bitcast | CastOp::AddrSpaceCast,
++            ops,
++        })) => blob_const_offset(cx, ops[0]),
++        Some(Const::Expr(ConstExpr::Gep { src_ty, ops, .. })) => {
++            let (base, idx) = ops.split_first().ok_or_else(refuse)?;
++            let base = blob_const_offset(cx, *base)?;
++            let idx: Vec<Value> = idx.iter().map(|&i| Value::Const(i)).collect();
++            let (delta, strides) = crate::memory::provenance::gep_displacement(
++                cx.entry,
++                &cx.memory.layouts,
++                *src_ty,
++                &idx,
++            )?;
++            let delta = delta.filter(|_| strides.is_empty()).ok_or_else(refuse)?;
++            let off = i64::from(base).checked_add(delta).ok_or_else(refuse)?;
++            u32::try_from(off).map_err(|_| refuse())
+         }
+         _ => Err(refuse()),
+     }
+ }
+ 
+ /// A leaf load of AIR type `ty` with alignment `align` through blob pointer `ptr`.

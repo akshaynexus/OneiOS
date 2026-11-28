@@ -252,9 +252,11 @@ up); ...`.
 **The stop list** (`takeover-stops=`, takeover-stages 2026-11-23; the plan's stage 2b): services of One UI's zygote's
 restart list that no bridge of a session uses. Every return restarts that list already (section 6), so a stop adds no
 new step to the way back. `default` (or no line): `cameraserver` (the camera bridge uses the provider HAL, not it),
-`mediaextractor`, `mediametrics`, `media.tuner`, `perfmond`, `wificond` (the Wi-Fi bridge scans by nl80211 itself).
-`netd` and `media` only when named (`takeover-stops=cameraserver,...,netd,media`): a Wi-Fi join and an encode without
-them are not yet checked on the phone. `none`: no stop. A service is stopped only when `init.svc.NAME` says `running`
+`mediaextractor`, `media.tuner`, `perfmond`, `wificond` (the Wi-Fi bridge scans by nl80211 itself).
+`mediametrics`, `netd`, and `media` only when named (`takeover-stops=cameraserver,...,mediametrics,netd,media`):
+`mediametrics` was removed from `default` on 2026-11-28 because `oneios-encoder`'s `AMediaCodec` blocks in
+`libmediametrics` when `mediametrics` is held stopped; a Wi-Fi join and an encode without `netd`/`media` are not yet
+checked on the phone. `none`: no stop. A service is stopped only when `init.svc.NAME` says `running`
 and an `.rc` file of `/system`, `/system_ext`, `/product`, `/vendor`, `/odm` or `/apex/*/etc` defines it without the
 `critical` option; otherwise it is named in the line as not stopped (`no such service`, `critical in its .rc`, `no .rc
 names it`). xnuhost checks the same word (`config.rs` `TAKEOVER_STOPPABLE`) and names it in its takeover line.

@@ -1674,8 +1674,10 @@ their subject; those below are the ones about memory held at rest):
   takes them). Left at 64; the `GM` row now says how much of the pooled bytes hold placements.
 - Turnip's own knobs: the plug-in sets `TU_DEBUG=nocb` in every Metal process (concurrent binning off: BV ran ahead
   of BR and the two stopped waiting on each other inside a pass, int-261p, int-262, int-265), and `sysmem,nocb` with
-  `sheng-fb-bgra=1`; GMEM against system memory is Turnip's autotune per pass. Must stay off in a normal boot:
-  `TU_DEBUG=sysmem` or `gmem` (forces one mode for every pass), `forcebin`, `nolrz`, `noubwc`, any `FD_MESA_DEBUG`,
+  `sheng-fb-bgra=1` (and since 2026-11-28, in `metal2vulkan-rt`'s `RtSwitches.inc`, `sysmem,nocb` by default for 8-bit
+  BGRA displays whenever `oneios-display-wide=1`, `oneios-gmem=1`, and `sheng-tu-debug=` are absent, to avoid Turnip
+  GMEM tile corruption and slower latency on 8-bit BGRA framebuffers). Must stay off in a normal boot:
+  `TU_DEBUG=gmem`, `forcebin`, `nolrz`, `noubwc`, any `FD_MESA_DEBUG`,
   `IR3_SHADER_DEBUG` or `MESA_SHADER_CACHE_DISABLE`-style switch beyond what the plug-in sets, and `TU_DARWIN_BO_CACHE=0`.
   The base's Turnip build drops every `TU_`, `FD_MESA_`, `IR3_`, `NIR_` and `MESA_SHADER_` variable of the build host.
 
@@ -1686,13 +1688,15 @@ diff (so does `turnip-submit-split.patch`, 2026-11-25: the add-on after it recom
 that takes on the phone is not measured (no line times it); each app's first opening after the add-on pays for its own
 pipelines, and later boots hit.
 
-**The port to metal2vulkan-rt (2026-11-23, in progress):** [`userland/metal/rt/README.md`](../userland/metal/rt/README.md). Upstream rewrote the runtime
+**The port to metal2vulkan-rt (2026-11-23, active):** [`userland/metal/rt/README.md`](../userland/metal/rt/README.md). Upstream rewrote the runtime
 (`metal2vulkan-runtime` 0.2); the inventory of our 56 patches on it, the loader-free instance (rt patch 0001, run on
 the laptop through ANV: 1000 of 1000 outputs right), Turnip as an Adreno 750 against rt's floor (above it with rt
 patch 0002; no `VK_EXT_device_generated_commands`, so rt refuses Metal indirect command buffers there) and a census
-of the guest's own metallibs. Since 2026-11-24 `METAL_RUNTIME=rt userland/metal/build.sh` builds the plug-in with the bridge
-rewritten on rt (all 184 functions of NativeMetal's C ABI) and rt patches 0001-0008, in `out/metal-rt`; the default
-build below is still the 624bab3 one, and stays the fallback (docs/switches.md, "The Metal add-on"). Not booted yet.
+of the guest's own metallibs. `METAL_RUNTIME=rt userland/metal/build.sh` builds the plug-in with the bridge rewritten on
+rt (all 184 functions of NativeMetal's C ABI) and rt patches 0001-0010 (including `0009` 100 ms `vkWaitSemaphores`
+polling while GPU work is in flight so KGSL resets surface `VK_ERROR_DEVICE_LOST`, and `0010` porting OneiOS's large
+indexed constant blob fixes `0101`/`0102`), in `out/metal-rt`; the 624bab3 build stays as fallback (docs/switches.md,
+"The Metal add-on").
 
 Built with the toolchain of [building.md](building.md) section 9: Xcode's on macOS, the cross toolchain on Linux. The
 same command on both; every link is against this guest's own iOS 27 stubs (`out/ios27-tbd`).

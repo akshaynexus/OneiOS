@@ -276,6 +276,7 @@ pub fn binder_threads() -> String {
 #[cfg(target_os = "android")]
 fn warm_up(link: Link) {
     use crate::backend_ndk::caps;
+    crate::backend_ndk::ignore_open_step_on_thread();
     let start = Instant::now();
     let found = match caps(MEDIA_PIXFMT_HEVC) {
         Ok(c) => {

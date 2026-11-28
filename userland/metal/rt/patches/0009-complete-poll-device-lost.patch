@@ -1,0 +1,36 @@
+OneiOS rt 0009: poll for device loss while GPU work is in flight in complete::run (2026-11-28).
+
+In v0.1.44-test on SM-S928B (2026-11-28), backboardd hit a KGSL GPU reset on queue 1 (`kgsl_note_reset: queue 1: the GPU
+was reset with this context guilty`, `GPU_COMMAND failed: Resource deadlock would occur`), after which drm2kgsl bumped
+`shmem->global_faults` and `shmem->async_error`. Mesa's `vk_common_WaitSemaphores` only calls `vk_device_check_status`
+(which reads `global_faults + async_error` in Turnip's virtio backend and returns `VK_ERROR_DEVICE_LOST`) *after*
+`vk_sync_wait_many` returns. Because `complete::run` called `device.wait_semaphores(&wait, u64::MAX)`, a reset whose
+timeline fence never signaled left backboardd's completion thread blocked forever, never delivering `DeviceLost` (code
+11) to `NativeBridgeMetalFrontend::endRenderServerAfterGpuLoss()`, freezing iOS instead of restarting backboardd.
+
+Waiting for `LOSS_POLL` (100 ms, already used by `Done::wait`) when GPU work is in flight (`target.is_some()`) adds zero
+wake-ups while idle (the thread still sleeps on `done.changed`), zero overhead on normal frames, and surfaces a KGSL
+reset as `VK_ERROR_DEVICE_LOST` within 100 ms so backboardd restarts cleanly.
+
+diff --git a/crates/metal2vulkan-runtime/src/complete.rs b/crates/metal2vulkan-runtime/src/complete.rs
+index 0d3b66f9..d90c3e7e 100644
+--- a/crates/metal2vulkan-runtime/src/complete.rs
++++ b/crates/metal2vulkan-runtime/src/complete.rs
+@@ -811,9 +811,16 @@ pub(crate) fn run(core: Arc<Core>) {
+             .flags(vk::SemaphoreWaitFlags::ANY)
+             .semaphores(&semaphores)
+             .values(&values);
++        // Poll with LOSS_POLL while GPU work is in flight so Mesa's vk_common_WaitSemaphores
++        // reaches vk_device_check_status() and surfaces a KGSL reset as VK_ERROR_DEVICE_LOST
++        // even if the lost submission's timeline fence never signals.
++        let timeout = match target.is_some() {
++            true => nanos(LOSS_POLL),
++            false => u64::MAX,
++        };
+         // SAFETY: every semaphore is a timeline semaphore of the device, live while the state
+         // holds its event or the core lives.
+-        let result = unsafe { device.wait_semaphores(&wait, u64::MAX) };
++        let result = unsafe { device.wait_semaphores(&wait, timeout) };
+         state = done.lock();
+         state.waiting = Waiting::Not;
+         match result {

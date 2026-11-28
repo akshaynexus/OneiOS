@@ -4370,6 +4370,16 @@ the phone).** No tile was coded, for two reasons ([codec README](../kernel/patch
   call it waits in (`encoder: helper: an open of HEVC 96x96 (NV12) has waited 1000 ms in AMediaCodec_configure`). A
   picture below the encoder's smallest size is coded at that size (the guest's SPS crop takes it back).
   `encctl caps` prints the encoders' sizes and Main10 support; `encctl hevc10 96 96` codes a P010 picture.
+- **2026-11-28 (takeover session hangs in `AMediaCodec_configure` / `AMediaCodec_start`):** on the `v0.1.44-test` S24
+  Ultra `session-mode=takeover` boot, `oneios-encoder` still timed out in `AMediaCodec_configure` / `AMediaCodec_start`
+  (falling back to software video decode at 733% CPU and overheating the phone). Three root causes fixed:
+  1. `runtime/bridges/camera/spawn.rs` `spawn_with_fd3` now sets `POSIX_SPAWN_SETSIGMASK` with an empty signal mask so
+     `oneios-encoder` and `oneios-camera` do not inherit xnuhost's blocked `SIGRTMIN..=SIGRTMIN+3` signals.
+  2. `app/switcher/assets/oneios_switch.sh` removed `mediametrics` from `TAKEOVER_DEFAULT` (kept in
+     `TAKEOVER_STOPPABLE`), because `AMediaCodec` blocks in `libmediametrics` when `mediametrics` is held stopped.
+  3. `runtime/bridges/encoder/backend_ndk.rs` + `helper.rs` mark the background `warm_up()` thread with
+     `ignore_open_step_on_thread()` so warm-up calls cannot overwrite the main thread's global `OPEN_STEP` watchdog
+     state. Not booted on the phone yet.
 
 ### The video decoder (fix/hw-decode, 2026-11-24; host-tested, built; not yet booted on the phone)
 

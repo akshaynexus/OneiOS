@@ -848,8 +848,16 @@ pub extern "C" fn nmb_sampler_new(device: *mut NmbDevice, descriptor: *const Nmb
         let dev = get(device)?;
         let d = get(descriptor)?;
         let mut out = rt::SamplerDescriptor::new();
-        out.min_filter = raw::<SamplerMinMagFilter>(d.min_filter, "min filter")?;
-        out.mag_filter = raw::<SamplerMinMagFilter>(d.mag_filter, "mag filter")?;
+        let filter = |v: u64, what: &str| -> Result<SamplerMinMagFilter, String> {
+            match raw::<SamplerMinMagFilter>(v, what)? {
+                // rt does not implement cubic sampler filters (Gap::CubicSampler); clamp to Linear so
+                // system daemons like iconservicesagent do not crash on a nil sampler.
+                SamplerMinMagFilter::Cubic => Ok(SamplerMinMagFilter::Linear),
+                other => Ok(other),
+            }
+        };
+        out.min_filter = filter(d.min_filter, "min filter")?;
+        out.mag_filter = filter(d.mag_filter, "mag filter")?;
         out.mip_filter = raw::<SamplerMipFilter>(d.mip_filter, "mip filter")?;
         out.s_address_mode = raw::<SamplerAddressMode>(d.s_address, "address mode")?;
         out.t_address_mode = raw::<SamplerAddressMode>(d.t_address, "address mode")?;

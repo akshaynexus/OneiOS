@@ -75,10 +75,13 @@ fn descriptor(d: *const NmbTextureDescriptor) -> Result<(rt::TextureDescriptor, 
     Ok((out, d))
 }
 
-/// Whether a shader may reach a texture of `usage`: a read or write, a render target (a fragment function reads it through its
-/// attachment), or Unknown (0), which Metal takes as every usage.
-fn reached(usage: TextureUsage) -> bool {
-    usage.as_raw() == 0 || usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE | TextureUsage::RENDER_TARGET)
+/// Whether a shader may reach a texture of `pf` and `usage`, matching `metal2vulkan_runtime`'s `reached`: read or write, a
+/// colour render target (a fragment function reads it through its attachment; depth/stencil targets without read/write take no
+/// index), or Unknown (0), which Metal expands to every usage including read/write.
+fn reached(pf: rt::PixelFormat, usage: TextureUsage) -> bool {
+    usage.as_raw() == 0
+        || usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE)
+        || (usage.contains(TextureUsage::RENDER_TARGET) && !metal2vulkan::metal::format::is_depth_stencil(pf))
 }
 
 impl NmbTexture {
@@ -99,9 +102,9 @@ impl NmbTexture {
 }
 
 /// Makes a texture at a new index where a shader may reach it; the index goes back where the make fails.
-fn at_index(d: &NmbDevice, usage: TextureUsage, make: impl FnOnce(Option<u32>) -> Result<rt::Texture, rt::Error>)
-            -> Result<(rt::Texture, Option<u32>), String> {
-    let index = if reached(usage) { Some(d.indices.take(rt::IndexClass::Texture).ok_or("no texture index is free")?) } else { None };
+fn at_index(d: &NmbDevice, pf: rt::PixelFormat, usage: TextureUsage,
+            make: impl FnOnce(Option<u32>) -> Result<rt::Texture, rt::Error>) -> Result<(rt::Texture, Option<u32>), String> {
+    let index = if reached(pf, usage) { Some(d.indices.take(rt::IndexClass::Texture).ok_or("no texture index is free")?) } else { None };
     match make(index) {
         Ok(t) => Ok((t, index)),
         Err(why) => {
@@ -118,7 +121,7 @@ pub extern "C" fn nmb_texture_new(device: *mut NmbDevice, descriptor_: *const Nm
     guard(std::ptr::null_mut(), || {
         let d = get(device)?;
         let (desc, source) = descriptor(descriptor_)?;
-        let (t, index) = at_index(d, desc.usage, |i| d.device.new_texture(&desc, i)).map_err(|w| format!("texture: {w}"))?;
+        let (t, index) = at_index(d, desc.pixel_format, desc.usage, |i| d.device.new_texture(&desc, i)).map_err(|w| format!("texture: {w}"))?;
         Ok(boxed(NmbTexture::new(t, d, index, source)))
     })
 }
@@ -128,7 +131,7 @@ fn over_buffer(buffer: *mut NmbBuffer, descriptor_: *const NmbTextureDescriptor,
     let b = get(buffer)?;
     let d = device_of(b.device);
     let (desc, source) = descriptor(descriptor_)?;
-    let (t, index) = at_index(d, desc.usage, |i| b.buffer.new_texture(&desc, i, offset, bytes_per_row))
+    let (t, index) = at_index(d, desc.pixel_format, desc.usage, |i| b.buffer.new_texture(&desc, i, offset, bytes_per_row))
         .map_err(|w| format!("texture over a buffer: {w}"))?;
     Ok(boxed(NmbTexture::new(t, d, index, source)))
 }
@@ -185,7 +188,7 @@ fn view(texture: *mut NmbTexture, format: u64, kind: Option<u64>, levels: *const
             (raw::<TextureType>(kind, "texture type")?, l, s)
         }
     };
-    let (v, index) = at_index(d, parent.usage, |i| match swizzle {
+    let (v, index) = at_index(d, format, parent.usage, |i| match swizzle {
         None => t.texture.new_texture_view(format, kind, l, s, i),
         Some(w) => {
             let channel = |shift: u32| raw::<TextureSwizzle>(((w >> shift) & 0xff) as u64, "texture swizzle").expect("a swizzle");
@@ -319,7 +322,7 @@ pub extern "C" fn nmb_heap_new_texture(heap: *const NmbHeap, descriptor_: *const
         } else {
             (offset, None)
         };
-        match at_index(d, desc.usage, |i| d.device.new_heap_texture(&desc, i, h.inner.range(), at)) {
+        match at_index(d, desc.pixel_format, desc.usage, |i| d.device.new_heap_texture(&desc, i, h.inner.range(), at)) {
             Ok((t, index)) => {
                 let mut out = NmbTexture::new(t, d, index, source);
                 out.options = h.options;
@@ -354,4 +357,21 @@ pub extern "C" fn nmb_device_heap_texture_size_and_align(device: *const NmbDevic
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_texture_resource_id(texture: *const NmbTexture) -> u64 {
     guard(0, || Ok(get(texture)?.texture.gpu_resource_id().to_bits()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reached;
+    use metal2vulkan_runtime::{PixelFormat as P, TextureUsage as U};
+
+    #[test]
+    fn depth_stencil_render_target_is_not_reached() {
+        assert!(!reached(P::Depth32FloatStencil8, U::RENDER_TARGET));
+        assert!(!reached(P::Depth16Unorm, U::RENDER_TARGET));
+        assert!(!reached(P::Depth32Float, U::RENDER_TARGET));
+        assert!(!reached(P::Stencil8, U::RENDER_TARGET));
+        assert!(reached(P::Depth32FloatStencil8, U::RENDER_TARGET | U::SHADER_READ));
+        assert!(reached(P::Depth32FloatStencil8, U::empty()));
+        assert!(reached(P::BGRA8Unorm, U::RENDER_TARGET));
+    }
 }

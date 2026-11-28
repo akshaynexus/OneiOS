@@ -221,9 +221,10 @@ Its findings that hold for rt too: the pipeline cache and preprocess-pool commit
 | 0006 queue-global-priority | Droid-VM 0012 | ANV refuses high (`NOT_PERMITTED`): the bridge makes the device at the default; Turnip (noop shim) takes it |
 | 0007 patch-with-no-control-points | NativeMetal 0009 | applies as it was |
 | 0008 render-pass-split-counts | the other effort's RP counters | `abi_smoke`'s census check |
+| 0009 complete-poll-device-lost | poll `vkWaitSemaphores` every 100 ms while GPU work is in flight so Turnip's `vk_device_check_status` detects KGSL GPU resets instead of hanging forever | rt unit tests (`build.sh test`) |
+| 0010 adreno-large-constants-to-blob | port OneiOS 0101 + 0102: large indexed constant globals (>4 KiB) go to the constant blob and `blob_ptr` resolves constant pointer casts / GEPs | rt + translator unit tests (`build.sh test`) |
 
-With all eight: rt's unit tests 188 passed, 0 failed, 2 ignored (`build.sh test`); `abi_smoke` 35 checks, 0 failed;
-`m2v-rt-check --selftest` 0 wrong outputs, QuartzCore 38 of 41 kernels and 15 of 21 pairs.
+With all ten: rt's unit tests (`build.sh test`), `abi_smoke` and `m2v-rt-check --selftest` pass.
 
 ### DontCare stores and split passes (2026-11-28)
 
@@ -405,9 +406,47 @@ needs NotImplemented at metada`), and `launchd` triggered shutdown at +66.8 s. `
 `RGB10A8_2P_XR10_sRGB` to `RGBA16Float` (same 8 bytes/texel as rt's `R32G32_UINT`, with hardware blending and alpha)
 and `R16Bfloat`/`RG16Bfloat`/`RGBA16Bfloat` to `R16Float`/`RG16Float`/`RGBA16Float`; `nmb_device_linear_bytes_per_row`
 reads `pixel_format_info` of the stored format; and `nmb_texture_new_on_surface` allows single-plane views (such as
-NV12 video planes) over 2-plane IOSurfaces instead of rejecting whenever `chroma_bytes_per_row != 0`. Not booted on a
-phone yet: the proof is `gpuaddon` loaded + no `sheng-exit: backboardd ... Metal failed to build render pipeline` +
-SpringBoard 9 of 9.
+NV12 video planes) over 2-plane IOSurfaces instead of rejecting whenever `chroma_bytes_per_row != 0`.
+
+**v0.1.43 boot on SM-S928B (2026-11-28, iOS 27.2.1 24B156, takeover):** `backboardd` no longer aborted, `SpringBoard`
+started, and `oneios-display` accepted swaps 1..129, **but every frame was all black** (`backboardd fences 1`, then `0`
+thereafter). `ioslog` showed three bridge bugs:
+1. **`minimumLinearTextureAlignmentForPixelFormat:` returned Turnip's 512-byte linear image pitch rounding** (`abi/device.rs`),
+   so `backboardd` logged `Failed to allocate MTLTexture from IOSurface 0x2. Row bytes (5888) not 512 aligned` and
+   `IOSurface 0x1. Row bytes (5760) not 512 aligned` on every frame and never rendered into its display framebuffer.
+   `rt`'s `Buffer::new_texture` takes any whole-texel pitch (and uses its optimal-image over-copy path for every
+   `import_host_memory` IOSurface anyway); the bridge now answers 16 bytes for every uncompressed colour format (matching
+   Apple Metal and the old runtime) and refuses compressed/depth/stencil formats.
+2. **`reached()` gave texture indices to depth/stencil `RENDER_TARGET`-only textures** (`abi/texture.rs`), which `rt`
+   refuses (`a texture no shader reaches takes no index`) — 932,353 refusals across `iconservicesagent` (554k),
+   `SpringBoard` (347k, causing hangs and a crash), `CollectionsPoster` (30k), `MapKit` (whose missing depth target then
+   failed `AttachmentFormats`), and `MercuryPosterExtension`. `reached(pf, usage)` now excludes depth/stencil formats when
+   only `RENDER_TARGET` is set, matching `rt`.
+3. **`no_copy` failed when `length` was not a multiple of 4096** (`abi/memory.rs`, e.g. `iconservicesagent` importing
+   52224 and 210944 bytes in 16 KiB pages). `no_copy` now rounds the `import_host_memory` window out to 4096-byte
+   boundaries (strictly within the OS pages `[pointer, pointer + length)` already occupies) and places the `rt::Buffer`
+   at the exact `(offset, length)`.
+
+**v0.1.44-test boot on SM-S928B (2026-11-28, iOS 27.2.1 24B156, takeover, `display=drm`):** the three fixes above ended
+the black screen (`guest ready: first frame with content`, up to 101.3 fps, `p50` 8.4 ms, 0 alignment/fmt-260/no-copy
+errors, 0 `backboardd` crashes), and exposed four more runtime/bridge faults fixed here:
+1. **Stuck screen after KGSL GPU reset (`rt 0009`)**: at +297.7 s `backboardd` queue 1 hit a KGSL reset
+   (`kgsl_note_reset: queue 1: the GPU was reset with this context guilty`; `GPU_COMMAND failed: Resource deadlock would
+   occur`). `complete::run` called `vkWaitSemaphores(..., u64::MAX)`, so Mesa's `vk_common_WaitSemaphores` never returned
+   to call `vk_device_check_status()`, `DeviceLost` (code 11) never reached `endRenderServerAfterGpuLoss()`, and
+   `backboardd` stayed frozen instead of restarting. `0009-complete-poll-device-lost.patch` waits `LOSS_POLL` (100 ms)
+   while GPU work is in flight (still sleeping on `Condvar` when idle).
+2. **`iconservicesagent` 15-crash loop (`abi/device.rs`, `abi/shader.rs`)**: `supportsFloat16BCubicFiltering` answered
+   `true` while `rt` refuses `SamplerMinMagFilter::Cubic` (`Gap::CubicSampler`, 18 refusals). The bridge now answers
+   `false` to `supportsFloat16BCubicFiltering` and clamps `SamplerMinMagFilter::Cubic` to `Linear` in `nmb_sampler_new`.
+3. **1,013 `YCBCR84202P` refusals during Safari video playback (`abi/device.rs`)**: `supportsYCBCRFormats12` answered
+   `false`, leaving `_MTLDevice`'s `supportsYCBCRFormats` / `supportsYCBCRPackedFormats` / `PQ` / `XR` answering `YES`
+   for `Apple3`. All six selectors now answer `false` so CoreAnimation uses separate `R8Unorm` + `RG8Unorm` planes.
+4. **Center-of-screen glitch on 8-bit BGRA page transitions (`RtSwitches.inc`) & Adreno large constants (`rt 0010`)**:
+   `RtSwitches.inc` now sets `TU_DEBUG=sysmem,nocb` on 8-bit BGRA displays (when `oneios-display-wide=1` and
+   `oneios-gmem=1` are not set, still overridable by `sheng-tu-debug=`), avoiding Turnip GMEM tile/feedback-loop
+   corruption on Adreno 750; `0010-adreno-large-constants-to-blob.patch` ports OneiOS's Adreno fixes `0101`/`0102`
+   (runtime-indexed constant tables > 4 KiB to the constant blob, and cast/constant-GEP blob pointers) into `rt`.
 
 Not the cause either: the conformance list's `padded-fetch-*` refusals (`known-gaps-rt.tsv`, "at metadata of entry
 pfx_fetch_read, argument 1": a fragment function that reads its padded attachment). `alpha_threshold_lph` does not read
