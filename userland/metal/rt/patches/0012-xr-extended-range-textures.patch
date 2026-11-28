@@ -10,31 +10,31 @@
 # back dispatches too: over::record and command.rs's copy-back sites forget the bound compute
 # pipeline after it. (OneiOS userland/metal/rt/README.md, "Apple's extended-range bytes".)
 diff --git a/crates/metal2vulkan-runtime/src/command.rs b/crates/metal2vulkan-runtime/src/command.rs
-index 8742cd9..0be6726 100644
+index 901790df5..81327b7b1 100644
 --- a/crates/metal2vulkan-runtime/src/command.rs
 +++ b/crates/metal2vulkan-runtime/src/command.rs
-@@ -998,9 +998,12 @@ impl Building {
+@@ -1127,9 +1127,12 @@ impl Building {
                      // SAFETY: the command buffer records outside any render pass and keeps each
                      // texture, which holds its buffer, until it retires; each image is in its
                      // home layout between commands.
 -                    unsafe {
--                        over::record_side(&core, command, &back, false);
+-                        over::record_side(&core, command, &back, false, Metric::OtherBarriers);
 -                    };
 +                    // An extended-range texture's copy back binds a compute pipeline of its own
 +                    // (`crate::xr`).
-+                    if unsafe { over::record_side(&core, command, &back, false) } {
++                    if unsafe { over::record_side(&core, command, &back, false, Metric::OtherBarriers) } {
 +                        self.bound = None;
 +                        self.pushed = Pushed::default();
 +                    }
                      self.host_written |= back.iter().any(|copy| copy.shared);
                  }
                  // Its end barrier pays what is owed and starts the hazard sets again.
-@@ -1456,7 +1459,11 @@ impl Building {
+@@ -1728,7 +1731,11 @@ impl Building {
          // SAFETY: the command buffer records outside any render pass and keeps each image, and
          // each buffer through its texture or below, until it retires; each image is in its home
          // layout between commands.
--        unsafe { over::record_side(&core, command, &copies, false) };
-+        if unsafe { over::record_side(&core, command, &copies, false) } {
+-        unsafe { over::record_side(&core, command, &copies, false, Metric::OtherBarriers) };
++        if unsafe { over::record_side(&core, command, &copies, false, Metric::OtherBarriers) } {
 +            // An extended-range texture's copy back bound a compute pipeline of its own.
 +            self.bound = None;
 +            self.pushed = Pushed::default();
@@ -43,10 +43,10 @@ index 8742cd9..0be6726 100644
              .images
              .extend(backs.into_iter().map(|(_, _, image)| image));
 diff --git a/crates/metal2vulkan-runtime/src/device.rs b/crates/metal2vulkan-runtime/src/device.rs
-index a40ebea..1d287df 100644
+index ea1430b7b..0c1330a2c 100644
 --- a/crates/metal2vulkan-runtime/src/device.rs
 +++ b/crates/metal2vulkan-runtime/src/device.rs
-@@ -383,6 +383,8 @@ pub(crate) struct Core {
+@@ -395,6 +395,8 @@ pub(crate) struct Core {
      pub(crate) own: crate::own::OwnKernels,
      /// Two-plane YCbCr/RGB compute conversion pipeline (`crate::ycbcr`).
      pub(crate) ycbcr: crate::ycbcr::YcbcrPipeline,
@@ -55,7 +55,7 @@ index a40ebea..1d287df 100644
      /// The translator's decodes and specialized entries of the functions the device's pipeline
      /// states lowered, which every creation reads, so a module is decoded and a stage
      /// specialized once for the device rather than once a state. Bounded by the translator: the
-@@ -911,6 +913,7 @@ impl Device {
+@@ -960,6 +962,7 @@ impl Device {
              kernels: KernelMap::new(),
              own: crate::own::OwnKernels::default(),
              ycbcr: crate::ycbcr::YcbcrPipeline::default(),
@@ -63,7 +63,7 @@ index a40ebea..1d287df 100644
              entries: metal2vulkan::pipeline::StageEntries::new(),
              closed: AtomicBool::new(false),
              halt: AtomicU8::new(RUNNING),
-@@ -1802,6 +1805,7 @@ impl Drop for Core {
+@@ -1880,6 +1883,7 @@ impl Drop for Core {
          unsafe {
              self.own.destroy(self);
              self.ycbcr.destroy(self);
@@ -72,10 +72,10 @@ index a40ebea..1d287df 100644
          // SAFETY: the device is idle; nothing reads the ring.
          let ring_blocks = unsafe { self.ring.destroy(&self.device) };
 diff --git a/crates/metal2vulkan-runtime/src/lib.rs b/crates/metal2vulkan-runtime/src/lib.rs
-index 606d525..68ca4cc 100644
+index 567f3f2d0..f6b309d31 100644
 --- a/crates/metal2vulkan-runtime/src/lib.rs
 +++ b/crates/metal2vulkan-runtime/src/lib.rs
-@@ -67,6 +67,8 @@ mod tests;
+@@ -70,6 +70,8 @@ mod tests;
  mod texture;
  mod times;
  mod visibility;
@@ -84,7 +84,7 @@ index 606d525..68ca4cc 100644
  mod ycbcr;
  mod ycbcr_spv;
  
-@@ -164,5 +166,6 @@ pub use surface::{
+@@ -167,5 +169,6 @@ pub use surface::{
  pub use texture::{
      BytesPlace, HeapRange, Region, SizeAndAlign, StorageMode, Texture, TextureDescriptor,
  };
@@ -92,10 +92,10 @@ index 606d525..68ca4cc 100644
  pub use ycbcr::YcbcrSpec;
  pub use times::{host_time, HOST_DOMAIN};
 diff --git a/crates/metal2vulkan-runtime/src/over.rs b/crates/metal2vulkan-runtime/src/over.rs
-index c716b37..d7828a7 100644
+index f5f482ef5..be685a712 100644
 --- a/crates/metal2vulkan-runtime/src/over.rs
 +++ b/crates/metal2vulkan-runtime/src/over.rs
-@@ -54,6 +54,7 @@ use crate::kept::AddressHasher;
+@@ -56,6 +56,7 @@ use crate::kept::AddressHasher;
  use crate::memory::BlockId;
  use crate::record::{memory_barrier, Reach};
  use crate::texture::{Image, OverCopy, TextureInner, TextureObject};
@@ -103,17 +103,18 @@ index c716b37..d7828a7 100644
  use crate::ycbcr::YcbcrCopy;
  use ash::vk;
  use std::collections::{HashMap, HashSet};
-@@ -415,16 +416,26 @@ pub(crate) unsafe fn record(
+@@ -418,12 +419,19 @@ pub(crate) unsafe fn record(
      copies: &Copies,
  ) -> (bool, bool) {
      // SAFETY: the caller's contract.
 -    let ycbcr_ran = unsafe {
--        record_side(core, command, &copies.back, false);
--        record_side(core, command, &copies.into, true)
 +    let ran = unsafe {
+         let cause = Metric::OtherBarriers;
+-        record_side(core, command, &copies.back, false, cause);
+-        record_side(core, command, &copies.into, true, cause)
 +        // An extended-range texture's copy back is a compute dispatch too (`crate::xr`).
-+        let back = record_side(core, command, &copies.back, false);
-+        record_side(core, command, &copies.into, true) | back
++        let back = record_side(core, command, &copies.back, false, cause);
++        record_side(core, command, &copies.into, true, cause) | back
      };
 -    (copies.back.iter().any(|copy| copy.shared && copy.ycbcr.is_none()), ycbcr_ran)
 +    (copies.back.iter().any(|copy| copy.shared && copy.ycbcr.is_none()), ran)
@@ -126,16 +127,19 @@ index c716b37..d7828a7 100644
  }
  
  /// Records `copies` into `command`: each buffer's bytes into its image (`into`), or back, between
- /// one pair of barriers. Two-plane YCbCr/RGB textures run their compute conversion on `into` and
--/// are read-only (ignored on `into == false`). Returns `true` if any YCbCr compute dispatch ran.
-+/// are read-only (ignored on `into == false`); extended-range textures (`crate::xr`) decode their
-+/// buffer's bytes into the image on `into` and encode the image back into them otherwise, each
-+/// by a compute dispatch between a pair of barriers. Returns `true` if any compute dispatch ran,
-+/// which leaves the compute pipeline and push constants the caller bound replaced.
+@@ -432,7 +440,10 @@ pub(crate) unsafe fn record(
+ /// level and slice, of its only aspect, the colour one (`texture::over_texel` refuses any other
+ /// texture over a buffer). A copy back moves it from home, which keeps its texels. Two-plane
+ /// YCbCr/RGB textures run their compute conversion on `into` and are read-only (ignored on
+-/// `into == false`). Returns `true` if any YCbCr compute dispatch ran.
++/// `into == false`); extended-range textures (`crate::xr`) decode their buffer's bytes into the
++/// image on `into` and encode the image back into them otherwise, each by a compute dispatch
++/// between a pair of barriers. Returns `true` if any compute dispatch ran, which leaves the
++/// compute pipeline and push constants the caller bound replaced.
  ///
  /// # Safety
  ///
-@@ -442,7 +453,7 @@ pub(crate) unsafe fn record_side(
+@@ -451,7 +462,7 @@ pub(crate) unsafe fn record_side(
      }
      let device = &core.device;
      let counters = &core.counters;
@@ -144,9 +148,9 @@ index c716b37..d7828a7 100644
      let ycbcr: Vec<&OverCopy> = if into {
          copies.iter().filter(|c| c.ycbcr.is_some()).collect()
      } else {
-@@ -530,27 +541,34 @@ pub(crate) unsafe fn record_side(
-         counters.count(Metric::Barriers);
-         counters.count(Metric::Barriers);
+@@ -543,27 +554,34 @@ pub(crate) unsafe fn record_side(
+         counters.count(cause);
+         counters.count(cause);
      }
 -    if ycbcr.is_empty() {
 +    let xr: Vec<&OverCopy> = copies.iter().filter(|c| c.xr.is_some()).collect();
@@ -175,18 +179,18 @@ index c716b37..d7828a7 100644
                  command,
                  &vk::DependencyInfo::default().memory_barriers(&earlier),
              );
-             counters.count(Metric::Barriers);
+             counters.count(cause);
          }
 -        let dispatched = core.ycbcr.dispatch(core, command, &ycbcr_copies);
 -        for copy in &ycbcr {
 +        let mut dispatched = core.ycbcr.dispatch(core, command, &ycbcr_copies);
 +        dispatched |= core.xr.dispatch(core, command, &xr_copies, !into);
 +        for copy in ycbcr.iter().chain(&xr) {
-             counters.over_copied(copy.bytes, copy.imported, copy.kind);
+             counters.over_copied(copy.bytes, copy.imported, copy.class, copy.kind);
          }
          if dispatched {
-@@ -561,8 +579,7 @@ pub(crate) unsafe fn record_side(
-             counters.count(Metric::Barriers);
+@@ -574,8 +592,7 @@ pub(crate) unsafe fn record_side(
+             counters.count(cause);
          }
          dispatched
 -    };
@@ -196,10 +200,10 @@ index c716b37..d7828a7 100644
  
  /// A copy back a reader of a Managed buffer's device copy takes ([`ManagedOvers::backs`]): the
 diff --git a/crates/metal2vulkan-runtime/src/texture.rs b/crates/metal2vulkan-runtime/src/texture.rs
-index a89639e..8f61231 100644
+index e1d5d105d..849d45441 100644
 --- a/crates/metal2vulkan-runtime/src/texture.rs
 +++ b/crates/metal2vulkan-runtime/src/texture.rs
-@@ -343,6 +343,9 @@ struct Named {
+@@ -370,6 +370,9 @@ struct Named {
      form: Form,
      /// Two-plane YCbCr/RGB conversion parameters (`Buffer::new_ycbcr_texture`).
      ycbcr: Option<(crate::ycbcr::YcbcrSpec, u32)>,
@@ -209,15 +213,15 @@ index a89639e..8f61231 100644
  }
  
  impl Named {
-@@ -1490,6 +1493,7 @@ impl Device {
+@@ -1624,6 +1627,7 @@ impl Device {
                      places: places.to_vec(),
                      form: Form::Managed,
                      ycbcr: None,
 +                    xr: None,
                  };
-                 (Some(named), vk::ImageLayout::UNDEFINED, plan.home)
+                 (Some(named), vk::ImageLayout::UNDEFINED, plan.home())
              }
-@@ -1509,6 +1513,24 @@ impl Device {
+@@ -1643,6 +1647,24 @@ impl Device {
                          Err(cause) => Form::Copied(cause),
                      },
                      ycbcr: None,
@@ -240,9 +244,9 @@ index a89639e..8f61231 100644
 +                    ycbcr: None,
 +                    xr: Some(*xr),
                  };
-                 (Some(named), vk::ImageLayout::UNDEFINED, plan.home)
+                 (Some(named), vk::ImageLayout::UNDEFINED, plan.home())
              }
-@@ -1523,7 +1545,7 @@ impl Device {
+@@ -1657,7 +1679,7 @@ impl Device {
          // from its first texel a resolve into it may reach (`render_reach`).
          let mut resolve_reach = None;
          let (bind, mut block) = match source {
@@ -251,7 +255,7 @@ index a89639e..8f61231 100644
              Source::Heap(block, heap, offset) => {
                  let bind = Bind::Heap {
                      memory: block.memory.device_memory(),
-@@ -2923,6 +2945,9 @@ enum Source<'a> {
+@@ -3269,6 +3291,9 @@ enum Source<'a> {
      Heap(Arc<Block>, HeapRange, u64),
      /// A buffer, the texture's offset in it and its rows' pitch.
      Over(&'a Buffer, u64, u64),
@@ -261,7 +265,7 @@ index a89639e..8f61231 100644
  }
  
  /// Where [`make`] binds the image.
-@@ -4072,6 +4097,7 @@ impl Texture {
+@@ -4631,6 +4656,7 @@ impl Texture {
                  places: levels.clone().flat_map(level_places).collect(),
                  form: named.form,
                  ycbcr: named.ycbcr,
@@ -269,7 +273,7 @@ index a89639e..8f61231 100644
              }
          });
          let view = TextureInner {
-@@ -5182,6 +5208,53 @@ pub(crate) trait TextureObject {
+@@ -5997,6 +6023,54 @@ pub(crate) trait TextureObject {
                      storage_idx,
                      flags,
                  }),
@@ -300,6 +304,7 @@ index a89639e..8f61231 100644
 +                },
 +                bytes,
 +                shared: named.buffer.is_shared(),
++                class: device_copy.is_none().then_some(block.memory.class),
 +                imported: device_copy.is_none() && block.memory.imported(),
 +                exported: device_copy.is_none() && block.memory.exported(),
 +                kind: OverCopyKind {
@@ -323,7 +328,7 @@ index a89639e..8f61231 100644
              };
              return Some((&named.buffer, copy));
          }
-@@ -5215,6 +5288,7 @@ pub(crate) trait TextureObject {
+@@ -6031,6 +6105,7 @@ pub(crate) trait TextureObject {
                  usage: d.usage,
              },
              ycbcr: None,
@@ -331,7 +336,7 @@ index a89639e..8f61231 100644
          };
          Some((&named.buffer, copy))
      }
-@@ -5493,6 +5567,7 @@ impl Buffer {
+@@ -6309,6 +6384,7 @@ impl Buffer {
              ],
              form: Form::Copied(OverCause::Linear),
              ycbcr: Some((spec, flags)),
@@ -339,7 +344,7 @@ index a89639e..8f61231 100644
          };
          let mut stored_desc = d;
          stored_desc.pixel_format = PixelFormat::RGBA16Float;
-@@ -5536,6 +5611,90 @@ impl Buffer {
+@@ -6352,6 +6428,90 @@ impl Buffer {
          Ok(texture)
      }
  
@@ -430,7 +435,7 @@ index a89639e..8f61231 100644
      /// A surface plane's texture over this buffer, as [`Buffer::new_texture`] makes it, but that
      /// with no index a plane shaders read or write is reached through its views alone
      /// ([`Device::new_texture_for_views`]).
-@@ -5826,6 +5985,7 @@ impl Device {
+@@ -6642,6 +6802,7 @@ impl Device {
              }],
              form: Form::InPlace,
              ycbcr: None,
@@ -438,7 +443,7 @@ index a89639e..8f61231 100644
          };
          let inner = TextureInner {
              core: Arc::clone(core),
-@@ -5893,6 +6053,9 @@ pub(crate) struct OverCopy {
+@@ -6715,6 +6876,9 @@ pub(crate) struct OverCopy {
      pub(crate) kind: OverCopyKind,
      /// Two-plane YCbCr/RGB compute conversion parameters (`None` for plain buffer-to-image copies).
      pub(crate) ycbcr: Option<crate::ycbcr::YcbcrCopy>,
@@ -450,7 +455,7 @@ index a89639e..8f61231 100644
  impl crate::kept::Handle for Texture {
 diff --git a/crates/metal2vulkan-runtime/src/xr.rs b/crates/metal2vulkan-runtime/src/xr.rs
 new file mode 100644
-index 0000000..7e9dbcf
+index 000000000..7e9dbcfbb
 --- /dev/null
 +++ b/crates/metal2vulkan-runtime/src/xr.rs
 @@ -0,0 +1,508 @@
@@ -964,7 +969,7 @@ index 0000000..7e9dbcf
 +}
 diff --git a/crates/metal2vulkan-runtime/src/xr_convert.comp b/crates/metal2vulkan-runtime/src/xr_convert.comp
 new file mode 100644
-index 0000000..52000ed
+index 000000000..52000eda2
 --- /dev/null
 +++ b/crates/metal2vulkan-runtime/src/xr_convert.comp
 @@ -0,0 +1,135 @@
@@ -1105,7 +1110,7 @@ index 0000000..52000ed
 +}
 diff --git a/crates/metal2vulkan-runtime/src/xr_spv.rs b/crates/metal2vulkan-runtime/src/xr_spv.rs
 new file mode 100644
-index 0000000..1e43564
+index 000000000..1e435646c
 --- /dev/null
 +++ b/crates/metal2vulkan-runtime/src/xr_spv.rs
 @@ -0,0 +1,348 @@

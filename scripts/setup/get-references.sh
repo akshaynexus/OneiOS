@@ -26,7 +26,7 @@ DEST=${REF_DIR:-$REPO/external}
 #                   patches copies of them (patches/metal2vulkan, patches/mesa of Droid-VM-UniXNU); these stay as fetched.
 #                   metal2vulkan stays at 624bab3 (2026-11-23): upstream development replaced the runtime the bridge and its
 #                   51 patches are written for (5d725aeec); docs/gpu.md section 7, "metal2vulkan's upstream".
-#                   metal2vulkan-rt (userland/metal/rt): its pin, development 6462199fa, is fetched into this same clone by
+#                   metal2vulkan-rt (userland/metal/rt): its pin, development 89fb42079, is fetched into this same clone by
 #                   userland/metal/rt/build.sh source (a worktree in out/m2v-rt/src); this table keeps 624bab3.
 # NativeMobileDisplay  the IOMobileFramebuffer backend (GopFramebuffer fork), at the kernel base's drivers/GopFramebuffer.
 # NativeHidInput    UniXNU/ShengHidInput at the commit UniXNU-droidvm's ipados27 build-droidvm-hid-input.py pins (its

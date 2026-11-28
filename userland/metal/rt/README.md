@@ -7,7 +7,7 @@ from metal2vulkan `624bab3` (2026-10-29) to the newest `development` of
 carried as a new, smaller patch set on top. The old add-on (624bab3, `userland/metal/build.sh`) stays the default and
 the fallback until a phone boot of the new one passes (docs/switches.md, the add-on row).
 
-Pin of this port: `development` **6462199fa** (2026-11-23 02:28 -0800), 9,217 commits after 624bab3.
+Pin of this port: `development` **89fb42079** (2026-11-27; bumped 2026-11-28 from `6462199fa`, +494 upstream commits: unattached trailing color attachments, lock-free arena block take, host-confirmed event values, Managed texture `synchronizeResource:`, float/half function-constant predicates, barrier-cause metrics, undefined-layout copy-in).
 
 What is here:
 

@@ -103,7 +103,7 @@ the same camera plug-in; they differ in the bridge's runtime (`userland/metal/rt
 | Add-on | Built by | Default | What |
 |---|---|---|---|
 | 624bab3 | `userland/metal/build.sh` (`METAL_RUNTIME` unset) | yes, until a phone boot of rt passes | the old runtime and its 56 patches; the fallback |
-| rt | `METAL_RUNTIME=rt userland/metal/build.sh` | no | metal2vulkan `development` 6462199fa (`metal2vulkan-runtime` 0.2) with `userland/metal/rt/patches` 0001-0008 and the rewritten bridge; not booted |
+| rt | `METAL_RUNTIME=rt userland/metal/build.sh` | no | metal2vulkan `development` 89fb42079 (`metal2vulkan-runtime` 0.2) with `userland/metal/rt/patches` 0001-0012 and the rewritten bridge |
 
 Each build writes `NativeAdrenoMetal.runtime` (`624bab3` or `rt`) beside its bundle; the CDHashes of a pair the Mac
 was given are in that hand-off, and `oneios-tool phone sums` shows the staged one.

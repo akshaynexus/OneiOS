@@ -1,10 +1,10 @@
 OneiOS rt 0006: DeviceOptions::queue_global_priority: the queues' global priority where the consumer enables VK_KHR/EXT_global_priority, so the render server's frames do not wait behind an app's (Droid-VM 0012; rt takes no queue priority).
 
 diff --git a/crates/metal2vulkan-runtime/src/device.rs b/crates/metal2vulkan-runtime/src/device.rs
-index ec57929c5..31dbf3bb8 100644
+index 97eedf816..07f1ffc29 100644
 --- a/crates/metal2vulkan-runtime/src/device.rs
 +++ b/crates/metal2vulkan-runtime/src/device.rs
-@@ -483,6 +483,12 @@ pub struct DeviceOptions {
+@@ -499,6 +499,12 @@ pub struct DeviceOptions {
      /// split are lost (and a resolving pass resolves stale samples over them). The split is not
      /// known as the rendering begins, so the consumer sets it only for an A/B of the speed.
      pub dont_care_stores: bool,
@@ -17,7 +17,7 @@ index ec57929c5..31dbf3bb8 100644
      /// For the device tests: what the block-maker thread does with the internals asked of it,
      /// from its first work on.
      #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-@@ -658,6 +664,24 @@ impl Device {
+@@ -712,6 +718,24 @@ impl Device {
                  &options.extensions,
              )
          };

@@ -13,10 +13,10 @@ wake-ups while idle (the thread still sleeps on `done.changed`), zero overhead o
 reset as `VK_ERROR_DEVICE_LOST` within 100 ms so backboardd restarts cleanly.
 
 diff --git a/crates/metal2vulkan-runtime/src/complete.rs b/crates/metal2vulkan-runtime/src/complete.rs
-index 0d3b66f9..d90c3e7e 100644
+index cfb2da52e..7a55eac27 100644
 --- a/crates/metal2vulkan-runtime/src/complete.rs
 +++ b/crates/metal2vulkan-runtime/src/complete.rs
-@@ -811,9 +811,16 @@ pub(crate) fn run(core: Arc<Core>) {
+@@ -907,9 +907,16 @@ pub(crate) fn run(core: Arc<Core>) {
              .flags(vk::SemaphoreWaitFlags::ANY)
              .semaphores(&semaphores)
              .values(&values);
@@ -31,6 +31,6 @@ index 0d3b66f9..d90c3e7e 100644
          // holds its event or the core lives.
 -        let result = unsafe { device.wait_semaphores(&wait, u64::MAX) };
 +        let result = unsafe { device.wait_semaphores(&wait, timeout) };
+         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+         core.counters.event_read(crate::counters::event_step::WAKE);
          state = done.lock();
-         state.waiting = Waiting::Not;
-         match result {

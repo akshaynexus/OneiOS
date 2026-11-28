@@ -1,10 +1,10 @@
 OneiOS rt 0004: on Apple systems rt's threads take a quality-of-service class: m2v-submit and m2v-complete user-interactive, the others user-initiated (at the default class they woke up to 50 ms late on iOS; NativeMetal 0023 on the old runtime).
 
 diff --git a/crates/metal2vulkan-runtime/src/device.rs b/crates/metal2vulkan-runtime/src/device.rs
-index 3dd130afb..313cbf88c 100644
+index 8edf1f272..86d39da46 100644
 --- a/crates/metal2vulkan-runtime/src/device.rs
 +++ b/crates/metal2vulkan-runtime/src/device.rs
-@@ -1194,6 +1194,7 @@ pub(crate) fn start(
+@@ -1268,6 +1268,7 @@ pub(crate) fn start(
          .name(name.to_string())
          .spawn(move || {
              let _slot = counters.thread_started();
@@ -12,7 +12,7 @@ index 3dd130afb..313cbf88c 100644
              drop(holding);
              body();
          })?;
-@@ -1773,3 +1774,21 @@ impl Drop for Core {
+@@ -1851,3 +1852,21 @@ impl Drop for Core {
          }
      }
  }

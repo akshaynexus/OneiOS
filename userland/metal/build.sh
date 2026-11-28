@@ -6,7 +6,7 @@
 #   ONEIOS_METAL_TARGET="iPhone18,2 24B156" userland/metal/build.sh   for iOS 27.2.1 (hooks/iPhone18,2-24B156.json), in
 #                               out/userland-24B156 (the default target, iPhone18,2 24A446, is out/userland's)
 #   METAL_RUNTIME=rt userland/metal/build.sh ...            the same with the bridge on metal2vulkan-rt (userland/metal/rt: the
-#                               pin development 6462199fa and its patches, the bridge rewritten on its API), in out/metal-rt and
+#                               pin development 89fb42079 and its patches, the bridge rewritten on its API), in out/metal-rt and
 #                               out/userland-rt unless METAL_WORK and METAL_OUT say otherwise; the default stays 624bab3
 #
 # What is built (docs/gpu.md section 7, docs/userland.md 7.1):

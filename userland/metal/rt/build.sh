@@ -19,11 +19,15 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 HERE=$ROOT/userland/metal/rt
-PIN=6462199fad8d75b81556a7fa322317da116701fa
+PIN=89fb4207967f7a354d3ae96b9d5f09d3ba852ad4
 W=${M2V_RT_WORK:-$ROOT/out/m2v-rt}
 S=$W/src
 EXT=$ROOT/external/metal2vulkan
 say() { echo "metal-rt: $*"; }
+
+runtime_id() {
+  (echo "$PIN"; cat "$HERE"/patches/*.patch) | sha256sum | cut -c1-32
+}
 
 source_tree() {
   [ -d "$EXT/.git" ] || [ -f "$EXT/.git" ] || { echo "metal-rt: no external/metal2vulkan (scripts/setup/get-references.sh metal2vulkan)" >&2; exit 1; }
@@ -31,8 +35,9 @@ source_tree() {
   if [ ! -e "$S/.git" ]; then
     mkdir -p "$W"
     git -C "$EXT" worktree add -q --detach "$S" "$PIN"
+  elif [ "$(git -C "$S" rev-parse HEAD)" != "$PIN" ]; then
+    git -C "$S" checkout -q -f --detach "$PIN"
   fi
-  [ "$(git -C "$S" rev-parse HEAD)" = "$PIN" ] || { echo "metal-rt: $S is not at $PIN" >&2; exit 1; }
   # Idempotent: the tree is reset to the pin, then every patch applied.
   git -C "$S" checkout -q -- .
   git -C "$S" clean -qfd
@@ -40,6 +45,15 @@ source_tree() {
     git -C "$S" apply "$p"
     say "applied $(basename "$p")"
   done
+  runtime_id > "$S/.oneios-rt-id"
+}
+
+ensure_source() {
+  local want
+  want=$(runtime_id)
+  if [ ! -e "$S/.git" ] || [ "$(git -C "$S" rev-parse HEAD 2>/dev/null)" != "$PIN" ] || [ "$(cat "$S/.oneios-rt-id" 2>/dev/null)" != "$want" ]; then
+    source_tree
+  fi
 }
 
 manifest() {
@@ -80,12 +94,12 @@ EOF
 bridge_env() {
   export NMB_FIXTURE_AIR=$W/bridge/runtime_examples.air NMB_FC_AIR=$W/bridge/function_constant.air NMB_SCANOUT_AIR=$W/bridge/scanout_convert.air
   # The translator source the runtime is built from (its pin and our patches), which keys the frontend's shader priming.
-  NMB_RUNTIME_ID=$( (echo "$PIN"; cat "$HERE"/patches/*.patch) | sha256sum | cut -c1-32)
+  NMB_RUNTIME_ID=$(runtime_id)
   export NMB_RUNTIME_ID
 }
 
 check() {
-  [ -e "$S/.git" ] || source_tree
+  ensure_source
   manifest
   bridge_env
   (cd "$W/bridge" && CARGO_TARGET_DIR=$W/target cargo build --release)
@@ -99,7 +113,7 @@ check() {
 # environment is userland/metal/build.sh's (scripts/ios/env.sh: the guest's SDK and the cross clang).
 ios() {
   local out=$1
-  [ -e "$S/.git" ] || source_tree
+  ensure_source
   manifest
   bridge_env
   . "$ROOT/scripts/ios/env.sh"
@@ -114,7 +128,7 @@ ios() {
 }
 
 unit_tests() {
-  [ -e "$S/.git" ] || source_tree
+  ensure_source
   (cd "$S" && CARGO_TARGET_DIR=$W/target cargo test -p metal2vulkan-runtime --lib)
 }
 

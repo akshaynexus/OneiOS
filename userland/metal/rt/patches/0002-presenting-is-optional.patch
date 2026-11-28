@@ -1,10 +1,10 @@
 OneiOS rt 0002: VK_KHR_surface and VK_KHR_swapchain are optional: Turnip on iOS is built with no window system (tu_wsi.h: no TU_USE_WSI_PLATFORM for platforms=macos) and the runtime calls neither; only a consumer's swapchain does.
 
 diff --git a/crates/metal2vulkan-runtime/README.md b/crates/metal2vulkan-runtime/README.md
-index 3c1a12df9..ec8eca60e 100644
+index f7bc4b6c2..72b5f2ab7 100644
 --- a/crates/metal2vulkan-runtime/README.md
 +++ b/crates/metal2vulkan-runtime/README.md
-@@ -4861,8 +4861,8 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
+@@ -5484,8 +5484,8 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
  
  | Extension | Where | Used for |
  |---|---|---|
@@ -16,7 +16,7 @@ index 3c1a12df9..ec8eca60e 100644
  | `VK_EXT_calibrated_timestamps` | device | GPU times on the host clock: the device calibrates its own clock (`VK_TIME_DOMAIN_DEVICE_EXT`) with the host's (`floor::TIME_DOMAINS`) |
  | `VK_EXT_line_rasterization` | device | lines drawn by Bresenham's rule, through `bresenhamLines` below; every venue's driver lists this name (RADV, ANV, lavapipe, NVIDIA's, KosmicKrisp, and the UHD 630's Windows driver, a Vulkan 1.3 device) |
 diff --git a/crates/metal2vulkan-runtime/src/floor.rs b/crates/metal2vulkan-runtime/src/floor.rs
-index 2b9099982..075f86972 100644
+index 0e165934f..5fe2cc3cf 100644
 --- a/crates/metal2vulkan-runtime/src/floor.rs
 +++ b/crates/metal2vulkan-runtime/src/floor.rs
 @@ -17,18 +17,22 @@ pub const VERSION: u32 = vk::API_VERSION_1_3;
@@ -45,9 +45,9 @@ index 2b9099982..075f86972 100644
      ash::ext::robustness2::NAME,
      ash::ext::calibrated_timestamps::NAME,
      ash::ext::line_rasterization::NAME,
-@@ -61,6 +65,8 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
- /// report is read once, at its first loss ([`DeviceLoss::fault`](crate::DeviceLoss::fault)), and
- /// `VK_KHR_maintenance8` ([`MAINTENANCE8`]), for the optional feature of its own.
+@@ -64,6 +68,8 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
+ /// buffer access 2, and `VK_KHR_maintenance8` ([`MAINTENANCE8`]), for the
+ /// optional feature of its own.
  pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
 +    // Presenting, where the driver has a window system (see OPTIONAL_INSTANCE_EXTENSIONS).
 +    ash::khr::swapchain::NAME,
@@ -55,10 +55,10 @@ index 2b9099982..075f86972 100644
      ash::khr::shader_subgroup_uniform_control_flow::NAME,
      ash::khr::shader_quad_control::NAME,
 diff --git a/crates/metal2vulkan-runtime/src/tests/floor.rs b/crates/metal2vulkan-runtime/src/tests/floor.rs
-index 98c8b3047..df63528c0 100644
+index 8e03e9515..023b76821 100644
 --- a/crates/metal2vulkan-runtime/src/tests/floor.rs
 +++ b/crates/metal2vulkan-runtime/src/tests/floor.rs
-@@ -288,16 +288,16 @@ fn an_instance_enables_what_the_loader_or_the_drivers_offer_and_direct_loading_w
+@@ -291,16 +291,16 @@ fn an_instance_enables_what_the_loader_or_the_drivers_offer_and_direct_loading_w
      // loading too, though the loader offers it.
      assert_eq!(
          names(enabled(&loader, &[], &[metal], false)),
@@ -78,7 +78,7 @@ index 98c8b3047..df63528c0 100644
      );
      assert!(matches!(
          enabled(&owned(&[portability]), &drivers, &[], true),
-@@ -311,11 +311,11 @@ fn an_instance_enables_what_the_loader_or_the_drivers_offer_and_direct_loading_w
+@@ -314,11 +314,11 @@ fn an_instance_enables_what_the_loader_or_the_drivers_offer_and_direct_loading_w
      let loader = owned(&[direct, portability, headless]);
      assert_eq!(
          names(enabled(&loader, &[], &[headless], false)),
@@ -92,7 +92,7 @@ index 98c8b3047..df63528c0 100644
      );
  }
  
-@@ -1118,7 +1118,6 @@ fn every_missing_item_is_named_at_once() {
+@@ -1301,7 +1301,6 @@ fn every_missing_item_is_named_at_once() {
      assert_eq!(
          below.missing,
          [
@@ -100,7 +100,7 @@ index 98c8b3047..df63528c0 100644
              Missing::Extension(ash::ext::robustness2::NAME),
              Missing::Extension(ash::ext::calibrated_timestamps::NAME),
              Missing::Extension(ash::ext::line_rasterization::NAME),
-@@ -1137,7 +1136,7 @@ fn every_missing_item_is_named_at_once() {
+@@ -1325,7 +1324,7 @@ fn every_missing_item_is_named_at_once() {
      );
      assert_eq!(
          below.to_string(),
@@ -110,7 +110,7 @@ index 98c8b3047..df63528c0 100644
           maxColorAttachments 4, below 8; a queue family with graphics and compute; a memory \
           type with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
 diff --git a/crates/metal2vulkan-validation/profiles/runtime-floor.json b/crates/metal2vulkan-validation/profiles/runtime-floor.json
-index 024784e9d..4630d9493 100644
+index 86676e4b3..0f85a858f 100644
 --- a/crates/metal2vulkan-validation/profiles/runtime-floor.json
 +++ b/crates/metal2vulkan-validation/profiles/runtime-floor.json
 @@ -1119,7 +1119,6 @@

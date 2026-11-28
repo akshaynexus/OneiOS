@@ -1,13 +1,13 @@
 OneiOS rt 0008: Metrics::render_pass_splits and render_pass_barrier_splits: the render passes an encoder ended and began again (a split stores and loads every tile once more on a tiler), for the GPU memory row's RP line (fix/m2v-update's split counters on the old runtime).
 
 diff --git a/crates/metal2vulkan-runtime/src/counters.rs b/crates/metal2vulkan-runtime/src/counters.rs
-index 63b5ac8f2..1254e1699 100644
+index de8cb705e..5dea5e301 100644
 --- a/crates/metal2vulkan-runtime/src/counters.rs
 +++ b/crates/metal2vulkan-runtime/src/counters.rs
-@@ -305,10 +305,14 @@ pub(crate) enum Metric {
-     AccumulatedVisibilityRefused,
-     /// [`Metrics::overlapping_copies_refused`].
-     OverlappingCopiesRefused,
+@@ -359,10 +359,14 @@ pub(crate) enum Metric {
+     StencilBitDraws,
+     /// [`Metrics::rendering_interrupts`].
+     RenderingInterrupts,
 +    /// [`Metrics::render_pass_splits`] (rt patch 0008).
 +    RenderPassSplits,
 +    /// [`Metrics::render_pass_barrier_splits`] (rt patch 0008).
@@ -15,51 +15,51 @@ index 63b5ac8f2..1254e1699 100644
  }
  
  /// The number of [`Metric`]s.
--const METRICS: usize = Metric::OverlappingCopiesRefused as usize + 1;
+-const METRICS: usize = Metric::RenderingInterrupts as usize + 1;
 +const METRICS: usize = Metric::RenderPassBarrierSplits as usize + 1;
  
  /// Every [`Metric`], in its order: each at its own index.
  const METRIC_ORDER: [Metric; METRICS] = [
-@@ -359,6 +363,8 @@ const METRIC_ORDER: [Metric; METRICS] = [
-     Metric::VisibilityInterruptsRefused,
-     Metric::AccumulatedVisibilityRefused,
-     Metric::OverlappingCopiesRefused,
+@@ -440,6 +444,8 @@ const METRIC_ORDER: [Metric; METRICS] = [
+     Metric::HeapMoves,
+     Metric::StencilBitDraws,
+     Metric::RenderingInterrupts,
 +    Metric::RenderPassSplits,
 +    Metric::RenderPassBarrierSplits,
  ];
  
  // Each metric of the order is at its own index.
-@@ -778,6 +784,8 @@ struct Atomics {
-     visibility_interrupts_refused: AtomicU64,
-     accumulated_visibility_refused: AtomicU64,
-     overlapping_copies_refused: AtomicU64,
+@@ -919,6 +925,8 @@ struct Atomics {
+     heap_moves: AtomicU64,
+     stencil_bit_draws: AtomicU64,
+     rendering_interrupts: AtomicU64,
 +    render_pass_splits: AtomicU64,
 +    render_pass_barrier_splits: AtomicU64,
      /// Each [`Part`]'s calls, at its index: their count, bytes, total and longest nanoseconds,
      /// and those over each of [`OVER_NANOS`].
      parts: [[AtomicU64; 7]; PARTS],
-@@ -941,6 +949,8 @@ impl Counters {
-             Metric::VisibilityInterruptsRefused => &a.visibility_interrupts_refused,
-             Metric::AccumulatedVisibilityRefused => &a.accumulated_visibility_refused,
-             Metric::OverlappingCopiesRefused => &a.overlapping_copies_refused,
+@@ -1129,6 +1137,8 @@ impl Counters {
+             Metric::HeapMoves => &a.heap_moves,
+             Metric::StencilBitDraws => &a.stencil_bit_draws,
+             Metric::RenderingInterrupts => &a.rendering_interrupts,
 +            Metric::RenderPassSplits => &a.render_pass_splits,
 +            Metric::RenderPassBarrierSplits => &a.render_pass_barrier_splits,
          }
      }
  
-@@ -1875,6 +1885,8 @@ impl Counters {
-             visibility_interrupts_refused: a.visibility_interrupts_refused.load(Relaxed),
-             accumulated_visibility_refused: a.accumulated_visibility_refused.load(Relaxed),
-             overlapping_copies_refused: a.overlapping_copies_refused.load(Relaxed),
+@@ -2213,6 +2223,8 @@ impl Counters {
+             heap_moves: a.heap_moves.load(Relaxed),
+             stencil_bit_draws: a.stencil_bit_draws.load(Relaxed),
+             rendering_interrupts: a.rendering_interrupts.load(Relaxed),
 +            render_pass_splits: a.render_pass_splits.load(Relaxed),
 +            render_pass_barrier_splits: a.render_pass_barrier_splits.load(Relaxed),
              takes: part(Part::Take),
              take_lock_waits: part(Part::TakeLock),
              take_makes: part(Part::TakeMake),
-@@ -2811,6 +2823,14 @@ pub struct Metrics {
-     /// and a texture placed in a heap whose memory meets the other side's. Copies the guest
-     /// asked for that did not run.
-     pub overlapping_copies_refused: u64,
+@@ -3399,6 +3411,14 @@ pub struct Metrics {
+     /// moves of attachments to the feedback layout or of heap textures, and an execution's count
+     /// kernel. No Metal counterpart: a Metal render encoder is one pass.
+     pub rendering_interrupts: u64,
 +    /// OneiOS (rt patch 0008): the render passes a render encoder ended and began again inside one
 +    /// encoder (`RenderCommandEncoder::interrupt`: a memory barrier, a visibility result owed, a
 +    /// feedback move, a shadow copy, an indirect count): on a tiler each split stores and loads the
@@ -72,10 +72,10 @@ index 63b5ac8f2..1254e1699 100644
      /// [`Device::take_block`](crate::Device::take_block) and a texture block, carved from a free
      /// range or from an allocation the take made ([`take_makes`](Self::take_makes)); their bytes
 diff --git a/crates/metal2vulkan-runtime/src/render_encoder.rs b/crates/metal2vulkan-runtime/src/render_encoder.rs
-index df10582fd..5a68beb47 100644
+index fdd4f6100..82abbdae3 100644
 --- a/crates/metal2vulkan-runtime/src/render_encoder.rs
 +++ b/crates/metal2vulkan-runtime/src/render_encoder.rs
-@@ -1683,6 +1683,9 @@ impl RenderCommandEncoder {
+@@ -1783,6 +1783,9 @@ impl RenderCommandEncoder {
      /// encoder's draws so far are ordered before its later ones.
      fn ordered(&mut self) -> Result<(), Error> {
          (self.drew, self.owed) = (false, false);
@@ -84,11 +84,11 @@ index df10582fd..5a68beb47 100644
 +        }
          self.interrupt(|building, _| {
              let command = building.ordered_command()?;
-             building.barrier(command, Reach::Commands);
-@@ -3402,6 +3405,7 @@ impl RenderCommandEncoder {
-         // SAFETY: the command buffer is inside the pass's rendering, which nothing else records
+             building.barrier(command, Reach::Commands, Metric::OtherBarriers);
+@@ -3620,6 +3623,7 @@ impl RenderCommandEncoder {
          // into while the encoder holds it.
          unsafe { core.device.cmd_end_rendering(self.command) };
+         building.count(Metric::RenderingInterrupts);
 +        building.count(Metric::RenderPassSplits);
          let recorded = record(building, core);
          // SAFETY: the command buffer records outside any rendering and keeps each attachment's
