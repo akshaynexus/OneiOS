@@ -1693,10 +1693,11 @@ pipelines, and later boots hit.
 the laptop through ANV: 1000 of 1000 outputs right), Turnip as an Adreno 750 against rt's floor (above it with rt
 patch 0002; no `VK_EXT_device_generated_commands`, so rt refuses Metal indirect command buffers there) and a census
 of the guest's own metallibs. `METAL_RUNTIME=rt userland/metal/build.sh` builds the plug-in with the bridge rewritten on
-rt (all 184 functions of NativeMetal's C ABI) and rt patches 0001-0010 (including `0009` 100 ms `vkWaitSemaphores`
-polling while GPU work is in flight so KGSL resets surface `VK_ERROR_DEVICE_LOST`, and `0010` porting OneiOS's large
-indexed constant blob fixes `0101`/`0102`), in `out/metal-rt`; the 624bab3 build stays as fallback (docs/switches.md,
-"The Metal add-on").
+rt (all 184 functions of NativeMetal's C ABI plus `nmb_encoder_memory_barrier` for intra-encoder compute/render
+barriers) and rt patches 0001-0011 (including `0009` 100 ms `vkWaitSemaphores` polling while GPU work is in flight so
+KGSL resets surface `VK_ERROR_DEVICE_LOST`, `0010` porting OneiOS's large indexed constant blob fixes `0101`/`0102`,
+and `0011` GPU compute conversion for two-plane YCbCr/RGB IOSurface video textures), in `out/metal-rt`; the 624bab3
+build stays as fallback (docs/switches.md, "The Metal add-on").
 
 Built with the toolchain of [building.md](building.md) section 9: Xcode's on macOS, the cross toolchain on Linux. The
 same command on both; every link is against this guest's own iOS 27 stubs (`out/ios27-tbd`).

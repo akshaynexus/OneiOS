@@ -11,6 +11,7 @@
 
 static int failures;
 size_t m2v_memory_census(uint64_t *out, size_t count);
+bool nmb_encoder_memory_barrier(NmbEncoder *encoder);
 #define CHECK(cond, ...) do { int ok_ = (cond); printf(ok_ ? "ok   " : "FAIL "); failures += !ok_; printf(__VA_ARGS__); \
     if (!ok_) { printf(" (%s)", nmb_last_error()); } printf("\n"); } while (0)
 
@@ -48,10 +49,12 @@ int main(int argc, char **argv) {
           nmb_device_linear_bytes_per_row(device, 80, 1440) == 5760 &&
           !nmb_device_answer(device, "minimumLinearTextureAlignmentForPixelFormat:", 260 /* Depth32Float_Stencil8 */, &lin_align),
           "minimumLinearTextureAlignmentForPixelFormat: BGRA8Unorm=%llu (1440->5760), depth refused", (unsigned long long)lin_align);
-    uint64_t ycbcr = 1, cubic_flag = 1;
-    CHECK(nmb_device_answer(device, "supportsYCBCRFormats", 0, &ycbcr) && ycbcr == 0 &&
+    uint64_t ycbcr = 0, ycbcr_packed = 0, ycbcr12 = 1, cubic_flag = 1;
+    CHECK(nmb_device_answer(device, "supportsYCBCRFormats", 0, &ycbcr) && ycbcr == 1 &&
+          nmb_device_answer(device, "supportsYCBCRPackedFormats", 0, &ycbcr_packed) && ycbcr_packed == 1 &&
+          nmb_device_answer(device, "supportsYCBCRFormats12", 0, &ycbcr12) && ycbcr12 == 0 &&
           nmb_device_answer(device, "supportsFloat16BCubicFiltering", 0, &cubic_flag) && cubic_flag == 0,
-          "supportsYCBCRFormats=0, supportsFloat16BCubicFiltering=0");
+          "supportsYCBCRFormats=1, supportsYCBCRPackedFormats=1, supportsYCBCRFormats12=0, supportsFloat16BCubicFiltering=0");
 
     /* Buffers: a small one (a slab slot), a large one (a block), one with bytes. */
     NmbBuffer *small = nmb_buffer_new(device, 100, 0, NULL);
@@ -232,6 +235,107 @@ int main(int argc, char **argv) {
           ((uint8_t *)nmb_buffer_contents(small))[63] == 0x5a && !memcmp(nmb_buffer_contents(output), pattern, 256),
           "blit: fill, buffer copy, texture to buffer");
     nmb_command_buffer_release(cb);
+
+    /* Two-plane YCbCr / RGB over a surface (rt patch 0011): YCBCR8_420_2P, YCBCR8_420_2P_sRGB, RGB8_420_2P, YCBCR10_420_2P. */
+    {
+        /* 4x4 luma (row stride 16) + 2x2 chroma (offset 64, row stride 16): pure white (Y=235, Cb=128, Cr=128) in BT.709 video range. */
+        uint8_t nv12[128];
+        memset(nv12, 0, sizeof nv12);
+        for (int y = 0; y < 4; y++) memset(nv12 + y * 16, 235, 4);
+        for (int y = 0; y < 2; y++)
+            for (int x = 0; x < 2; x++) {
+                nv12[64 + y * 16 + x * 2] = 128;
+                nv12[64 + y * 16 + x * 2 + 1] = 128;
+            }
+        NmbBuffer *ysurf = nmb_buffer_new(device, sizeof nv12, 0, nv12);
+        struct NmbTextureDescriptor ytd;
+        memset(&ytd, 0, sizeof ytd);
+        ytd.type = 2; ytd.format = 500; /* YCBCR8_420_2P */
+        ytd.width = 4; ytd.height = 4; ytd.depth = 1; ytd.levels = 1; ytd.samples = 1; ytd.array_length = 1;
+        ytd.usage = 1; /* shader read */
+        NmbTexture *ytex = nmb_texture_new_on_surface(ysurf, &ytd, 0, 16, 0x34323076u /* '420v' */, 0, 4, 4, 64, 16);
+        struct NmbTextureDescriptor yback;
+        if (ytex) nmb_texture_describe(ytex, &yback);
+        CHECK(ytex && nmb_texture_resource_id(ytex) != 0 && yback.format == 500, "nmb_texture_new_on_surface YCBCR8_420_2P");
+        /* Blit the YCbCr texture into a buffer so the compute conversion runs on commit. */
+        NmbBuffer *yread = nmb_buffer_new(device, 4 * 4 * 8, 0, NULL); /* RGBA16Float = 8 bytes/texel */
+        cb = nmb_command_buffer_new(queue);
+        enc = nmb_blit_encoder_new(cb);
+        uint64_t yo[3] = {0, 0, 0}, ys[3] = {4, 4, 1};
+        int yok = ytex && yread && enc &&
+                  nmb_blit_texture_to_buffer(enc, ytex, 0, 0, yo, ys, yread, 0, 32, 128, 0) &&
+                  nmb_encoder_end(enc) && nmb_command_buffer_commit(cb) && nmb_command_buffer_wait(cb, 10000) == 0;
+        const uint16_t *yh = yread ? (const uint16_t *)nmb_buffer_contents(yread) : NULL;
+        /* IEEE 754 half 1.0 = 0x3c00; BT.709 video white (Y=235, Cb=Cr=128) converts to ~1.0 (0x3bff..0x3c01). */
+        int ygood = yok && yh && yh[0] >= 0x3bf0 && yh[0] <= 0x3c10 && yh[1] >= 0x3bf0 && yh[1] <= 0x3c10 &&
+                    yh[2] >= 0x3bf0 && yh[2] <= 0x3c10 && yh[3] == 0x3c00;
+        CHECK(ygood, "YCBCR8_420_2P GPU compute conversion white=(%#x,%#x,%#x,%#x)",
+              yh ? yh[0] : 0, yh ? yh[1] : 0, yh ? yh[2] : 0, yh ? yh[3] : 0);
+        nmb_command_buffer_release(cb);
+
+        /* RGB8_420_2P (540): raw codes (Cr/255, Y/255, Cb/255, 1.0); with Cr=128 (~0.502 -> ~0x3804), Y=235 (~0.922 -> ~0x3b60), Cb=128. */
+        ytd.format = 540;
+        NmbTexture *rtex = nmb_texture_new_on_surface(ysurf, &ytd, 0, 16, 0x34323076u, 0, 4, 4, 64, 16);
+        cb = nmb_command_buffer_new(queue);
+        enc = nmb_blit_encoder_new(cb);
+        int rok = rtex && enc &&
+                  nmb_blit_texture_to_buffer(enc, rtex, 0, 0, yo, ys, yread, 0, 32, 128, 0) &&
+                  nmb_encoder_end(enc) && nmb_command_buffer_commit(cb) && nmb_command_buffer_wait(cb, 10000) == 0;
+        int rgood = rok && yh && yh[0] >= 0x37f0 && yh[0] <= 0x3820 && yh[1] >= 0x3b40 && yh[1] <= 0x3b80 &&
+                    yh[2] >= 0x37f0 && yh[2] <= 0x3820 && yh[3] == 0x3c00;
+        CHECK(rgood, "RGB8_420_2P GPU compute raw codes=(%#x,%#x,%#x,%#x)",
+              yh ? yh[0] : 0, yh ? yh[1] : 0, yh ? yh[2] : 0, yh ? yh[3] : 0);
+        nmb_command_buffer_release(cb);
+
+        /* YCBCR8_420_2P_sRGB (520): mid-gray Y=126 (~0.5 sRGB) -> linear ~0.214 (half ~0x32db). */
+        uint8_t nv12_gray[128];
+        memset(nv12_gray, 0, sizeof nv12_gray);
+        for (int y = 0; y < 4; y++) memset(nv12_gray + y * 16, 126, 4);
+        for (int y = 0; y < 2; y++)
+            for (int x = 0; x < 2; x++) {
+                nv12_gray[64 + y * 16 + x * 2] = 128;
+                nv12_gray[64 + y * 16 + x * 2 + 1] = 128;
+            }
+        NmbBuffer *gsurf = nmb_buffer_new(device, sizeof nv12_gray, 0, nv12_gray);
+        ytd.format = 520;
+        NmbTexture *stex = nmb_texture_new_on_surface(gsurf, &ytd, 0, 16, 0x34323076u, 0, 4, 4, 64, 16);
+        cb = nmb_command_buffer_new(queue);
+        enc = nmb_blit_encoder_new(cb);
+        int sok = stex && enc &&
+                  nmb_blit_texture_to_buffer(enc, stex, 0, 0, yo, ys, yread, 0, 32, 128, 0) &&
+                  nmb_encoder_end(enc) && nmb_command_buffer_commit(cb) && nmb_command_buffer_wait(cb, 10000) == 0;
+        /* sRGB 0.5 -> linear ~0.214 (IEEE half 0x3200..0x3380). */
+        int sgood = sok && yh && yh[0] >= 0x3200 && yh[0] <= 0x3380 && yh[1] == yh[0] && yh[2] == yh[0] && yh[3] == 0x3c00;
+        CHECK(sgood, "YCBCR8_420_2P_sRGB GPU compute mid-gray=(%#x,%#x,%#x,%#x)",
+              yh ? yh[0] : 0, yh ? yh[1] : 0, yh ? yh[2] : 0, yh ? yh[3] : 0);
+        nmb_command_buffer_release(cb);
+
+        /* View of YCBCR8_420_2P as YCBCR8_420_2P_sRGB (520). */
+        NmbTexture *yview = ytex ? nmb_texture_new_view(ytex, 520, 2, levels, slices, true) : NULL;
+        CHECK(yview != NULL, "nmb_texture_new_view of YCBCR8_420_2P as YCBCR8_420_2P_sRGB");
+
+        /* Intra-encoder memory barriers on render and compute encoders. */
+        cb = nmb_command_buffer_new(queue);
+        enc = nmb_render_encoder_new(cb, &pass);
+        int rb_ok = enc && nmb_render_set_pipeline(enc, rp) && nmb_render_set_viewport(enc, viewport) &&
+                    nmb_encoder_set_buffer(enc, 1, pb, 0, 0) && nmb_encoder_set_buffer(enc, 1, colb, 0, 1) &&
+                    nmb_render_draw(enc, 3, 0, 6, 1, 0) && nmb_encoder_memory_barrier(enc) && nmb_encoder_end(enc);
+        enc = rb_ok ? nmb_compute_encoder_new(cb) : NULL;
+        int cb_ok = enc && nmb_compute_set_pipeline(enc, pipeline) && nmb_encoder_set_buffer(enc, 0, input, 0, 0) &&
+                    nmb_encoder_set_buffer(enc, 0, output, 0, 1) && nmb_encoder_set_bytes(enc, 0, &scale, sizeof scale, 2) &&
+                    nmb_compute_dispatch(enc, grid, group, true) && nmb_encoder_memory_barrier(enc) && nmb_encoder_end(enc);
+        CHECK(cb_ok && nmb_command_buffer_commit(cb) && nmb_command_buffer_wait(cb, 10000) == 0,
+              "nmb_encoder_memory_barrier on render and compute encoders");
+        nmb_command_buffer_release(cb);
+
+        nmb_texture_release(yview);
+        nmb_texture_release(stex);
+        nmb_buffer_release(gsurf);
+        nmb_texture_release(rtex);
+        nmb_texture_release(ytex);
+        nmb_buffer_release(yread);
+        nmb_buffer_release(ysurf);
+    }
 
     /* The GPU memory row's census (CommandPoolRow.inc's GM and RP lines), weak in the plug-in. */
     uint64_t census[16];

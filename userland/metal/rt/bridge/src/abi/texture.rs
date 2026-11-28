@@ -142,18 +142,34 @@ pub extern "C" fn nmb_texture_new_on_buffer(buffer: *mut NmbBuffer, descriptor_:
     guard(std::ptr::null_mut(), || over_buffer(buffer, descriptor_, offset, bytes_per_row))
 }
 
-/// `newTextureWithDescriptor:iosurface:plane:`: the asked plane's bytes as a texture over the surface's buffer. Single-plane
-/// views of a multi-plane surface (such as plane 0 `R8Unorm` / plane 1 `RG8Unorm` of NV12 video, or `BGR10_XR` / `A8Unorm`
-/// of `b3a8`) already have their plane's offset and `bytes_per_row` and go straight to `over_buffer`; only a multi-plane
-/// Metal pixel format (one texture reading both planes at once) is refused because rt has no two-plane texture over a buffer.
+/// `newTextureWithDescriptor:iosurface:plane:`: two-plane YCbCr/RGB formats (`YCBCR8_420_2P`, `YCBCR8_420_2P_sRGB`,
+/// `RGB8_420_2P`, 10-bit unpacked/packed, 4:2:2/4:4:4) use rt patch 0011's GPU compute conversion (`Buffer::new_ycbcr_texture`);
+/// single-plane views of a multi-plane surface (such as plane 0 `R8Unorm` / plane 1 `RG8Unorm` of NV12 video) go straight to
+/// `over_buffer`.
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_texture_new_on_surface(buffer: *mut NmbBuffer, descriptor_: *const NmbTextureDescriptor, offset: u64,
-                                             bytes_per_row: u64, _pixel_format: u32, _plane: u64, _width: u64, _height: u64,
-                                             _chroma_offset: u64, chroma_bytes_per_row: u64) -> *mut NmbTexture {
+                                             bytes_per_row: u64, pixel_format: u32, _plane: u64, _width: u64, _height: u64,
+                                             chroma_offset: u64, chroma_bytes_per_row: u64) -> *mut NmbTexture {
     guard(std::ptr::null_mut(), || {
         let asked = raw::<rt::PixelFormat>(get(descriptor_)?.format, "pixel format")?;
         if chroma_bytes_per_row != 0 && matches!(asked, rt::PixelFormat::RGB10A82PXR10 | rt::PixelFormat::RGB10A82PXR10SRGB) {
             return Err("a two-plane RGB10A8_2P_XR10 texture over a surface is not made by the rt bridge".into());
+        }
+        if chroma_bytes_per_row != 0 && metal2vulkan::metal::format::ycbcr_format(asked).is_some() {
+            let b = get(buffer)?;
+            let d = device_of(b.device);
+            let (mut desc, source) = descriptor(descriptor_)?;
+            desc.pixel_format = asked;
+            let spec = rt::YcbcrSpec {
+                luma_offset: offset,
+                luma_bytes_per_row: bytes_per_row,
+                chroma_offset,
+                chroma_bytes_per_row,
+                fourcc: pixel_format,
+            };
+            let (t, index) = at_index(d, desc.pixel_format, desc.usage, |i| b.buffer.new_ycbcr_texture(&desc, i, spec))
+                .map_err(|w| format!("ycbcr texture over a surface: {w}"))?;
+            return Ok(boxed(NmbTexture::new(t, d, index, source)));
         }
         over_buffer(buffer, descriptor_, offset, bytes_per_row)
     })
@@ -172,7 +188,12 @@ fn view(texture: *mut NmbTexture, format: u64, kind: Option<u64>, levels: *const
     let d = device_of(t.device);
     let parent = t.texture.descriptor();
     let asked = format;
-    let format = super::pixel_format(format, "pixel format")?;
+    let raw_fmt = raw::<rt::PixelFormat>(format, "pixel format")?;
+    let format = if metal2vulkan::metal::format::ycbcr_format(raw_fmt).is_some() {
+        rt::PixelFormat::RGBA16Float
+    } else {
+        super::stored(raw_fmt)
+    };
     let (kind, l, s) = match kind {
         None => {
             let slices = match parent.texture_type {

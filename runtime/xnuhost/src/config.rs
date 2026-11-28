@@ -2202,6 +2202,56 @@ pub fn boot_args_bt_transport(args: &str) -> Option<u32> {
 /// (display-format=rgba16f) oneios-display-wide=1, which tells the guest's display to hand half-float surfaces to the
 /// scanout as they are instead of narrowing them to 8 bits. Err with no room in a C buffer of `size` bytes (what was
 /// added before stays).
+/// Apple Silicon's 24 MHz mach timebase, which iOS 27's CoreAudio (audiomxd / mediaplaybackd) and
+/// libswift_Concurrency assume. Passed to XNU's `droidvm-timebase-24mhz.patch` via `droidvm-timebase-hz=24000000`
+/// whenever the host counter runs at a different rate (19.2 MHz on Qualcomm SM8650).
+pub const GUEST_TIMEBASE_HZ: u64 = 24_000_000;
+
+/// Adds `droidvm-timebase-hz=24000000` when the host counter is not 24 MHz and boot-args do not already name
+/// `droidvm-timebase-hz=`. Passing `droidvm-timebase-hz=0` (or the host's rate) in boot-args opts out.
+pub fn timebase_boot_arg(args: &mut String, size: usize, host_hz: u64) -> Result<(), NoRoom> {
+    if host_hz != 0 && host_hz != GUEST_TIMEBASE_HZ && !has_switch(args, "droidvm-timebase-hz") {
+        append_arg(args, size, &format!("droidvm-timebase-hz={GUEST_TIMEBASE_HZ}"))?;
+    }
+    Ok(())
+}
+
+/// The active virtual timebase scale `(num, den, guest_hz)` matching `droidvm_virtual_timebase()` in
+/// `pexpert/arm/pe_identify_machine.c`: reduced `target / host_hz` when `droidvm-timebase-hz=<target>` is set and
+/// both reduced terms fit in `u16`, else `(1, 1, host_hz)`.
+pub fn timebase_scale(args: &str, host_hz: u64) -> (u32, u32, u64) {
+    if host_hz == 0 {
+        return (1, 1, 0);
+    }
+    let mut target: Option<u64> = None;
+    for w in words(args) {
+        if let Some(rest) = w.strip_prefix("droidvm-timebase-hz=") {
+            let parsed = if let Some(hex) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+                u64::from_str_radix(hex, 16).ok()
+            } else {
+                rest.parse::<u64>().ok()
+            };
+            if let Some(v) = parsed {
+                target = Some(v);
+            }
+        }
+    }
+    let Some(target) = target.filter(|&t| t != 0 && t != host_hz) else {
+        return (1, 1, host_hz);
+    };
+    let (mut a, mut b) = (target, host_hz);
+    while b != 0 {
+        let r = a % b;
+        a = b;
+        b = r;
+    }
+    let (num, den) = (target / a, host_hz / a);
+    if num > 0xffff || den > 0xffff {
+        return (1, 1, host_hz);
+    }
+    (num as u32, den as u32, target)
+}
+
 pub fn display_boot_args(
     args: &mut String,
     size: usize,

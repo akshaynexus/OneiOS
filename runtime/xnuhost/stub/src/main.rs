@@ -289,6 +289,26 @@ unsafe extern "C" fn xs_handler(signo: i32, info: *mut KSiginfo, uc: *mut KUcont
     // SAFETY: tp is the thread's trap page (its area's first page, shared with xnuhost), uc the kernel's frame.
     unsafe {
         let mc = addr_of_mut!((*uc).mc);
+        // Fast-path MACH_ARM_TRAP_ABSTIME (-3) and MACH_ARM_TRAP_CONTTIME (-4) when XNU runs with a scaled
+        // virtual timebase (droidvm-timebase-hz=24000000 over a 19.2 MHz counter): USER_TIMEBASE_NONE sends every
+        // userspace mach_absolute_time()/mach_continuous_time() through svc #0x80. Hosted XNU never sleeps
+        // (cpu_base_timebase == 0, mach_absolutetime_asleep == 0), so returning timebase_from_counter(CNTVCT_EL0)
+        // here matches handle_mach_absolute_time_trap/handle_mach_continuous_time_trap exactly without a vCPU
+        // round-trip.
+        if signo == SIGSYS && (*tp).booted != 0 {
+            let num = (*config).timebase_num as u64;
+            let den = (*config).timebase_den as u64;
+            let x16 = (*mc).regs[16] as i64;
+            if num != den
+                && den != 0
+                && (x16 == -3 || x16 == -4)
+                && read_volatile((*mc).pc.wrapping_sub(4) as *const u32) == 0xd400_1001
+            {
+                let c = counter();
+                (*mc).regs[0] = (c / den).wrapping_mul(num).wrapping_add((c % den).wrapping_mul(num) / den);
+                return;
+            }
+        }
         let st = addr_of_mut!((*tp).state);
         let trap = addr_of_mut!((*tp).trap);
 

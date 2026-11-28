@@ -597,7 +597,7 @@ fn reader_main(mut devices: Devices, running: std::sync::Arc<AtomicBool>) {
     let pen_index = devices.pen.as_ref().map(|_| devices.sources.len());
     let mut raw = [evdev::InputEvent::default(); 64];
     let mut batch = [Event::default(); 64];
-    let hz = crate::hostcalls::info().timebase_hz;
+    let hz = crate::cpu::guest_timebase_hz(crate::hostcalls::info().timebase_hz);
     while running.load(Ordering::Acquire) {
         // A pen frame held by the coalescing (pen.rs) is sent when its time comes, even if the pen sends nothing more.
         let mut timeout = 500;
@@ -619,7 +619,7 @@ fn reader_main(mut devices: Devices, running: std::sync::Arc<AtomicBool>) {
             }
             let Some(count) = evdev::read(p.fd, &mut raw) else { continue };
             let now_ns = monotonic_ns();
-            let now_counter = crate::cpu::counter();
+            let now_counter = crate::cpu::guest_counter();
             for (b, e) in batch.iter_mut().zip(&raw[..count]) {
                 *b = Event::new(e.sec * 1_000_000_000 + e.usec * 1000, e.kind, e.code, e.value);
             }

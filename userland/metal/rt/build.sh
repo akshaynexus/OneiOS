@@ -35,6 +35,7 @@ source_tree() {
   [ "$(git -C "$S" rev-parse HEAD)" = "$PIN" ] || { echo "metal-rt: $S is not at $PIN" >&2; exit 1; }
   # Idempotent: the tree is reset to the pin, then every patch applied.
   git -C "$S" checkout -q -- .
+  git -C "$S" clean -qfd
   for p in "$HERE"/patches/*.patch; do
     git -C "$S" apply "$p"
     say "applied $(basename "$p")"

@@ -2038,3 +2038,37 @@ fn the_catalog() {
         assert_eq!(oneios_switches::size(v), parse_size(v), "size {v:?}");
     }
 }
+
+#[test]
+fn timebase_boot_arg_and_scale() {
+    // 19.2 MHz host (Snapdragon SM8650) -> 24.0 MHz guest (Apple): appends droidvm-timebase-hz=24000000 and scales 5/4.
+    let mut b = String::from("-v debug=0x8");
+    assert!(timebase_boot_arg(&mut b, 1024, 19_200_000).is_ok());
+    assert_eq!(b, "-v debug=0x8 droidvm-timebase-hz=24000000");
+    assert_eq!(timebase_scale(&b, 19_200_000), (5, 4, GUEST_TIMEBASE_HZ));
+    assert_eq!(crate::cpu::scale_counter(4_000_000, 5, 4), 5_000_000);
+    // Overflow-safe scaling near u64::MAX / 2.
+    let big = 1_000_000_000_000_000_000u64; // 10^18 ticks (~1650 years at 19.2 MHz)
+    assert_eq!(crate::cpu::scale_counter(big, 5, 4), 1_250_000_000_000_000_000u64);
+
+    // 24 MHz host already matches Apple's rate: no boot-arg added, identity scale.
+    let mut b = String::from("-v");
+    assert!(timebase_boot_arg(&mut b, 1024, 24_000_000).is_ok());
+    assert_eq!(b, "-v");
+    assert_eq!(timebase_scale(&b, 24_000_000), (1, 1, 24_000_000));
+
+    // Explicit droidvm-timebase-hz=0 opts out of virtual timebase scaling.
+    let mut b = String::from("-v droidvm-timebase-hz=0");
+    assert!(timebase_boot_arg(&mut b, 1024, 19_200_000).is_ok());
+    assert_eq!(b, "-v droidvm-timebase-hz=0");
+    assert_eq!(timebase_scale(&b, 19_200_000), (1, 1, 19_200_000));
+
+    // Explicit custom droidvm-timebase-hz=N is respected and not overwritten.
+    let mut b = String::from("droidvm-timebase-hz=24000000 -v");
+    assert!(timebase_boot_arg(&mut b, 1024, 19_200_000).is_ok());
+    assert_eq!(b, "droidvm-timebase-hz=24000000 -v");
+    assert_eq!(timebase_scale(&b, 19_200_000), (5, 4, 24_000_000));
+
+    // Non-coprime rates exceeding u16 after GCD fall back to identity (matches XNU's droidvm_virtual_timebase).
+    assert_eq!(timebase_scale("droidvm-timebase-hz=24000000", 19_200_001), (1, 1, 19_200_001));
+}

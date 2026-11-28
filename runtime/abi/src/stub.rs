@@ -55,6 +55,11 @@ pub struct XsConfig {
     pub uid: i32,
     /// 0 = no seccomp (hosts without it; svc is then not trapped)
     pub filter_length: u32,
+    /// Virtual timebase scale (droidvm-timebase-hz / CNTFRQ_EL0, e.g. 5/4 for 24 MHz over 19.2 MHz).
+    /// When timebase_num != timebase_den and timebase_den != 0, xs_handler fast-paths MACH_ARM_TRAP_ABSTIME (-3)
+    /// and MACH_ARM_TRAP_CONTTIME (-4) directly from CNTVCT_EL0 without a vCPU round-trip.
+    pub timebase_num: u32,
+    pub timebase_den: u32,
     pub filter: [XsFilterInsn; XS_FILTER_MAX],
 }
 

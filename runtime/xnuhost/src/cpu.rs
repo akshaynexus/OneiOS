@@ -20,6 +20,44 @@ use xnuhost_abi::{XhCpu, XhFrame, XhUpcalls};
 
 pub use crate::config::MAX_CPUS;
 
+static TIMEBASE_NUM: AtomicU32 = AtomicU32::new(1);
+static TIMEBASE_DEN: AtomicU32 = AtomicU32::new(1);
+
+/// Records the guest virtual timebase scale `(num, den)` (`droidvm-timebase-hz / CNTFRQ_EL0`).
+pub fn set_timebase_scale(num: u32, den: u32) {
+    let (n, d) = if num != 0 && den != 0 { (num, den) } else { (1, 1) };
+    TIMEBASE_NUM.store(n, Relaxed);
+    TIMEBASE_DEN.store(d, Relaxed);
+}
+
+/// Active virtual timebase scale `(num, den)`.
+pub fn timebase_scale() -> (u32, u32) {
+    (TIMEBASE_NUM.load(Relaxed), TIMEBASE_DEN.load(Relaxed))
+}
+
+/// Scales a raw host counter value into guest `mach_absolute_time` ticks (matching `timebase_from_counter`).
+#[inline]
+pub fn scale_counter(c: u64, num: u32, den: u32) -> u64 {
+    if num == den || den == 0 {
+        return c;
+    }
+    let (num, den) = (u64::from(num), u64::from(den));
+    (c / den).wrapping_mul(num).wrapping_add((c % den).wrapping_mul(num) / den)
+}
+
+/// Current host counter scaled to the guest's `mach_absolute_time` rate (for HID scan timestamps).
+#[inline]
+pub fn guest_counter() -> u64 {
+    let (num, den) = timebase_scale();
+    scale_counter(counter(), num, den)
+}
+
+/// Effective guest timebase frequency in Hz for a host counter frequency `host_hz`.
+pub fn guest_timebase_hz(host_hz: u64) -> u64 {
+    let (num, den) = timebase_scale();
+    scale_counter(host_hz, num, den)
+}
+
 /// `struct xh_cpu` with every field an atomic: the kernel, the signal handlers and other vCPUs read and write it at
 /// once. The same layout as [`XhCpu`] (checked below); the kernel gets a `*mut XhCpu` to it.
 #[repr(C)]

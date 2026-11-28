@@ -386,6 +386,21 @@ pub extern "C" fn nmb_encoder_wait_fence(encoder_: *mut NmbEncoder, fence: *mut 
     })
 }
 
+/// `memoryBarrierWithScope:` / `memoryBarrierWithResources:count:` / `textureBarrier`: forwards intra-encoder
+/// memory barriers to rt's compute and render encoders so feedback-loop attachment reads (`self.owed` -> `ordered()`),
+/// shadow copies (`shadowed.held.clear()`), and compute dispatches flush writes before subsequent reads.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_encoder_memory_barrier(encoder_: *mut NmbEncoder) -> bool {
+    guard(false, || {
+        match &mut encoder(encoder_)?.kind {
+            Kind::Compute(c) => c.memory_barrier(),
+            Kind::Render(r) => r.memory_barrier().map_err(e("memory barrier"))?,
+            Kind::Blit(_) => {}
+        }
+        Ok(true)
+    })
+}
+
 fn usage(raw_usage: u64) -> rt::ResourceUsage {
     let mut u = rt::ResourceUsage::READ;
     if raw_usage & 2 != 0 {

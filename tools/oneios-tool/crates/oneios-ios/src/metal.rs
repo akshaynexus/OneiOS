@@ -407,6 +407,33 @@ fn frontend_camera_edits() -> Vec<(&'static str, String, &'static str)> {
             .into(),
             "a compute pipeline rebuilt with its unset constants zero keeps its function until the reflection is read (NativeMetal 3c46b5e: cameracaptured's crash)",
         ),
+        (
+            "- (void)memoryBarrierWithScope:(MTLBarrierScope)s {(void)s;}\n@end\n",
+            concat!(
+                "// OneiOS (oneios-tool ios metal-stage-edit): forward intra-encoder memory barriers to the rt bridge\n",
+                "// (weak so the 624bab3 bridge still links unchanged). Without this, compute dispatches and render-pass\n",
+                "// attachment feedback reads after the first feedback_moves never called memory_barrier().\n",
+                "extern \"C\" bool nmb_encoder_memory_barrier(NmbEncoder *) __attribute__((weak));\n",
+                "- (void)memoryBarrierWithScope:(MTLBarrierScope)s {(void)s;if(nmb_encoder_memory_barrier)ENCODE([self check:nmb_encoder_memory_barrier(self.handle) what:\"memoryBarrier\"]);}\n",
+                "- (void)memoryBarrierWithResources:(const id<MTLResource> __unsafe_unretained [])r count:(NSUInteger)n {(void)r;(void)n;if(nmb_encoder_memory_barrier)ENCODE([self check:nmb_encoder_memory_barrier(self.handle) what:\"memoryBarrierWithResources\"]);}\n",
+                "@end\n"
+            )
+            .into(),
+            "NBComputeEncoder forwards memoryBarrierWithScope: and memoryBarrierWithResources:count: to rt",
+        ),
+        (
+            "- (void)updateFence:(id<MTLFence>)fence afterStages:(MTLRenderStages)stages {[self fence:fence stages:stages update:true];}\n- (void)waitForFence:(id<MTLFence>)fence beforeStages:(MTLRenderStages)stages {[self fence:fence stages:stages update:false];}\n@end\n",
+            concat!(
+                "- (void)updateFence:(id<MTLFence>)fence afterStages:(MTLRenderStages)stages {[self fence:fence stages:stages update:true];}\n",
+                "- (void)waitForFence:(id<MTLFence>)fence beforeStages:(MTLRenderStages)stages {[self fence:fence stages:stages update:false];}\n",
+                "- (void)memoryBarrierWithScope:(MTLBarrierScope)s afterStages:(MTLRenderStages)a beforeStages:(MTLRenderStages)b {(void)s;(void)a;(void)b;if(nmb_encoder_memory_barrier)ENCODE([self check:nmb_encoder_memory_barrier(self.handle) what:\"memoryBarrier\"]);}\n",
+                "- (void)memoryBarrierWithResources:(const id<MTLResource> __unsafe_unretained [])r count:(NSUInteger)n afterStages:(MTLRenderStages)a beforeStages:(MTLRenderStages)b {(void)r;(void)n;(void)a;(void)b;if(nmb_encoder_memory_barrier)ENCODE([self check:nmb_encoder_memory_barrier(self.handle) what:\"memoryBarrierWithResources\"]);}\n",
+                "- (void)textureBarrier {if(nmb_encoder_memory_barrier)ENCODE([self check:nmb_encoder_memory_barrier(self.handle) what:\"textureBarrier\"]);}\n",
+                "@end\n"
+            )
+            .into(),
+            "NBRenderEncoder forwards memoryBarrierWithScope:, memoryBarrierWithResources:count:, and textureBarrier to rt",
+        ),
     ]
 }
 

@@ -780,6 +780,9 @@ mod machine {
         cfg.trap_fd = trap_fd;
         cfg.kick_signal = kick_signal() as u32;
         cfg.uid = c.task_uid.map_or(-1, |u| u as i32);
+        let (tb_num, tb_den) = cpu::timebase_scale();
+        cfg.timebase_num = tb_num;
+        cfg.timebase_den = tb_den;
         // The hand-off (xnuhost-abi's stub.rs): how long each side spins before it sleeps. Measured with the bench of
         // xnuhost/check-arm64.sh (docs/booter.md 2.6a): the defaults are what that measurement chose.
         let hz = cpu::counter_hz();

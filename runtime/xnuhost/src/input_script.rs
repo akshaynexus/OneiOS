@@ -288,7 +288,7 @@ fn script_main(
     mut pen: Option<pen::Source<InputDev>>,
     running: Arc<AtomicBool>,
 ) {
-    let hz = crate::hostcalls::info().timebase_hz;
+    let hz = crate::cpu::guest_timebase_hz(crate::hostcalls::info().timebase_hz);
     let mut start = 0;
     let mut left = 0; // repeats still to run; 0 before the first `repeat` is met
     let mut counting = false;
@@ -317,7 +317,7 @@ fn script_main(
                         p.feed(&ev, now_ns); // the pen's filter (pen.rs), as the phone's pen
                     }
                 } else {
-                    source.feed(&ev, now_ns, crate::cpu::counter(), hz);
+                    source.feed(&ev, now_ns, crate::cpu::guest_counter(), hz);
                 }
             }
             Step::Repeat(n) => match n {

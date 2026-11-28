@@ -920,8 +920,9 @@ enable` +134.0 s, `first scan request` +248.1 s after the driver's start. Still 
   moment minus the age, and the record was asked for 1.6 s later (3951 ms). The clock: `TIMESTAMP` is
   `mach_continuous_time` in ns (kernel), `-[CWFScanResult age]` is `clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)` minus
   it, and CLOCK_MONOTONIC_RAW is `mach_continuous_time` scaled by `mach_timebase_info`, which is the kernel's
-  `rtclock_timebase_const`, set from the same frequency as `absolutetime_to_nanoseconds` (`osfmk/arm/rtclock.c`); the
-  guest's timebase is not scaled on the phone (xnuhost gives the counter's own frequency, `droidvm-timebase-hz` unset).
+  `rtclock_timebase_const`, set from the same frequency as `absolutetime_to_nanoseconds` (`osfmk/arm/rtclock.c`); at the
+  time of that trace the guest's timebase was unscaled (19.2 MHz), and since 2026-11-28 xnuhost scales it to 24 MHz via
+  `droidvm-timebase-hz=24000000` + the `xs_handler` stub fast-path (`docs/booter.md` 2.4).
   [I] So the age CoreWiFi computes is the right one; not seen in a log.
 - Auto-join's filter (`__performScanWithChannelList:...`) is the scan's own `CWFScanParameters`: BSS type, PHY mode,
   include-hidden, `addScanDurationToMaxAge`, the channels (the known networks' recent ones), the SSID list, dwell time,

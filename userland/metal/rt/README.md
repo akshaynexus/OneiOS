@@ -223,8 +223,14 @@ Its findings that hold for rt too: the pipeline cache and preprocess-pool commit
 | 0008 render-pass-split-counts | the other effort's RP counters | `abi_smoke`'s census check |
 | 0009 complete-poll-device-lost | poll `vkWaitSemaphores` every 100 ms while GPU work is in flight so Turnip's `vk_device_check_status` detects KGSL GPU resets instead of hanging forever | rt unit tests (`build.sh test`) |
 | 0010 adreno-large-constants-to-blob | port OneiOS 0101 + 0102: large indexed constant globals (>4 KiB) go to the constant blob and `blob_ptr` resolves constant pointer casts / GEPs | rt + translator unit tests (`build.sh test`) |
+| 0011 ycbcr-two-plane-textures | GPU compute conversion of all 27 two-plane YCbCr/RGB formats (`YCBCR8_420_2P`, `_sRGB`, `RGB8_420_2P`, 10-bit unpacked/packed, 4:2:0/4:2:2/4:4:4) over IOSurface buffers into optimal `RGBA16Float` images on submission (`over::record_side`) | rt unit tests (`build.sh test`) + `abi_smoke` on Intel Vulkan (`YCBCR8_420_2P`, `RGB8_420_2P`, `YCBCR8_420_2P_sRGB`, views) |
 
-With all ten: rt's unit tests (`build.sh test`), `abi_smoke` and `m2v-rt-check --selftest` pass.
+With all eleven: rt's unit tests (`build.sh test`), `abi_smoke` and `m2v-rt-check --selftest` pass.
+
+**v0.1.45 fixes (2026-11-28, host-tested; phone verification next):**
+1. **Two-plane YCbCr / RGB video surfaces (`rt 0011`, `abi/texture.rs`, `abi/device.rs`)**: `backboardd` (2,011 `YCBCR84202P` refusals) and `CollectionsPoster` (538 `RGB84202P` refusals) still asked for two-plane YCbCr/RGB Metal textures over decoded video IOSurfaces even with `supportsYCBCRFormats=0`, leaving video black. Patch `0011` adds a self-contained Vulkan 1.3 compute shader (`ycbcr.rs`, `ycbcr_spv.rs`) matching Apple Silicon's 4:2:0 (9/3/3/1) / 4:2:2 (3/1) / 4:4:4 (1/1) chroma filtering and fixed-point BT.601/BT.709/BT.2020 video/full-range conversion, dispatched during `over::record_side` into an optimal `RGBA16Float` image. `supportsYCBCRFormats` and `supportsYCBCRPackedFormats` now answer `1` (PQ/XR/12-bit remain `0`), and `nmb_texture_new_view` maps YCbCr view formats to the `RGBA16Float` backing format.
+2. **Intra-encoder memory barriers (`abi/command.rs`, `oneios-ios/src/metal.rs`)**: `NativeBridgeMetalFrontend.mm` implemented `NBComputeEncoder::memoryBarrierWithScope:` as a no-op and left `NBRenderEncoder`'s `memoryBarrierWithScope:afterStages:beforeStages:`, `memoryBarrierWithResources:count:afterStages:beforeStages:`, and `textureBarrier` unimplemented (silently swallowed by `NBObject::forwardInvocation:`). After a render pass's first `feedback_moves` transition, subsequent backdrop/composite draws reading the render target never set `self.owed`, omitting `vkCmdPipelineBarrier2` between color writes and fragment reads on Adreno 750 (`sysmem` CCU cache-line corruption during Home Screen/Settings/Safari page swipes), and compute encoders dropped intra-encoder barriers. `nmb_encoder_memory_barrier` now forwards all five selectors to `rt`'s `RenderCommandEncoder::memory_barrier()` and `ComputeCommandEncoder::memory_barrier()`.
+3. **Sandbox-safe `RtSwitches.inc`**: `rtSwitches()` now still applies `TU_DEBUG=sysmem,nocb` when `sysctlbyname("kern.bootargs", ...)` is blocked by an app/daemon sandbox, and logs one `os_log` line (`OneiOS rt switches: ...`) recording the active `TU_DEBUG`, `dont_care`, and `queue_priority` values.
 
 ### DontCare stores and split passes (2026-11-28)
 
@@ -303,8 +309,8 @@ What the bridge does that the old runtime did (rt's README, "What the consumer i
 | Device answers | the old runtime's answers on the Adreno 750 (dumped on the laptop: 28 counts, 23 flags, the public queries), the Vulkan limits read where they depend on the device; `supportsFamily:` true for Apple1-3 and Common1-2 as before |
 | Telemetry rows | rt's `Metrics` and `Gauges` where they count the same thing; the stage ring, allocation sites and no-copy remaps answer nothing |
 
-Not made by this bridge (each call fails with its reason in `nmb_last_error`): two-plane YCbCr textures over a surface
-(`supportsYCBCRFormats12` answers NO), sparse heaps, a tessellation factor scale other than 1, patches drawn with a
+Not made by this bridge (each call fails with its reason in `nmb_last_error`): two-plane `RGB10A8_2P_XR10` / 12-bit / PQ / XR YCbCr textures over a surface
+(`supportsYCBCRFormats12`, `PQ`, `XR` answer NO; 8-bit and 10-bit SDR two-plane YCbCr/RGB formats are converted on the GPU by rt 0011), sparse heaps, a tessellation factor scale other than 1, patches drawn with a
 control point index buffer, blit option `RowLinearPVRTC`, pipeline states' resource IDs (0; rt refuses indirect command
 buffers on Turnip anyway).
 

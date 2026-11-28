@@ -913,6 +913,14 @@ it is `runtime/abi/src/stub.rs`, shared by the stub and xnuhost.
   interrupts masked (the return path of a host call belongs to the vCPU the call started on).
 - The timer is CNTVCT_EL0 (the kernel and iOS tasks read it directly; `/cpus` timebase = CNTFRQ_EL0) with a
   per-CPU POSIX timer (`SIGEV_THREAD_ID`) for the deadline; its line is INTID 27, a level, as ArmCpu takes it.
+- **24 MHz virtual timebase on non-24 MHz hosts (2026-11-28, `config.rs`, `cpu.rs`, `stub/src/main.rs`):** Qualcomm
+  SM8650 runs CNTVCT_EL0 at 19.2 MHz while iOS userland frameworks (`CoreAudio` / `audiomxd` / `mediaserverd`) assume
+  Apple Silicon's 24 MHz `mach_absolute_time` rate (causing a 0.8000x audio clock ratio, `Deadline is prior to Start
+  time` and `SafetyViolationOccurred` audio glitching). When `host_hz != 24_000_000`, `xnuhost` now automatically appends
+  `droidvm-timebase-hz=24000000` (unless already set or `=0`), scales HID timestamps (`guest_counter()` /
+  `guest_timebase_hz()`), and handles `MACH_ARM_TRAP_ABSTIME` (`-3`) and `MACH_ARM_TRAP_CONTTIME` (`-4`) inside the
+  seccomp `SIGSYS` stub fast-path (`XsConfig.timebase_num/den`, exact 5/4 rational scaling matching XNU's
+  `droidvm_virtual_timebase()`), logging `timebase: 19200000 Hz host -> 24000000 Hz guest (5/4)` at boot.
 - **The host timer is armed only when the deadline comes earlier** (`timer-coalesce=1`, the default since
   fix/unmap-fanout, 2026-11-24; `cpu.rs` `timer_set`, `timer_signal`). XNU sets a new deadline at nearly every dispatch
   (the next thread's quantum), each one later than the last: on the phone (2026-11-24 01:17) 497,376 sets per 30 s,

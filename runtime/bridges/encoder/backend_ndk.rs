@@ -405,7 +405,9 @@ mod ffi {
         }
     }
 
-    /// A new AMediaFormat with the mime, size and, given, the color format and profile; deleted by the caller.
+    /// A new AMediaFormat with the mime, optional size (omitted when either is 0, since
+    /// `AMediaCodecStore_findNextEncoderForFormat` matches every key set and rejects 0x0) and,
+    /// given, the color format and profile; deleted by the caller.
     ///
     /// # Safety
     /// NDK calls; the caller deletes the format.
@@ -420,8 +422,10 @@ mod ffi {
         unsafe {
             let f = AMediaFormat_new();
             AMediaFormat_setString(f, AMEDIAFORMAT_KEY_MIME, mime(codec).as_ptr());
-            AMediaFormat_setInt32(f, AMEDIAFORMAT_KEY_WIDTH, width as i32);
-            AMediaFormat_setInt32(f, AMEDIAFORMAT_KEY_HEIGHT, height as i32);
+            if width > 0 && height > 0 {
+                AMediaFormat_setInt32(f, AMEDIAFORMAT_KEY_WIDTH, width as i32);
+                AMediaFormat_setInt32(f, AMEDIAFORMAT_KEY_HEIGHT, height as i32);
+            }
             if let Some(color) = color {
                 AMediaFormat_setInt32(f, AMEDIAFORMAT_KEY_COLOR_FORMAT, color);
             }

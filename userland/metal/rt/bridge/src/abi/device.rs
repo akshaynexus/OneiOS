@@ -593,11 +593,11 @@ fn device_answer(d: &NmbDevice, selector: &str, arg: u64) -> Result<u64, String>
         "supportsMemorylessRenderTargets" => 1,
         // The old runtime answered false on the Adreno 750.
         "supportsSamplerReductionMode" => 0,
-        // No two-plane YCbCr textures through this bridge yet (abi::texture); override _MTLDevice's
-        // Apple3=YES answers so CoreAnimation samples plane 0 (R8Unorm) and plane 1 (RG8Unorm) separately.
-        "supportsYCBCRFormats"
-        | "supportsYCBCRPackedFormats"
-        | "supportsYCBCRFormatsPQ"
+        // Two-plane 8-bit and 10-bit YCbCr/RGB formats (4:2:0, 4:2:2, 4:4:4, unpacked and packed,
+        // Converted, sRGB and raw Codes) are converted on the GPU via `Buffer::new_ycbcr_texture`
+        // (rt patch 0011). PQ, XR and 12-bit variants stay 0 so CoreAnimation sticks to 8/10-bit SDR.
+        "supportsYCBCRFormats" | "supportsYCBCRPackedFormats" => 1,
+        "supportsYCBCRFormatsPQ"
         | "supportsYCBCRFormatsXR"
         | "supportsYCBCRFormats12"
         | "supportsYCBCRPackedFormats12" => 0,

@@ -10,6 +10,7 @@
 //                                         displays — when oneios-display-wide=1 is not set — TU_DEBUG=sysmem,nocb is
 //                                         set before deviceForPort so Turnip renders in system memory, avoiding GMEM
 //                                         tile/feedback-loop corruption on Adreno 750; sheng-tu-debug= still overrides).
+#include <os/log.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/sysctl.h>
@@ -29,15 +30,21 @@ static bool bootWord(const char *args, const char *word) {
 __attribute__((constructor)) static void rtSwitches() {
     char args[1024] = {};
     size_t size = sizeof(args) - 1;
-    if (sysctlbyname("kern.bootargs", args, &size, nullptr, 0)) return;
-    if (bootWord(args, "oneios-dont-care=1")) setenv("METAL2VULKAN_DONT_CARE_STORES", "1", 1);
+    const bool haveArgs = (sysctlbyname("kern.bootargs", args, &size, nullptr, 0) == 0);
+    if (haveArgs && bootWord(args, "oneios-dont-care=1")) setenv("METAL2VULKAN_DONT_CARE_STORES", "1", 1);
     // The plug-in sets "high" later in the render server without overwriting: "default" set here first stays.
-    if (bootWord(args, "oneios-queue-priority=0")) setenv("METAL2VULKAN_QUEUE_PRIORITY", "default", 1);
+    if (haveArgs && bootWord(args, "oneios-queue-priority=0")) setenv("METAL2VULKAN_QUEUE_PRIORITY", "default", 1);
     // On 8-bit BGRA displays (the default without oneios-display-wide=1), Turnip's GMEM path has known tile
     // swap/feedback-loop corruption on Adreno 750 and was measured slightly slower than sysmem (NativeAdrenoMetalPlugin.mm).
-    // Set sysmem,nocb without overwriting so sheng-tu-debug= and /private/var/ngpu/tu_debug still win.
-    if (!bootWord(args, "oneios-display-wide=1") && !bootWord(args, "oneios-gmem=1") && !strstr(args, "sheng-tu-debug="))
+    // Apply even if kern.bootargs is unreadable under a tight sandbox; overwrite=0 so sheng-tu-debug= and
+    // /private/var/ngpu/tu_debug still win.
+    if (!haveArgs || (!bootWord(args, "oneios-display-wide=1") && !bootWord(args, "oneios-gmem=1") && !strstr(args, "sheng-tu-debug=")))
         setenv("TU_DEBUG", "sysmem,nocb", 0);
+    const char *tu = getenv("TU_DEBUG");
+    const char *dc = getenv("METAL2VULKAN_DONT_CARE_STORES");
+    const char *qp = getenv("METAL2VULKAN_QUEUE_PRIORITY");
+    os_log(OS_LOG_DEFAULT, "OneiOS rt switches: TU_DEBUG=%{public}s dont_care=%{public}s queue_priority=%{public}s bootargs=%d",
+           tu ? tu : "(unset)", dc ? dc : "0", qp ? qp : "(default)", haveArgs ? 1 : 0);
 }
 
 }  // namespace oneios_rt

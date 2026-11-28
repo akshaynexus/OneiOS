@@ -233,6 +233,97 @@ fn describe(codec: u32, input: u32, w: u32, h: u32) -> String {
     format!("{name} {w}x{h} ({samples})")
 }
 
+/// Lightweight binder stubs registered by `oneios-encoder` only when `system_server` is stopped
+/// (`AServiceManager_checkService` returns null). During a session with `system_server` down,
+/// `libstagefright.so` / `mediametrics` call `waitForService("package_native")` and Samsung's
+/// `libcodecsolutionhelper.so` calls `waitForService("vendor.samsung.frameworks.codecsolution.ISehCodecSolution/default")`,
+/// blocking `AMediaCodec_configure` and `AMediaCodec_start` forever (`Waited one second for package_native`,
+/// 2026-11-28 `ewlogd`). Answering `STATUS_UNKNOWN_TRANSACTION` lets both fall back immediately; when
+/// `oneios-encoder` exits on return, `servicemanager` removes the dead binders automatically.
+#[cfg(target_os = "android")]
+fn register_missing_binder_stubs() -> String {
+    use std::ffi::{c_char, c_void, CStr};
+    type CheckService = unsafe extern "C" fn(*const c_char) -> *mut c_void;
+    type AddService = unsafe extern "C" fn(*mut c_void, *const c_char) -> i32;
+    type DecStrong = unsafe extern "C" fn(*mut c_void);
+    type OnCreate = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+    type OnDestroy = unsafe extern "C" fn(*mut c_void);
+    type OnTransact = unsafe extern "C" fn(*mut c_void, u32, *const c_void, *mut c_void) -> i32;
+    type ClassDefine = unsafe extern "C" fn(*const c_char, OnCreate, OnDestroy, OnTransact) -> *mut c_void;
+    type BinderNew = unsafe extern "C" fn(*const c_void, *mut c_void) -> *mut c_void;
+
+    unsafe extern "C" fn on_create(args: *mut c_void) -> *mut c_void {
+        args
+    }
+    unsafe extern "C" fn on_destroy(_user_data: *mut c_void) {}
+    unsafe extern "C" fn on_transact(_binder: *mut c_void, _code: u32, _in: *const c_void, _out: *mut c_void) -> i32 {
+        -libc::EBADMSG // STATUS_UNKNOWN_TRANSACTION
+    }
+
+    let sym = |name: &CStr| onecamera::android::platform_symbol(name);
+    let (Some(check), Some(add), Some(dec), Some(define), Some(new)) = (
+        sym(c"AServiceManager_checkService"),
+        sym(c"AServiceManager_addService"),
+        sym(c"AIBinder_decStrong"),
+        sym(c"AIBinder_Class_define"),
+        sym(c"AIBinder_new"),
+    ) else {
+        return "binder stubs: skipped (no libbinder_ndk service symbols)".to_string();
+    };
+    // SAFETY: platform symbols of libbinder_ndk, matching binder_ibinder.h / binder_manager.h.
+    let (check, add, dec, define, new) = unsafe {
+        (
+            std::mem::transmute::<*mut c_void, CheckService>(check),
+            std::mem::transmute::<*mut c_void, AddService>(add),
+            std::mem::transmute::<*mut c_void, DecStrong>(dec),
+            std::mem::transmute::<*mut c_void, ClassDefine>(define),
+            std::mem::transmute::<*mut c_void, BinderNew>(new),
+        )
+    };
+
+    const SERVICES: &[(&str, &CStr, &CStr)] = &[
+        ("package_native", c"package_native", c"android.content.pm.IPackageManagerNative"),
+        (
+            "ISehCodecSolution",
+            c"vendor.samsung.frameworks.codecsolution.ISehCodecSolution/default",
+            c"vendor.samsung.frameworks.codecsolution.ISehCodecSolution",
+        ),
+    ];
+
+    let mut parts = Vec::with_capacity(SERVICES.len());
+    for &(short, instance, descriptor) in SERVICES {
+        // SAFETY: valid C strings and libbinder_ndk callbacks; the created binder is kept alive for the helper's lifetime.
+        let status = unsafe {
+            let existing = check(instance.as_ptr());
+            if !existing.is_null() {
+                dec(existing);
+                "present".to_string()
+            } else {
+                let clazz = define(descriptor.as_ptr(), on_create, on_destroy, on_transact);
+                if clazz.is_null() {
+                    "class-null".to_string()
+                } else {
+                    let binder = new(clazz, std::ptr::null_mut());
+                    if binder.is_null() {
+                        "binder-null".to_string()
+                    } else {
+                        let rc = add(binder, instance.as_ptr());
+                        if rc == 0 {
+                            // Keep one strong reference for the helper's lifetime so servicemanager retains the stub.
+                            "stubbed".to_string()
+                        } else {
+                            dec(binder);
+                            format!("add-failed({rc})")
+                        }
+                    }
+                }
+            }
+        };
+        parts.push(format!("{short}={status}"));
+    }
+    format!("binder stubs: {}", parts.join(", "))
+}
+
 /// This process's binder threads (Android), as the line says them.
 #[cfg(target_os = "android")]
 pub fn binder_threads() -> String {
@@ -268,7 +359,8 @@ pub fn binder_threads() -> String {
         }
         _ => "libhidlbase not loaded (no hwbinder pool)",
     };
-    format!("binder threads: {binder}; {hidl}")
+    let stubs = register_missing_binder_stubs();
+    format!("binder threads: {binder}; {hidl}; {stubs}")
 }
 
 /// The warm-up (Android, a thread of its own): the codec store's HEVC encoder and one HEVC encoder opened and closed,

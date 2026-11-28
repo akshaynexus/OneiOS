@@ -720,6 +720,27 @@ pub fn main() -> i32 {
     memory::ram_choice_log(&config);
     s.usb_tick(&config, true, "");
 
+    // iOS 27's CoreAudio (audiomxd / mediaplaybackd) and libswift_Concurrency assume Apple's 24 MHz timebase;
+    // on a 19.2 MHz Qualcomm counter, audio clock ran at 0.8000x (ratio -0.20) with thousands of HALS_IOThread
+    // deadline errors. Pass droidvm-timebase-hz=24000000 and arm the stub's SIGSYS fast-path before task::init.
+    let host_hz = cpu::counter_hz();
+    if config::timebase_boot_arg(&mut config.boot_args, config::BOOT_ARGS_SIZE, host_hz).is_err() {
+        loge!("no room in the boot arguments for droidvm-timebase-hz");
+        return EXIT_SETUP;
+    }
+    let (tb_num, tb_den, guest_hz) = config::timebase_scale(&config.boot_args, host_hz);
+    cpu::set_timebase_scale(tb_num, tb_den);
+    if tb_num != tb_den {
+        logi!(
+            "timebase: {} Hz host -> {} Hz guest ({}/{}; droidvm-timebase-hz={}, stub fast-path on)",
+            host_hz,
+            guest_hz,
+            tb_num,
+            tb_den,
+            guest_hz
+        );
+    }
+
     // Order matters: the RAM memfd and the task factory come first, while this process is still single-threaded and
     // has nothing of the guest mapped.
     mem::map_limit();
