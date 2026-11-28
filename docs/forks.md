@@ -1,12 +1,40 @@
-# Devices and forks (2026-11-27)
+# Devices and forks (2026-11-28)
 
 One project, many phones. This file maps every known OneiOS device fork: what runs where,
-what already flowed back into `main`, and what is still fork-only. Status as of 2026-11-27;
+what already flowed back into `main`, and what is still fork-only. Status as of 2026-11-28;
 fork contents move fast and this file will go stale — the dates say when it was true.
 
 Our own target stays the rooted Galaxy S24 Ultra (the owner's SM-S928B, SM8650; every SM-S928 model, the Canadian
 SM-S928W too, takes the same path: `docs/hardware.md` 7h, "The S24 Ultra's models"); everything below is
 judged by what it teaches `main` or what runs on more phones without breaking the S24 Ultra.
+
+## The survey of 2026-11-28 (`port/fork-backports-2026-11-28`)
+
+Method: `gh api repos/akshaynexus/OneiOS/forks --paginate` (9 forks), `gh api repos/akshaynexus/OneOS/forks --paginate`,
+and the forks of every fork (only `YMGPwcca/OneiOS` has any: `YumikoHayamato/OneiOS`, `jonrazta89/OneiOS`; and
+`Musicalista/OneiOS-A56`: `winterballs/Easy-OneiOS-A56B-A56E`). Every fork fetched; a branch's new commits are
+`git log --since=2026-11-26T12:00 BRANCH --not --remotes=origin`. Also re-read: every candidate this file deferred on
+2026-11-27 and 2026-11-23. Host-tested on the build laptop; **not booted on a phone**.
+
+| Fork | Pushed | New since 2026-11-27 | This pass (2026-11-28) |
+|---|---|---|---|
+| `YMGPwcca/OneiOS` | 2026-11-28 | `feat/sm8850-stock-session-integration`: 63, `feat/sm8850-xnuhost-perf-p0`: 48 (of which `bb950679`, `257f7ee7` already ported 2026-11-27) | **Ported (into Rust)**: `8be9ec18` virtio-gpu fast lane reads the slow lane's watermark only on a retry (`virtio_gpu.rs` `worker`: a `lanes` lock and unlock fewer per fast command; only that thread queues slow jobs, so the count is the same) and a same-layout scanout is copied byte for byte per segment (`rows_into`: no `convert_to` call or split-pixel carry for B,G,R,X/A onto B,G,R,X and half floats onto half floats); from the deferred audio chain, `c4d9e318` (one target raise per 5 ms guest period for xruns and underruns together: one MMAP starvation gave 18 xrun increments in 0.3 ms and drove the level to its 80 ms ceiling; every phone, `aaudio_helper.rs` `Ring::raise_target`) and `7cf70ce7` + `4dd7242c` (the probe's speaker stream prefilled with silence before `requestStart`, its frames counted; opt-in `ONEIOS_AUDIO_PROBE_PREFILL=1`, set by the `galaxy-s26-ultra` row only, so the S24 Ultra's probe is unchanged). **Already here**: `72517d38` (the encoder's binder pool: the Rust helper starts libbinder_ndk's and libhidlbase's pools on every phone). **Not taken**: `9abed4b5` (partial-lock late-damage drain in the C display helper: our Rust helper has a reader thread and a poster that locks the buffer whole, no post-lock drain to extend), `f2570647` (helper errors instead of a timed-out EOS: our device side has no `ENC_MSG_ERROR` path, and it changes what the S24 Ultra's drain has run with; a phone A/B first), `0082` own-pmap (the fork closed it itself on 2026-11-26, `7bded0d3`: no useful gain measured, default off), and everything else: the ticketed quiescence/park/supervisor stack, PerfLock/thermal admission, the stock-session thermal runner and boot-animation suppression (Framework-takeover experiments, phone-gated to the S26 Ultra, against the way back), docs |
+| `YMGPwcca/OneOS` (OneOS fork) | 2026-11-28 | more SM8850 takeover/thermal pins | None (app repo; the same experiments) |
+| `YumikoHayamato/OneiOS` | 2026-11-28 | `take22`-`take24`: 22-29, `ci/metal-upgrade`: 9, `ci/apps`: 8, `ci/metal-plugin`: 1 | **Ported**: `phone hw` (`9ff6bbd9`, deferred since 2026-11-22: a read-only hardware map, named files only, refused in a session; `crates/oneios-phone/src/hw.rs` with its 3 tests; references to the fork's native-path docs dropped). **Not taken**: the take19-24 native VM path (Gunyah/crosvm: hosted patches `0084`-`0091` are `native-*` or for its own apps' view, the audio driver's microphone work is the native transport's, `vm-boot`, `hugepool`, `droidvm`, `vmperf`), the Metal stack upgrade (`5da0d970`, NativeMetal `0009`-`0018`, `ScreenRecord.inc` dispatch-once fix `64cf85c3`, prewarm by source name `6b8d8b4d`, `0011`/`0012`: the non-rt `metal2vulkan` stack; `main` ships `--metal-rt`, which has none of those files: a dedicated Metal pass), the guest apps (2048, OneiOS Bench, the registrar: `ci/apps`), Italian guide and recipes |
+| `orumanayurpanjayat-ux/OneiOS` | 2026-11-28 | `main`: 2 merges (`7c617d81`, `0d07fdc0`) of what 2026-11-27 ported; `codex/s24u-ios16`: 25 | **Not taken**: `codex/s24u-ios16` (`0f043550` "S24 Ultra GPU and 120 Hz display profile" and `1e126b5a` change the S24 Ultra's host-table defaults and `GIVEN_KEYS`; the rest is its app-patch overlay `.github/patches/s24u-ios16-app.patch`, iOS 16 Metal CI and the iPhone X Metal match for the S24; `3f718a7e` only re-states the test that branch changes) |
+| `NoNameBuilder/OneiOS` | 2026-11-27 | `ios16-s25`: 6 | **Ported**: `6f875ea6`'s `userland/camera/build.sh` part (the target is `scripts/ios/env.sh`'s `IOS_TARGET`, the signature checked for that architecture; default unchanged: `arm64e-apple-ios27.0`). **Already here**: `dccee724` (the `build-hosted.sh` shebang, 2026-11-27), `7ee605b8` (our `metal-stage-edit` call has no empty array). **Not taken**: the iPhone X 16.5 Metal plug-in (`192dc9b2`, `6ac6f9f4`, `0b96a670` `--gpu-metal`, `6f875ea6`'s `_MTLDevice` size edit): unproven on any phone by the fork, needs its own Metal pass with an A56/16.5 boot |
+| `MRDinar/OneiOS-A56x` | 2026-11-27 | `main`: 45 (`release.yml` edits, 2 more `0005-oneios-radeonsi-screen.patch` edits) | None: its CI and the stderr-capture probe in `0005` (a one-boot probe) |
+| `burugou05-wq/OneiOS`, `Musicalista/OneiOS-A56`, `jonrazta89/OneiOS`, `winterballs/...`, `gageconnor/*`, `denis0001-dev/*`, `mangosaretasty/PixeliOS`, `burugou05-wq/OneOS` | 2026-11-14..25 | none | Unchanged. The deferred A56 candidates are in `main` already: `0079-hid-digitizer-ios16` as `0103-hid-digitizer-ios16`, the AIDL Bluetooth HAL (`bt/aidl_parcel.rs`), the Xclipse renderer (`gpu3d_amdgpu.rs`) |
+
+Also fixed on the way: `oneios-tool`'s mirror of the host table (`crates/oneios-phone/src/host.rs`) still had no
+config for the S24 Ultra after `7c70ef93` gave xnuhost's row `pen=auto` and `encoder=auto` (`host::tests::
+table_matches_the_bridges` failed on `main`); `phone status` now says `defaults: pen=auto, encoder=auto` there, as
+`tests/phone/run.sh` checks.
+
+**What a phone must show** (the next boots): the S24 Ultra's `oneios-audio: speaker running: ...` lines with the same
+or a lower target after an xrun burst (no `speaker prefill` line: off there); xnuhost's `display: 10 s: flushes N,
+copy mean X us` no higher than before; on an S26 Ultra, `oneios-audio: speaker prefill: N/N frames before
+requestStart` then `probe: speaker latency N frames`.
 
 ## The survey of 2026-11-27 (`port/fork-survey-2026-11-27`)
 
@@ -125,7 +153,8 @@ not listed. "New" means not in this file before today.
   matrix). A port lands as a record plus its profile/config, not as a parallel universe.
 - **Per-device config**: `userland/config/device-iphone18,2.toml` is the guest-side pattern; the host side follows
   the same shape as backends grow.
-- **What a new port still needs each time**: panel mode/refresh (display helper XHDP report), input/evdev
+- **What a new port still needs each time**: its hardware map first (`oneios-tool phone hw`, read only, since
+  2026-11-28; `tools/probe/s25-probe.sh`), then panel mode/refresh (display helper XHDP report), input/evdev
   capabilities, sensor/HAL paths (backend stand-ins first), GPU backend notes (AGX gate pattern in `docs/gpu.md`),
   kernel notes only where the SoC differs (the Oryon rule is the template: describe, test, keep old phones unchanged).
 

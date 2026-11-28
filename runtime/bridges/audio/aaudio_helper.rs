@@ -243,6 +243,11 @@ pub struct Settings {
     pub perf_mode: i32,
     /// ONEIOS_AUDIO_MMAP=exclusive|shared|off
     pub mmap_want: MmapWant,
+    /// ONEIOS_AUDIO_PROBE_PREFILL=1: the AU_PROBE speaker stream is filled with silence (non-blocking writes, its
+    /// whole buffer) before requestStart. Off by default (the S24 Ultra's probe is unchanged); the S26 Ultra's row of
+    /// the host table sets it: there a stream started underfilled took 480 of 576 frames and never moved FramesRead
+    /// or gave a timestamp (YMGPwcca/OneiOS 7cf70ce7, 4dd7242c). A guest START's stream is never prefilled.
+    pub probe_prefill: bool,
 }
 
 fn env_ms(name: &str, fallback: u32, low: u32, high: u32) -> u32 {
@@ -271,6 +276,7 @@ impl Settings {
                 "shared" => MmapWant::Shared,
                 _ => MmapWant::Off,
             },
+            probe_prefill: env_ms("ONEIOS_AUDIO_PROBE_PREFILL", 0, 0, 1) == 1,
         }
     }
 }
@@ -424,6 +430,8 @@ pub struct Ring {
     /// a stream that is not the legacy track: the receive loop reopens the speaker on the legacy path (once, mmap_dead
     /// on the Helper).
     dead: bool,
+    /// When the target was last raised (CLOCK_MONOTONIC s, -1: not since the stream opened): raise_target's coalescing.
+    raised_at: f64,
 }
 
 impl Ring {
@@ -448,6 +456,7 @@ impl Ring {
             out_path: OutPath::Legacy,
             continuous: false,
             dead: false,
+            raised_at: -1.0,
         }
     }
 
@@ -494,18 +503,28 @@ impl Ring {
         })
     }
 
-    /// The target up by 5 ms (an underrun, AAudio's xrun), the level measured anew.
-    fn raise_target(&mut self) {
+    /// The target up by 5 ms (an underrun, AAudio's xrun), the level measured anew. One raise per guest period
+    /// (CHUNK, 5 ms) however many reports come in it: AAudio's MMAP xrun counter goes up on each write attempt while
+    /// its read is ahead of the write (18 increments in 0.3 ms on an SM8850, YMGPwcca/OneiOS c4d9e318), one starvation
+    /// and not 18 periods lost; raised for each, the level went to its ceiling (80 ms) at once and stayed there as
+    /// latency. The raw counts (stats.xruns, stats.underruns) still count every report. False: coalesced.
+    pub fn raise_target(&mut self, now: f64) -> bool {
+        if self.raised_at >= 0.0 && now - self.raised_at < f64::from(CHUNK) / f64::from(RATE) {
+            return false;
+        }
+        self.raised_at = now;
         self.target = (self.target + ms_frames(5)).min(ms_frames(self.target_max_ms));
         if self.target > self.stats.target_peak {
             self.stats.target_peak = self.target;
         }
         self.window_late_max = 0.0;
         self.window_periods = 0;
+        true
     }
 
     fn restart(&mut self) {
         self.guest_on = true;
+        self.raised_at = -1.0;
         self.generation += 1;
         self.dead = false;
         self.stats = OutStats::default();
@@ -631,6 +650,30 @@ fn system_server_up() -> bool {
         name.starts_with(|c: char| ('1'..='9').contains(&c))
             && std::fs::read(format!("/proc/{name}/comm")).is_ok_and(|comm| comm.starts_with(b"system_server\n"))
     })
+}
+
+/// AAudio's advice for an output stream: its buffer filled before the asynchronous START (probe_prefill). Non-blocking
+/// writes of silence up to the buffer size; false (logged) when the buffer is unusable or a write comes back short:
+/// the stream is then not started.
+fn prefill_speaker(stream: &dyn AStream) -> bool {
+    let (size, capacity) = (stream.buffer_size(), stream.buffer_capacity());
+    if size <= 0 || capacity <= 0 || size > capacity || size > RING_FRAMES as i32 {
+        eprintln!("oneios-audio: speaker prefill: invalid buffer {size} of {capacity} frames");
+        return false;
+    }
+    let zeros = [0i16; CHUNK as usize * 2];
+    let mut filled = 0i32;
+    while filled < size {
+        let wanted = (size - filled).min(CHUNK as i32);
+        let n = stream.write(&zeros, wanted, 0);
+        if n <= 0 || n > wanted {
+            eprintln!("oneios-audio: speaker prefill: {filled}/{size} frames; write returned {n}");
+            return false;
+        }
+        filled += n;
+    }
+    eprintln!("oneios-audio: speaker prefill: {filled}/{size} frames before requestStart");
+    true
 }
 
 /// The latest burst size a stream reported as the writer's: 16..MAX_BURST, else 240.
@@ -930,7 +973,7 @@ impl Helper {
         (stream, asked, why)
     }
 
-    fn open_stream(&self, output: bool, rate: u32, channels: u32) -> Option<Arc<dyn AStream>> {
+    fn open_stream(&self, output: bool, rate: u32, channels: u32, prefill: bool) -> Option<Arc<dyn AStream>> {
         // The speaker on its path; the microphone performance mode NONE, shared (AAudio tries MMAP only for LOW_LATENCY).
         let (stream, asked, why) = if output {
             self.open_speaker(rate, channels)
@@ -991,6 +1034,11 @@ impl Helper {
             why,
             if why.is_empty() { "" } else { ")" }
         );
+        // AAudio's START is asynchronous; a HAL that needs its buffer full first (probe_prefill) gets it before it.
+        if output && prefill && !prefill_speaker(&*stream) {
+            stream.close();
+            return None;
+        }
         let rc = stream.request_start();
         if rc != AAUDIO_OK {
             eprintln!(
@@ -1152,7 +1200,7 @@ impl Helper {
             if xruns > xruns_seen {
                 // AAudio ran dry (the writer was late): the level goes up
                 r.stats.xruns += (xruns - xruns_seen) as u64;
-                r.raise_target();
+                r.raise_target(now);
                 quiet_since = now;
                 (level, reference, settled) = (-1.0, -1.0, 0);
             }
@@ -1341,7 +1389,7 @@ impl Helper {
                 take = r.count;
                 r.priming = true;
                 r.stats.underruns += 1;
-                r.raise_target();
+                r.raise_target(now);
                 quiet_since = now;
                 (level, reference, settled) = (-1.0, -1.0, 0);
             }
@@ -1495,6 +1543,11 @@ impl Helper {
 
     /// A stream on (the guest's START); 0 or an errno.
     fn start_dir(self: &Arc<Helper>, output: bool, rate: u32, channels: u32) -> i32 {
+        self.start_dir_with(output, rate, channels, false)
+    }
+
+    /// start_dir; `prefill`: the speaker's stream is filled with silence before its start (the probe's, probe_prefill).
+    fn start_dir_with(self: &Arc<Helper>, output: bool, rate: u32, channels: u32, prefill: bool) -> i32 {
         if output {
             if let Some(d) = self.dir(true) {
                 if rate == d.stream.sample_rate() as u32 && channels == d.channels {
@@ -1519,7 +1572,7 @@ impl Helper {
             self.in_lost.store(0, Ordering::Relaxed);
             self.in_short.store(0, Ordering::Relaxed);
         }
-        let Some(stream) = self.open_stream(output, rate, channels) else { return libc::EIO };
+        let Some(stream) = self.open_stream(output, rate, channels, prefill) else { return libc::EIO };
         if output {
             self.host_volume_full(); // One UI's media volume to full scale, once a run
                                      // the path's floor (open_stream). On MMAP a new stream starts 5 ms above its floor: it comes down once a
@@ -1530,12 +1583,15 @@ impl Helper {
             r.window_late_max = 0.0;
             r.window_periods = 0;
         }
+        // what AAudio already holds (0 but for a prefilled probe stream, whose silence its timestamps count: without it
+        // pipeline_frames would come out short by the buffer)
+        let written = if output { stream.frames_written().max(0) as u64 } else { 0 };
         let d = Arc::new(Dir {
             burst: usable_burst(stream.frames_per_burst()),
             channels: stream.channel_count() as u32,
             stream,
             run: AtomicBool::new(true),
-            frames: AtomicU64::new(0),
+            frames: AtomicU64::new(written),
             started: Mutex::new(time::monotonic_s()),
         });
         *locked(if output { &self.out } else { &self.inp }) = Some(Arc::clone(&d));
@@ -1628,7 +1684,7 @@ impl Helper {
         // path is not waited on at all (its silence never reaches AudioFlinger's start threshold without the guest).
         for attempt in 0..2 {
             if self.dir(true).is_none() {
-                if self.start_dir(true, RATE, 2) != 0 {
+                if self.start_dir_with(true, RATE, 2, self.settings.probe_prefill) != 0 {
                     eprintln!("oneios-audio: probe: the speaker did not open");
                     return 0;
                 }
@@ -1824,4 +1880,149 @@ pub fn main_with(args: &[String], aaudio: Arc<dyn AAudio>) -> i32 {
     // SAFETY: the descriptor xnuhost handed this process (its end of the pair), owned from here.
     let sock = unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd) };
     Helper::new(sock, aaudio).run()
+}
+
+#[cfg(test)]
+mod raise_tests {
+    use super::*;
+
+    /// A burst of xrun/underrun reports inside one guest period raises the target once; the next period's raises
+    /// again; a new stream (restart) starts uncoalesced. The ceiling still holds.
+    #[test]
+    fn raise_target_coalesces_per_guest_period() {
+        let mut r = Ring::new();
+        r.target_ms = 5;
+        r.target_max_ms = 80;
+        r.target = ms_frames(5);
+        let t0 = 100.0;
+        assert!(r.raise_target(t0));
+        // 18 reports in 0.3 ms (the SM8850's MMAP counter): one starvation, one raise
+        for i in 1..18 {
+            assert!(!r.raise_target(t0 + f64::from(i) * 0.3e-3 / 18.0));
+        }
+        assert_eq!(r.target, ms_frames(10));
+        assert_eq!(r.stats.target_peak, ms_frames(10));
+        // a period later: a new episode
+        // just past a period (exactly 5 ms after t0 rounds to under it)
+        assert!(r.raise_target(t0 + f64::from(CHUNK) / f64::from(RATE) + 1e-6));
+        assert_eq!(r.target, ms_frames(15));
+        r.restart();
+        assert!(r.raise_target(t0 + 0.006));
+        for k in 0..40 {
+            r.raise_target(t0 + 1.0 + f64::from(k) * 0.01);
+        }
+        assert_eq!(r.target, ms_frames(80)); // the ceiling
+    }
+}
+
+#[cfg(test)]
+mod prefill_tests {
+    use super::*;
+
+    /// A stream whose buffer takes `room` frames before its start, then refuses (a non-blocking write: 0).
+    struct Room {
+        size: i32,
+        capacity: i32,
+        room: i32,
+        written: Mutex<i64>,
+        timeouts: Mutex<Vec<i64>>,
+    }
+
+    impl AStream for Room {
+        fn request_start(&self) -> i32 {
+            0
+        }
+        fn request_stop(&self) -> i32 {
+            0
+        }
+        fn close(&self) {}
+        fn write(&self, pcm: &[i16], frames: i32, timeout_ns: i64) -> i32 {
+            assert!(pcm.len() >= frames as usize * 2 && pcm.iter().all(|&v| v == 0));
+            locked(&self.timeouts).push(timeout_ns);
+            let mut w = locked(&self.written);
+            let n = (i64::from(self.room) - *w).clamp(0, i64::from(frames)) as i32;
+            *w += i64::from(n);
+            n
+        }
+        fn read(&self, _: &mut [i16], _: i32, _: i64) -> i32 {
+            0
+        }
+        fn set_buffer_size(&self, f: i32) -> i32 {
+            f
+        }
+        fn timestamp(&self) -> Option<(i64, i64)> {
+            None
+        }
+        fn frames_per_burst(&self) -> i32 {
+            192
+        }
+        fn buffer_size(&self) -> i32 {
+            self.size
+        }
+        fn buffer_capacity(&self) -> i32 {
+            self.capacity
+        }
+        fn sample_rate(&self) -> i32 {
+            RATE as i32
+        }
+        fn channel_count(&self) -> i32 {
+            2
+        }
+        fn device_id(&self) -> i32 {
+            0
+        }
+        fn session_id(&self) -> i32 {
+            0
+        }
+        fn xrun_count(&self) -> i32 {
+            0
+        }
+        fn sharing_mode(&self) -> i32 {
+            0
+        }
+        fn performance_mode(&self) -> i32 {
+            0
+        }
+        fn frames_written(&self) -> i64 {
+            *locked(&self.written)
+        }
+        fn frames_read(&self) -> i64 {
+            0
+        }
+        fn mmap_used(&self) -> i32 {
+            1
+        }
+    }
+
+    fn room(size: i32, capacity: i32, room: i32) -> Room {
+        Room { size, capacity, room, written: Mutex::new(0), timeouts: Mutex::new(Vec::new()) }
+    }
+
+    #[test]
+    fn prefill_fills_the_buffer_without_blocking() {
+        // the SM8850's MMAP shape: 576 frames of 3072, in chunks, every write non-blocking
+        let s = room(576, 3072, 3072);
+        assert!(prefill_speaker(&s));
+        assert_eq!(s.frames_written(), 576);
+        assert!(locked(&s.timeouts).iter().all(|&t| t == 0) && locked(&s.timeouts).len() == 3);
+        // a short write (the buffer full early): not started
+        assert!(!prefill_speaker(&room(576, 3072, 480)));
+        // an unusable buffer: nothing written
+        let bad = room(0, 3072, 3072);
+        assert!(!prefill_speaker(&bad) && bad.frames_written() == 0);
+        assert!(!prefill_speaker(&room(4096, 3072, 9999)));
+        assert!(!prefill_speaker(&room(RING_FRAMES as i32 + 1, 99999, 99999)));
+    }
+
+    #[test]
+    fn probe_prefill_is_off_unless_asked() {
+        let _g = crate::hw::testdir::env_lock();
+        std::env::remove_var("ONEIOS_AUDIO_PROBE_PREFILL");
+        assert!(!Settings::from_env().probe_prefill);
+        std::env::set_var("ONEIOS_AUDIO_PROBE_PREFILL", "1");
+        assert!(Settings::from_env().probe_prefill);
+        std::env::set_var("ONEIOS_AUDIO_PROBE_PREFILL", "0");
+        assert!(!Settings::from_env().probe_prefill);
+        std::env::remove_var("ONEIOS_AUDIO_PROBE_PREFILL");
+    }
 }

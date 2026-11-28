@@ -94,7 +94,7 @@ not; mark guesses as guesses.
 
 All phone work goes through `oneios-tool phone` (`status`, `switch --version-code N`, `return`, `stage
 runtime|runtime-asis|image`, `manifest DIR --stage`, `sums`, `log [--follow] [--grep] [--pen]`, `pull-log`,
-`display-restart`, `touch`, `pen`, `backlight`, `cpu`, `procs`), `oneios-tool app` and `cycle`. Use adb only where the CLI has
+`display-restart`, `touch`, `pen`, `backlight`, `cpu`, `hw`, `procs`), `oneios-tool app` and `cycle`. Use adb only where the CLI has
 no command yet (say so, and add the command).
 
 - **Logs:** `oneios-tool phone pull-log DIR` (iOS's log of a boot in seconds, beside an open session, with

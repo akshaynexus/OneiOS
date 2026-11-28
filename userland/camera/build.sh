@@ -1,5 +1,7 @@
 #!/bin/bash
-# Build the capture plug-in for iOS 27 (arm64e): one dylib, H9ISP.mediacapture, signed ad hoc with 4 KiB pages.
+# Build the capture plug-in: one dylib, H9ISP.mediacapture, signed ad hoc with 4 KiB pages. The target is env.sh's
+# IOS_TARGET (iOS 27 arm64e by default); IOS_TBD=out/ios16-tbd IOS_MIN=16.5 IOS_TARGET=arm64-apple-ios16.5 builds it
+# for a 16.5 guest (the iPhone X image), and ONEIOS_IOS_TARGET overrides the target alone.
 #
 #   userland/camera/build.sh [OUT_DIR]        default out/userland/camera (git-ignored)
 #
@@ -17,11 +19,18 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
-TARGET=${ONEIOS_IOS_TARGET:-arm64e-apple-ios27.0}
 OUT=${1:-$REPO/out/userland/camera}
 NAME=H9ISP.mediacapture
 mkdir -p "$OUT"
 . "$REPO/scripts/ios/env.sh"
+# The target the toolchain was set up for (env.sh's IOS_TARGET: arm64e-apple-ios27.0 by default, arm64-apple-ios16.5
+# for the iPhone X guest) unless the caller names one.
+TARGET=${ONEIOS_IOS_TARGET:-$IOS_TARGET}
+case "$TARGET" in
+  arm64e-*) ARCH=arm64e ;;
+  arm64-*) ARCH=arm64 ;;
+  *) echo "camera: $TARGET: not an arm64 or arm64e iOS target" >&2; exit 2 ;;
+esac
 . "$REPO/scripts/lib/oneios-tool.sh"
 oneios_tool "$REPO"
 echo "camera: SDK $IOS_SDK_VERSION ($IOS_SDK); stubs $([ -f "$IOS_TBD/usr/lib/libSystem.B.tbd" ] && echo "$IOS_TBD" || echo "none: the SDK's own"); $("$IOS_CLANG" --version | head -1)"
@@ -31,7 +40,7 @@ echo "camera: SDK $IOS_SDK_VERSION ($IOS_SDK); stubs $([ -f "$IOS_TBD/usr/lib/li
   -framework CoreFoundation -framework CoreMedia -framework CoreVideo -framework IOKit -o "$OUT/$NAME"
 "$ONEIOS_TOOL" ios sign --identifier com.oneios.H9ISP "$OUT/$NAME" >/dev/null
 "$ONEIOS_TOOL" image tweaks cdhash "$OUT/$NAME" | tee "$OUT/cdhashes.txt"
-grep -q 'arm64e pages=4096' "$OUT/cdhashes.txt" || { echo "build.sh: $NAME is not arm64e with 4 KiB signature pages" >&2; exit 1; }
+grep -q "$ARCH pages=4096" "$OUT/cdhashes.txt" || { echo "build.sh: $NAME is not $ARCH with 4 KiB signature pages" >&2; exit 1; }
 # (cctools' nm beside the linker, else llvm-nm: a Linux host's own nm does not read Mach-O)
 NM=$IOS_CCTOOLS/nm; [ -x "$NM" ] || NM=llvm-nm
 "$NM" -gU "$OUT/$NAME" | grep -q ' _H9ISPCaptureDeviceCreate$' || { echo "build.sh: $NAME does not export H9ISPCaptureDeviceCreate" >&2; exit 1; }

@@ -165,6 +165,9 @@ static TABLE: [HostDevice; 7] = [
     // wrote 2300 to panel0-backlight, whose max_brightness is 12750 (brightness's test_sm8850_manual_brightness_cap).
     // Without it the iOS slider's top writes 12750, 5.5 times One UI's manual top (HBM territory: heat and current).
     // 2300 is the conservative value, not a claim about the panel's maximum.
+    // ONEIOS_AUDIO_PROBE_PREFILL=1 [F]: on the fork's SM-S948B an AU_PROBE speaker stream started underfilled took 480 of
+    // 576 frames and never moved FramesRead or gave a timestamp; filled with silence before requestStart it ran
+    // (YMGPwcca/OneiOS 7cf70ce7, 4dd7242c; the audio helper's probe_prefill). Only the probe's stream.
     // takeover: session-mode=takeover is allowed [F: the phone YMGPwcca's root-only Framework-takeover experiment ran on,
     // 2026-11-20..22, with the native touchscreen grabbed]. Not through this tree's switch yet. touch-exclusive itself is
     // not a default here: session-mode=takeover turns it on (xnuhost's config), session-mode=hosted keeps it off on every
@@ -178,7 +181,7 @@ static TABLE: [HostDevice; 7] = [
         socs: &["SM8850"],
         platforms: &["canoe"],
         config: NONE,
-        env: &["ONEIOS_BRIGHT_MAX=2300"],
+        env: &["ONEIOS_BRIGHT_MAX=2300", "ONEIOS_AUDIO_PROBE_PREFILL=1"],
         takeover: true,
     },
     // Galaxy S26 (base model, Snapdragon 8 Elite Gen 2 / SM8850; burugou05-wq/OneiOS e85405f1).

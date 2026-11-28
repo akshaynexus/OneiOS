@@ -769,6 +769,7 @@ $T phone backlight status          # the panel's level, max_brightness, and One 
 $T phone backlight set 5350        # 1..12750; the return writes One UI's own value back
 $T phone cpu                       # each CPU's core, domain, clocks and governor; the cpusets; xnuhost's and iOS's threads (read only)
 $T phone cpu --trace 30 --out cpu.pftrace   # also a 30 s Perfetto trace (sched, freq, idle), copied here
+$T phone hw --out logs/phone-hw   # read only, no session: the device tree, iomem, interrupts, CPUs, panel, partitions, kernel.config
 $T phone wifi p2p                  # the staged wifictl p2p as root (read only): every radio, Google's Wonder radio, the
                                    #   AirDrop verdicts, Wonder's files; then a summary of those lines (--save FILE keeps the report)
 $T phone wifi wonder --seconds 30 --freq 5745   # wifictl wonder: a monitor interface on Wonder's radio beside wlan0,
@@ -1239,6 +1240,9 @@ libraries. `--test` passes; `ios macho-check` with the new stubs gives the same 
 
 ```sh
 userland/camera/build.sh                # -> out/userland/camera/H9ISP.mediacapture, cdhashes.txt (2 s on the Mac)
+# its target is scripts/ios/env.sh's IOS_TARGET (arm64e-apple-ios27.0 by default; ONEIOS_IOS_TARGET overrides it); for a
+# 16.5 guest: IOS_TBD=out/ios16-tbd IOS_MIN=16.5 IOS_TARGET=arm64-apple-ios16.5 userland/camera/build.sh (arm64; not
+# run on a 16.5 phone: NoNameBuilder/OneiOS 6f875ea6)
 userland/camera/tests/host.sh           # the reader; on a Mac also the device under macOS's own CMCapture (35 checks)
 ```
 

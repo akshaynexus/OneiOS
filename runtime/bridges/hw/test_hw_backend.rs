@@ -46,7 +46,8 @@ fn host_device() {
     // The table: the home device first; names unique; every entry matches by a model; its xnuhost settings are only the
     // keys the config merges as device defaults (gpu, panel-fallback, hz, width, height, scale, return-graceful-ms, astc,
     // hw-backend*), its environment ones only
-    // variables a bridge reads. The S24 Ultra's entry holds nothing: its behaviour is today's.
+    // variables a bridge (or the audio helper, which inherits them) reads. The S24 Ultra's entry holds no environment
+    // default: its bridges behave as today.
     let t = host_table();
     assert!(t.len() == 7 && t[0].name == "galaxy-s24-ultra");
     for (i, e) in t.iter().enumerate() {
@@ -78,7 +79,8 @@ fn host_device() {
             assert!(
                 v.starts_with("ONEIOS_BRIGHT_MAX=")
                     || v.starts_with("ONEIOS_THERMAL_SOC_TRIPS=")
-                    || v.starts_with("ONEIOS_THERMAL_SOC_SAMPLES="),
+                    || v.starts_with("ONEIOS_THERMAL_SOC_SAMPLES=")
+                    || v.starts_with("ONEIOS_AUDIO_PROBE_PREFILL="),
                 "{v}"
             );
         }
@@ -178,15 +180,22 @@ fn host_device() {
 
     // The environment's defaults: taken when unset, a variable already set wins (the S26 Ultra's brightness cap).
     env::remove_var("ONEIOS_BRIGHT_MAX");
+    env::remove_var("ONEIOS_AUDIO_PROBE_PREFILL");
     let s26 = host_find("galaxy-s26-ultra").unwrap();
-    assert_eq!(host_env_describe(s26), "ONEIOS_BRIGHT_MAX=2300");
+    assert_eq!(host_env_describe(s26), "ONEIOS_BRIGHT_MAX=2300, ONEIOS_AUDIO_PROBE_PREFILL=1");
     host_env_apply(s26);
     assert_eq!(env::var("ONEIOS_BRIGHT_MAX").as_deref(), Ok("2300"));
+    assert_eq!(env::var("ONEIOS_AUDIO_PROBE_PREFILL").as_deref(), Ok("1"));
+    env::remove_var("ONEIOS_AUDIO_PROBE_PREFILL");
     env::set_var("ONEIOS_BRIGHT_MAX", "1000");
-    assert_eq!(host_env_describe(s26), "ONEIOS_BRIGHT_MAX=2300 not taken (the environment's 1000)");
+    assert_eq!(
+        host_env_describe(s26),
+        "ONEIOS_BRIGHT_MAX=2300 not taken (the environment's 1000), ONEIOS_AUDIO_PROBE_PREFILL=1"
+    );
     host_env_apply(s26);
     assert_eq!(env::var("ONEIOS_BRIGHT_MAX").as_deref(), Ok("1000"));
     env::remove_var("ONEIOS_BRIGHT_MAX");
+    env::remove_var("ONEIOS_AUDIO_PROBE_PREFILL");
     host_env_apply(&t[0]);
     assert!(env::var("ONEIOS_BRIGHT_MAX").is_err()); // the S24 Ultra's entry sets nothing
     assert_eq!(host_env_describe(&t[0]), "");
@@ -204,10 +213,11 @@ fn host_device() {
         line,
         "host: galaxy-s26-ultra, matched by ro.product.model=SM-S948B; read: ro.product.model=SM-S948B \
          ro.product.device=(none) ro.board.platform=(none) ro.soc.model=SM8850 ro.soc.manufacturer=QTI; defaults: \
-         ONEIOS_BRIGHT_MAX=2300"
+         ONEIOS_BRIGHT_MAX=2300, ONEIOS_AUDIO_PROBE_PREFILL=1"
     );
     assert!(hw.one[Bridge::Backlight as usize] == Backend::Treble && hw.all == Backend::Unset);
     env::remove_var("ONEIOS_BRIGHT_MAX");
+    env::remove_var("ONEIOS_AUDIO_PROBE_PREFILL");
     env::set_var("ONEIOS_HOST_PROPS", phone(&tmp, "s24u", "SM-S928B", "e3q", "pineapple", "SM8650", "QTI"));
     let (e, line) = host_tool(&mut hw).unwrap();
     assert!(e == Some(&t[0]) && line.contains("host: galaxy-s24-ultra, matched by ro.product.model=SM-S928B;"));
